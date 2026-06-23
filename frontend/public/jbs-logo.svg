@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" fill="none">
+  <!-- Purple dots (left arc) -->
+  <circle cx="42" cy="72" r="4" fill="#7C3AED"/>
+  <circle cx="38" cy="62" r="4" fill="#7C3AED"/>
+  <circle cx="36" cy="52" r="3.5" fill="#7C3AED"/>
+  <circle cx="38" cy="42" r="3.5" fill="#8B5CF6"/>
+  <circle cx="42" cy="32" r="3" fill="#8B5CF6"/>
+  <circle cx="48" cy="24" r="3" fill="#8B5CF6"/>
+  <!-- Blue dots (middle arc) -->
+  <circle cx="50" cy="72" r="4" fill="#6D28D9"/>
+  <circle cx="48" cy="62" r="3.5" fill="#6366F1"/>
+  <circle cx="47" cy="52" r="3.5" fill="#6366F1"/>
+  <circle cx="48" cy="42" r="3" fill="#818CF8"/>
+  <circle cx="52" cy="32" r="3" fill="#818CF8"/>
+  <circle cx="56" cy="24" r="2.5" fill="#93C5FD"/>
+  <circle cx="62" cy="18" r="2.5" fill="#93C5FD"/>
+  <!-- Teal dots (right arc) -->
+  <circle cx="58" cy="68" r="3.5" fill="#3B82F6"/>
+  <circle cx="58" cy="58" r="3.5" fill="#3B82F6"/>
+  <circle cx="58" cy="48" r="3" fill="#06B6D4"/>
+  <circle cx="60" cy="38" r="3" fill="#06B6D4"/>
+  <circle cx="64" cy="28" r="2.5" fill="#22D3EE"/>
+  <circle cx="70" cy="20" r="2.5" fill="#22D3EE"/>
+  <circle cx="76" cy="16" r="2" fill="#67E8F9"/>
+  <!-- JBS Text -->
+  <text x="70" y="70" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="38" fill="#1E1B4B" letter-spacing="-1">JBS</text>
+  <!-- Subtitle -->
+  <text x="70" y="86" font-family="Arial, sans-serif" font-weight="600" font-size="8" fill="#6B7280" letter-spacing="2">JADE BUSINESS SERVICES</text>
+</svg>

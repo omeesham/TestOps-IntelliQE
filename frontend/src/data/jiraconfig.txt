@@ -1,0 +1,4 @@
+jiraurl: https://jade-biz-ai-qe-team.atlassian.net
+jira_email_id: omeesha.mahanta@jade-biz.com
+API_key:ATATT3xFfGF0gyP35tif70gG8VCg0CMyaklBeYgiXLi56eAKtJa-0uFOM6qIQzEGjsDISFpVsJ_mAilM9uByXPI2cstUhGkbdmHDh9jvClSy2Bi8sqPaECJlMTW-Ifs3dk99PwJX9cZ2ElZGf-m6iW8amV5tZiRiUZejfPHWjQ4lhGX1PY5vcGM=9C1FD891
+ 

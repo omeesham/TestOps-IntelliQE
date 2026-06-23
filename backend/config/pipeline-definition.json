@@ -1,0 +1,134 @@
+{
+  "version": "1.0",
+  "defaults": {
+    "model": "sonnet",
+    "maxTurnsPerStage": 50,
+    "budgetPerRunUsd": 2,
+    "budgetPerStageUsd": 0.5,
+    "workerPollIntervalMs": 5000,
+    "workerHeartbeatIntervalMs": 30000,
+    "cliPath": "claude",
+    "cliOutputFormat": "json",
+    "agentRunner": "sdk",
+    "autoInvoke": true
+  },
+  "models": {
+    "available": ["haiku", "sonnet", "opus"],
+    "costPerMTokenInput": { "haiku": 0.25, "sonnet": 3, "opus": 15 },
+    "costPerMTokenOutput": { "haiku": 1.25, "sonnet": 15, "opus": 75 }
+  },
+  "stages": [
+    {
+      "id": "requirements",
+      "name": "Requirements Intake",
+      "agent": "playwright-requirements",
+      "agentFile": ".github/agents/playwright-requirements.agent.md",
+      "model": "haiku",
+      "enabled": true,
+      "maxTurns": 30,
+      "budgetCap": 0.1,
+      "retries": 0,
+      "timeoutSeconds": 300,
+      "next": { "success": "planning" },
+      "mcpConfig": "browser-only",
+      "approvalMode": "auto",
+      "preRunGate": "",
+      "postCompleteGate": "",
+      "description": "Explores target URL, captures UI structure and requirements"
+    },
+    {
+      "id": "planning",
+      "name": "Test Case Planning",
+      "agent": "playwright-test-planner",
+      "agentFile": ".github/agents/playwright-test-planner.agent.md",
+      "model": "sonnet",
+      "enabled": true,
+      "maxTurns": 50,
+      "budgetCap": 0.15,
+      "retries": 0,
+      "timeoutSeconds": 600,
+      "next": { "success": "generation" },
+      "mcpConfig": "browser-only",
+      "approvalMode": "auto",
+      "preRunGate": "",
+      "postCompleteGate": "",
+      "description": "Creates detailed test cases from requirements"
+    },
+    {
+      "id": "generation",
+      "name": "Spec Generation",
+      "agent": "playwright-test-generator",
+      "agentFile": ".github/agents/playwright-test-generator.agent.md",
+      "model": "sonnet",
+      "enabled": true,
+      "maxTurns": 80,
+      "budgetCap": 0.2,
+      "retries": 0,
+      "timeoutSeconds": 600,
+      "next": { "success": "audit", "fail": "healing" },
+      "routing": {
+        "condition": "testResults",
+        "rules": [
+          { "when": "success", "then": "audit" },
+          { "when": "fail", "then": "healing" }
+        ]
+      },
+      "mcpConfig": "browser-and-test",
+      "approvalMode": "auto",
+      "preRunGate": "",
+      "postCompleteGate": "",
+      "description": "Generates Playwright spec files from test cases"
+    },
+    {
+      "id": "healing",
+      "name": "Test Healing",
+      "agent": "playwright-test-healer",
+      "agentFile": ".github/agents/playwright-test-healer.agent.md",
+      "model": "sonnet",
+      "enabled": true,
+      "maxTurns": 60,
+      "budgetCap": 0.15,
+      "retries": 3,
+      "timeoutSeconds": 600,
+      "next": { "success": "audit", "fail": "healing" },
+      "routing": {
+        "condition": "testResults",
+        "rules": [
+          { "when": "success", "then": "audit" },
+          { "when": "fail", "then": "healing" }
+        ]
+      },
+      "mcpConfig": "browser-and-test",
+      "approvalMode": "auto",
+      "preRunGate": "",
+      "postCompleteGate": "",
+      "description": "Debugs and fixes failing test specs"
+    },
+    {
+      "id": "audit",
+      "name": "Quality Audit",
+      "agent": "playwright-pipeline-audit",
+      "agentFile": ".github/agents/playwright-pipeline-audit.agent.md",
+      "model": "haiku",
+      "enabled": true,
+      "maxTurns": 40,
+      "budgetCap": 0.05,
+      "retries": 2,
+      "timeoutSeconds": 300,
+      "next": { "success": "completed", "fail": "healing" },
+      "mcpConfig": null,
+      "approvalMode": "auto",
+      "preRunGate": "",
+      "postCompleteGate": "",
+      "description": "Reviews all artifacts for quality and completeness"
+    }
+  ],
+  "terminalStates": ["completed", "fixme", "cancelled"],
+  "convergenceGuards": {
+    "enabled": true,
+    "sameFindings": { "enabled": true, "action": "fixme" },
+    "notDecreasing": { "enabled": true, "windowSize": 2, "action": "fixme" },
+    "maxIterations": { "enabled": true, "limit": 3, "action": "fixme" },
+    "budgetExhausted": { "enabled": true, "action": "fixme" }
+  }
+}

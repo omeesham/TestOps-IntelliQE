@@ -1,0 +1,19 @@
+{
+  "name": "qe-playwright-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright end-to-end test package (source build).",
+  "scripts": {
+    "test": "playwright test -c config/playwright.config.ts",
+    "test:headed": "playwright test -c config/playwright.config.ts --headed",
+    "test:ui": "playwright test -c config/playwright.config.ts --ui",
+    "test:chromium": "playwright test -c config/playwright.config.ts --project=chromium",
+    "report": "playwright show-report ./reports/html",
+    "install:browsers": "playwright install"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0"
+  }
+}

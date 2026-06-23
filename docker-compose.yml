@@ -1,0 +1,39 @@
+# JBS IntelliQE — UI + API in one command, backed by Azure SQL Database.
+#   docker-compose up --build -d      then open http://localhost:8090
+#
+# The backend connects to an Azure SQL Database provisioned out-of-band, so the app
+# only bootstraps the schema + tables on first start (idempotent — never drops data).
+# All connection settings are environment variables: override AZURE_SQL_SERVER /
+# AZURE_SQL_DATABASE / AZURE_SQL_USER / AZURE_SQL_PASSWORD in a .env file next to this
+# compose file to point at a different DB (e.g. prod) without editing this file. The
+# defaults below target the current shared DB.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_VERSION: "${APP_VERSION:-dev}"   # sidebar build stamp; CI sets V<run>-DDMMYY
+    container_name: intelliqe
+    ports:
+      - "8090:80"            # UI + /api  ->  http://localhost:8090
+    environment:
+      PORT: 3001
+      # ── Azure SQL Database connection (override any of these in .env) ──
+      AZURE_SQL_SERVER: "${AZURE_SQL_SERVER:-intelliqe.database.windows.net}"
+      AZURE_SQL_DATABASE: "${AZURE_SQL_DATABASE:-Intelliqe-sql}"
+      AZURE_SQL_USER: "${AZURE_SQL_USER:-intelliqeuser}"
+      AZURE_SQL_PASSWORD: "${AZURE_SQL_PASSWORD:-}"   # supply via .env — never commit
+      AZURE_SQL_PORT: "${AZURE_SQL_PORT:-1433}"
+      DB_SSL: "true"                 # Azure SQL requires encryption (Encrypt=True)
+      DB_TRUST_SERVER_CERT: "true"   # Trust Server Certificate=True
+      DB_BOOTSTRAP: "false"          # DB is provisioned out-of-band on Azure SQL
+      # Required in production (NODE_ENV=production) to sign user JWTs.
+      # Must be >= 32 chars. Override for real deployments.
+      JWT_SECRET: "${JWT_SECRET:-local-dev-jwt-secret-change-me-0123456789}"
+      # Pipeline worker — off by default. Set RUN_WORKER=true and provide
+      # the keys (e.g. in a .env file next to this compose file) to enable.
+      RUN_WORKER: "${RUN_WORKER:-false}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      WORKER_SECRET: "${WORKER_SECRET:-}"

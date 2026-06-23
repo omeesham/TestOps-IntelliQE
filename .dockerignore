@@ -1,0 +1,31 @@
+# Dependencies & build output (rebuilt inside the image)
+**/node_modules
+backend/dist
+frontend/dist
+**/.vite
+
+# Local env & secrets — never bake into the image
+**/.env
+**/.env.*
+
+# VCS / IDE / OS
+.git
+.github
+# …but the orchestrator/worker need the agent prompt definitions at runtime
+!.github/agents
+!.github/agents/**
+.vscode
+.idea
+**/.DS_Store
+
+# Logs, test artifacts, temp
+**/*.log
+**/test-results
+**/playwright-report
+**/allure-results
+**/allure-report
+**/coverage
+**/tmp
+
+# Docs (not needed at build time)
+docs

@@ -1,0 +1,136 @@
+name: Build and Push to Azure Container Registry
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  ACR_NAME: intelliqeacr
+  IMAGE_NAME: jbsintelliqe-app
+  RESOURCE_GROUP: IntelliQE
+  CONTAINER_NAME: ca-intelliqe
+  LOCATION: eastus
+  # Azure SQL Database connection target. Provisioned & managed out-of-band (NOT
+  # created by this workflow). Override per-environment via GitHub Actions
+  # Variables (repo/environment Settings > Secrets and variables > Actions >
+  # Variables): set AZURE_SQL_SERVER / AZURE_SQL_DATABASE / AZURE_SQL_USER to
+  # point prod at a different DB WITHOUT editing this file. The defaults below
+  # apply when a Variable is unset. The password stays a secret (SQL_ADMIN_PASSWORD
+  # override) / the out-of-band `sqlpassword` Container App secret.
+  SQL_SERVER_FQDN: ${{ vars.AZURE_SQL_SERVER || 'intelliqe.database.windows.net' }}
+  SQL_DB_NAME: ${{ vars.AZURE_SQL_DATABASE || 'Intelliqe-sql' }}
+  SQL_USER: ${{ vars.AZURE_SQL_USER || 'intelliqeuser' }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Login to Azure Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.ACR_NAME }}.azurecr.io
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      # Sidebar build stamp: V<run number>-DDMMYY (e.g. V42-150626). run_number
+      # auto-increments each deploy, so users can confirm they're on the latest.
+      - name: Compute app version
+        run: echo "APP_VERSION=V${{ github.run_number }}-$(date -u +%d%m%y)" >> "$GITHUB_ENV"
+
+      - name: Build and push image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          dockerfile: Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            APP_VERSION=${{ env.APP_VERSION }}
+          tags: |
+            ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+            ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy to Azure Container App
+        uses: azure/cli@v2
+        env:
+          # ACR pull creds (also used by the build job to push the image).
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+          # OPTIONAL secret overrides. The app's runtime secrets (sqlpassword,
+          # jwtsecret, encryptionkey, workersecret) are provisioned ONCE on the
+          # Container App and persist across deploys — see the README/run-book.
+          # A deploy only re-sets a secret when the matching repo secret is
+          # NON-EMPTY, so an unset/blank repo secret can NEVER wipe a working
+          # value. Leave these unset in GitHub to keep the out-of-band values.
+          SQL_PASSWORD_OVERRIDE: ${{ secrets.SQL_ADMIN_PASSWORD }}
+          JWT_SECRET_OVERRIDE: ${{ secrets.JWT_SECRET }}
+          WORKER_SECRET_OVERRIDE: ${{ secrets.WORKER_SECRET }}
+          ENCRYPTION_KEY_OVERRIDE: ${{ secrets.ENCRYPTION_KEY }}
+        with:
+          inlineScript: |
+            set -e
+            az extension add --name containerapp --upgrade --only-show-errors -y || true
+
+            APP="${{ env.CONTAINER_NAME }}"            # ca-intelliqe (Container App)
+            RG="${{ env.RESOURCE_GROUP }}"
+            SQL_FQDN="${{ env.SQL_SERVER_FQDN }}"      # existing, out-of-band server
+            # Immutable, per-commit image tag forces a new Container App revision.
+            IMAGE="${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+            echo "Deploying $IMAGE to Container App $APP (DB: $SQL_FQDN)"
+
+            # Ensure the app can pull from ACR (skip if creds not provided —
+            # the app may already pull via a managed identity).
+            if [ -n "$ACR_USERNAME" ]; then
+              az containerapp registry set -n "$APP" -g "$RG" \
+                --server ${{ env.ACR_NAME }}.azurecr.io \
+                --username "$ACR_USERNAME" --password "$ACR_PASSWORD" || true
+            fi
+
+            # Optional secret refresh — only update a secret when its repo secret
+            # is provided. Never wipes the out-of-band values with empty strings.
+            SECRET_ARGS=()
+            if [ -n "$SQL_PASSWORD_OVERRIDE" ];  then SECRET_ARGS+=("sqlpassword=$SQL_PASSWORD_OVERRIDE");   fi
+            if [ -n "$JWT_SECRET_OVERRIDE" ];    then SECRET_ARGS+=("jwtsecret=$JWT_SECRET_OVERRIDE");        fi
+            if [ -n "$WORKER_SECRET_OVERRIDE" ]; then SECRET_ARGS+=("workersecret=$WORKER_SECRET_OVERRIDE");  fi
+            if [ -n "$ENCRYPTION_KEY_OVERRIDE" ]; then SECRET_ARGS+=("encryptionkey=$ENCRYPTION_KEY_OVERRIDE"); fi
+            if [ ${#SECRET_ARGS[@]} -gt 0 ]; then
+              az containerapp secret set -n "$APP" -g "$RG" --secrets "${SECRET_ARGS[@]}"
+            fi
+
+            # Guarantee external ingress targets nginx (port 80). Idempotent —
+            # this is the setting that makes the new revision reachable/healthy.
+            az containerapp ingress update -n "$APP" -g "$RG" \
+              --type external --target-port 80 --transport auto || true
+
+            # Update image + env. AZURE_SQL_* take precedence over any leftover
+            # DB_* vars in db.ts buildConfig(). All four runtime secrets are
+            # referenced via secretref (provisioned out-of-band, persist across
+            # deploys). Health probes (port 80) carry over from the live template.
+            az containerapp update -n "$APP" -g "$RG" \
+              --image "$IMAGE" \
+              --set-env-vars \
+                NODE_ENV=production \
+                AZURE_SQL_SERVER="$SQL_FQDN" \
+                AZURE_SQL_DATABASE="${{ env.SQL_DB_NAME }}" \
+                AZURE_SQL_USER="${{ env.SQL_USER }}" \
+                AZURE_SQL_PORT=1433 \
+                DB_SSL=true \
+                AZURE_SQL_PASSWORD=secretref:sqlpassword \
+                JWT_SECRET=secretref:jwtsecret \
+                WORKER_SECRET=secretref:workersecret \
+                ENCRYPTION_KEY=secretref:encryptionkey

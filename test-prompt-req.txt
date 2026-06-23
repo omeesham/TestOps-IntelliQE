@@ -1,0 +1,21 @@
+You are a senior QA requirements analyst. Analyze the following requirements and extract structured test-relevant information.
+
+Requirements:
+Go to Demo Application, and do possible field level validations
+
+Return ONLY valid JSON (no markdown, no explanation) in this exact format:
+{
+  "features": ["Feature1", "Feature2"],
+  "actors": ["user", "admin"],
+  "flows": ["flow description 1", "flow description 2"],
+  "edgeCases": ["edge case 1", "edge case 2"],
+  "dataRules": ["rule 1", "rule 2"]
+}
+
+Rules:
+- Extract real feature names from the requirements (e.g., "User Login", "Product Search", "Checkout")
+- Identify all user roles/actors mentioned
+- List every user flow and interaction path
+- Identify edge cases, boundary conditions, and error scenarios
+- List data validation rules (required fields, format constraints, etc.)
+- Be thorough — cover positive, negative, and edge case flows

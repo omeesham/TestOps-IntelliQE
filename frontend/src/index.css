@@ -1,0 +1,115 @@
+@import "tailwindcss";
+
+@theme {
+  /* Agentic AI Workspace — Purple / Blue / Teal palette */
+  --color-primary: #7C3AED;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #EEF2FF;
+  --color-secondary-foreground: #1E1B4B;
+  --color-background: #F5F3FF;
+  --color-foreground: #1E1B4B;
+  --color-card: #ffffff;
+  --color-card-foreground: #1E1B4B;
+  --color-border: #DDD6FE;
+  --color-muted: #EDE9FE;
+  --color-muted-foreground: #6B7280;
+  --color-accent: #ECFEFF;
+  --color-accent-foreground: #164E63;
+  --color-destructive: #EF4444;
+  --color-destructive-foreground: #ffffff;
+  --color-success: #10B981;
+  --color-warning: #F59E0B;
+
+  /* Extended agentic palette */
+  --color-agent-purple: #7C3AED;
+  --color-agent-blue: #3B82F6;
+  --color-agent-teal: #06B6D4;
+  --color-agent-indigo: #6366F1;
+  --color-sidebar: #1E1B4B;
+  --color-sidebar-foreground: #C4B5FD;
+  --color-sidebar-active: #7C3AED;
+  --color-sidebar-hover: rgba(124, 58, 237, 0.15);
+
+  --radius: 12px;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  html {
+    height: 100%;
+  }
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+  }
+  #root {
+    height: 100%;
+    overflow: hidden;
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes slideInRight {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.animate-slideInRight {
+  animation: slideInRight 0.3s ease-out;
+}
+
+@keyframes slideInUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.animate-slideInUp {
+  animation: slideInUp 0.4s ease-out;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.animate-shimmer {
+  animation: shimmer 1.5s ease-in-out infinite;
+  background-size: 200% 100%;
+}
+
+@keyframes gaugeStroke {
+  from { stroke-dashoffset: var(--gauge-circumference); }
+  to { stroke-dashoffset: var(--gauge-target); }
+}
+
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(124, 58, 237, 0); }
+}
+.animate-pulseGlow {
+  animation: pulseGlow 2s ease-in-out infinite;
+}
+
+@keyframes countUp {
+  from { opacity: 0.5; }
+  to { opacity: 1; }
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}

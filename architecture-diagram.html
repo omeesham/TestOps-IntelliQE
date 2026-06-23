@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JBS IntelliQE — Architecture Diagram</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    background: #0F0E17;
+    color: #E4E0F0;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── HEADER ── */
+  .header {
+    text-align: center;
+    padding: 48px 24px 32px;
+    background: linear-gradient(135deg, #1A1830 0%, #0F0E17 50%, #121025 100%);
+    border-bottom: 1px solid rgba(124, 58, 237, 0.2);
+  }
+  .header h1 {
+    font-size: 36px; font-weight: 800;
+    background: linear-gradient(135deg, #7C3AED, #06B6D4, #A78BFA);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    margin-bottom: 8px;
+  }
+  .header p { color: #9CA3AF; font-size: 15px; font-weight: 400; }
+  .header .badge {
+    display: inline-block; margin-top: 12px;
+    background: rgba(124, 58, 237, 0.15); border: 1px solid rgba(124, 58, 237, 0.3);
+    padding: 4px 14px; border-radius: 20px; font-size: 12px; color: #A78BFA; font-weight: 500;
+  }
+
+  /* ── CANVAS ── */
+  .canvas {
+    max-width: 1440px; margin: 0 auto; padding: 40px 32px 80px;
+    position: relative;
+  }
+
+  /* ── SECTION TITLES ── */
+  .section-title {
+    font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px;
+    color: #7C3AED; margin-bottom: 20px; display: flex; align-items: center; gap: 10px;
+  }
+  .section-title::after {
+    content: ''; flex: 1; height: 1px;
+    background: linear-gradient(90deg, rgba(124,58,237,0.4), transparent);
+  }
+
+  /* ── LAYER ROWS ── */
+  .layer { margin-bottom: 36px; }
+
+  /* ── BOXES ── */
+  .box-row {
+    display: flex; gap: 16px; flex-wrap: wrap;
+  }
+
+  .box {
+    background: #1A1830;
+    border: 1px solid rgba(124, 58, 237, 0.15);
+    border-radius: 14px;
+    padding: 20px;
+    flex: 1; min-width: 200px;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+  }
+  .box::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    border-radius: 14px 14px 0 0;
+  }
+  .box:hover {
+    border-color: rgba(124, 58, 237, 0.4);
+    box-shadow: 0 8px 32px rgba(124, 58, 237, 0.1);
+    transform: translateY(-2px);
+  }
+
+  .box-title {
+    font-size: 14px; font-weight: 700; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .box-title .icon {
+    width: 28px; height: 28px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+  }
+
+  .box-items {
+    list-style: none; font-size: 12px; color: #9CA3AF; line-height: 1.9;
+  }
+  .box-items li {
+    display: flex; align-items: center; gap: 6px;
+  }
+  .box-items li::before {
+    content: ''; width: 4px; height: 4px; border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .box-badge {
+    display: inline-block; font-size: 10px; font-weight: 600;
+    padding: 2px 8px; border-radius: 10px; margin-left: auto;
+  }
+
+  /* ── COLOR THEMES ── */
+  .theme-purple .box::before { background: linear-gradient(90deg, #7C3AED, #A78BFA); }
+  .theme-purple .box-title { color: #A78BFA; }
+  .theme-purple .icon { background: rgba(124,58,237,0.15); color: #A78BFA; }
+  .theme-purple .box-items li::before { background: #7C3AED; }
+
+  .theme-cyan .box::before { background: linear-gradient(90deg, #06B6D4, #67E8F9); }
+  .theme-cyan .box-title { color: #67E8F9; }
+  .theme-cyan .icon { background: rgba(6,182,212,0.15); color: #67E8F9; }
+  .theme-cyan .box-items li::before { background: #06B6D4; }
+
+  .theme-emerald .box::before { background: linear-gradient(90deg, #10B981, #6EE7B7); }
+  .theme-emerald .box-title { color: #6EE7B7; }
+  .theme-emerald .icon { background: rgba(16,185,129,0.15); color: #6EE7B7; }
+  .theme-emerald .box-items li::before { background: #10B981; }
+
+  .theme-amber .box::before { background: linear-gradient(90deg, #F59E0B, #FCD34D); }
+  .theme-amber .box-title { color: #FCD34D; }
+  .theme-amber .icon { background: rgba(245,158,11,0.15); color: #FCD34D; }
+  .theme-amber .box-items li::before { background: #F59E0B; }
+
+  .theme-rose .box::before { background: linear-gradient(90deg, #F43F5E, #FDA4AF); }
+  .theme-rose .box-title { color: #FDA4AF; }
+  .theme-rose .icon { background: rgba(244,63,94,0.15); color: #FDA4AF; }
+  .theme-rose .box-items li::before { background: #F43F5E; }
+
+  .theme-indigo .box::before { background: linear-gradient(90deg, #6366F1, #A5B4FC); }
+  .theme-indigo .box-title { color: #A5B4FC; }
+  .theme-indigo .icon { background: rgba(99,102,241,0.15); color: #A5B4FC; }
+  .theme-indigo .box-items li::before { background: #6366F1; }
+
+  .theme-sky .box::before { background: linear-gradient(90deg, #0EA5E9, #7DD3FC); }
+  .theme-sky .box-title { color: #7DD3FC; }
+  .theme-sky .icon { background: rgba(14,165,233,0.15); color: #7DD3FC; }
+  .theme-sky .box-items li::before { background: #0EA5E9; }
+
+  /* ── CONNECTOR ARROWS ── */
+  .connector {
+    display: flex; justify-content: center; padding: 12px 0;
+  }
+  .connector .arrow {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    color: #4B5563; font-size: 11px;
+  }
+  .connector .arrow-line {
+    width: 2px; height: 24px;
+    background: linear-gradient(180deg, rgba(124,58,237,0.4), rgba(6,182,212,0.4));
+    border-radius: 2px;
+  }
+  .connector .arrow-head { font-size: 10px; color: #06B6D4; }
+  .connector .arrow-label {
+    font-size: 10px; color: #6B7280; font-weight: 500;
+    background: #1A1830; padding: 2px 10px; border-radius: 8px;
+    border: 1px solid rgba(107,114,128,0.2);
+  }
+
+  /* ── FLOW DIAGRAM ── */
+  .flow-container {
+    background: #151425;
+    border: 1px solid rgba(124,58,237,0.12);
+    border-radius: 16px;
+    padding: 28px;
+    margin-bottom: 36px;
+  }
+  .flow-row {
+    display: flex; align-items: center; justify-content: center;
+    gap: 8px; flex-wrap: wrap; margin: 8px 0;
+  }
+  .flow-node {
+    padding: 8px 16px; border-radius: 10px;
+    font-size: 11px; font-weight: 600;
+    border: 1px solid; white-space: nowrap;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .flow-arrow {
+    color: #4B5563; font-size: 16px; font-weight: 300;
+  }
+
+  .flow-node.req { background: rgba(124,58,237,0.12); border-color: rgba(124,58,237,0.3); color: #A78BFA; }
+  .flow-node.audit { background: rgba(244,63,94,0.12); border-color: rgba(244,63,94,0.3); color: #FDA4AF; }
+  .flow-node.plan { background: rgba(6,182,212,0.12); border-color: rgba(6,182,212,0.3); color: #67E8F9; }
+  .flow-node.gen { background: rgba(16,185,129,0.12); border-color: rgba(16,185,129,0.3); color: #6EE7B7; }
+  .flow-node.script { background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.3); color: #FCD34D; }
+  .flow-node.exec { background: rgba(99,102,241,0.12); border-color: rgba(99,102,241,0.3); color: #A5B4FC; }
+  .flow-node.heal { background: rgba(236,72,153,0.12); border-color: rgba(236,72,153,0.3); color: #F9A8D4; }
+  .flow-node.data { background: rgba(14,165,233,0.12); border-color: rgba(14,165,233,0.3); color: #7DD3FC; }
+
+  /* ── DB SCHEMA ── */
+  .table-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 16px;
+  }
+  .db-table {
+    background: #151425;
+    border: 1px solid rgba(16,185,129,0.15);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .db-table-header {
+    background: rgba(16,185,129,0.08);
+    padding: 10px 14px;
+    font-size: 13px; font-weight: 700; color: #6EE7B7;
+    display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid rgba(16,185,129,0.12);
+  }
+  .db-table-header .tbl-icon {
+    font-size: 12px; opacity: 0.7;
+  }
+  .db-cols {
+    padding: 10px 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: #9CA3AF; line-height: 1.85;
+  }
+  .db-cols .pk { color: #FCD34D; font-weight: 600; }
+  .db-cols .fk { color: #A78BFA; }
+  .db-cols .col-type { color: #6B7280; font-size: 10px; }
+
+  /* ── STATS BAR ── */
+  .stats-bar {
+    display: flex; gap: 16px; flex-wrap: wrap;
+    margin-bottom: 36px;
+  }
+  .stat-card {
+    background: #1A1830;
+    border: 1px solid rgba(124,58,237,0.12);
+    border-radius: 12px;
+    padding: 16px 20px;
+    flex: 1; min-width: 120px;
+    text-align: center;
+  }
+  .stat-card .stat-value {
+    font-size: 28px; font-weight: 800;
+    background: linear-gradient(135deg, #7C3AED, #06B6D4);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .stat-card .stat-label {
+    font-size: 11px; color: #6B7280; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 1px; margin-top: 4px;
+  }
+
+  /* ── INTEGRATION GRID ── */
+  .int-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+  }
+  .int-chip {
+    background: #151425;
+    border: 1px solid rgba(107,114,128,0.15);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 11px; font-weight: 500;
+    color: #9CA3AF;
+    display: flex; align-items: center; gap: 8px;
+    transition: all 0.2s;
+  }
+  .int-chip:hover {
+    border-color: rgba(124,58,237,0.3);
+    background: #1A1830;
+  }
+  .int-chip .int-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  }
+  .int-chip.active .int-dot { background: #10B981; }
+  .int-chip.catalog .int-dot { background: #6B7280; }
+
+  /* ── SECURITY CARD ── */
+  .security-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px;
+  }
+  .sec-card {
+    background: #151425; border: 1px solid rgba(244,63,94,0.12);
+    border-radius: 12px; padding: 18px;
+  }
+  .sec-card h4 {
+    font-size: 13px; font-weight: 700; color: #FDA4AF;
+    margin-bottom: 8px; display: flex; align-items: center; gap: 8px;
+  }
+  .sec-card p { font-size: 12px; color: #9CA3AF; line-height: 1.7; }
+  .sec-tag {
+    display: inline-block; font-size: 10px; font-weight: 600;
+    padding: 2px 8px; border-radius: 8px;
+    background: rgba(244,63,94,0.1); color: #FDA4AF;
+    margin-top: 8px;
+  }
+
+  /* ── ROLE TABLE ── */
+  .role-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 12px;
+  }
+  .role-table th {
+    text-align: left; padding: 10px 14px;
+    background: rgba(124,58,237,0.08);
+    color: #A78BFA; font-weight: 600; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 1px;
+  }
+  .role-table td {
+    padding: 10px 14px;
+    border-top: 1px solid rgba(107,114,128,0.1);
+    color: #9CA3AF;
+  }
+  .role-table tr:hover td { background: rgba(124,58,237,0.04); }
+  .role-check { color: #10B981; font-weight: 700; }
+  .role-cross { color: #4B5563; }
+
+  /* ── TECH STACK ── */
+  .tech-row {
+    display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px;
+  }
+  .tech-tag {
+    font-size: 11px; font-weight: 500;
+    padding: 5px 14px; border-radius: 20px;
+    border: 1px solid rgba(107,114,128,0.2);
+    color: #9CA3AF;
+    background: #151425;
+  }
+
+  /* ── RESPONSIVE ── */
+  @media (max-width: 768px) {
+    .box-row { flex-direction: column; }
+    .canvas { padding: 20px 16px 60px; }
+    .header h1 { font-size: 26px; }
+    .flow-row { flex-direction: column; }
+    .flow-arrow { transform: rotate(90deg); }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════ HEADER ═══════════════════ -->
+<div class="header">
+  <h1>JBS IntelliQE — Solution Architecture</h1>
+  <p>Intelligent Quality Engineering powered by AI Agents</p>
+  <span class="badge">Multi-Tenant · Role-Based · AI-Driven · SCADA Validation</span>
+</div>
+
+<div class="canvas">
+
+<!-- ═══════════════════ STATS BAR ═══════════════════ -->
+<div class="stats-bar">
+  <div class="stat-card"><div class="stat-value">13</div><div class="stat-label">Pages</div></div>
+  <div class="stat-card"><div class="stat-value">50+</div><div class="stat-label">API Endpoints</div></div>
+  <div class="stat-card"><div class="stat-value">8</div><div class="stat-label">AI Agents</div></div>
+  <div class="stat-card"><div class="stat-value">10</div><div class="stat-label">DB Tables</div></div>
+  <div class="stat-card"><div class="stat-value">30+</div><div class="stat-label">Integrations</div></div>
+  <div class="stat-card"><div class="stat-value">3</div><div class="stat-label">User Roles</div></div>
+  <div class="stat-card"><div class="stat-value">17</div><div class="stat-label">Operators</div></div>
+</div>
+
+<!-- ═══════════════════ LAYER 1: CLIENT / USERS ═══════════════════ -->
+<div class="layer">
+  <div class="section-title">👤 Layer 1 — Client / Users</div>
+  <div class="box-row theme-purple">
+    <div class="box" style="max-width: 360px;">
+      <div class="box-title"><span class="icon">🌐</span> Browser Client</div>
+      <ul class="box-items">
+        <li>React 19 + TypeScript 5.9</li>
+        <li>Vite 7.3 Dev Server (port 5173)</li>
+        <li>Tailwind CSS 4.2 Styling</li>
+        <li>Recharts 3.8 Visualization</li>
+        <li>Axios HTTP Client + Token Interceptor</li>
+        <li>Web Speech API (TTS)</li>
+      </ul>
+    </div>
+    <div class="box">
+      <div class="box-title"><span class="icon">🔐</span> Authentication</div>
+      <ul class="box-items">
+        <li>Login with encrypted credentials</li>
+        <li>Token: <code style="font-size:10px;color:#A78BFA;">intelliqe-demo-token-{ts}:{user}</code></li>
+        <li>Session storage persistence</li>
+        <li>Auto-inject via Axios interceptor</li>
+        <li>AuthContext → useAuth() hook</li>
+      </ul>
+    </div>
+    <div class="box">
+      <div class="box-title"><span class="icon">👥</span> Roles &amp; Tenants</div>
+      <ul class="box-items">
+        <li><strong style="color:#A78BFA">admin</strong> — Full access + SQL expressions</li>
+        <li><strong style="color:#A78BFA">qa_engineer</strong> — Workflows, Automation, Execution</li>
+        <li><strong style="color:#A78BFA">data_analyst</strong> — Data, Reports, Insights</li>
+        <li>Multi-tenant isolation (tenant_id)</li>
+        <li>Platform admin sees all tenants</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ── Connector ── -->
+<div class="connector">
+  <div class="arrow">
+    <div class="arrow-line"></div>
+    <div class="arrow-label">HTTPS / REST API</div>
+    <div class="arrow-head">▼</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ LAYER 2: FRONTEND PAGES ═══════════════════ -->
+<div class="layer">
+  <div class="section-title">📱 Layer 2 — Frontend Application (React SPA)</div>
+  <div class="box-row theme-cyan">
+    <div class="box">
+      <div class="box-title"><span class="icon">🏠</span> Public Pages</div>
+      <ul class="box-items">
+        <li><strong>/</strong> — Landing Page</li>
+        <li><strong>/login</strong> — Login Page</li>
+      </ul>
+    </div>
+    <div class="box">
+      <div class="box-title"><span class="icon">🤖</span> Core Pages</div>
+      <ul class="box-items">
+        <li><strong>/chat</strong> — AI Test Generation Wizard</li>
+        <li><strong>/dashboard</strong> — KPIs + Agent Monitoring</li>
+        <li><strong>/data</strong> — Analytics &amp; Data Validation</li>
+        <li><strong>/custom-tests</strong> — Custom Test Suites</li>
+        <li><strong>/reports</strong> — Reports Summary</li>
+        <li><strong>/insights</strong> — AI Insights</li>
+      </ul>
+    </div>
+    <div class="box">
+      <div class="box-title"><span class="icon">⚙️</span> Admin Pages</div>
+      <ul class="box-items">
+        <li><strong>/system-configuration</strong> — Integrations Hub</li>
+        <li><strong>/workflows</strong> — Application Workflows</li>
+        <li><strong>/automation</strong> — Test Automation</li>
+        <li><strong>/execution</strong> — Test Execution</li>
+        <li><strong>/agents</strong> — Agent Monitor</li>
+      </ul>
+    </div>
+    <div class="box">
+      <div class="box-title"><span class="icon">🧩</span> Shared Components</div>
+      <ul class="box-items">
+        <li>Layout (Sidebar + Header)</li>
+        <li>KPICard, QualityChart</li>
+        <li>AgentActivityPanel</li>
+        <li>ConfigTabNav + ConnectModal</li>
+        <li>IntegrationCard (reusable)</li>
+        <li>TestTypeSelector + Config Forms</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ── Connector ── -->
+<div class="connector">
+  <div class="arrow">
+    <div class="arrow-line"></div>
+    <div class="arrow-label">Axios → /api/* (Bearer Token)</div>
+    <div class="arrow-head">▼</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ LAYER 3: BACKEND API ═══════════════════ -->
+<div class="layer">
+  <div class="section-title">🖥️ Layer 3 — Backend API (Express + TypeScript)</div>
+  <div class="box-row theme-emerald">
+    <div class="box">
+      <div class="box-title"><span class="icon">🚪</span> API Gateway</div>
+      <ul class="box-items">
+        <li>Express 5.1 (port 3001)</li>
+        <li>CORS middleware</li>
+        <li>JSON body parser</li>
+        <li>Auth middleware (token validation)</li>
+        <li>Tenant context injection (req.user)</li>
+      </ul>
+    </div>
+    <div class="box" style="flex: 2;">
+      <div class="box-title"><span class="icon">🛣️</span> Route Modules (11)</div>
+      <ul class="box-items" style="column-count: 2; column-gap: 24px;">
+        <li><strong>/api/auth</strong> — Login, Signup</li>
+        <li><strong>/api/generate</strong> — Gen pipeline</li>
+        <li><strong>/api/execute</strong> — Full pipeline</li>
+        <li><strong>/api/chat</strong> — Conversations</li>
+        <li><strong>/api/agents</strong> — Agent status/queue</li>
+        <li><strong>/api/data</strong> — CSV validation</li>
+        <li><strong>/api/jira</strong> — JIRA integration</li>
+        <li><strong>/api/azure</strong> — Blob storage</li>
+        <li><strong>/api/configurations</strong> — Configs CRUD</li>
+        <li><strong>/api/validation-rules</strong> — Rules + Results</li>
+        <li><strong>/api/test-cases</strong> — Save/Export</li>
+        <li><strong>/api/reports</strong> — Summary reports</li>
+      </ul>
+    </div>
+    <div class="box">
+      <div class="box-title"><span class="icon">⚡</span> Services (6)</div>
+      <ul class="box-items">
+        <li>ChatService</li>
+        <li>ConfigurationsService</li>
+        <li>JiraService</li>
+        <li>AzureStorageService</li>
+        <li>CsvValidatorService</li>
+        <li>ValidationRulesService</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ── Connector ── -->
+<div class="connector">
+  <div class="arrow">
+    <div class="arrow-line"></div>
+    <div class="arrow-label">Service calls / Agent orchestration</div>
+    <div class="arrow-head">▼</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ LAYER 4: AI AGENT PIPELINE ═══════════════════ -->
+<div class="layer">
+  <div class="section-title">🧠 Layer 4 — AI Agent Pipeline</div>
+  <div class="flow-container">
+    <div style="text-align:center;margin-bottom:16px;">
+      <span style="font-size:12px;font-weight:600;color:#A78BFA;">Full Execution Pipeline (7 Stages)</span>
+    </div>
+    <div class="flow-row">
+      <div class="flow-node req">📋 Requirement Agent</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-node audit">🔍 Audit Agent</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-node plan">📐 Planner Agent</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-node gen">🧪 Generator Agent</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-node script">📜 Script Agent</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-node exec">▶️ Execution Agent</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-node heal">🩺 Healing Agent</div>
+    </div>
+    <div style="text-align:center;margin-top:20px;">
+      <span style="font-size:12px;font-weight:600;color:#67E8F9;">+ Data Validation Agent (standalone)</span>
+    </div>
+    <div class="flow-row" style="margin-top:10px;">
+      <div class="flow-node data">📊 Data Validation Agent</div>
+      <span class="flow-arrow">→</span>
+      <span style="font-size:11px;color:#6B7280;">CSV parsing → Schema validation → Rule execution → Results</span>
+    </div>
+  </div>
+
+  <div class="box-row theme-amber">
+    <div class="box">
+      <div class="box-title"><span class="icon">📋</span> Requirement Agent</div>
+      <ul class="box-items">
+        <li>Parse features, actors, flows</li>
+        <li>Extract edge cases &amp; data rules</li>
+        <li>JIRA story acceptance criteria</li>
+      </ul>
+    </div>
+    <div class="box">
+      <div class="box-title"><span class="icon">📐</span> Planner Agent</div>
+      <ul class="box-items">
+        <li>Create test plan from requirements</li>
+        <li>UI, API, Data test allocation</li>
+        <li>Priority &amp; coverage strategy</li>
+      </ul>
+    </div>
+    <div class="box">
+      <div class="box-title"><span class="icon">🧪</span> Generator + Script</div>
+      <ul class="box-items">
+        <li>Generate test cases from plan</li>
+        <li>Create automation scripts</li>
+        <li>Steps, expected results, priority</li>
+      </ul>
+    </div>
+    <div class="box">
+      <div class="box-title"><span class="icon">🩺</span> Execution + Healing</div>
+      <ul class="box-items">
+        <li>Execute tests, capture results</li>
+        <li>Auto-fix failing tests</li>
+        <li>Self-healing retry logic</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ── Connector ── -->
+<div class="connector">
+  <div class="arrow">
+    <div class="arrow-line"></div>
+    <div class="arrow-label">pg Pool (max 10 connections)</div>
+    <div class="arrow-head">▼</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ LAYER 5: DATABASE ═══════════════════ -->
+<div class="layer">
+  <div class="section-title">🗄️ Layer 5 — PostgreSQL Database (Schema: JBSTestOpsAI)</div>
+  <div class="table-grid">
+    <div class="db-table">
+      <div class="db-table-header"><span class="tbl-icon">🏢</span> tenants</div>
+      <div class="db-cols">
+        <span class="pk">id</span> <span class="col-type">UUID PK</span><br>
+        name <span class="col-type">VARCHAR</span><br>
+        slug <span class="col-type">VARCHAR UNIQUE</span><br>
+        is_platform <span class="col-type">BOOLEAN</span><br>
+        created_at, updated_at <span class="col-type">TIMESTAMP</span>
+      </div>
+    </div>
+    <div class="db-table">
+      <div class="db-table-header"><span class="tbl-icon">👤</span> users</div>
+      <div class="db-cols">
+        <span class="pk">id</span> <span class="col-type">UUID PK</span><br>
+        <span class="fk">tenant_id</span> <span class="col-type">FK → tenants</span><br>
+        username <span class="col-type">VARCHAR UNIQUE</span><br>
+        password_hash, email, full_name <span class="col-type">VARCHAR</span><br>
+        role <span class="col-type">admin | qa_engineer | data_analyst</span>
+      </div>
+    </div>
+    <div class="db-table">
+      <div class="db-table-header"><span class="tbl-icon">🔗</span> client_configurations</div>
+      <div class="db-cols">
+        <span class="pk">id</span> <span class="col-type">UUID PK</span><br>
+        <span class="fk">tenant_id</span> <span class="col-type">FK → tenants</span><br>
+        integration_id <span class="col-type">VARCHAR</span><br>
+        status <span class="col-type">connected | available</span><br>
+        config_data <span class="col-type">JSONB (encrypted)</span><br>
+        category <span class="col-type">VARCHAR</span>
+      </div>
+    </div>
+    <div class="db-table">
+      <div class="db-table-header"><span class="tbl-icon">✅</span> data_validation_rules</div>
+      <div class="db-cols">
+        <span class="pk">id</span> <span class="col-type">UUID PK</span><br>
+        <span class="fk">tenant_id</span> <span class="col-type">FK → tenants</span><br>
+        rule_name, column_name <span class="col-type">VARCHAR</span><br>
+        operator <span class="col-type">17 types</span><br>
+        value, value_upper <span class="col-type">VARCHAR</span><br>
+        sql_expression <span class="col-type">TEXT</span><br>
+        is_active <span class="col-type">BOOLEAN</span>
+      </div>
+    </div>
+    <div class="db-table">
+      <div class="db-table-header"><span class="tbl-icon">📊</span> data_validation_results</div>
+      <div class="db-cols">
+        <span class="pk">id</span> <span class="col-type">UUID PK</span><br>
+        <span class="fk">rule_id</span> <span class="col-type">FK → rules</span><br>
+        <span class="fk">tenant_id</span> <span class="col-type">FK → tenants</span><br>
+        file_name <span class="col-type">VARCHAR</span><br>
+        status <span class="col-type">passed | failed | error</span><br>
+        records_scanned/passed/failed <span class="col-type">INT</span><br>
+        error_message <span class="col-type">TEXT</span><br>
+        executed_at <span class="col-type">TIMESTAMP</span>
+      </div>
+    </div>
+    <div class="db-table">
+      <div class="db-table-header"><span class="tbl-icon">💬</span> conversations + messages</div>
+      <div class="db-cols">
+        <span class="pk">conversations.id</span> <span class="col-type">UUID PK</span><br>
+        username, <span class="fk">tenant_id</span>, title <span class="col-type">VARCHAR</span><br>
+        <span class="pk">messages.id</span> <span class="col-type">UUID PK</span><br>
+        <span class="fk">conversation_id</span> <span class="col-type">FK → conversations</span><br>
+        role <span class="col-type">user | assistant | system</span><br>
+        content, metadata <span class="col-type">TEXT / JSONB</span>
+      </div>
+    </div>
+    <div class="db-table">
+      <div class="db-table-header"><span class="tbl-icon">🧪</span> test_runs + test_cases</div>
+      <div class="db-cols">
+        <span class="pk">test_runs.id</span> <span class="col-type">UUID PK</span><br>
+        username, <span class="fk">tenant_id</span> <span class="col-type">VARCHAR</span><br>
+        story_key, story_title, source <span class="col-type">VARCHAR</span><br>
+        <span class="pk">test_cases.id</span> <span class="col-type">UUID PK</span><br>
+        <span class="fk">test_run_id</span> <span class="col-type">FK → test_runs</span><br>
+        title, steps <span class="col-type">TEXT / JSONB</span><br>
+        priority, type, status <span class="col-type">VARCHAR</span>
+      </div>
+    </div>
+    <div class="db-table">
+      <div class="db-table-header"><span class="tbl-icon">🔑</span> jira_connections (legacy)</div>
+      <div class="db-cols">
+        <span class="pk">id</span> <span class="col-type">UUID PK</span><br>
+        username, <span class="fk">tenant_id</span> <span class="col-type">VARCHAR</span><br>
+        jira_url <span class="col-type">VARCHAR</span><br>
+        auth_header <span class="col-type">TEXT (encrypted)</span><br>
+        display_name <span class="col-type">VARCHAR</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Connector ── -->
+<div class="connector">
+  <div class="arrow">
+    <div class="arrow-line"></div>
+    <div class="arrow-label">External API calls (Axios / Azure SDK)</div>
+    <div class="arrow-head">▼</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ LAYER 6: EXTERNAL INTEGRATIONS ═══════════════════ -->
+<div class="layer">
+  <div class="section-title">🔌 Layer 6 — External Integrations</div>
+  <div class="box-row theme-indigo">
+    <div class="box">
+      <div class="box-title"><span class="icon">☁️</span> Data Sources</div>
+      <div class="int-grid">
+        <div class="int-chip active"><span class="int-dot"></span>Azure Blob</div>
+        <div class="int-chip catalog"><span class="int-dot"></span>AWS S3</div>
+        <div class="int-chip catalog"><span class="int-dot"></span>GCP Storage</div>
+        <div class="int-chip catalog"><span class="int-dot"></span>Snowflake</div>
+        <div class="int-chip catalog"><span class="int-dot"></span>Databricks</div>
+        <div class="int-chip catalog"><span class="int-dot"></span>PostgreSQL</div>
+        <div class="int-chip catalog"><span class="int-dot"></span>MySQL</div>
+        <div class="int-chip catalog"><span class="int-dot"></span>MSSQL</div>
+        <div class="int-chip catalog"><span class="int-dot"></span>Oracle</div>
+      </div>
+    </div>
+    <div class="box">
+      <div class="box-title"><span class="icon">📋</span> Requirement Sources</div>
+      <div class="int-grid">
+        <div class="int-chip active"><span class="int-dot"></span>JIRA Cloud</div>
+        <div class="int-chip catalog"><span class="int-dot"></span>Confluence</div>
+        <div class="int-chip catalog"><span class="int-dot"></span>SharePoint</div>
+      </div>
+      <div style="margin-top: 14px;">
+        <div class="box-title" style="font-size:12px;"><span class="icon" style="width:22px;height:22px;font-size:11px;">📦</span> Git Repos</div>
+        <div class="int-grid" style="margin-top:6px;">
+          <div class="int-chip catalog"><span class="int-dot"></span>GitHub</div>
+          <div class="int-chip catalog"><span class="int-dot"></span>GitLab</div>
+          <div class="int-chip catalog"><span class="int-dot"></span>Bitbucket</div>
+        </div>
+      </div>
+    </div>
+    <div class="box">
+      <div class="box-title"><span class="icon">🔔</span> Notifications</div>
+      <div class="int-grid">
+        <div class="int-chip catalog"><span class="int-dot"></span>Email (SMTP)</div>
+        <div class="int-chip catalog"><span class="int-dot"></span>Slack</div>
+        <div class="int-chip catalog"><span class="int-dot"></span>MS Teams</div>
+      </div>
+      <div style="margin-top:12px;font-size:11px;color:#6B7280;">
+        <span style="display:inline-flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:#10B981;display:inline-block;"></span> Active</span>
+        &nbsp;&nbsp;
+        <span style="display:inline-flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:#6B7280;display:inline-block;"></span> Catalog</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ DATA FLOWS ═══════════════════ -->
+<div class="layer">
+  <div class="section-title">🔄 Key Data Flows</div>
+  <div class="box-row theme-sky">
+    <div class="box">
+      <div class="box-title"><span class="icon">🧪</span> Test Generation Flow</div>
+      <ul class="box-items">
+        <li>1. Select test type (UI/API/Data/E2E)</li>
+        <li>2. Import requirements (JIRA / manual)</li>
+        <li>3. Configure target app + credentials</li>
+        <li>4. AI Pipeline generates test cases</li>
+        <li>5. Review, edit, save to DB</li>
+        <li>6. Export as test suite</li>
+      </ul>
+    </div>
+    <div class="box">
+      <div class="box-title"><span class="icon">📊</span> Validation Drill-Down Flow</div>
+      <ul class="box-items">
+        <li>1. Configure data source (Azure Blob)</li>
+        <li>2. Create validation rules (17 operators)</li>
+        <li>3. Execute → batch insert ~1,666 results</li>
+        <li>4. <strong style="color:#7DD3FC">Overview</strong> → Monthly summary</li>
+        <li>5. <strong style="color:#7DD3FC">Month</strong> → Daily breakdown</li>
+        <li>6. <strong style="color:#7DD3FC">Day</strong> → SCADA file table</li>
+        <li>7. <strong style="color:#7DD3FC">File</strong> → Individual test cards</li>
+      </ul>
+    </div>
+    <div class="box">
+      <div class="box-title"><span class="icon">💬</span> Chat / AI Flow</div>
+      <ul class="box-items">
+        <li>1. Create conversation (per tenant)</li>
+        <li>2. Send messages (user/assistant)</li>
+        <li>3. Metadata stored as JSONB</li>
+        <li>4. Credential sanitization on save</li>
+        <li>5. TTS voice readback (optional)</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ SECURITY ═══════════════════ -->
+<div class="layer">
+  <div class="section-title">🛡️ Security Architecture</div>
+  <div class="security-grid">
+    <div class="sec-card">
+      <h4>🔒 Encryption in Transit</h4>
+      <p>Frontend encrypts sensitive fields with XOR + Base64 before sending. Prefixed with <code style="color:#FDA4AF;font-size:11px;">__ENC__</code>. Shared key between client &amp; server.</p>
+      <span class="sec-tag">XOR Cipher</span>
+    </div>
+    <div class="sec-card">
+      <h4>🗄️ Encryption at Rest</h4>
+      <p>Backend re-encrypts config_data JSONB before storing in PostgreSQL. Sensitive keys (25+ patterns) automatically detected and encrypted.</p>
+      <span class="sec-tag">JSONB Encrypted</span>
+    </div>
+    <div class="sec-card">
+      <h4>🎭 API Response Masking</h4>
+      <p>All sensitive fields replaced with <code style="color:#FDA4AF;font-size:11px;">•••••</code> in API responses. Raw credentials never exposed to frontend.</p>
+      <span class="sec-tag">Field Masking</span>
+    </div>
+    <div class="sec-card">
+      <h4>💬 Chat Sanitization</h4>
+      <p>Regex patterns redact SAS tokens, Bearer tokens, GitHub PATs, AWS keys from chat messages before saving to database.</p>
+      <span class="sec-tag">Auto-Redaction</span>
+    </div>
+    <div class="sec-card">
+      <h4>🏢 Tenant Isolation</h4>
+      <p>Every query scoped by tenant_id. Auth middleware injects tenant context. Platform admin flag for cross-tenant access.</p>
+      <span class="sec-tag">Row-Level Security</span>
+    </div>
+    <div class="sec-card">
+      <h4>👁️ Role-Based Visibility</h4>
+      <p>SQL expressions hidden from non-admin users. Sidebar items filtered by role. Admin-only pages enforced via routing.</p>
+      <span class="sec-tag">RBAC</span>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ ROLE ACCESS MATRIX ═══════════════════ -->
+<div class="layer">
+  <div class="section-title">🔐 Role Access Matrix</div>
+  <div style="background:#151425;border:1px solid rgba(124,58,237,0.12);border-radius:14px;overflow:hidden;">
+    <table class="role-table">
+      <thead>
+        <tr>
+          <th>Feature / Page</th>
+          <th style="text-align:center">Admin</th>
+          <th style="text-align:center">QA Engineer</th>
+          <th style="text-align:center">Data Analyst</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Home / Chat</td><td class="role-check" style="text-align:center">✓</td><td class="role-check" style="text-align:center">✓</td><td class="role-check" style="text-align:center">✓</td></tr>
+        <tr><td>Dashboard</td><td class="role-check" style="text-align:center">✓</td><td class="role-check" style="text-align:center">✓</td><td class="role-check" style="text-align:center">✓</td></tr>
+        <tr><td>Data &amp; Analytics</td><td class="role-check" style="text-align:center">✓</td><td class="role-check" style="text-align:center">✓</td><td class="role-check" style="text-align:center">✓</td></tr>
+        <tr><td>SQL Expressions (visible)</td><td class="role-check" style="text-align:center">✓</td><td class="role-cross" style="text-align:center">✗</td><td class="role-cross" style="text-align:center">✗</td></tr>
+        <tr><td>Reports &amp; Insights</td><td class="role-check" style="text-align:center">✓</td><td class="role-check" style="text-align:center">✓</td><td class="role-check" style="text-align:center">✓</td></tr>
+        <tr><td>Custom Test Suites</td><td class="role-check" style="text-align:center">✓</td><td class="role-check" style="text-align:center">✓</td><td class="role-check" style="text-align:center">✓</td></tr>
+        <tr><td>Application Workflows</td><td class="role-check" style="text-align:center">✓</td><td class="role-check" style="text-align:center">✓</td><td class="role-cross" style="text-align:center">✗</td></tr>
+        <tr><td>Automation</td><td class="role-check" style="text-align:center">✓</td><td class="role-check" style="text-align:center">✓</td><td class="role-cross" style="text-align:center">✗</td></tr>
+        <tr><td>Execution</td><td class="role-check" style="text-align:center">✓</td><td class="role-check" style="text-align:center">✓</td><td class="role-cross" style="text-align:center">✗</td></tr>
+        <tr><td>System Configuration</td><td class="role-check" style="text-align:center">✓</td><td class="role-cross" style="text-align:center">✗</td><td class="role-cross" style="text-align:center">✗</td></tr>
+        <tr><td>Agent Monitor</td><td class="role-check" style="text-align:center">✓</td><td class="role-cross" style="text-align:center">✗</td><td class="role-cross" style="text-align:center">✗</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════ TECH STACK ═══════════════════ -->
+<div class="layer">
+  <div class="section-title">🛠️ Technology Stack</div>
+  <div class="box-row theme-rose">
+    <div class="box">
+      <div class="box-title"><span class="icon">⚛️</span> Frontend</div>
+      <div class="tech-row">
+        <span class="tech-tag">React 19</span>
+        <span class="tech-tag">TypeScript 5.9</span>
+        <span class="tech-tag">Vite 7.3</span>
+        <span class="tech-tag">Tailwind CSS 4.2</span>
+        <span class="tech-tag">React Router 7</span>
+        <span class="tech-tag">Recharts 3.8</span>
+        <span class="tech-tag">Axios 1.13</span>
+        <span class="tech-tag">Lucide Icons</span>
+        <span class="tech-tag">Web Speech API</span>
+      </div>
+    </div>
+    <div class="box">
+      <div class="box-title"><span class="icon">🖥️</span> Backend</div>
+      <div class="tech-row">
+        <span class="tech-tag">Node.js</span>
+        <span class="tech-tag">Express 5.1</span>
+        <span class="tech-tag">TypeScript 5.7</span>
+        <span class="tech-tag">tsx (runtime)</span>
+        <span class="tech-tag">Zod 3.24</span>
+        <span class="tech-tag">pg 8.20</span>
+        <span class="tech-tag">Axios 1.13</span>
+        <span class="tech-tag">Azure Blob SDK</span>
+        <span class="tech-tag">CORS</span>
+      </div>
+    </div>
+    <div class="box">
+      <div class="box-title"><span class="icon">🗄️</span> Infrastructure</div>
+      <div class="tech-row">
+        <span class="tech-tag">PostgreSQL</span>
+        <span class="tech-tag">Azure Blob Storage</span>
+        <span class="tech-tag">JIRA Cloud API</span>
+        <span class="tech-tag">localhost dev</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ FOOTER ═══════════════════ -->
+<div style="text-align:center; padding: 32px 0 0; border-top: 1px solid rgba(124,58,237,0.1); margin-top: 20px;">
+  <p style="font-size: 13px; color: #6B7280;">
+    JBS IntelliQE Architecture Diagram &nbsp;·&nbsp; Jade Business Solutions LLC &nbsp;·&nbsp; v1.0
+  </p>
+</div>
+
+</div><!-- /canvas -->
+</body>
+</html>

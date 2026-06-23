@@ -1,0 +1,38 @@
+You are a senior QA test case designer. Generate comprehensive test cases for the following.
+
+Requirements: Go to Demo Application, and do possible field level validations
+
+
+Features to cover: Demo Application Access, Field Level Validation, Form Input Validation, Data Entry Forms
+User flows: Navigate to Demo Application URL, Access form fields on Demo Application, Enter valid data into required fields and submit, Leave required fields empty and attempt submission
+Edge cases: Empty required fields submission, Whitespace-only input in required fields, Maximum length boundary input (exact max characters)
+Actors: user, tester, end user
+
+Return ONLY valid JSON array (no markdown, no explanation):
+[
+  {
+    "feature": "Feature Name",
+    "scenario": "Descriptive test scenario name",
+    "steps": ["Step 1: Navigate to...", "Step 2: Enter...", "Step 3: Click...", "Step 4: Verify..."],
+    "expectedResult": "Clear expected outcome",
+    "type": "positive|negative|edge|e2e|smoke",
+    "priority": "P0|P1|P2",
+    "precondition": "Any prerequisites"
+  }
+]
+
+Coverage mandate (MOST IMPORTANT):
+- There is NO upper or lower limit on the number of test cases. Generate as many test cases as are required to fully certify the functionality — no more, no less. Coverage completeness is the only success criterion; an incomplete set that leaves functional gaps is a failure regardless of count.
+- For EVERY feature listed above, produce test cases that cover: happy path, each alternate path, every documented validation/business rule, every error and exception path, boundary and edge conditions, security/authorization checks per actor, and end-to-end integration with dependent features.
+- For EVERY user flow, cover success, each failure mode, interruption/resume, and permission variations per actor.
+- For EVERY edge case and data rule, produce at least one dedicated test case.
+- For EVERY actor/role, cover both authorized and unauthorized access to each relevant feature.
+- Do NOT merge distinct scenarios into one test case to reduce the count. Do NOT omit a scenario because the list is getting long. Functional gaps are unacceptable.
+
+Other rules:
+- Each test case must have 3-8 detailed, actionable steps
+- Steps must reference actual UI elements (buttons, fields, links) based on the requirements
+- Include positive (happy path), negative (error handling), edge case, and E2E tests
+- Prioritize: P0 = critical path, P1 = important, P2 = nice to have
+- Include preconditions where relevant (e.g., "User is logged in", "Cart has items")
+- Make scenarios specific and testable, not generic

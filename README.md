@@ -1,1 +1,2 @@
-# TestOps-IntelliQE
+# JBSIntelliQE
+AI Based Test Automation Solution
