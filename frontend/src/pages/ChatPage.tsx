@@ -31,7 +31,7 @@ import {
   Plus, Trash2, Download, Clipboard, Cpu, Code, Search, Zap,
   BarChart3, Activity, Workflow, Box, Pencil, Save, ChevronLeft, ChevronRight,
   Play, Heart, GitBranch, Terminal, AlertTriangle, Wrench, ExternalLink, Copy, Package,
-  SkipForward, XCircle, Volume2, VolumeX, Settings,
+  SkipForward, XCircle, Volume2, VolumeX, Settings, Clock,
 } from 'lucide-react';
 import { initTTS, speak, speakAsync, waitForSpeech, waitForVoices, stopSpeaking, isTTSEnabled, toggleTTS } from '@/utils/tts';
 
@@ -152,6 +152,21 @@ interface PipelineStageState {
   key: string;
   status: 'pending' | 'running' | 'completed' | 'skipped';
   detail: string;
+  /** Accumulated wall-clock time this stage spent in the 'running' state (ms). */
+  durationMs?: number;
+  /** Transient: epoch ms when the current 'running' segment began. */
+  startedAt?: number;
+}
+
+/** Format a stage's elapsed time for display (e.g. "820ms", "12.3s", "1m 5s"). */
+function formatStageDuration(ms?: number): string {
+  if (!ms || ms < 0) return '';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  const rem = Math.round(s % 60);
+  return `${m}m ${rem}s`;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -204,7 +219,20 @@ export default function ChatPage() {
   );
 
   const updatePipeline = (key: string, status: 'pending' | 'running' | 'completed' | 'skipped', detail: string) => {
-    setPipelineStages(prev => prev.map(s => s.key === key ? { ...s, status, detail } : s));
+    setPipelineStages(prev => prev.map(s => {
+      if (s.key !== key) return s;
+      const next: PipelineStageState = { ...s, status, detail };
+      // Start the clock when a stage enters 'running'; accumulate elapsed time on
+      // finish. Accumulation handles stages that run in more than one segment
+      // (e.g. execution re-recording results during a healing cycle).
+      if (status === 'running' && s.status !== 'running') {
+        next.startedAt = Date.now();
+      } else if ((status === 'completed' || status === 'skipped') && s.startedAt) {
+        next.durationMs = (s.durationMs || 0) + (Date.now() - s.startedAt);
+        next.startedAt = undefined;
+      }
+      return next;
+    }));
   };
 
   // Script generation results
@@ -2333,6 +2361,24 @@ export default function ChatPage() {
                 </div>
               ))}
             </div>
+            {/* Agent execution times — how long each AI pipeline stage took */}
+            {pipelineStages.some(s => s.durationMs) && (
+              <div className="px-5 py-3 border-t border-gray-100">
+                <p className="text-xs font-semibold text-gray-700 mb-2 flex items-center gap-1"><Clock className="w-3.5 h-3.5 text-violet-500" />Agent Execution Times</p>
+                <div className="space-y-1">
+                  {PIPELINE_STAGES.map((info) => {
+                    const st = pipelineStages.find(s => s.key === info.key);
+                    if (!st?.durationMs) return null;
+                    return (
+                      <div key={info.key} className="flex items-center justify-between text-[11px]">
+                        <span className="text-gray-600">{info.name}</span>
+                        <span className="font-medium text-gray-800 tabular-nums">{formatStageDuration(st.durationMs)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {/* Healing summary if applicable */}
             {healingLog.length > 0 && (
               <div className="px-5 py-3 border-t border-gray-100">
@@ -2556,6 +2602,11 @@ export default function ChatPage() {
                     }`}>
                       {info.name}
                     </p>
+                    {stage.durationMs ? (
+                      <span className="ml-auto flex items-center gap-0.5 text-[10px] font-medium text-gray-400 tabular-nums">
+                        <Clock className="w-2.5 h-2.5" />{formatStageDuration(stage.durationMs)}
+                      </span>
+                    ) : null}
                   </div>
                   <p className={`text-[11px] mt-0.5 ${
                     stage.status === 'completed' ? 'text-[#1E1B4B]' :
