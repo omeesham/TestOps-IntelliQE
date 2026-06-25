@@ -4,7 +4,11 @@ import {
   connectJira,
   getJiraStories,
   getJiraStoryDetails,
-  generateTests,
+  startGeneration,
+  getGenerationResult,
+  generateScriptsForRun,
+  executeScriptsForRun,
+  generateAllureReport,
   executeTests,
   saveTestCases,
   exportTestCases,
@@ -19,6 +23,7 @@ import {
   getSharePointDocuments,
   getSharePointDocument,
 } from '@/services/api';
+import { normalizeError } from '@/utils/apiError';
 import {
   Send, Bot, Loader2, CheckCircle, Monitor, Plug,
   Globe, Layers, Shield, FileText, Upload, Type, Link2,
@@ -222,6 +227,11 @@ export default function ChatPage() {
 
   // Report state
   const [reportData, setReportData] = useState<{ totalTests: number; passed: number; failed: number; healed: number; passRate: number; executionTime: string; healingRequired: boolean } | null>(null);
+  const [reportDownloadUrl, setReportDownloadUrl] = useState<string>('');
+  // Tracks the downloadable Allure report build so the report card can always
+  // show a clear state (preparing → ready → failed) instead of silently hiding
+  // the Download button until generation resolves.
+  const [reportGenStatus, setReportGenStatus] = useState<'idle' | 'generating' | 'ready' | 'failed'>('idle');
 
   // Pipeline run tracking
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
@@ -622,119 +632,174 @@ export default function ChatPage() {
     setStep('column-select');
   };
 
-  /* --- generation pipeline (only TC generation, not full pipeline) --- */
+  /* --- generation pipeline (only TC generation, not full pipeline) ---
+     The backend runs the multi-stage Claude pipeline as a BACKGROUND job and
+     returns a runId immediately. We drive the pipeline panel from SSE stage
+     events and finish when the job reports done/error — with a poll fallback so
+     a missed event can't hang the UI. No long-held request → no client timeout,
+     and errors are shown as friendly messages, never raw text. */
   const runGeneration = async (requirements: string) => {
     const steps: AgentStep[] = AGENTS.map(a => ({ name: a.name, status: 'pending' as const, detail: a.detail }));
     setAgentSteps(steps);
 
     // Pipeline: Stage 1 → running
     updatePipeline('requirements', 'running', 'Analyzing requirements...');
-
-    // Agent 1: Requirement Analyst
     setAgentSteps(prev => prev.map((s, idx) => idx === 0 ? { ...s, status: 'running' } : s));
-    let res: any = null;
+
+    /* Apply a successful result: map backend test cases (IEEE-829 shape, with
+       legacy aliases preserved) into the wizard and advance to results. */
+    const applyGenerationResult = (res: any) => {
+      let testCases: any[] = [];
+      if (res?.testCases?.length) {
+        testCases = res.testCases.map((tc: any, i: number) => ({
+          id: tc.id || `TC-${String(i + 1).padStart(3, '0')}`,
+          traceabilityId: tc.traceabilityId || '',
+          module: tc.module || '',
+          submodule: tc.submodule || '',
+          feature: tc.feature || '',
+          title: tc.title || tc.scenario || tc.name || 'Test scenario',
+          scenario: tc.scenario || tc.title || tc.name || 'Test scenario',
+          description: tc.description || '',
+          precondition: tc.precondition || '',
+          testData: tc.testData || {},
+          testSteps: Array.isArray(tc.testSteps) ? tc.testSteps : [],
+          // String steps are kept populated for the existing UI column
+          steps: Array.isArray(tc.steps) && tc.steps.length
+            ? tc.steps
+            : Array.isArray(tc.testSteps)
+              ? tc.testSteps.map((s: any, idx: number) =>
+                  `${s.step ?? idx + 1}. ${s.action}${s.expected ? ` → Expected: ${s.expected}` : ''}`)
+              : [],
+          expectedResult: tc.expectedResult || tc.expected || '',
+          type: tc.type || tc.category || 'positive',
+          priority: tc.priority || 'P1',
+          severity: tc.severity || '',
+          tags: Array.isArray(tc.tags) ? tc.tags : [],
+          status: tc.status || 'generated',
+        }));
+      }
+
+      updatePipeline('requirements', 'completed', res?.summary?.features?.join(', ') || 'Completed');
+      setAgentSteps(prev => prev.map((s, idx) => idx <= 1 ? { ...s, status: 'completed' } : s));
+
+      if (!testCases.length) {
+        const parsedFeatures: string[] = res?.summary?.features || [];
+        const detail = parsedFeatures.length ? ` Parsed features: ${parsedFeatures.join(', ')}.` : '';
+        push('tessa', `The AI didn't return any test cases this time.${detail} Please try a more specific requirement or a different JIRA story.`);
+        updatePipeline('test-design', 'skipped', 'No test cases generated');
+        setStep('welcome');
+        return;
+      }
+
+      setResults({ testCases });
+      setTcPage(1);
+      setSelectedTcIds(new Set());
+      setEditingTcId(null);
+      updatePipeline('test-design', 'completed', `${testCases.length} test cases generated`);
+      push('tessa', `Generated ${testCases.length} test cases from the AI pipeline. Review, edit, or delete as needed. Click Save when satisfied.`);
+      setStep('results');
+    };
+
+    /* Friendly failure — never surface raw error text in the chat. */
+    const failGeneration = (message: string) => {
+      push('tessa', `⚠️ ${message}`);
+      updatePipeline('test-design', 'skipped', 'Generation failed');
+      setAgentSteps(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'pending' } : s));
+      setStep('welcome');
+    };
+
+    // ── Start the background generation job ──
+    let runId = '';
     try {
-      // Detect explore-mode marker stashed by handleExploreSubmit.
-      // When present, route to the backend with exploreMode=true and roles
-      // instead of sending the marker string as actual requirements.
+      // Detect explore-mode marker stashed by handleExploreSubmit. When present,
+      // route to the backend with exploreMode=true and roles instead of sending
+      // the marker string as actual requirements.
       const isExplore = source === 'explore' || requirements.startsWith('__EXPLORE__:');
       if (isExplore) {
         const roles = exploreUsername
           ? [{ roleName: 'user', username: exploreUsername, password: explorePassword }]
           : undefined;
-        res = await generateTests('', subCategory || undefined, {
+        const started = await startGeneration('', subCategory || undefined, {
           exploreMode: true,
           targetUrl: exploreUrl,
           appName: exploreAppName || undefined,
           roles,
         });
+        runId = started?.runId || '';
       } else {
-        res = await generateTests(requirements, subCategory || undefined);
+        const started = await startGeneration(requirements, subCategory || undefined);
+        runId = started?.runId || '';
       }
-    } catch (err) {
-      console.error('Generate tests failed:', err);
-    }
-
-    // Track pipeline run
-    if (res?.runId) {
-      setCurrentRunId(res.runId);
-      setPipelineMode(res.mode || 'sync');
-    }
-
-    setAgentSteps(prev => prev.map((s, idx) => idx === 0 ? { ...s, status: 'completed' } : s));
-
-    // Pipeline: Stage 1 → completed
-    updatePipeline('requirements', 'completed', res?.summary?.features?.join(', ') || 'Completed');
-
-    // Pipeline: Stage 2 → running
-    updatePipeline('test-design', 'running', 'Generating test cases...');
-
-    // Agent 2: Test Case Generator — backend has already produced the cases
-    // synchronously above; we just reflect the real status, no artificial wait.
-    setAgentSteps(prev => prev.map((s, idx) => idx === 1 ? { ...s, status: 'running' } : s));
-    setAgentSteps(prev => prev.map((s, idx) => idx === 1 ? { ...s, status: 'completed' } : s));
-
-    // Map backend test cases from the real pipeline. The backend now emits
-    // the IEEE-829 shape (title, description, testSteps with per-step expected,
-    // testData, severity, traceabilityId). We keep the legacy aliases so the
-    // existing render code and exports continue to work unchanged.
-    let testCases: any[] = [];
-    if (res?.testCases?.length) {
-      testCases = res.testCases.map((tc: any, i: number) => ({
-        id: tc.id || `TC-${String(i + 1).padStart(3, '0')}`,
-        traceabilityId: tc.traceabilityId || '',
-        module: tc.module || '',
-        submodule: tc.submodule || '',
-        feature: tc.feature || '',
-        title: tc.title || tc.scenario || tc.name || 'Test scenario',
-        scenario: tc.scenario || tc.title || tc.name || 'Test scenario',
-        description: tc.description || '',
-        precondition: tc.precondition || '',
-        testData: tc.testData || {},
-        testSteps: Array.isArray(tc.testSteps) ? tc.testSteps : [],
-        // String steps are kept populated for the existing UI column
-        steps: Array.isArray(tc.steps) && tc.steps.length
-          ? tc.steps
-          : Array.isArray(tc.testSteps)
-            ? tc.testSteps.map((s: any, idx: number) =>
-                `${s.step ?? idx + 1}. ${s.action}${s.expected ? ` → Expected: ${s.expected}` : ''}`)
-            : [],
-        expectedResult: tc.expectedResult || tc.expected || '',
-        type: tc.type || tc.category || 'positive',
-        priority: tc.priority || 'P1',
-        severity: tc.severity || '',
-        tags: Array.isArray(tc.tags) ? tc.tags : [],
-        status: tc.status || 'generated',
-      }));
-    }
-
-    if (!testCases.length) {
-      const parsedFeatures: string[] = res?.summary?.features || [];
-      const parsedFlows: string[] = res?.summary?.flows || [];
-      const detail =
-        parsedFeatures.length || parsedFlows.length
-          ? ` Parsed features: ${parsedFeatures.join(', ') || '(none)'}. Flows: ${parsedFlows.join(', ') || '(none)'}.`
-          : '';
-      const warn = res?.warning === 'no_test_cases_generated' ? ' (backend returned no_test_cases_generated)' : '';
-      push(
-        'tessa',
-        `Pipeline returned no test cases${warn}.${detail} Try a more specific requirement or a different JIRA story.`
-      );
-      updatePipeline('test-design', 'skipped', 'No test cases generated');
-      setStep('welcome');
+    } catch (err: any) {
+      console.error('Start generation failed:', err);
+      failGeneration(normalizeError(err).message);
       return;
     }
 
-    setResults({ testCases });
-    setTcPage(1);
-    setSelectedTcIds(new Set());
-    setEditingTcId(null);
+    if (!runId) {
+      failGeneration('Could not start generation. Please try again.');
+      return;
+    }
+    setCurrentRunId(runId);
+    setPipelineMode('async');
 
-    // Pipeline: Stage 2 → completed with count
-    updatePipeline('test-design', 'completed', `${testCases.length} test cases generated`);
+    // ── Drive progress + completion from SSE, with a polling fallback ──
+    let handled = false;
+    let es: EventSource | null = null;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-    push('tessa', `Generated ${testCases.length} test cases from the AI pipeline (${res?.mode === 'async' ? 'Claude AI' : 'local agents'}). Review, edit, or delete as needed. Click Save when satisfied.`);
-    setStep('results');
+    const cleanup = () => {
+      if (es) { es.close(); es = null; }
+      if (pollTimer !== null) { clearInterval(pollTimer); pollTimer = null; }
+    };
+
+    const onTerminal = (job: { status: string; result?: any; error?: string }) => {
+      if (handled) return;
+      handled = true;
+      cleanup();
+      if (job.status === 'done' && job.result) {
+        applyGenerationResult(job.result);
+      } else {
+        failGeneration(job.error || 'Generation did not complete. Please try again.');
+      }
+    };
+
+    es = subscribeToPipelineEvents(runId, (event: any) => {
+      if (!event || typeof event !== 'object') return;
+      if (event.type === 'gen_stage') {
+        const status = event.status === 'completed' ? 'completed' : 'running';
+        updatePipeline(event.stage, status, event.detail || '');
+        if (event.stage === 'requirements') {
+          setAgentSteps(prev => prev.map((s, i) => i === 0 ? { ...s, status } : s));
+        } else if (event.stage === 'test-design') {
+          setAgentSteps(prev => prev.map((s, i) =>
+            i === 0 ? { ...s, status: 'completed' } : i === 1 ? { ...s, status } : s));
+        }
+      } else if (event.type === 'generation_complete') {
+        getGenerationResult(runId).then(onTerminal).catch(() =>
+          onTerminal({ status: 'error', error: 'Generation finished but the result could not be loaded. Please try again.' }),
+        );
+      } else if (event.type === 'generation_error') {
+        onTerminal({ status: 'error', error: event.error });
+      }
+    });
+
+    // Poll fallback every 4s — covers a missed SSE event or a dropped stream.
+    pollTimer = setInterval(async () => {
+      if (handled) return;
+      try {
+        const job = await getGenerationResult(runId);
+        if (job.status === 'done' || job.status === 'error') {
+          onTerminal(job);
+        } else if (job.status === 'unknown') {
+          onTerminal({ status: 'error', error: 'This generation run is no longer available. Please start a new generation.' });
+        } else if (job.stage) {
+          updatePipeline(job.stage, 'running', job.detail || '');
+        }
+      } catch {
+        // transient network hiccup — keep polling
+      }
+    }, 4000);
   };
 
   /* --- Save test cases to DB --- */
@@ -801,33 +866,40 @@ export default function ChatPage() {
     updatePipeline('script-gen', 'running', 'Producing automation scripts...');
     setAgentSteps([{ name: 'Script Writer', status: 'running', detail: 'Analyzing test cases and producing automation scripts' }]);
 
-    // Scripts are generated by the backend pipeline (scriptAgent)
-    // Re-call generateTests to get scripts if not already available
-    let scripts: any[] = [];
-    try {
-      const scriptRes = await generateTests(pendingRequirements || 'Generate scripts', subCategory || undefined);
-      if (scriptRes?.scripts?.length) {
-        scripts = scriptRes.scripts.map((s: any) => ({
-          testCaseId: s.testCaseId || s.testCase_id,
-          fileName: s.fileName || s.file_name || `${s.testCaseId}.spec.ts`,
-          code: s.code || s.script || '// Script generation pending',
-        }));
-      }
-    } catch (err) {
-      console.error('Script generation API failed:', err);
+    // Scripts are produced by the REAL backend script agent (Claude) against the
+    // saved test run — no client-side fabrication. The run must be saved first.
+    if (!savedTestRunId) {
+      push('tessa', '⚠️ Please save the test cases first — scripts are generated from the saved run.');
+      updatePipeline('script-gen', 'skipped', 'Save test cases first');
+      setAgentSteps([{ name: 'Script Writer', status: 'completed', detail: 'Save required' }]);
+      setStep('results');
+      return;
     }
 
-    // Fallback: generate basic scripts client-side if backend didn't return them
-    if (!scripts.length) {
-      scripts = testCases.map((tc: any) => {
-        const safeName = (tc.scenario || tc.id || 'test').replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase().slice(0, 40);
-        return {
-          testCaseId: tc.id,
-          fileName: `${safeName}.spec.ts`,
-          code: `import { test, expect } from '@playwright/test';\n\ntest.describe('${tc.feature || 'Feature'}', () => {\n  test('${tc.scenario || 'Test'}', async ({ page }) => {\n${(tc.steps || []).map((step: string, i: number) => `    // Step ${i + 1}: ${step}`).join('\n')}\n  });\n});`,
-        };
-      });
+    let scripts: any[] = [];
+    let scriptErr: string | null = null;
+    try {
+      const scriptRes = await generateScriptsForRun(savedTestRunId);
+      const rows = Array.isArray(scriptRes?.scripts) ? scriptRes.scripts : [];
+      scripts = rows.map((s: any) => ({
+        testCaseId: s.test_case_id || s.testCaseId,
+        fileName: s.file_name || s.fileName || `${s.tc_number || s.test_case_id || 'test'}.spec.ts`,
+        code: s.code || '',
+      })).filter((s: any) => s.code);
+    } catch (err: any) {
+      console.error('Script generation API failed:', err);
+      const ne = normalizeError(err);
+      scriptErr = ne.hint ? `${ne.message} — ${ne.hint}` : ne.message;
     }
+
+    if (!scripts.length) {
+      push('tessa', `⚠️ ${scriptErr || 'The backend returned no scripts. Ensure the AI engine is connected and try again.'}`);
+      updatePipeline('script-gen', 'skipped', 'No scripts generated');
+      setAgentSteps([{ name: 'Script Writer', status: 'completed', detail: 'No scripts produced' }]);
+      setStep('results');
+      return;
+    }
+
     setGeneratedScripts(scripts);
     setSelectedScriptIdx(0);
 
@@ -858,12 +930,27 @@ export default function ChatPage() {
     }));
     setExecutionResults([...initialResults]);
 
-    // Call the real execute pipeline endpoint
+    // Execute the ACTUAL generated scripts for this saved run via Playwright —
+    // not a re-run of the generation pipeline. Requires the run to be saved.
     let execRes: any = null;
-    try {
-      execRes = await executeTests(pendingRequirements || 'Execute test suite');
-    } catch (err) {
-      console.error('Execute tests failed:', err);
+    let execErr: string | null = null;
+    if (!savedTestRunId) {
+      execErr = 'Save the test cases and generate scripts before executing.';
+    } else {
+      try {
+        execRes = await executeScriptsForRun(savedTestRunId);
+      } catch (err: any) {
+        console.error('Execute tests failed:', err);
+        const ne = normalizeError(err);
+        execErr = ne.hint ? `${ne.message} — ${ne.hint}` : ne.message;
+      }
+    }
+
+    if (execErr) {
+      push('tessa', `⚠️ ${execErr}`);
+      updatePipeline('execution', 'skipped', 'Execution failed');
+      setStep('script-review');
+      return;
     }
 
     if (execRes?.runId) setCurrentRunId(execRes.runId);
@@ -1049,9 +1136,56 @@ export default function ChatPage() {
       healingRequired: healingAttempt > 0,
     });
 
+    // Materialize a downloadable Allure report for THIS run. The wizard just
+    // executed, so real allure-results are already stored — generation is fast
+    // (no re-run) and needs no Java. The report card shows a live "preparing…"
+    // state meanwhile, so the Download option is always visible before the PR.
+    let downloadMsg = '';
+    setReportDownloadUrl('');
+    if (savedTestRunId) {
+      setReportGenStatus('generating');
+      try {
+        const allure = await generateAllureReport(savedTestRunId);
+        if (allure?.reportUrl) {
+          setReportDownloadUrl(allure.reportUrl.replace(/\/index\.html$/, '/download'));
+          setReportGenStatus('ready');
+          downloadMsg = ' You can download the full Allure report below, or open it any time from the Reports page.';
+        } else {
+          setReportGenStatus('failed');
+        }
+      } catch (err) {
+        console.error('Allure report generation failed:', err);
+        setReportGenStatus('failed');
+        downloadMsg = ' (The detailed Allure report could not be built this time — the summary above still reflects the run.)';
+      }
+    } else {
+      setReportGenStatus('failed');
+    }
+
     // Pipeline: Stage 6 → completed
     updatePipeline('report-gen', 'completed', `Report ready — ${passRate}% pass rate`);
-    push('tessa', `Report generated. Pass rate: ${passRate}%. ${healingAttempt > 0 ? `${healingLog.filter(l => l.result === 'fixed').length} test(s) were auto-healed.` : 'No auto-healing was needed.'}`);
+    push('tessa', `Report generated. Pass rate: ${passRate}%. ${healingAttempt > 0 ? `${healingLog.filter(l => l.result === 'fixed').length} test(s) were auto-healed.` : 'No auto-healing was needed.'}${downloadMsg}`);
+  };
+
+  /* --- Retry just the downloadable report build (no pipeline re-run) --- */
+  const handleRetryReport = async () => {
+    if (!savedTestRunId || reportGenStatus === 'generating') return;
+    setReportGenStatus('generating');
+    setReportDownloadUrl('');
+    try {
+      const allure = await generateAllureReport(savedTestRunId);
+      if (allure?.reportUrl) {
+        setReportDownloadUrl(allure.reportUrl.replace(/\/index\.html$/, '/download'));
+        setReportGenStatus('ready');
+      } else {
+        setReportGenStatus('failed');
+      }
+    } catch (err) {
+      console.error('Allure report retry failed:', err);
+      setReportGenStatus('failed');
+      const ne = normalizeError(err);
+      push('tessa', `⚠️ ${ne.hint ? `${ne.message} — ${ne.hint}` : ne.message}`);
+    }
   };
 
   /* --- Auto-populate git repo from System Configuration when entering publish step --- */
@@ -1219,6 +1353,8 @@ export default function ChatPage() {
     setHealingAttempt(0);
     setHealingLog([]);
     setReportData(null);
+    setReportDownloadUrl('');
+    setReportGenStatus('idle');
     setGitRepoUrl('');
     setGitBranch('main');
     setIsPublishing(false);
@@ -2198,7 +2334,34 @@ export default function ChatPage() {
               </div>
             )}
           </div>
-          {/* Action buttons */}
+          {/* Download report — always shown in the report step so it's clearly
+              available BEFORE creating a pull request. Switches between
+              preparing / ready / retry states. */}
+          {reportGenStatus === 'ready' && reportDownloadUrl ? (
+            <a
+              href={reportDownloadUrl}
+              download
+              className="w-full py-2.5 bg-emerald-50 border border-emerald-300 hover:border-emerald-500 hover:bg-emerald-100 text-emerald-700 text-sm font-semibold rounded-lg transition-all flex items-center justify-center gap-2"
+            >
+              <Download className="w-4 h-4" />Download Test Report
+            </a>
+          ) : reportGenStatus === 'failed' ? (
+            <button
+              onClick={handleRetryReport}
+              className="w-full py-2.5 bg-white border border-amber-300 hover:border-amber-500 text-amber-700 text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+            >
+              <RotateCcw className="w-4 h-4" />Report not ready — Retry download
+            </button>
+          ) : (
+            <div className="w-full py-2.5 bg-gray-50 border border-gray-200 text-gray-500 text-sm font-medium rounded-lg flex items-center justify-center gap-2 cursor-default">
+              <Loader2 className="w-4 h-4 animate-spin" />Preparing your downloadable report…
+            </div>
+          )}
+          {reportGenStatus !== 'ready' && (
+            <p className="text-[11px] text-gray-400 text-center -mt-1">
+              You can download the report here before creating a pull request.
+            </p>
+          )}
           <button
             onClick={() => setStep('publish')}
             className="w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"

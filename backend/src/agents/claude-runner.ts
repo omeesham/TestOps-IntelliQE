@@ -13,6 +13,7 @@ import { execSync, spawnSync } from 'child_process';
 import { homedir, tmpdir } from 'os';
 import { join } from 'path';
 import { writeFileSync, unlinkSync } from 'fs';
+import Anthropic from '@anthropic-ai/sdk';
 
 let resolvedCliPath: string | null = null;
 const IS_WINDOWS = process.platform === 'win32';
@@ -38,7 +39,92 @@ function findClaudeCli(): string | null {
 }
 
 /**
- * Run a prompt through Claude CLI and return the response text.
+ * Run a prompt through Claude and return the response text.
+ *
+ * Auth strategy, in priority order:
+ *   1. ANTHROPIC_API_KEY set → call the Anthropic API directly via the official
+ *      SDK. This is the durable, portable path: API keys don't expire like an
+ *      interactive `claude auth login` session, they work headlessly, and
+ *      anyone who clones the repo can run the pipeline by setting their own key.
+ *      PREFERRED.
+ *   2. Otherwise → shell out to the locally-authenticated `claude` CLI
+ *      (subscription login). Kept as a fallback so existing CLI setups keep
+ *      working — but its login token expires periodically, which is the failure
+ *      the API-key path above is meant to eliminate.
+ *
+ * Returns a Promise now (the SDK is async). All call sites `await` it.
+ */
+export async function runClaudePrompt(
+  prompt: string,
+  options?: { maxTokens?: number; model?: string },
+): Promise<string> {
+  // Empty string is intentionally treated as "not set" so a placeholder
+  // `ANTHROPIC_API_KEY=` line in .env falls through to the CLI fallback.
+  if (process.env.ANTHROPIC_API_KEY) {
+    return runViaAnthropicApi(prompt, options);
+  }
+  return runViaClaudeCli(prompt, options);
+}
+
+/** Default model for the API path; override with ANTHROPIC_MODEL (e.g. claude-sonnet-4-6 for lower cost). */
+const DEFAULT_API_MODEL = 'claude-opus-4-8';
+
+let anthropicClient: Anthropic | null = null;
+function getAnthropicClient(): Anthropic {
+  if (!anthropicClient) {
+    // Reads ANTHROPIC_API_KEY from the environment. Generous timeout + retries
+    // so a long 16k-token generation can't trip the SDK's default request bound.
+    anthropicClient = new Anthropic({ maxRetries: 2, timeout: 290_000 });
+  }
+  return anthropicClient;
+}
+
+/**
+ * Call the Anthropic Messages API via the official SDK. Streams and collects the
+ * final message so that large `max_tokens` (the generator/script agents use
+ * 16384) can't hit the SDK's non-streaming HTTP timeout.
+ */
+async function runViaAnthropicApi(
+  prompt: string,
+  options?: { maxTokens?: number; model?: string },
+): Promise<string> {
+  const client = getAnthropicClient();
+  const model = process.env.ANTHROPIC_MODEL || options?.model || DEFAULT_API_MODEL;
+  const maxTokens = options?.maxTokens ?? 4096;
+
+  try {
+    const stream = client.messages.stream({
+      model,
+      max_tokens: maxTokens,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    const message = await stream.finalMessage();
+
+    let text = '';
+    for (const block of message.content) {
+      if (block.type === 'text') text += block.text;
+    }
+    text = text.trim();
+    if (!text) throw new Error('Anthropic API returned an empty response');
+    return text;
+  } catch (err: any) {
+    // Re-throw with messages the route's mapGenError() can classify into calm,
+    // user-facing text (it keys on "not authenticated" / "rate limit" / "timeout").
+    if (err instanceof Anthropic.AuthenticationError || err?.status === 401) {
+      throw new Error('Anthropic API not authenticated — ANTHROPIC_API_KEY is missing or invalid.');
+    }
+    if (err instanceof Anthropic.PermissionDeniedError || err?.status === 403) {
+      throw new Error('Anthropic API not authenticated — this API key lacks access to the requested model.');
+    }
+    if (err instanceof Anthropic.RateLimitError || err?.status === 429) {
+      throw new Error('Anthropic API rate limit reached — please retry in a moment.');
+    }
+    throw err;
+  }
+}
+
+/**
+ * Run a prompt through the Claude CLI and return the response text.
  * Uses `claude -p` (print mode — non-interactive, returns text).
  *
  * Uses spawnSync (not execSync) because spawnSync gives us the child PID
@@ -47,7 +133,7 @@ function findClaudeCli(): string | null {
  * small shell wrapper on POSIX or use `taskkill /T` on Windows via the
  * timeout-kill helper below.
  */
-export function runClaudePrompt(prompt: string, options?: { maxTokens?: number; model?: string }): string {
+function runViaClaudeCli(prompt: string, options?: { maxTokens?: number; model?: string }): string {
   const cli = findClaudeCli();
   if (!cli) throw new Error('Claude CLI not found');
 
@@ -115,6 +201,27 @@ function treeKill(pid: number): void {
  */
 export function isClaudeCliAvailable(): boolean {
   return findClaudeCli() !== null;
+}
+
+/**
+ * Check if Claude is actually usable — i.e. the CLI is present AND authenticated.
+ *
+ * `isClaudeCliAvailable()` only proves the binary exists; `claude -p` still fails
+ * with "Not logged in" until the user runs `claude auth login`. The generation
+ * agents have no offline fallback, so callers should preflight with THIS before
+ * starting a pipeline to fail fast with an actionable message instead of a deep
+ * JSON-parse error. An ANTHROPIC_API_KEY in the environment also satisfies auth.
+ */
+export function isClaudeCliAuthenticated(): boolean {
+  if (process.env.ANTHROPIC_API_KEY) return true;
+  const cli = findClaudeCli();
+  if (!cli) return false;
+  try {
+    const out = execSync(`"${cli}" auth status`, { timeout: 10000, encoding: 'utf-8', stdio: 'pipe' });
+    return JSON.parse(out.trim()).loggedIn === true;
+  } catch {
+    return false;
+  }
 }
 
 /**

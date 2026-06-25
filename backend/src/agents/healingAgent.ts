@@ -1,7 +1,7 @@
 import type { TestOpsState, AutomationScript } from './state.js';
 import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
 
-export function healingAgent(state: TestOpsState): TestOpsState {
+export async function healingAgent(state: TestOpsState): Promise<TestOpsState> {
   if (!state.failureReason) return state;
 
   const failedCases = state.testCases.filter((tc) => tc.status === 'failed');
@@ -49,7 +49,7 @@ Rules:
 - Fix incorrect assertions based on the expected result
 - The script must be complete and runnable with @playwright/test`;
 
-      const response = runClaudePrompt(prompt, { maxTokens: 4096 });
+      const response = await runClaudePrompt(prompt, { maxTokens: 4096 });
       const fixed = parseJsonFromResponse<{ fileName: string; code: string }>(response);
 
       if (fixed?.code?.trim()) {

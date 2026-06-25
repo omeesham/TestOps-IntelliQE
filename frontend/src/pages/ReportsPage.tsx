@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Loader2, FileText, RefreshCw, ChevronDown } from 'lucide-react';
+import { Loader2, FileText, RefreshCw, ChevronDown, Download } from 'lucide-react';
 import { getReportsSummary, generateAllureReport, getAllureReportStatus } from '@/services/api';
 import ErrorAlert from '@/components/feedback/ErrorAlert';
 import { normalizeError, type NormalizedError } from '@/utils/apiError';
@@ -176,6 +176,17 @@ export default function ReportsPage() {
               {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
               {generating ? 'Running tests…' : 'Generate Report'}
             </button>
+
+            {allureStatus?.exists && allureStatus.reportUrl && (
+              <a
+                href={allureStatus.reportUrl.replace(/\/index\.html$/, '/download')}
+                download
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-[#7C3AED] bg-white border border-[#DDD6FE] rounded-lg hover:bg-[#F5F3FF] transition-all shadow-sm"
+              >
+                <Download className="w-4 h-4" />
+                Download
+              </a>
+            )}
 
             {allureStatus?.generatedAt && (
               <span className="text-xs text-[#A5B4FC] ml-auto">

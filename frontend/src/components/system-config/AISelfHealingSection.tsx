@@ -168,7 +168,7 @@ export default function AISelfHealingSection({ configs }: Props) {
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string; resolvedPath?: string } | null>(null);
 
   useEffect(() => {
     if (existing?.configData) setForm({ ...getDefaults(), ...existing.configData });
@@ -216,6 +216,7 @@ export default function AISelfHealingSection({ configs }: Props) {
         body: JSON.stringify({
           provider: form.aiProvider, authMethod: form.authMethod,
           apiKey: form.aiApiKey, model: form.aiModel, baseUrl: form.aiBaseUrl,
+          cliPath: form.cliAutoDetect ? undefined : form.cliPath,
           awsAccessKeyId: form.awsAccessKeyId, awsSecretAccessKey: form.awsSecretAccessKey,
           awsRegion: form.awsRegion, awsSessionToken: form.awsSessionToken,
           gcpProjectId: form.gcpProjectId, gcpLocation: form.gcpLocation,
@@ -227,7 +228,7 @@ export default function AISelfHealingSection({ configs }: Props) {
       });
       const data = await res.json();
       if (res.ok) {
-        setTestResult({ ok: true, message: data.message || 'Connection successful!' });
+        setTestResult({ ok: true, message: data.message || 'Connection successful!', resolvedPath: data.resolvedPath });
       } else {
         setTestResult({ ok: false, message: data.error || 'Connection test failed.' });
       }
@@ -517,6 +518,7 @@ export default function AISelfHealingSection({ configs }: Props) {
             <span className={`flex items-center gap-1.5 text-xs font-medium ${testResult.ok ? 'text-emerald-600' : 'text-red-500'}`}>
               {testResult.ok ? <CheckCircle className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
               {testResult.message}
+              {testResult.resolvedPath && <code className="text-[#6B7280] font-normal">({testResult.resolvedPath})</code>}
             </span>
           )}
         </div>

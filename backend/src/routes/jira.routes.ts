@@ -13,6 +13,27 @@ import { decryptField } from '../utils/crypto.js';
 
 const router = Router();
 
+/**
+ * Pull the project key out of a pasted JIRA URL so story fetching can be
+ * scoped to that project. Handles the common shapes:
+ *   .../projects/IQ/boards/447   .../browse/IQ-1   ?projectKey=IQ
+ * Returns undefined when no project is identifiable (callers then fall back
+ * to a site-wide query).
+ */
+function extractProjectKey(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const patterns = [
+    /\/projects\/([A-Za-z][A-Za-z0-9_]+)/, // /jira/software/c/projects/IQ/...
+    /\/browse\/([A-Za-z][A-Za-z0-9_]+)-\d+/, // /browse/IQ-1
+    /[?&]projectKey=([A-Za-z][A-Za-z0-9_]+)/i, // ?projectKey=IQ
+  ];
+  for (const re of patterns) {
+    const m = raw.match(re);
+    if (m && m[1]) return m[1].toUpperCase();
+  }
+  return undefined;
+}
+
 // POST /api/jira/connect — Connect to JIRA and save credentials (tenant-scoped)
 router.post('/connect', async (req: Request, res: Response) => {
   try {
@@ -26,9 +47,26 @@ router.post('/connect', async (req: Request, res: Response) => {
       return;
     }
 
-    const normalizedUrl = baseUrl.trim().replace(/\/$/, '');
-    const fullUrl = /^https?:\/\//i.test(normalizedUrl) ? normalizedUrl : `https://${normalizedUrl}`;
+    // Users frequently paste the full board URL
+    // (e.g. https://site.atlassian.net/jira/software/c/projects/IQ/boards/447).
+    // The REST API lives at the SITE ORIGIN, so strip any path/query/fragment
+    // and keep only scheme + host — otherwise every `${baseUrl}/rest/api/3/...`
+    // call hits an invalid path (and Atlassian's 200 SPA fallback hides it).
+    let fullUrl: string;
+    try {
+      const candidate = /^https?:\/\//i.test(baseUrl.trim()) ? baseUrl.trim() : `https://${baseUrl.trim()}`;
+      const u = new URL(candidate);
+      fullUrl = `${u.protocol}//${u.host}`;
+    } catch {
+      res.status(400).json({ error: 'Invalid JIRA URL — use your site address, e.g. https://your-domain.atlassian.net' });
+      return;
+    }
     const authHeader = `Basic ${Buffer.from(`${email}:${apiToken}`).toString('base64')}`;
+
+    // The site origin is the API base, but the project context (e.g. IQ from
+    // .../projects/IQ/boards/447) is what scopes story fetching. Capture it so
+    // the wizard lists only this project's issues, not every project on the site.
+    const projectKey = extractProjectKey(baseUrl);
 
     const creds = { baseUrl: fullUrl, authHeader };
 
@@ -36,11 +74,11 @@ router.post('/connect', async (req: Request, res: Response) => {
     const me = await testConnection(creds);
 
     // Save to database (tenant-scoped)
-    await saveCredsForTenant(user.tenantId, user.username, fullUrl, authHeader, me.displayName);
+    await saveCredsForTenant(user.tenantId, user.username, fullUrl, authHeader, me.displayName, projectKey);
 
-    console.log(`JIRA connected: tenant=${user.tenantId}, user=${user.username}, url=${normalizedUrl}, jiraUser=${me.displayName}`);
+    console.log(`JIRA connected: tenant=${user.tenantId}, user=${user.username}, url=${fullUrl}, project=${projectKey || '(all)'}, jiraUser=${me.displayName}`);
 
-    res.json({ ok: true, displayName: me.displayName });
+    res.json({ ok: true, displayName: me.displayName, projectKey: projectKey || null });
   } catch (err: any) {
     let safeMsg = 'Failed to connect to JIRA';
     const status = err?.response?.status;

@@ -93,6 +93,36 @@ router.get('/status', authMiddleware, async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/allure/report/:tenantId/:scope/download  (NO auth — tenant UUID is an opaque token)
+ * Download the single self-contained report HTML as a file attachment.
+ * Registered BEFORE the wildcard serve route so "download" isn't treated as a filename.
+ */
+router.get('/report/:tenantId/:scope/download', async (req: Request, res: Response) => {
+  try {
+    const tenantId = String(req.params.tenantId || '');
+    const scope = String(req.params.scope || '');
+    const baseDir = path.join(BACKEND_ROOT, 'allure-reports', tenantId, scope);
+    const indexFile = path.resolve(baseDir, 'index.html');
+
+    // Directory traversal protection
+    if (!indexFile.startsWith(baseDir)) {
+      res.status(400).json({ error: 'Invalid path' });
+      return;
+    }
+    try {
+      await fs.access(indexFile);
+    } catch {
+      res.status(404).json({ error: 'Report not found. Generate the report first, then download.' });
+      return;
+    }
+    res.download(indexFile, `allure-report-${scope.slice(0, 8)}.html`);
+  } catch (err: any) {
+    console.error('Allure download error:', err.message);
+    res.status(500).json({ error: 'Failed to download report file' });
+  }
+});
+
+/**
  * GET /api/allure/report/:tenantId/:scope/*  (NO auth — static files for iframe)
  * Serve static Allure HTML report files.
  * Security: tenant ID in URL acts as an opaque token (UUIDs are unguessable).

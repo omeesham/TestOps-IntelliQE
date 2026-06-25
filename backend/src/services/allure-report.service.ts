@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import os from 'os';
 import crypto from 'crypto';
 import pool from '../db.js';
-import { runPlaywrightForRun } from './playwright-runner.service.js';
+import { executeRunScripts, storedAllureResultsDir } from './playwright-runner.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -163,39 +163,58 @@ export async function generateAllureResults(
   return resultsDir;
 }
 
-/* ── Find the allure CLI binary ── */
-function getAllureBin(): string {
-  if (process.platform === 'win32') {
-    return path.join(BACKEND_ROOT, 'node_modules', '.bin', 'allure.cmd');
-  }
-  return path.join(BACKEND_ROOT, 'node_modules', '.bin', 'allure');
+/* ── Node-based Allure 3 CLI (no Java) ── */
+function getAllureNodeCli(): string {
+  // The `allure` v3 package ships a pure-JS Node CLI at <pkg>/cli.js — no Java,
+  // unlike the legacy allure-commandline 2.x. We invoke it directly via `node`.
+  return path.join(BACKEND_ROOT, 'node_modules', 'allure', 'cli.js');
 }
 
-/* ── Generate Allure HTML from result files ── */
-export async function generateAllureHtml(resultsDir: string, outputDir: string): Promise<void> {
-  const allureBin = getAllureBin();
-
-  // Check that allure binary exists
+async function dirHasFiles(dir: string): Promise<boolean> {
   try {
-    await fs.access(allureBin);
+    const files = await fs.readdir(dir);
+    return files.length > 0;
   } catch {
-    throw new Error('allure-commandline binary not found. Run: npm install allure-commandline');
+    return false;
+  }
+}
+
+/* ── Generate Allure HTML from result files (Node CLI, single self-contained file) ── */
+export async function generateAllureHtml(resultsDir: string, outputDir: string): Promise<void> {
+  const cli = getAllureNodeCli();
+  try {
+    await fs.access(cli);
+  } catch {
+    throw new Error('Allure 3 Node CLI not found. Run `npm install` in the backend folder (package: allure).');
   }
 
+  // Start clean so no stale artifacts linger, then let the CLI recreate it.
+  await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
   await fs.mkdir(outputDir, { recursive: true });
 
+  // Throwaway Allure config enabling the Awesome plugin's single-file output →
+  // one self-contained index.html that both embeds in an iframe and downloads
+  // as a standalone file. No Java required.
+  const cfgDir = path.join(os.tmpdir(), `allurerc-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
+  await fs.mkdir(cfgDir, { recursive: true });
+  const cfgPath = path.join(cfgDir, 'allurerc.mjs');
+  await fs.writeFile(
+    cfgPath,
+    `export default {\n  name: "JBSIntelliQE Test Report",\n  plugins: {\n    awesome: {\n      options: { singleFile: true },\n    },\n  },\n};\n`,
+    'utf-8',
+  );
+
   try {
-    if (process.platform === 'win32') {
-      await execFileAsync('cmd', ['/c', allureBin, 'generate', resultsDir, '-o', outputDir, '--clean'], {
-        timeout: 120_000,
-      });
-    } else {
-      await execFileAsync(allureBin, ['generate', resultsDir, '-o', outputDir, '--clean'], {
-        timeout: 120_000,
-      });
-    }
+    // node <cli> generate <resultsDir> --output <outputDir> --config <allurerc.mjs>
+    await execFileAsync(
+      process.execPath,
+      [cli, 'generate', resultsDir, '--output', outputDir, '--config', cfgPath],
+      { timeout: 120_000, maxBuffer: 50 * 1024 * 1024 },
+    );
   } catch (err: any) {
-    throw new Error(`Allure generate failed: ${err.stderr || err.message}`);
+    throw new Error(`Allure report generation failed: ${err.stderr || err.message}`);
+  } finally {
+    await fs.rm(cfgDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -212,19 +231,43 @@ export async function getOrGenerateRealReport(
   if (!runId) throw new Error('runId is required');
   const outputDir = path.join(BACKEND_ROOT, 'allure-reports', tenantId, runId);
 
-  const { resultsDir, workspace } = await runPlaywrightForRun(tenantId, isPlatform, runId);
+  // 1) Prefer the real allure-results captured when the wizard executed this run.
+  let resultsDir = storedAllureResultsDir(tenantId, runId);
+  let haveResults = await dirHasFiles(resultsDir);
+
+  // 2) Otherwise run the saved scripts now via the reliable Edge runner — which
+  //    also persists allure-results to the store as a side effect.
+  if (!haveResults) {
+    try {
+      await executeRunScripts(tenantId, isPlatform, runId);
+      haveResults = await dirHasFiles(resultsDir);
+    } catch (err) {
+      // No scripts, unreachable target, etc. Fall through to the synthetic path
+      // so the user still gets a report built from saved test-case status.
+      console.warn('[allure] execution path unavailable, using DB status:', (err as Error).message);
+    }
+  }
+
+  // 3) Last resort — synthesize allure-results from DB test_cases status so the
+  //    report is never blank. Statuses are real; durations are nominal.
+  let synthDir: string | null = null;
+  if (!haveResults) {
+    synthDir = await generateAllureResults(tenantId, isPlatform, runId);
+    resultsDir = synthDir;
+  }
+
   try {
     await generateAllureHtml(resultsDir, outputDir);
     const meta = {
       generatedAt: new Date().toISOString(),
       runId,
       tenantId,
-      real: true,
+      real: !synthDir,
     };
     await fs.writeFile(path.join(outputDir, 'report-meta.json'), JSON.stringify(meta, null, 2));
     return { outputDir, generatedAt: meta.generatedAt };
   } finally {
-    await fs.rm(workspace, { recursive: true, force: true }).catch(() => {});
+    if (synthDir) await fs.rm(synthDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 

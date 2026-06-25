@@ -9,12 +9,14 @@
     "worker:start": "tsx --env-file-if-exists=.env src/worker/index.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.105.0",
     "@gitbeaker/rest": "^43.8.0",
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "@octokit/rest": "^22.0.1",
     "@playwright/test": "^1.48.0",
     "@types/bcrypt": "^6.0.0",
     "@types/jsonwebtoken": "^9.0.7",
+    "allure": "^3.13.0",
     "allure-commandline": "^2.30.0",
     "allure-playwright": "^3.0.0",
     "archiver": "^7.0.1",

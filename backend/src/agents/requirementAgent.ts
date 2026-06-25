@@ -23,7 +23,7 @@
 import type { TestOpsState, ParsedRequirements } from './state.js';
 import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
 
-export function requirementAgent(state: TestOpsState): TestOpsState {
+export async function requirementAgent(state: TestOpsState): Promise<TestOpsState> {
   const appInfo = state.appContext
     ? `\nApplication Under Test: ${state.appContext.appName || 'Unknown'}\nTarget URL: ${state.appContext.targetUrl || 'Not specified'}\nEnvironment: ${state.appContext.environment || 'staging'}`
     : '';
@@ -87,7 +87,7 @@ EXTRACTION RULES (read carefully):
 9. If the source text is sparse, INFER reasonable extensions based on the application domain — but mark inferences with " (inferred)" in the relevant field.
 10. NEVER return empty arrays for features / actors / flows — at minimum return one entry each based on what you can deduce.`;
 
-  const response = runClaudePrompt(prompt, { maxTokens: 8000 });
+  const response = await runClaudePrompt(prompt, { maxTokens: 8000 });
   const parsed = parseJsonFromResponse<ParsedRequirements>(response);
 
   // Defensive normalisation — Claude may omit some optional sections.

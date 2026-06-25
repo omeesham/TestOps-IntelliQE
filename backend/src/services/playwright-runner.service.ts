@@ -16,6 +16,15 @@ function sanitizeFileName(raw: string): string {
   return (raw || 'test').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120);
 }
 
+/**
+ * Stable on-disk location where a run's real `allure-results` are kept after
+ * execution, so the Reports page can build an Allure report from the SAME
+ * execution the wizard ran — no slow, flaky re-run. Keyed by tenant + run.
+ */
+export function storedAllureResultsDir(tenantId: string, runId: string): string {
+  return path.join(BACKEND_ROOT, 'allure-results-store', tenantId, runId);
+}
+
 interface PwSummary {
   stats?: { expected?: number; unexpected?: number; skipped?: number; flaky?: number };
   suites?: any[];
@@ -248,18 +257,24 @@ export async function runPlaywrightForRun(
 module.exports = defineConfig({
   testDir: './tests',
   fullyParallel: true,
+  // Cap concurrency — launching one Edge per test (a full suite) at once
+  // starves CPU/memory on a single host and makes tests time out. 2 workers
+  // keeps the run stable while still parallelising.
+  workers: ${Number(process.env.PLAYWRIGHT_WORKERS) || 2},
   retries: 0,
-  timeout: 60_000,
+  timeout: 45_000,
   reporter: [
     ['line'],
     ['json', { outputFile: './pw-summary.json' }],
-    ['allure-playwright', { outputFolder: './allure-results', detail: true, suiteTitle: false }],
+    ['allure-playwright', { resultsDir: ${JSON.stringify(resultsDir)}, detail: true, suiteTitle: false }],
   ],
   use: {
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
+    actionTimeout: 15_000,
+    navigationTimeout: 30_000,
   },
-  projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
+  projects: [{ name: 'edge', use: { channel: '${process.env.PLAYWRIGHT_CHANNEL || 'msedge'}' } }],
 });
 `;
   await fs.writeFile(configPath, configSrc, 'utf-8');
@@ -330,4 +345,160 @@ module.exports = defineConfig({
   }
 
   return { resultsDir, workspace, summary };
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   Execute a run's saved scripts and return per-test results.
+   Unlike runPlaywrightForRun (which is geared to producing an Allure
+   report and throws when allure-results is empty), this relies on the
+   JSON reporter's pw-summary.json — so real pass/fail results survive
+   even if the Allure reporter writes nothing. Used by the chat wizard's
+   "Execute Test Suite" step.
+   ────────────────────────────────────────────────────────────────── */
+export interface RunSpecResult {
+  testCaseId: string | null;
+  tcNumber: string | null;
+  scenario: string;
+  status: 'passed' | 'failed' | 'not_run';
+  durationMs?: number;
+  error?: string;
+}
+
+export async function executeRunScripts(
+  tenantId: string,
+  isPlatform: boolean,
+  runId: string,
+): Promise<{ details: RunSpecResult[]; passed: number; failed: number }> {
+  if (!runId) throw new Error('runId is required to execute Playwright tests');
+
+  const query = isPlatform
+    ? `SELECT id, tc_number, test_case_id, test_case_title, file_name, code
+       FROM "JBSTestOpsAI".automation_scripts
+       WHERE test_run_id = $1 AND framework = 'playwright' AND code IS NOT NULL AND code <> ''`
+    : `SELECT id, tc_number, test_case_id, test_case_title, file_name, code
+       FROM "JBSTestOpsAI".automation_scripts
+       WHERE test_run_id = $1 AND tenant_id = $2 AND framework = 'playwright' AND code IS NOT NULL AND code <> ''`;
+  const { rows } = await pool.query(query, isPlatform ? [runId] : [runId, tenantId]);
+  if (rows.length === 0) {
+    throw new PlaywrightRunError({
+      code: 'NO_SCRIPTS', httpStatus: 404,
+      message: 'No automation scripts have been generated for this run yet.',
+      hint: 'Generate scripts for this run before executing.',
+    });
+  }
+
+  const workspace = path.join(os.tmpdir(), `jbs-pwexec-${runId}-${Date.now()}`);
+  const testsDir = path.join(workspace, 'tests');
+  await fs.mkdir(testsDir, { recursive: true });
+
+  // Write each spec (no BOM via Node fs) and map its final file name → DB row.
+  const byFile = new Map<string, any>();
+  const seen = new Set<string>();
+  for (const row of rows) {
+    let base = sanitizeFileName(row.file_name || row.tc_number || row.test_case_id || row.id);
+    if (!base.endsWith('.spec.ts')) base = `${base}.spec.ts`;
+    let candidate = base;
+    let n = 1;
+    while (seen.has(candidate)) candidate = base.replace(/\.spec\.ts$/, `-${++n}.spec.ts`);
+    seen.add(candidate);
+    await fs.writeFile(path.join(testsDir, candidate), row.code, 'utf-8');
+    byFile.set(candidate.toLowerCase().replace(/\.spec\.ts$/, ''), row);
+  }
+
+  const configPath = path.join(workspace, 'playwright.config.cjs');
+  const channel = process.env.PLAYWRIGHT_CHANNEL || 'msedge';
+  const workers = Number(process.env.PLAYWRIGHT_WORKERS) || 2;
+  // allure-playwright resolves outputFolder relative to CWD (BACKEND_ROOT), not
+  // the config dir — so use an ABSOLUTE path into the workspace, otherwise the
+  // results leak to backend/allure-results and the persist below finds nothing.
+  const allureResultsDir = path.join(workspace, 'allure-results');
+  await fs.writeFile(configPath, `const { defineConfig } = require('@playwright/test');
+module.exports = defineConfig({
+  testDir: './tests', fullyParallel: true, workers: ${workers}, retries: 0, timeout: 45_000,
+  reporter: [['line'], ['json', { outputFile: './pw-summary.json' }], ['allure-playwright', { resultsDir: ${JSON.stringify(allureResultsDir)}, detail: true, suiteTitle: false }]],
+  use: { actionTimeout: 15_000, navigationTimeout: 30_000, trace: 'off', screenshot: 'off' },
+  projects: [{ name: 'edge', use: { channel: '${channel}' } }],
+});
+`, 'utf-8');
+
+  const env = {
+    ...process.env, CI: '1',
+    PLAYWRIGHT_JSON_OUTPUT_NAME: path.join(workspace, 'pw-summary.json'),
+    NODE_PATH: path.join(BACKEND_ROOT, 'node_modules'),
+  };
+  const isWindows = process.platform === 'win32';
+  let stdout = '', stderr = '';
+  try {
+    const r = await execFileAsync(isWindows ? 'npx.cmd' : 'npx',
+      ['playwright', 'test', '--config', configPath],
+      { cwd: BACKEND_ROOT, env, timeout: 600_000, maxBuffer: 50 * 1024 * 1024, shell: isWindows });
+    stdout = r.stdout; stderr = r.stderr;
+  } catch (err: any) {
+    stdout = err.stdout || ''; stderr = err.stderr || err.message || '';
+  }
+
+  let summary: PwSummary | null = null;
+  try {
+    summary = JSON.parse(await fs.readFile(path.join(workspace, 'pw-summary.json'), 'utf-8'));
+  } catch { summary = null; }
+  if (!summary) {
+    const logPath = path.join(workspace, 'pw-run.log');
+    await fs.writeFile(logPath, `STDOUT:\n${stdout}\n\nSTDERR:\n${stderr}`, 'utf-8').catch(() => {});
+    throw classifyPlaywrightFailure(stdout, stderr, logPath);
+  }
+
+  // Persist the real allure-results for this run so the Reports page can build
+  // the Allure report from this SAME execution (no slow re-run). Best-effort —
+  // a copy failure must never fail the execution itself.
+  try {
+    const srcAllure = path.join(workspace, 'allure-results');
+    const files = await fs.readdir(srcAllure).catch(() => [] as string[]);
+    if (files.length > 0) {
+      const dest = storedAllureResultsDir(tenantId, runId);
+      await fs.rm(dest, { recursive: true, force: true }).catch(() => {});
+      await fs.mkdir(dest, { recursive: true });
+      await fs.cp(srcAllure, dest, { recursive: true });
+    }
+  } catch (e: any) {
+    console.warn('[playwright-runner] failed to persist allure-results:', e?.message);
+  }
+
+  // Flatten suites → specs and attribute each spec back to its test case by file.
+  const specs: any[] = [];
+  const walk = (s: any) => {
+    if (Array.isArray(s?.specs)) specs.push(...s.specs);
+    if (Array.isArray(s?.suites)) s.suites.forEach(walk);
+  };
+  (summary.suites || []).forEach(walk);
+
+  const baseName = (f: string) => (f || '').split(/[\\/]/).pop()!.toLowerCase().replace(/\.spec\.ts$/, '');
+  const details: RunSpecResult[] = specs.map((spec) => {
+    const first = spec?.tests?.[0]?.results?.[0];
+    const st: string | undefined = first?.status;
+    const passed = st === 'passed' || st === 'expected';
+    const row = byFile.get(baseName(spec?.file || ''));
+    return {
+      testCaseId: row?.test_case_id || null,
+      tcNumber: row?.tc_number || null,
+      scenario: spec?.title || row?.test_case_title || '',
+      status: passed ? 'passed' : st ? 'failed' : 'not_run',
+      durationMs: typeof first?.duration === 'number' ? first.duration : undefined,
+      error: passed ? undefined : first?.error?.message,
+    };
+  });
+
+  const passed = details.filter((d) => d.status === 'passed').length;
+  const failed = details.filter((d) => d.status === 'failed').length;
+
+  // Best-effort last-run stamp.
+  try {
+    await pool.query(
+      `UPDATE "JBSTestOpsAI".automation_scripts SET last_run_at = $1, last_run_result = $2, updated_at = NOW()
+       WHERE test_run_id = $3${isPlatform ? '' : ' AND tenant_id = $4'}`,
+      isPlatform ? [new Date().toISOString(), failed > 0 ? 'failed' : 'passed', runId]
+                 : [new Date().toISOString(), failed > 0 ? 'failed' : 'passed', runId, tenantId],
+    );
+  } catch { /* ignore */ }
+
+  return { details, passed, failed };
 }

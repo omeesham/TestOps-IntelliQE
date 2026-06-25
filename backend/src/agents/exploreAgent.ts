@@ -21,7 +21,7 @@
  *    string that requirementAgent treats as if it were a functional spec.
  */
 import type { TestOpsState, ExploredApp, AppContext } from './state.js';
-import { runClaudePrompt, parseJsonFromResponse, isClaudeCliAvailable } from './claude-runner.js';
+import { runClaudePrompt, parseJsonFromResponse, isClaudeCliAuthenticated } from './claude-runner.js';
 
 // Lazy import so unit tests that don't touch this agent don't drag in a
 // 100 MB browser binary on require().
@@ -102,8 +102,8 @@ export async function exploreAgent(state: TestOpsState): Promise<TestOpsState> {
 
   // Hand the UI map to Claude — produce a natural-language requirements
   // document that mimics what a BA would have written for this app.
-  const synthesized = isClaudeCliAvailable()
-    ? synthesizeRequirements(exploredApp)
+  const synthesized = isClaudeCliAuthenticated()
+    ? await synthesizeRequirements(exploredApp)
     : naiveRequirementsFromMap(exploredApp);
 
   return {
@@ -339,7 +339,7 @@ function deriveFeatures(snaps: PageSnapshot[]): string[] {
  * Claude is instructed to write as if it were a BA who had just shadowed
  * the application, NOT to invent features the crawler did not observe.
  */
-function synthesizeRequirements(app: ExploredApp): string {
+async function synthesizeRequirements(app: ExploredApp): Promise<string> {
   const uiMap = JSON.stringify(
     {
       baseUrl: app.baseUrl,
@@ -382,7 +382,7 @@ Rules:
 - Output markdown only, no commentary.`;
 
   try {
-    const response = runClaudePrompt(prompt, { maxTokens: 6000 });
+    const response = await runClaudePrompt(prompt, { maxTokens: 6000 });
     return response.trim();
   } catch (err) {
     // eslint-disable-next-line no-console

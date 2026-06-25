@@ -194,7 +194,14 @@ export async function extractDocumentText(file: File): Promise<ExtractedDocument
 /* ─────────────────────────────────────────────────────────────
    Test generation (chat wizard core)
    ───────────────────────────────────────────────────────────── */
-export async function generateTests(
+/**
+ * Start a generation run. The backend now runs the multi-stage Claude pipeline
+ * as a BACKGROUND job and returns `{ runId }` immediately (202) — no long-held
+ * request, so this can never hit an axios timeout. Progress + the final result
+ * stream over SSE (subscribeToPipelineEvents); the result is also fetchable via
+ * getGenerationResult (used as a poll fallback).
+ */
+export async function startGeneration(
   requirements: string,
   testType?: string,
   options?: {
@@ -206,7 +213,7 @@ export async function generateTests(
     /** Optional credentials so the explore agent can log in. */
     roles?: { roleName?: string; username: string; password: string }[];
   },
-) {
+): Promise<{ runId: string }> {
   const { data } = await api.post('/generate', {
     requirements,
     testType,
@@ -217,6 +224,27 @@ export async function generateTests(
     roles: options?.roles,
   });
   return data;
+}
+
+export interface GenerationResult {
+  status: 'running' | 'done' | 'error' | 'unknown';
+  stage?: string;
+  detail?: string;
+  result?: any;
+  error?: string;
+  code?: string;
+}
+
+/** Fetch a generation job's status/result by runId. Returns the 404 body (status:'unknown') rather than throwing if the job has expired. */
+export async function getGenerationResult(runId: string): Promise<GenerationResult> {
+  try {
+    const { data } = await api.get(`/generate/result/${runId}`);
+    return data;
+  } catch (err: any) {
+    const data = err?.response?.data;
+    if (data && typeof data === 'object') return data as GenerationResult;
+    throw err;
+  }
 }
 
 export async function executeTests(
@@ -372,13 +400,26 @@ export async function deleteAutomationScript(id: string) {
   return data;
 }
 
-export async function generateScriptsForRun(testRunId: string) {
-  const { data } = await api.post(`/automation-scripts/generate/${testRunId}`);
+export async function generateScriptsForRun(testRunId: string, regenerate = false) {
+  // POM script generation runs several batched Claude calls server-side; allow
+  // up to 6 min so the default 2-min client timeout doesn't abort it.
+  const { data } = await api.post(
+    `/automation-scripts/generate/${testRunId}`,
+    { regenerate },
+    { timeout: 360_000 },
+  );
   return data;
 }
 
 export async function getScriptsByRun(testRunId: string) {
   const { data } = await api.get(`/automation-scripts/by-run/${testRunId}`);
+  return data;
+}
+
+// Actually run the saved Playwright scripts for a run and return per-test
+// pass/fail. Real browser execution can take a few minutes for a full suite.
+export async function executeScriptsForRun(testRunId: string) {
+  const { data } = await api.post(`/automation-scripts/execute/${testRunId}`, {}, { timeout: 600_000 });
   return data;
 }
 
@@ -391,7 +432,10 @@ export async function getReportsSummary() {
 }
 
 export async function generateAllureReport(runId?: string) {
-  const { data } = await api.post('/allure/generate', { runId });
+  // Building the report normally reuses allure-results captured during the run
+  // (fast, ~3s). Worst case it re-executes the saved scripts, so allow up to
+  // 6 min rather than the default 2-min client timeout.
+  const { data } = await api.post('/allure/generate', { runId }, { timeout: 360_000 });
   return data;
 }
 

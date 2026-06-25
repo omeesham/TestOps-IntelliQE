@@ -3,7 +3,7 @@ import pool from '../db.js';
 import { decryptConfigData } from '../utils/crypto.js';
 
 // --- Types ---
-export type JiraCreds = { baseUrl: string; authHeader: string };
+export type JiraCreds = { baseUrl: string; authHeader: string; projectKey?: string };
 type StorySummary = { key: string; summary: string };
 type StoryDetails = {
   key: string;
@@ -22,7 +22,7 @@ export async function getCredsForTenant(tenantId: string): Promise<JiraCreds | n
   if (rows.length > 0) {
     // Decrypt any encrypted fields from DB storage
     const cfg = decryptConfigData(rows[0].config_data);
-    return { baseUrl: cfg.jira_url, authHeader: cfg.auth_header };
+    return { baseUrl: cfg.jira_url, authHeader: cfg.auth_header, projectKey: cfg.project_key || undefined };
   }
   // Legacy fallback
   const legacy = await pool.query(
@@ -38,7 +38,8 @@ export async function saveCredsForTenant(
   username: string,
   jiraUrl: string,
   authHeader: string,
-  displayName?: string
+  displayName?: string,
+  projectKey?: string
 ): Promise<void> {
   // Write to legacy table
   await pool.query(
@@ -61,7 +62,7 @@ export async function saveCredsForTenant(
      WHEN NOT MATCHED THEN
        INSERT (tenant_id, integration_id, status, config_data, connected_by, connected_at, last_sync_at)
        VALUES ($1, 'jira', 'connected', $2, $3, SYSUTCDATETIME(), SYSUTCDATETIME());`,
-    [tenantId, JSON.stringify({ jira_url: jiraUrl, auth_header: authHeader, display_name: displayName }), username]
+    [tenantId, JSON.stringify({ jira_url: jiraUrl, auth_header: authHeader, display_name: displayName, project_key: projectKey || null }), username]
   );
 }
 
@@ -181,6 +182,12 @@ function extractSectionByHeading(html: string, contains: RegExp) {
 export async function testConnection(creds: JiraCreds): Promise<any> {
   const url = `${creds.baseUrl}/rest/api/3/myself`;
   const me = await request<any>(creds, url);
+  // A wrong base URL (e.g. a board URL) makes Atlassian return its SPA HTML with
+  // a 200 status, so `me` parses to something without an accountId. Reject that
+  // explicitly instead of saving a connection that can never fetch issues.
+  if (!me || typeof me !== 'object' || !me.accountId) {
+    throw new Error('JIRA did not return a valid account — check the site URL (use https://your-domain.atlassian.net, not a board/project URL)');
+  }
   return { accountId: me.accountId, displayName: me.displayName, locale: me.locale };
 }
 
@@ -189,15 +196,22 @@ export async function getStories(creds: JiraCreds): Promise<StorySummary[]> {
   const url = `${creds.baseUrl}/rest/api/3/search/jql`;
   const issueTypeNames = await getIssueTypeNames(creds);
   const quoted = issueTypeNames.map((n) => `"${n.replace(/"/g, '\\"')}"`).join(', ');
-  const jql = `issuetype in (${quoted}) ORDER BY created DESC`;
+  // Scope to the connected project (e.g. project = "IQ") so the wizard lists
+  // only that project's issues, not every project on the JIRA site. When no
+  // project was captured, fall back to a site-wide query.
+  const projectClause = creds.projectKey ? `project = "${creds.projectKey.replace(/"/g, '\\"')}" AND ` : '';
+  const jql = `${projectClause}issuetype in (${quoted}) ORDER BY created DESC`;
   const params = { jql, maxResults: 50, fields: 'summary,issuetype' };
   try {
     const data = await request<any>(creds, url, params);
     const issues = Array.isArray(data.issues) ? data.issues : [];
     return issues.map((i: any) => ({ key: i.key, summary: i.fields?.summary ?? '' }));
   } catch {
-    // Fallback: broad search then filter client-side
-    const fallbackParams = { jql: 'ORDER BY created DESC', maxResults: 100, fields: 'summary,issuetype' };
+    // Fallback: broad search then filter client-side. The new /search/jql
+    // endpoint rejects fully-unbounded JQL ("Unbounded JQL queries are not
+    // allowed here"), so bound it with the project clause (or a wide date floor).
+    const fallbackJql = `${projectClause}created >= "1970/01/01" ORDER BY created DESC`;
+    const fallbackParams = { jql: fallbackJql, maxResults: 100, fields: 'summary,issuetype' };
     const data = await request<any>(creds, url, fallbackParams);
     const issues = (data.issues || []).filter((i: any) =>
       ((n) => /story/i.test(n) || /^task$/i.test(n))(String(i?.fields?.issuetype?.name || ''))

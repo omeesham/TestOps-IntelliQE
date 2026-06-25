@@ -119,7 +119,7 @@ function buildPrompt(state: TestOpsState, excludeTitles: string[] = []): string 
 
   const requestedMax = state.generationOptions?.maxTestCases;
   const countInstruction = requestedMax && requestedMax > 0
-    ? `- The user asked for approximately ${requestedMax} test cases — treat this as a HINT, NOT a ceiling. Generate more if coverage demands it.`
+    ? `- Generate AT MOST ${requestedMax} test cases — this is a HARD CEILING, do not exceed it. Spend the budget on the HIGHEST-VALUE cases: prioritise by business risk (happy path, then the most likely failure modes, then critical edge/security cases). Return ONLY the most important ${requestedMax}.`
     : `- There is NO ceiling on test count. Generate every case needed to fully certify the functionality. Stopping early because the list is long is unacceptable.`;
 
   const exclusionBlock = excludeTitles.length > 0
@@ -212,7 +212,7 @@ QUALITY RULES (every case must satisfy these — incomplete cases will be reject
 GENERATE NOW. Return the JSON array directly.`;
 }
 
-export function generatorAgent(state: TestOpsState): TestOpsState {
+export async function generatorAgent(state: TestOpsState): Promise<TestOpsState> {
   if (!state.parsedRequirements) return state;
   counter = 0;
 
@@ -220,7 +220,7 @@ export function generatorAgent(state: TestOpsState): TestOpsState {
   const plan = state.extendedTestPlan as ExtendedTestPlan | undefined;
 
   // First pass.
-  const firstResponse = runClaudePrompt(buildPrompt(state), { maxTokens: 16384 });
+  const firstResponse = await runClaudePrompt(buildPrompt(state), { maxTokens: 16384 });
   const firstParsed = parseJsonFromResponse<RawTestCase[]>(firstResponse);
 
   if (!Array.isArray(firstParsed) || firstParsed.length === 0) {
@@ -234,10 +234,18 @@ export function generatorAgent(state: TestOpsState): TestOpsState {
     ? plan.uiTests + plan.apiTests + plan.dataTests + plan.e2eTests + plan.securityTests + plan.accessibilityTests + plan.performanceTests
     : pr.features.length * Math.max(pr.flows.length, 3) + pr.edgeCases.length;
 
-  const minimumExpected = Math.max(
+  let minimumExpected = Math.max(
     pr.features.length * 3,            // never accept fewer than 3 per feature
     Math.round(plannedTotal * 0.7),    // 70 % of plan, to allow LLM rounding
   );
+
+  // When the caller asked for a specific count (the chat wizard always does),
+  // treat it as the floor. Otherwise a small request like "3 cases" still drags
+  // in a second full 16k-token generation pass and blows the request timeout.
+  const requestedMax = state.generationOptions?.maxTestCases;
+  if (requestedMax && requestedMax > 0) {
+    minimumExpected = Math.min(minimumExpected, requestedMax);
+  }
 
   if (testCases.length < minimumExpected) {
     const existingTitles = testCases.map((tc) => tc.title);
@@ -248,7 +256,7 @@ export function generatorAgent(state: TestOpsState): TestOpsState {
 You returned only ${testCases.length} test cases. With ${pr.features.length} features, ${pr.flows.length} flows, ${pr.actors.length} actors, and ${pr.edgeCases.length} edge cases, the plan calls for at least ${minimumExpected} cases. Generate the missing ${needed}+ test cases for scenarios you have NOT yet covered.`;
 
     try {
-      const retryResponse = runClaudePrompt(retryPrompt, { maxTokens: 16384 });
+      const retryResponse = await runClaudePrompt(retryPrompt, { maxTokens: 16384 });
       const retryParsed = parseJsonFromResponse<RawTestCase[]>(retryResponse);
       if (Array.isArray(retryParsed) && retryParsed.length > 0) {
         const existingSet = new Set(existingTitles.map((s) => s.toLowerCase().trim()));
