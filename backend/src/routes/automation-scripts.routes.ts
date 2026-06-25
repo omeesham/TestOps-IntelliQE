@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import pool from '../db.js';
 import { runClaudePrompt, isClaudeCliAuthenticated, parseJsonFromResponse } from '../agents/claude-runner.js';
 import { executeRunScripts, PlaywrightRunError } from '../services/playwright-runner.service.js';
+import { healRunScripts } from '../services/healing.service.js';
 
 const router = Router();
 const SCHEMA = process.env.DB_SCHEMA || 'JBSTestOpsAI';
@@ -408,6 +409,36 @@ router.post('/execute/:testRunId', async (req: Request, res: Response) => {
     }
     console.error('Script execution error:', err.message);
     res.status(500).json({ error: err.message || 'Execution failed' });
+  }
+});
+
+/* ────────────────────────────────────────────
+   POST /api/automation-scripts/heal/:testRunId
+   Auto-heal the REAL failing scripts for a run: AI-fix each failing script
+   (using its actual code + actual error + test intent), persist the fix, then
+   re-run the healed subset and return real per-test results keyed by
+   test_case_id. Body: { failures: [{ testCaseId, error }] }.
+   ──────────────────────────────────────────── */
+router.post('/heal/:testRunId', async (req: Request, res: Response) => {
+  const tenantId = req.user!.tenantId;
+  const isPlatform = req.user!.isPlatform;
+  const testRunId = String(req.params.testRunId);
+  const failures = Array.isArray(req.body?.failures) ? req.body.failures : [];
+  try {
+    const { details, healedCount, stillFailing } = await healRunScripts(tenantId, isPlatform, testRunId, failures);
+    res.json({
+      runId: testRunId,
+      // Same shape as /execute so the frontend maps results by testCaseId the same way.
+      executionDetails: details,
+      summary: { totalTests: details.length, healed: healedCount, stillFailing, executed: true },
+    });
+  } catch (err: any) {
+    if (err instanceof PlaywrightRunError) {
+      res.status(err.httpStatus || 500).json(err.toResponseJson(true));
+      return;
+    }
+    console.error('Script healing error:', err.message);
+    res.status(500).json({ error: err.message || 'Healing failed' });
   }
 });
 

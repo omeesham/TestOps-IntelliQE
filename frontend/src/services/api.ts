@@ -423,6 +423,23 @@ export async function executeScriptsForRun(testRunId: string) {
   return data;
 }
 
+// Auto-heal the failing scripts for a run: the backend AI-fixes each failing
+// script (using its real code + real error + intent), saves the fix, re-runs the
+// healed subset, and returns per-test results keyed by testCaseId (each detail
+// carries a `healFix` description and `healed` flag). AI + browser re-run can
+// take a few minutes, so use the long timeout.
+export async function healScriptsForRun(
+  testRunId: string,
+  failures: { testCaseId: string; error?: string }[],
+) {
+  const { data } = await api.post(
+    `/automation-scripts/heal/${testRunId}`,
+    { failures },
+    { timeout: 600_000 },
+  );
+  return data;
+}
+
 /* ─────────────────────────────────────────────────────────────
    Reports
    ───────────────────────────────────────────────────────────── */

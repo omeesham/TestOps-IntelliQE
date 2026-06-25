@@ -201,6 +201,15 @@ function classifyPlaywrightFailure(stdout: string, stderr: string, logPath: stri
 }
 
 /**
+ * Public wrapper around the internal failure classifier so the auto-healing
+ * service can map a failed heal re-run to the same typed, actionable error the
+ * main execution path produces. Pure delegation — no behaviour change here.
+ */
+export function classifyPlaywrightFailureExternal(stdout: string, stderr: string, logPath: string): PlaywrightRunError {
+  return classifyPlaywrightFailure(stdout, stderr, logPath);
+}
+
+/**
  * Execute the stored Playwright automation scripts for a given test_run_id and
  * return the absolute path of the real `allure-results` directory produced by
  * the `allure-playwright` reporter.

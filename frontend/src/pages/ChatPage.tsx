@@ -8,8 +8,8 @@ import {
   getGenerationResult,
   generateScriptsForRun,
   executeScriptsForRun,
+  healScriptsForRun,
   generateAllureReport,
-  executeTests,
   saveTestCases,
   exportTestCases,
   createChatConversation,
@@ -1027,17 +1027,30 @@ export default function ChatPage() {
     // Call backend healing endpoint to get real AI-powered fixes
     const newHealingLog: typeof healingLog = [];
 
-    // Call the real backend healing+re-execute endpoint. The backend
-    // healingAgent attempts AI-powered selector/wait fixes and then
-    // runs the suite again. Whatever it returns is what we surface —
-    // no fabricated "all healed pass" lies.
+    // Call the real backend healing endpoint. It loads THIS run's actual
+    // failing scripts, AI-fixes each one (using its real code + real error +
+    // test intent), persists the fix, then re-runs the healed subset and
+    // returns real per-test results keyed by testCaseId. Whatever it returns is
+    // what we surface — no fabricated "all healed pass" lies.
     let healRes: any = null;
+    if (!savedTestRunId) {
+      push('tessa', '⚠️ Cannot heal: the run was not saved. Save test cases and generate scripts first.');
+      updatePipeline('auto-healing', 'skipped', 'No saved run to heal');
+      setStep('execution-results');
+      return;
+    }
     try {
-      healRes = await executeTests(
-        `Heal failing tests: ${failedTests.map(t => `${t.testCaseId}: ${t.error}`).join('; ')}`,
+      healRes = await healScriptsForRun(
+        savedTestRunId,
+        failedTests.map(t => ({ testCaseId: t.testCaseId, error: t.error || '' })),
       );
-    } catch (err) {
+    } catch (err: any) {
       console.error('Healing API call failed:', err);
+      const ne = normalizeError(err);
+      push('tessa', `⚠️ Auto-heal could not run: ${ne.hint ? `${ne.message} — ${ne.hint}` : ne.message}`);
+      updatePipeline('auto-healing', 'skipped', 'Healing failed');
+      setStep('execution-results');
+      return;
     }
 
     // Map backend results so we can look up healed status by test-case id.
