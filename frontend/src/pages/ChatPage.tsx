@@ -420,8 +420,9 @@ export default function ChatPage() {
               setStories(list);
               push('tessa', `Found ${list.length} stories/tasks. Select one to generate test cases.`);
               setStep('content-select');
-            } catch {
-              push('tessa', `${label} is connected but I could not fetch stories. Please verify your credentials in System Configuration.`);
+            } catch (err: any) {
+              const errMsg = err?.response?.data?.error || err?.response?.data?.message || err?.message || 'Unknown error';
+              push('tessa', `${label} is connected but I could not fetch stories: ${errMsg}. Please verify your credentials in System Configuration.`);
             }
           } else if (s === 'confluence') {
             // Real Confluence fetch — list pages from the connected wiki.
@@ -1366,7 +1367,7 @@ export default function ChatPage() {
   /* ═══════════════════════════════════════════════════════════════
      RENDER HELPERS
      ═══════════════════════════════════════════════════════════════ */
-  const inputCls = 'w-full px-3.5 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-800 placeholder:text-gray-400 outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400 transition-all';
+  const inputCls = 'w-full px-3.5 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-800 placeholder:text-gray-400 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 transition-all';
 
   const renderFormField = (f: FormField) => {
     const val = formValues[f.key] || '';
@@ -1387,7 +1388,7 @@ export default function ChatPage() {
               className={inputCls + (isPass ? ' pr-9' : '')}
             />
             {isPass && (
-              <button type="button" onClick={() => setShowPasswords(p => ({ ...p, [f.key]: !p[f.key] }))} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-violet-500">
+              <button type="button" onClick={() => setShowPasswords(p => ({ ...p, [f.key]: !p[f.key] }))} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#155dfc]">
                 {show ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
               </button>
             )}
@@ -1417,7 +1418,7 @@ export default function ChatPage() {
                 className={
                   isComingSoon
                     ? 'relative text-left p-4 bg-white border border-gray-100 rounded-xl opacity-60 cursor-not-allowed'
-                    : 'group relative text-left p-4 bg-white border border-gray-100 rounded-xl hover:border-violet-300 hover:shadow-md hover:shadow-violet-500/5 transition-all'
+                    : 'group relative text-left p-4 bg-white border border-gray-100 rounded-xl hover:border-blue-300 hover:shadow-md hover:shadow-blue-500/5 transition-all'
                 }
               >
                 {isComingSoon && (
@@ -1430,7 +1431,7 @@ export default function ChatPage() {
                     'w-9 h-9 rounded-lg flex items-center justify-center mb-3 ' +
                     (isComingSoon
                       ? 'bg-gradient-to-br from-gray-300 to-gray-400'
-                      : 'bg-gradient-to-br from-violet-500 to-indigo-600')
+                      : 'bg-gradient-to-br from-blue-500 to-blue-600')
                   }
                 >
                   <Icon className="w-4.5 h-4.5 text-white" />
@@ -1438,7 +1439,7 @@ export default function ChatPage() {
                 <p
                   className={
                     'text-sm font-semibold ' +
-                    (isComingSoon ? 'text-gray-500' : 'text-gray-800 group-hover:text-violet-700')
+                    (isComingSoon ? 'text-gray-500' : 'text-gray-800 group-hover:text-[#155dfc]')
                   }
                 >
                   {c.title}
@@ -1458,8 +1459,8 @@ export default function ChatPage() {
           {REQ_SOURCES.map(s => {
             const Icon = s.icon;
             return (
-              <button key={s.id} onClick={() => pickSource(s.id)} className="group text-left p-3.5 bg-white border border-gray-100 rounded-xl hover:border-violet-300 hover:shadow-md transition-all">
-                <Icon className="w-5 h-5 text-violet-500 mb-2" />
+              <button key={s.id} onClick={() => pickSource(s.id)} className="group text-left p-3.5 bg-white border border-gray-100 rounded-xl hover:border-blue-300 hover:shadow-md transition-all">
+                <Icon className="w-5 h-5 text-blue-500 mb-2" />
                 <p className="text-sm font-medium text-gray-800">{s.title}</p>
                 <p className="text-[11px] text-gray-400">{s.desc}</p>
               </button>
@@ -1474,14 +1475,14 @@ export default function ChatPage() {
       const label = source === 'jira' ? 'JIRA' : source === 'confluence' ? 'Confluence' : 'SharePoint';
       return (
         <div className="max-w-md ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm text-center">
-          <Link2 className="w-8 h-8 text-violet-400 mx-auto mb-3" />
+          <Link2 className="w-8 h-8 text-blue-400 mx-auto mb-3" />
           <p className="text-sm font-semibold text-gray-800 mb-1">{label} Not Configured</p>
           <p className="text-xs text-gray-500 mb-4">
             Set up your {label} connection in System Configuration to continue.
           </p>
           <button
             onClick={() => window.location.href = '/system-configuration'}
-            className="px-5 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-sm font-medium rounded-lg hover:from-violet-500 hover:to-indigo-500 transition-all inline-flex items-center gap-2"
+            className="px-5 py-2 bg-[#155dfc] text-white text-sm font-medium rounded-lg hover:bg-[#124fd6] transition-all inline-flex items-center gap-2"
           >
             <Settings className="w-4 h-4" />
             Go to System Configuration
@@ -1511,7 +1512,7 @@ export default function ChatPage() {
               );
             })}
           </select>
-          <button onClick={handleStorySelect} disabled={!selectedStory} className="mt-3 w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2">
+          <button onClick={handleStorySelect} disabled={!selectedStory} className="mt-3 w-full py-2.5 bg-[#155dfc] hover:bg-[#124fd6] disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2">
             <ArrowRight className="w-4 h-4" />Proceed
           </button>
         </div>
@@ -1533,8 +1534,8 @@ export default function ChatPage() {
           <div
             className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
               uploadInProgress
-                ? 'border-violet-300 bg-violet-50/50 cursor-wait'
-                : 'border-gray-200 hover:border-violet-300 cursor-pointer'
+                ? 'border-blue-300 bg-blue-50/50 cursor-wait'
+                : 'border-gray-200 hover:border-blue-300 cursor-pointer'
             }`}
             onClick={uploadInProgress ? undefined : openFilePicker}
             onDragOver={(e) => { e.preventDefault(); }}
@@ -1553,13 +1554,13 @@ export default function ChatPage() {
           >
             {uploadInProgress ? (
               <>
-                <Loader2 className="w-8 h-8 text-violet-500 mx-auto mb-3 animate-spin" />
+                <Loader2 className="w-8 h-8 text-blue-500 mx-auto mb-3 animate-spin" />
                 <p className="text-sm font-medium text-gray-700">Extracting text from your document…</p>
                 <p className="text-xs text-gray-400 mt-1">This usually takes a few seconds.</p>
               </>
             ) : (
               <>
-                <Upload className="w-8 h-8 text-violet-400 mx-auto mb-3" />
+                <Upload className="w-8 h-8 text-blue-400 mx-auto mb-3" />
                 <p className="text-sm font-medium text-gray-700">Drop your file here or click to browse</p>
                 <p className="text-xs text-gray-400 mt-1">PDF, DOCX, TXT, or MD — up to 15 MB</p>
               </>
@@ -1579,7 +1580,7 @@ export default function ChatPage() {
       return (
         <div className="max-w-md ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm">
           <textarea value={pasteText} onChange={e => setPasteText(e.target.value)} placeholder="Paste your requirements, user stories, or acceptance criteria here..." rows={6} className={inputCls + ' resize-none'} />
-          <button onClick={handleTextSubmit} disabled={!pasteText.trim()} className="mt-3 w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2">
+          <button onClick={handleTextSubmit} disabled={!pasteText.trim()} className="mt-3 w-full py-2.5 bg-[#155dfc] hover:bg-[#124fd6] disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2">
             <Send className="w-4 h-4" />Submit Requirements
           </button>
         </div>
@@ -1594,7 +1595,7 @@ export default function ChatPage() {
       return (
         <div className="max-w-lg ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm space-y-3">
           <div className="flex items-center gap-2 mb-1">
-            <Search className="w-4 h-4 text-violet-500" />
+            <Search className="w-4 h-4 text-blue-500" />
             <span className="text-sm font-semibold text-gray-800">Explore Application</span>
           </div>
           <p className="text-xs text-gray-500 -mt-1">I'll launch a headless browser, crawl your app's main pages, and infer the features that need test coverage. Credentials are used only for the crawl and are not stored.</p>
@@ -1656,7 +1657,7 @@ export default function ChatPage() {
           <button
             onClick={handleExploreSubmit}
             disabled={!exploreUrl.trim()}
-            className="mt-2 w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+            className="mt-2 w-full py-2.5 bg-[#155dfc] hover:bg-[#124fd6] disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
           >
             <Search className="w-4 h-4" />Start Exploration
           </button>
@@ -1669,13 +1670,13 @@ export default function ChatPage() {
       return (
         <div className="max-w-lg ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm space-y-4">
           <div className="flex items-center gap-2 mb-1">
-            <Plug className="w-4 h-4 text-violet-500" />
+            <Plug className="w-4 h-4 text-blue-500" />
             <span className="text-sm font-semibold text-gray-800">API Configuration</span>
           </div>
 
           {/* URL + Method */}
           <div className="flex gap-2">
-            <select value={apiMethod} onChange={e => setApiMethod(e.target.value)} className="px-3 py-2.5 bg-violet-50 border border-violet-200 rounded-lg text-sm font-medium text-violet-700 outline-none w-28">
+            <select value={apiMethod} onChange={e => setApiMethod(e.target.value)} className="px-3 py-2.5 bg-blue-50 border border-blue-200 rounded-lg text-sm font-medium text-blue-700 outline-none w-28">
               {['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map(m => <option key={m}>{m}</option>)}
             </select>
             <input value={apiUrl} onChange={e => setApiUrl(e.target.value)} placeholder="https://api.example.com/v1/resource" className={inputCls + ' flex-1'} />
@@ -1685,7 +1686,7 @@ export default function ChatPage() {
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-xs font-medium text-gray-600">Headers</label>
-              <button onClick={() => setApiHeaders(h => [...h, { key: '', value: '' }])} className="text-xs text-violet-500 hover:text-violet-700 flex items-center gap-0.5"><Plus className="w-3 h-3" />Add</button>
+              <button onClick={() => setApiHeaders(h => [...h, { key: '', value: '' }])} className="text-xs text-blue-500 hover:text-[#155dfc] flex items-center gap-0.5"><Plus className="w-3 h-3" />Add</button>
             </div>
             {apiHeaders.map((h, i) => (
               <div key={i} className="flex gap-2 mb-1.5">
@@ -1724,7 +1725,7 @@ export default function ChatPage() {
             <textarea value={apiSampleResp} onChange={e => setApiSampleResp(e.target.value)} placeholder='{ "status": "ok", "data": [...] }' rows={3} className={inputCls + ' resize-none font-mono text-xs'} />
           </div>
 
-          <button onClick={handleApiSubmit} disabled={!apiUrl.trim()} className="w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2">
+          <button onClick={handleApiSubmit} disabled={!apiUrl.trim()} className="w-full py-2.5 bg-[#155dfc] hover:bg-[#124fd6] disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2">
             <Zap className="w-4 h-4" />Generate API Tests
           </button>
         </div>
@@ -1736,20 +1737,20 @@ export default function ChatPage() {
       return (
         <div className="max-w-md ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm">
           <div className="flex items-center gap-2 mb-4">
-            <Layers className="w-4 h-4 text-violet-500" />
+            <Layers className="w-4 h-4 text-blue-500" />
             <span className="text-sm font-semibold text-gray-800">Select Test Case Columns</span>
           </div>
           <p className="text-xs text-gray-500 mb-3">Choose which columns to include in your generated test cases.</p>
           <div className="space-y-1">
             {ALL_COLUMNS.map(col => (
-              <label key={col.key} className="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-violet-50/50 cursor-pointer transition-colors">
+              <label key={col.key} className="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-blue-50/50 cursor-pointer transition-colors">
                 <input
                   type="checkbox"
                   checked={selectedColumns.includes(col.key)}
                   onChange={() => setSelectedColumns(prev =>
                     prev.includes(col.key) ? prev.filter(k => k !== col.key) : [...prev, col.key]
                   )}
-                  className="w-4 h-4 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+                  className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 />
                 <span className="text-sm text-gray-700">{col.label}</span>
                 {col.default && <span className="text-[10px] text-gray-400 ml-auto">(default)</span>}
@@ -1759,7 +1760,7 @@ export default function ChatPage() {
           <button
             onClick={() => { setStep('generating'); runGeneration(pendingRequirements); }}
             disabled={selectedColumns.length === 0}
-            className="mt-4 w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+            className="mt-4 w-full py-2.5 bg-[#155dfc] hover:bg-[#124fd6] disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
           >
             <Zap className="w-4 h-4" />Generate Test Cases
           </button>
@@ -1772,7 +1773,7 @@ export default function ChatPage() {
       const loadingText = step === 'script-generating' ? 'Generating scripts...' : 'Generating test cases...';
       return (
         <div className="max-w-md ml-11 flex items-center gap-2.5 px-4 py-3 bg-white border border-gray-100 rounded-xl shadow-sm">
-          <Loader2 className="w-4 h-4 text-violet-500 animate-spin flex-shrink-0" />
+          <Loader2 className="w-4 h-4 text-blue-500 animate-spin flex-shrink-0" />
           <span className="text-sm text-gray-600">{loadingText}</span>
         </div>
       );
@@ -1789,7 +1790,7 @@ export default function ChatPage() {
         t === 'positive' ? 'bg-emerald-50 text-emerald-700' :
         t === 'negative' ? 'bg-rose-50 text-rose-700' :
         t === 'edge' ? 'bg-orange-50 text-orange-700' :
-        t === 'e2e' ? 'bg-violet-50 text-violet-700' :
+        t === 'e2e' ? 'bg-blue-50 text-blue-700' :
         t === 'api' ? 'bg-sky-50 text-sky-700' :
         'bg-gray-50 text-gray-600';
       const colVisible = (key: string) => selectedColumns.includes(key);
@@ -1801,13 +1802,13 @@ export default function ChatPage() {
           <div className="bg-white border border-gray-100 rounded-xl px-4 py-3 shadow-sm flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-3">
               <span className="text-sm font-semibold text-gray-800">
-                <FileText className="w-4 h-4 inline -mt-0.5 mr-1 text-violet-500" />
+                <FileText className="w-4 h-4 inline -mt-0.5 mr-1 text-blue-500" />
                 Test Cases ({totalTcs})
               </span>
               <select
                 value={tcPageSize}
                 onChange={e => { setTcPageSize(Number(e.target.value)); setTcPage(1); }}
-                className="text-xs border border-gray-200 rounded-md px-2 py-1 text-gray-600 bg-white outline-none focus:border-violet-400"
+                className="text-xs border border-gray-200 rounded-md px-2 py-1 text-gray-600 bg-white outline-none focus:border-blue-400"
               >
                 {PAGE_SIZES.map(s => <option key={s} value={s}>{s} per page</option>)}
               </select>
@@ -1821,7 +1822,7 @@ export default function ChatPage() {
               <button
                 onClick={handleSaveTestCases}
                 disabled={isSaving || totalTcs === 0}
-                className="px-4 py-1.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-xs font-medium rounded-lg transition-all flex items-center gap-1.5"
+                className="px-4 py-1.5 bg-[#155dfc] hover:bg-[#124fd6] disabled:opacity-40 text-white text-xs font-medium rounded-lg transition-all flex items-center gap-1.5"
               >
                 {isSaving ? <><Loader2 className="w-3 h-3 animate-spin" />Saving...</> : <><Save className="w-3 h-3" />Save Test Cases</>}
               </button>
@@ -1834,7 +1835,7 @@ export default function ChatPage() {
               type="checkbox"
               checked={allPageSelected}
               onChange={toggleSelectAll}
-              className="w-3.5 h-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+              className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
             />
             <span className="text-xs text-gray-500">Select all on this page</span>
             {totalPages > 1 && <span className="text-[10px] text-gray-400 ml-auto">Showing {(tcPage - 1) * tcPageSize + 1}–{Math.min(tcPage * tcPageSize, totalTcs)} of {totalTcs}</span>}
@@ -1846,23 +1847,23 @@ export default function ChatPage() {
               const isEditing = editingTcId === tc.id;
               const draft = isEditing ? editDraft : tc;
               return (
-                <div key={tc.id} className={`bg-white border ${selectedTcIds.has(tc.id) ? 'border-violet-300 bg-violet-50/30' : 'border-gray-100'} rounded-xl p-4 shadow-sm transition-colors`}>
+                <div key={tc.id} className={`bg-white border ${selectedTcIds.has(tc.id) ? 'border-blue-300 bg-blue-50/30' : 'border-gray-100'} rounded-xl p-4 shadow-sm transition-colors`}>
                   {/* Row header: checkbox + TC# + badges + actions */}
                   <div className="flex items-center gap-2 mb-2 flex-wrap">
                     <input
                       type="checkbox"
                       checked={selectedTcIds.has(tc.id)}
                       onChange={() => toggleTcSelect(tc.id)}
-                      className="w-3.5 h-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+                      className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                     />
                     {colVisible('tcNumber') && (
-                      <span className="text-xs font-mono font-bold text-violet-600 bg-violet-50 px-2 py-0.5 rounded">{tc.id}</span>
+                      <span className="text-xs font-mono font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{tc.id}</span>
                     )}
                     {colVisible('priority') && !isEditing && (
                       <span className={`text-[10px] px-2 py-0.5 font-semibold rounded border ${priorityStyle(tc.priority)}`}>{tc.priority}</span>
                     )}
                     {colVisible('priority') && isEditing && (
-                      <select value={draft.priority} onChange={e => setEditDraft((d: any) => ({ ...d, priority: e.target.value }))} className="text-[10px] px-1.5 py-0.5 border border-violet-300 rounded bg-white text-gray-700 outline-none">
+                      <select value={draft.priority} onChange={e => setEditDraft((d: any) => ({ ...d, priority: e.target.value }))} className="text-[10px] px-1.5 py-0.5 border border-blue-300 rounded bg-white text-gray-700 outline-none">
                         {['P0', 'P1', 'P2', 'P3'].map(p => <option key={p}>{p}</option>)}
                       </select>
                     )}
@@ -1870,7 +1871,7 @@ export default function ChatPage() {
                       <span className={`text-[10px] px-2 py-0.5 font-medium rounded ${typeStyle(tc.type)}`}>{tc.type}</span>
                     )}
                     {colVisible('type') && isEditing && (
-                      <select value={draft.type} onChange={e => setEditDraft((d: any) => ({ ...d, type: e.target.value }))} className="text-[10px] px-1.5 py-0.5 border border-violet-300 rounded bg-white text-gray-700 outline-none">
+                      <select value={draft.type} onChange={e => setEditDraft((d: any) => ({ ...d, type: e.target.value }))} className="text-[10px] px-1.5 py-0.5 border border-blue-300 rounded bg-white text-gray-700 outline-none">
                         {['positive', 'negative', 'edge', 'e2e', 'api', 'security', 'performance'].map(t => <option key={t}>{t}</option>)}
                       </select>
                     )}
@@ -1888,7 +1889,7 @@ export default function ChatPage() {
                         </>
                       ) : (
                         <>
-                          <button onClick={() => startEdit(tc)} className="p-1 rounded hover:bg-violet-50 text-gray-400 hover:text-violet-600 transition-colors" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => startEdit(tc)} className="p-1 rounded hover:bg-blue-50 text-gray-400 hover:text-[#155dfc] transition-colors" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
                           <button onClick={() => deleteSingleTc(tc.id)} className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
                         </>
                       )}
@@ -1901,7 +1902,7 @@ export default function ChatPage() {
                       <input
                         value={draft.scenario}
                         onChange={e => setEditDraft((d: any) => ({ ...d, scenario: e.target.value }))}
-                        className="w-full text-[13px] font-semibold text-gray-800 mb-2 px-2 py-1.5 border border-violet-300 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 bg-white"
+                        className="w-full text-[13px] font-semibold text-gray-800 mb-2 px-2 py-1.5 border border-blue-300 rounded-lg outline-none focus:ring-1 focus:ring-blue-400 bg-white"
                       />
                     ) : (
                       <p className="text-[13px] font-semibold text-gray-800 mb-2">{tc.scenario}</p>
@@ -1919,14 +1920,14 @@ export default function ChatPage() {
                               value={(draft.steps || []).join('\n')}
                               onChange={e => setEditDraft((d: any) => ({ ...d, steps: e.target.value.split('\n') }))}
                               rows={Math.max(3, (draft.steps || []).length)}
-                              className="w-full text-xs text-gray-600 px-2 py-1.5 border border-violet-300 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 resize-none bg-white font-normal"
+                              className="w-full text-xs text-gray-600 px-2 py-1.5 border border-blue-300 rounded-lg outline-none focus:ring-1 focus:ring-blue-400 resize-none bg-white font-normal"
                               placeholder="One step per line"
                             />
                           ) : (
                             <ol className="space-y-0.5">
                               {(tc.steps || []).map((s: string, j: number) => (
                                 <li key={j} className="text-xs text-gray-600 leading-relaxed">
-                                  <span className="text-violet-500 font-semibold mr-1">{j + 1}.</span>{s}
+                                  <span className="text-blue-500 font-semibold mr-1">{j + 1}.</span>{s}
                                 </li>
                               ))}
                             </ol>
@@ -1941,7 +1942,7 @@ export default function ChatPage() {
                               value={draft.expectedResult}
                               onChange={e => setEditDraft((d: any) => ({ ...d, expectedResult: e.target.value }))}
                               rows={3}
-                              className="w-full text-xs text-gray-600 px-2 py-1.5 border border-violet-300 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 resize-none bg-white font-normal"
+                              className="w-full text-xs text-gray-600 px-2 py-1.5 border border-blue-300 rounded-lg outline-none focus:ring-1 focus:ring-blue-400 resize-none bg-white font-normal"
                             />
                           ) : (
                             <p className="text-xs text-gray-600 leading-relaxed">{tc.expectedResult}</p>
@@ -1961,7 +1962,7 @@ export default function ChatPage() {
                             <input
                               value={draft.feature}
                               onChange={e => setEditDraft((d: any) => ({ ...d, feature: e.target.value }))}
-                              className="w-full text-xs px-2 py-1 border border-violet-300 rounded-lg outline-none bg-white"
+                              className="w-full text-xs px-2 py-1 border border-blue-300 rounded-lg outline-none bg-white"
                             />
                           ) : (
                             <p className="text-xs text-gray-500">{tc.feature}</p>
@@ -1975,7 +1976,7 @@ export default function ChatPage() {
                             <input
                               value={draft.precondition}
                               onChange={e => setEditDraft((d: any) => ({ ...d, precondition: e.target.value }))}
-                              className="w-full text-xs px-2 py-1 border border-violet-300 rounded-lg outline-none bg-white"
+                              className="w-full text-xs px-2 py-1 border border-blue-300 rounded-lg outline-none bg-white"
                             />
                           ) : (
                             <p className="text-xs text-gray-500">{tc.precondition}</p>
@@ -1995,7 +1996,7 @@ export default function ChatPage() {
               <button
                 disabled={tcPage <= 1}
                 onClick={() => setTcPage(p => p - 1)}
-                className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:border-violet-300 hover:text-violet-600 disabled:opacity-30 disabled:hover:border-gray-200 disabled:hover:text-gray-500 transition-colors"
+                className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:border-blue-300 hover:text-[#155dfc] disabled:opacity-30 disabled:hover:border-gray-200 disabled:hover:text-gray-500 transition-colors"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
@@ -2003,7 +2004,7 @@ export default function ChatPage() {
               <button
                 disabled={tcPage >= totalPages}
                 onClick={() => setTcPage(p => p + 1)}
-                className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:border-violet-300 hover:text-violet-600 disabled:opacity-30 disabled:hover:border-gray-200 disabled:hover:text-gray-500 transition-colors"
+                className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:border-blue-300 hover:text-[#155dfc] disabled:opacity-30 disabled:hover:border-gray-200 disabled:hover:text-gray-500 transition-colors"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>
@@ -2015,11 +2016,11 @@ export default function ChatPage() {
             <button
               onClick={handleSaveTestCases}
               disabled={isSaving || totalTcs === 0}
-              className="px-5 py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center gap-2"
+              className="px-5 py-2.5 bg-[#155dfc] hover:bg-[#124fd6] disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center gap-2"
             >
               {isSaving ? <><Loader2 className="w-4 h-4 animate-spin" />Saving...</> : <><Save className="w-4 h-4" />Save Test Cases</>}
             </button>
-            <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-violet-300 hover:text-violet-600 transition-all">
+            <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-blue-300 hover:text-[#155dfc] transition-all">
               <RotateCcw className="w-3.5 h-3.5" />Start New
             </button>
           </div>
@@ -2047,7 +2048,7 @@ export default function ChatPage() {
           {/* Export Section */}
           <div className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm">
             <div className="flex items-center gap-2 mb-3">
-              <Download className="w-4 h-4 text-violet-500" />
+              <Download className="w-4 h-4 text-blue-500" />
               <span className="text-sm font-semibold text-gray-800">Export Test Cases</span>
             </div>
             <div className="grid grid-cols-3 gap-2">
@@ -2060,35 +2061,35 @@ export default function ChatPage() {
                   key={exp.format}
                   onClick={() => handleExport(exp.format)}
                   disabled={isExporting}
-                  className="group p-3 border border-gray-200 rounded-lg hover:border-violet-300 hover:bg-violet-50 disabled:opacity-50 transition-all text-center"
+                  className="group p-3 border border-gray-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50 transition-all text-center"
                 >
-                  <exp.icon className="w-4 h-4 mx-auto mb-1 text-gray-400 group-hover:text-violet-500 transition-colors" />
+                  <exp.icon className="w-4 h-4 mx-auto mb-1 text-gray-400 group-hover:text-[#155dfc] transition-colors" />
                   <p className="text-xs font-medium text-gray-700">{exp.label}</p>
                 </button>
               ))}
             </div>
             {isExporting && (
-              <p className="text-xs text-violet-500 mt-2 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" />Exporting...</p>
+              <p className="text-xs text-blue-500 mt-2 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" />Exporting...</p>
             )}
           </div>
 
           {/* Proceed to Script Generation */}
           <div className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm">
             <div className="flex items-center gap-2 mb-2">
-              <Code className="w-4 h-4 text-indigo-500" />
+              <Code className="w-4 h-4 text-blue-500" />
               <span className="text-sm font-semibold text-gray-800">Automation Scripts</span>
             </div>
             <p className="text-xs text-gray-500 mb-3">Generate automation scripts for your saved test cases.</p>
             <button
               onClick={handleScriptGeneration}
-              className="w-full py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+              className="w-full py-2.5 bg-gradient-to-r from-blue-600 to-blue-600 hover:from-blue-500 hover:to-blue-500 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
             >
               <Code className="w-4 h-4" />Generate Automation Scripts
             </button>
           </div>
 
           {/* Start New */}
-          <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-violet-300 hover:text-violet-600 transition-all">
+          <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-blue-300 hover:text-[#155dfc] transition-all">
             <RotateCcw className="w-3.5 h-3.5" />Start New Test
           </button>
         </div>
@@ -2103,9 +2104,9 @@ export default function ChatPage() {
             {/* Header */}
             <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Code className="w-4 h-4 text-violet-500" />
+                <Code className="w-4 h-4 text-blue-500" />
                 <span className="text-sm font-semibold text-gray-800">Generated Scripts</span>
-                <span className="text-xs px-2 py-0.5 bg-violet-50 text-violet-600 rounded-full">{generatedScripts.length} scripts</span>
+                <span className="text-xs px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full">{generatedScripts.length} scripts</span>
               </div>
             </div>
             {/* Script list */}
@@ -2117,7 +2118,7 @@ export default function ChatPage() {
                     <p className="text-xs font-mono text-gray-700 truncate">{s.fileName}</p>
                     <p className="text-[10px] text-gray-400">{s.testCaseId}</p>
                   </div>
-                  <span className="text-[10px] px-1.5 py-0.5 bg-[#7C3AED]/5 text-[#7C3AED] rounded border border-[#7C3AED]/10 font-mono">.spec.ts</span>
+                  <span className="text-[10px] px-1.5 py-0.5 bg-[#155dfc]/5 text-[#155dfc] rounded border border-[#155dfc]/10 font-mono">.spec.ts</span>
                 </div>
               ))}
             </div>
@@ -2142,14 +2143,14 @@ export default function ChatPage() {
           <div className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <Terminal className="w-4 h-4 text-violet-500 animate-pulse" />
+                <Terminal className="w-4 h-4 text-blue-500 animate-pulse" />
                 <span className="text-sm font-semibold text-gray-800">Test Execution</span>
               </div>
               <span className="text-xs text-gray-400">{completedCount}/{executionResults.length} completed</span>
             </div>
             {/* Progress bar */}
             <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden mb-4">
-              <div className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 rounded-full transition-all duration-500" style={{ width: `${percent}%` }} />
+              <div className="h-full bg-gradient-to-r from-blue-500 to-blue-500 rounded-full transition-all duration-500" style={{ width: `${percent}%` }} />
             </div>
             {/* Test list */}
             <div className="space-y-2 max-h-[350px] overflow-y-auto">
@@ -2157,17 +2158,17 @@ export default function ChatPage() {
                 <div key={i} className={`flex items-start gap-3 p-2.5 rounded-lg border ${
                   r.status === 'passed' ? 'bg-emerald-50/80 border-emerald-200/60' :
                   r.status === 'failed' ? 'bg-red-50/80 border-red-200/60' :
-                  r.status === 'running' ? 'bg-violet-50/80 border-violet-200/60' :
+                  r.status === 'running' ? 'bg-blue-50/80 border-blue-200/60' :
                   'bg-gray-50/80 border-gray-200/60'
                 }`}>
                   <div className="flex-shrink-0 mt-0.5">
                     {r.status === 'passed' ? <CheckCircle className="w-4 h-4 text-emerald-500" /> :
                      r.status === 'failed' ? <XCircle className="w-4 h-4 text-red-500" /> :
-                     r.status === 'running' ? <Loader2 className="w-4 h-4 text-violet-500 animate-spin" /> :
+                     r.status === 'running' ? <Loader2 className="w-4 h-4 text-blue-500 animate-spin" /> :
                      <span className="block w-4 h-4 rounded-full border-2 border-gray-300" />}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className={`text-xs font-medium ${r.status === 'running' ? 'text-violet-700' : 'text-gray-800'}`}>{r.testName}.spec.ts</p>
+                    <p className={`text-xs font-medium ${r.status === 'running' ? 'text-blue-700' : 'text-gray-800'}`}>{r.testName}.spec.ts</p>
                     {r.status === 'failed' && r.error && (
                       <p className="text-[11px] text-red-500 mt-0.5 truncate">{r.error}</p>
                     )}
@@ -2235,7 +2236,7 @@ export default function ChatPage() {
             )}
             <button
               onClick={handleProceedToReport}
-              className={`${executionSummary.failed > 0 && healingAttempt < 2 ? 'flex-1' : 'w-full'} py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2`}
+              className={`${executionSummary.failed > 0 && healingAttempt < 2 ? 'flex-1' : 'w-full'} py-2.5 bg-[#155dfc] hover:bg-[#124fd6] text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2`}
             >
               <BarChart3 className="w-4 h-4" />{executionSummary.failed > 0 && healingAttempt < 2 ? 'Skip to Report' : 'Generate Report'}
             </button>
@@ -2291,14 +2292,14 @@ export default function ChatPage() {
         <div className="max-w-2xl ml-11 space-y-3">
           <div className="bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden">
             {/* Header */}
-            <div className="px-5 py-4 bg-gradient-to-r from-violet-50 to-indigo-50 border-b border-violet-100">
+            <div className="px-5 py-4 bg-gradient-to-r from-blue-50 to-blue-50 border-b border-blue-100">
               <div className="flex items-center gap-2 mb-2">
-                <BarChart3 className="w-4.5 h-4.5 text-violet-600" />
+                <BarChart3 className="w-4.5 h-4.5 text-blue-600" />
                 <span className="text-sm font-semibold text-[#1E1B4B]">Test Execution Report</span>
               </div>
               {/* Pass rate bar */}
               <div className="flex items-center gap-3">
-                <div className="flex-1 h-3 bg-white rounded-full overflow-hidden border border-violet-100">
+                <div className="flex-1 h-3 bg-white rounded-full overflow-hidden border border-blue-100">
                   <div className={`h-full rounded-full transition-all duration-1000 ${reportData.passRate >= 90 ? 'bg-emerald-500' : reportData.passRate >= 70 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${reportData.passRate}%` }} />
                 </div>
                 <span className={`text-lg font-bold ${reportData.passRate >= 90 ? 'text-emerald-600' : reportData.passRate >= 70 ? 'text-amber-600' : 'text-red-600'}`}>{reportData.passRate}%</span>
@@ -2364,11 +2365,11 @@ export default function ChatPage() {
           )}
           <button
             onClick={() => setStep('publish')}
-            className="w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+            className="w-full py-2.5 bg-[#155dfc] hover:bg-[#124fd6] text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
           >
             <GitBranch className="w-4 h-4" />Create Pull Request
           </button>
-          <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-violet-300 hover:text-violet-600 transition-all">
+          <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-blue-300 hover:text-[#155dfc] transition-all">
             <RotateCcw className="w-3.5 h-3.5" />Start New Test
           </button>
         </div>
@@ -2394,8 +2395,8 @@ export default function ChatPage() {
               <div className="space-y-2 mt-3">
                 {[
                   { icon: CheckCircle, text: `${generatedScripts.length} test scripts added`, color: 'text-emerald-600' },
-                  { icon: GitBranch, text: `Branch: ${gitBranch}`, color: 'text-violet-600' },
-                  { icon: Workflow, text: 'PR ready for review', color: 'text-indigo-600' },
+                  { icon: GitBranch, text: `Branch: ${gitBranch}`, color: 'text-blue-600' },
+                  { icon: Workflow, text: 'PR ready for review', color: 'text-blue-600' },
                 ].map((item, i) => (
                   <div key={i} className="flex items-center gap-2">
                     <item.icon className={`w-3.5 h-3.5 ${item.color}`} />
@@ -2408,7 +2409,7 @@ export default function ChatPage() {
                   href={publishedPrUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-violet-700 hover:text-violet-800 break-all"
+                  className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 hover:text-[#155dfc] break-all"
                 >
                   <ExternalLink className="w-3.5 h-3.5 flex-shrink-0" />
                   <span>{publishedPrUrl}</span>
@@ -2419,7 +2420,7 @@ export default function ChatPage() {
             /* Form state */
             <div className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm">
               <div className="flex items-center gap-2 mb-4">
-                <GitBranch className="w-4 h-4 text-violet-500" />
+                <GitBranch className="w-4 h-4 text-blue-500" />
                 <span className="text-sm font-semibold text-gray-800">Create Pull Request</span>
               </div>
               <div className="space-y-3">
@@ -2452,14 +2453,14 @@ export default function ChatPage() {
               <button
                 onClick={handlePublishToGit}
                 disabled={!gitRepoUrl.trim() || isPublishing}
-                className="mt-4 w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+                className="mt-4 w-full py-2.5 bg-[#155dfc] hover:bg-[#124fd6] disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
               >
                 {isPublishing ? <Loader2 className="w-4 h-4 animate-spin" /> : <ExternalLink className="w-4 h-4" />}
                 {isPublishing ? 'Creating PR...' : 'Create PR'}
               </button>
             </div>
           )}
-          <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-violet-300 hover:text-violet-600 transition-all">
+          <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-blue-300 hover:text-[#155dfc] transition-all">
             <RotateCcw className="w-3.5 h-3.5" />Start New Test
           </button>
         </div>
@@ -2473,11 +2474,11 @@ export default function ChatPage() {
      PIPELINE SIDEBAR RENDERER
      ═══════════════════════════════════════════════════════════════ */
   const renderPipelineSidebar = () => (
-    <aside className="w-72 flex-shrink-0 border-l border-[#DDD6FE]/60 bg-white/90 backdrop-blur-sm overflow-y-auto">
+    <aside className="w-72 flex-shrink-0 border-l border-[#C9DCFF]/60 bg-white/90 backdrop-blur-sm overflow-y-auto">
       <div className="p-5">
         {/* Title */}
         <div className="flex items-center gap-2 mb-6">
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#7C3AED] to-[#6366F1] flex items-center justify-center">
+          <div className="w-7 h-7 rounded-lg bg-[#155dfc] flex items-center justify-center">
             <Workflow className="w-3.5 h-3.5 text-white" />
           </div>
           <h3 className="text-sm font-semibold text-[#1E1B4B]">AI Pipeline Progress</h3>
@@ -2500,7 +2501,7 @@ export default function ChatPage() {
                       : stage.status === 'skipped'
                         ? '#9CA3AF'
                         : stage.status === 'running'
-                          ? 'linear-gradient(to bottom, #7C3AED, #E5E7EB)'
+                          ? 'linear-gradient(to bottom, #155dfc, #E5E7EB)'
                           : '#E5E7EB',
                   }} />
                 )}
@@ -2512,7 +2513,7 @@ export default function ChatPage() {
                       <Check className="w-4 h-4 text-white" />
                     </div>
                   ) : stage.status === 'running' ? (
-                    <div className="w-8 h-8 rounded-full bg-[#7C3AED] flex items-center justify-center shadow-md shadow-violet-300 animate-pulse">
+                    <div className="w-8 h-8 rounded-full bg-[#155dfc] flex items-center justify-center shadow-md shadow-blue-300 animate-pulse">
                       <Loader2 className="w-4 h-4 text-white animate-spin" />
                     </div>
                   ) : stage.status === 'skipped' ? (
@@ -2531,13 +2532,13 @@ export default function ChatPage() {
                   <div className="flex items-center gap-1.5">
                     <Icon className={`w-3.5 h-3.5 ${
                       stage.status === 'completed' ? 'text-[#1E1B4B]' :
-                      stage.status === 'running' ? 'text-[#7C3AED]' :
+                      stage.status === 'running' ? 'text-[#155dfc]' :
                       stage.status === 'skipped' ? 'text-gray-400' :
                       'text-[#D1D5DB]'
                     }`} />
                     <p className={`text-sm font-medium ${
                       stage.status === 'completed' ? 'text-[#1E1B4B]' :
-                      stage.status === 'running' ? 'text-[#7C3AED]' :
+                      stage.status === 'running' ? 'text-[#155dfc]' :
                       stage.status === 'skipped' ? 'text-gray-400 line-through' :
                       'text-[#9CA3AF]'
                     }`}>
@@ -2546,7 +2547,7 @@ export default function ChatPage() {
                   </div>
                   <p className={`text-[11px] mt-0.5 ${
                     stage.status === 'completed' ? 'text-[#1E1B4B]' :
-                    stage.status === 'running' ? 'text-[#7C3AED]' :
+                    stage.status === 'running' ? 'text-[#155dfc]' :
                     stage.status === 'skipped' ? 'text-gray-400' :
                     'text-[#9CA3AF]'
                   }`}>
@@ -2577,7 +2578,7 @@ export default function ChatPage() {
               title={voiceEnabled ? 'Mute Tessa voice' : 'Enable Tessa voice'}
               className={`p-1.5 rounded-lg border transition-all ${
                 voiceEnabled
-                  ? 'text-violet-500 bg-white border-violet-200 hover:bg-violet-50'
+                  ? 'text-[#155dfc] bg-white border-blue-200 hover:bg-blue-50'
                   : 'text-gray-400 bg-white border-gray-200 hover:text-gray-600 hover:bg-gray-50'
               }`}
             >
@@ -2587,7 +2588,7 @@ export default function ChatPage() {
               <button
                 onClick={requestReset}
                 title="New chat"
-                className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:text-violet-600 hover:border-violet-200 transition-colors"
+                className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:text-[#155dfc] hover:border-blue-200 transition-colors"
               >
                 <RotateCcw className="w-3.5 h-3.5" />New
               </button>
@@ -2628,10 +2629,10 @@ export default function ChatPage() {
             <div className={`mx-auto space-y-4 ${step === 'results' ? 'max-w-4xl' : 'max-w-2xl'}`}>
               {/* Session restored banner */}
               {sessionRestored && (
-                <div className="flex items-center gap-2.5 px-4 py-2.5 bg-violet-50 border border-violet-200 rounded-xl text-sm text-violet-700 animate-fadeIn">
+                <div className="flex items-center gap-2.5 px-4 py-2.5 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-700 animate-fadeIn">
                   <RotateCcw className="w-3.5 h-3.5 flex-shrink-0" />
                   <span>Your previous session has been restored. Continue from where you left off.</span>
-                  <button onClick={() => setSessionRestored(false)} className="ml-auto text-violet-400 hover:text-violet-600">
+                  <button onClick={() => setSessionRestored(false)} className="ml-auto text-blue-400 hover:text-[#155dfc]">
                     <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
@@ -2640,13 +2641,13 @@ export default function ChatPage() {
               {messages.map(msg => (
                 <div key={msg.id} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'} animate-fadeIn`}>
                   {msg.sender === 'tessa' && (
-                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center mr-2 flex-shrink-0 mt-0.5">
+                    <div className="w-7 h-7 rounded-full bg-[#155dfc] flex items-center justify-center mr-2 flex-shrink-0 mt-0.5">
                       <Bot className="w-3.5 h-3.5 text-white" />
                     </div>
                   )}
                   <div className={`max-w-[75%] px-4 py-2.5 text-sm leading-relaxed ${
                     msg.sender === 'user'
-                      ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white rounded-2xl rounded-br-md shadow-sm'
+                      ? 'bg-[#155dfc] text-white rounded-2xl rounded-br-md shadow-sm'
                       : 'bg-white border border-gray-100 text-gray-700 rounded-2xl rounded-bl-md shadow-sm'
                   }`}>
                     {msg.text}
@@ -2667,8 +2668,8 @@ export default function ChatPage() {
           {(category || subCategory || source) && !['results', 'saved', 'script-generating', 'script-review', 'executing', 'execution-results', 'healing', 'report', 'publish'].includes(step) && (
             <div className="flex-shrink-0 px-6 py-2 border-t border-gray-100 bg-white/60 backdrop-blur-sm">
               <div className="max-w-2xl mx-auto flex items-center gap-1.5 text-[11px] text-gray-400">
-                {category && <span className="px-2 py-0.5 bg-violet-50 text-violet-600 rounded-full">{CATEGORIES.find(c => c.id === category)?.title}</span>}
-                {subCategory && <><ChevronDown className="w-3 h-3 rotate-[-90deg]" /><span className="px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-full">{subCategory}</span></>}
+                {category && <span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full">{CATEGORIES.find(c => c.id === category)?.title}</span>}
+                {subCategory && <><ChevronDown className="w-3 h-3 rotate-[-90deg]" /><span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full">{subCategory}</span></>}
                 {source && <><ChevronDown className="w-3 h-3 rotate-[-90deg]" /><span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full">{REQ_SOURCES.find(s => s.id === source)?.title}</span></>}
               </div>
             </div>

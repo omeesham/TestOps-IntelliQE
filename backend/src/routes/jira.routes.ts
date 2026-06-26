@@ -138,8 +138,55 @@ router.get('/stories', async (req: Request, res: Response) => {
     } else if (err?.message && !err?.message.includes('auth')) {
       safeMsg = `JIRA error: ${err.message}`;
     }
-    console.error('JIRA stories error:', safeMsg);
+    console.error('JIRA stories error:', safeMsg, err?.response?.data || '');
     res.status(status || 500).json({ error: safeMsg });
+  }
+});
+
+// GET /api/jira/debug — Diagnostic endpoint: shows raw creds + search results
+router.get('/debug', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const creds = await getCredsForTenant(user.tenantId);
+    if (!creds) { res.status(400).json({ error: 'No JIRA credentials stored for this tenant.' }); return; }
+
+    const axios = (await import('axios')).default;
+    const headers = { Authorization: creds.authHeader, Accept: 'application/json' };
+    const diag: Record<string, any> = {
+      baseUrl: creds.baseUrl,
+      projectKey: creds.projectKey || null,
+      authHeaderPrefix: creds.authHeader?.slice(0, 10) + '...',
+    };
+
+    // Test 1: /myself
+    try {
+      const me = await axios.get(`${creds.baseUrl}/rest/api/3/myself`, { headers });
+      diag.myself = { accountId: me.data.accountId, displayName: me.data.displayName };
+    } catch (e: any) { diag.myself = { error: e?.response?.status, msg: e?.message }; }
+
+    // Test 2: /issuetype
+    try {
+      const it = await axios.get(`${creds.baseUrl}/rest/api/3/issuetype`, { headers });
+      const arr = Array.isArray(it.data) ? it.data : (it.data?.values ?? it.data?.issueTypes ?? []);
+      diag.issueTypes = arr.map((t: any) => t.name);
+    } catch (e: any) { diag.issueTypes = { error: e?.response?.status, msg: e?.message }; }
+
+    // Test 3: broad search — all issues since 2000
+    for (const endpoint of ['/rest/api/3/search', '/rest/api/3/search/jql']) {
+      const url = `${creds.baseUrl}${endpoint}`;
+      try {
+        const sr = await axios.get(url, {
+          headers,
+          params: { jql: 'created >= "2000-01-01" ORDER BY created DESC', maxResults: 10, fields: 'summary,issuetype' },
+        });
+        diag[endpoint] = { total: sr.data.total, returned: sr.data.issues?.length, sample: sr.data.issues?.slice(0, 3).map((i: any) => `${i.key}: ${i.fields?.summary}`) };
+        break;
+      } catch (e: any) { diag[endpoint] = { error: e?.response?.status, msg: e?.response?.data?.errorMessages?.[0] || e?.message }; }
+    }
+
+    res.json(diag);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

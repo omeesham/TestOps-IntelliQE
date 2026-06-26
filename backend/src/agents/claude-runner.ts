@@ -1,18 +1,14 @@
 /**
  * Claude CLI runner — invokes Claude Code to generate AI responses.
- * Falls back to a basic prompt-based approach if CLI is not available.
  *
- * NOTE: Originally used execSync which, on Windows, could orphan child
- * claude.exe processes on timeout (Node can't reliably kill grandchildren
- * without a tree kill). This version keeps the same synchronous API but
- * wraps the call in a manual timeout that issues `taskkill /F /T /PID` on
- * Windows (or `kill -9 -pid` on POSIX) so the whole process tree dies and
- * no orphans can accumulate overnight.
+ * Auth strategy (in priority order):
+ *   1. ANTHROPIC_API_KEY set → Anthropic SDK (durable, headless, portable).
+ *   2. Otherwise → locally-authenticated `claude` CLI (subscription login).
+ *      The CLI path is fully async so the Node.js event loop is never blocked.
  */
-import { execSync, spawnSync } from 'child_process';
-import { homedir, tmpdir } from 'os';
+import { execSync, spawn } from 'child_process';
+import { homedir } from 'os';
 import { join } from 'path';
-import { writeFileSync, unlinkSync } from 'fs';
 import Anthropic from '@anthropic-ai/sdk';
 
 let resolvedCliPath: string | null = null;
@@ -42,17 +38,8 @@ function findClaudeCli(): string | null {
  * Run a prompt through Claude and return the response text.
  *
  * Auth strategy, in priority order:
- *   1. ANTHROPIC_API_KEY set → call the Anthropic API directly via the official
- *      SDK. This is the durable, portable path: API keys don't expire like an
- *      interactive `claude auth login` session, they work headlessly, and
- *      anyone who clones the repo can run the pipeline by setting their own key.
- *      PREFERRED.
- *   2. Otherwise → shell out to the locally-authenticated `claude` CLI
- *      (subscription login). Kept as a fallback so existing CLI setups keep
- *      working — but its login token expires periodically, which is the failure
- *      the API-key path above is meant to eliminate.
- *
- * Returns a Promise now (the SDK is async). All call sites `await` it.
+ *   1. ANTHROPIC_API_KEY set → Anthropic SDK (durable, portable, preferred).
+ *   2. Otherwise → locally-authenticated `claude` CLI (subscription login).
  */
 export async function runClaudePrompt(
   prompt: string,
@@ -125,62 +112,62 @@ async function runViaAnthropicApi(
 
 /**
  * Run a prompt through the Claude CLI and return the response text.
- * Uses `claude -p` (print mode — non-interactive, returns text).
- *
- * Uses spawnSync (not execSync) because spawnSync gives us the child PID
- * back via its return value — but in practice spawnSync also blocks on
- * the whole tree. To guarantee no orphans on timeout, we pipe through a
- * small shell wrapper on POSIX or use `taskkill /T` on Windows via the
- * timeout-kill helper below.
+ * Uses `claude --print` (non-interactive print mode) with the prompt piped
+ * via stdin. Fully async so the Node.js event loop is never blocked.
  */
-function runViaClaudeCli(prompt: string, options?: { maxTokens?: number; model?: string }): string {
+async function runViaClaudeCli(prompt: string, options?: { maxTokens?: number; model?: string }): Promise<string> {
   const cli = findClaudeCli();
   if (!cli) throw new Error('Claude CLI not found');
 
-  const args: string[] = ['-p'];
+  const args: string[] = ['--print'];
   if (options?.model) args.push('--model', options.model);
-  // Note: Claude CLI does not support --max-tokens; use --max-budget-usd for cost control
 
-  // Write prompt to a temp file to avoid shell escaping issues
-  const tmpFile = join(tmpdir(), `claude-prompt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
-  writeFileSync(tmpFile, prompt, 'utf-8');
+  return new Promise<string>((resolve, reject) => {
+    // On Windows, .cmd files require cmd.exe as the interpreter; pass shell
+    // explicitly via cmd /c instead of `shell: true` to avoid DEP0190.
+    const [spawnCmd, spawnArgs] = IS_WINDOWS
+      ? ['cmd', ['/c', cli, ...args]]
+      : [cli, args];
 
-  try {
-    // spawnSync returns { pid, stdout, stderr, signal, status, error } — with a
-    // hard timeout the child is killed, but on Windows that only kills the
-    // immediate child, not its grandchildren. We manually tree-kill via the
-    // `killSignal` + post-timeout taskkill below as a safety net.
-    const result = spawnSync(cli, args, {
-      timeout: 300000, // 5 minutes
-      encoding: 'utf-8',
+    const child = spawn(spawnCmd, spawnArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      maxBuffer: 10 * 1024 * 1024,
-      shell: IS_WINDOWS,
       windowsHide: true,
-      input: prompt,
-      killSignal: 'SIGKILL',
     });
 
-    // If spawnSync reported a timeout, result.error?.code === 'ETIMEDOUT' and
-    // result.pid points at the (now-half-dead) child. Tree-kill to sweep up
-    // any surviving grandchildren on Windows.
-    if (result.error) {
-      const err = result.error as NodeJS.ErrnoException;
-      if (err.code === 'ETIMEDOUT' && result.pid) {
-        treeKill(result.pid);
-        throw new Error(`Claude CLI timed out after 5 minutes (tree-killed pid ${result.pid})`);
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf-8'); });
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf-8'); });
+
+    const timer = setTimeout(() => {
+      if (child.pid) treeKill(child.pid);
+      reject(new Error(`Claude CLI timed out after 5 minutes (tree-killed pid ${child.pid})`));
+    }, 300_000);
+
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(new Error(`Claude CLI exited with code ${code}: ${stderr.slice(0, 500)}`));
+        return;
       }
-      throw err;
-    }
+      const text = stdout.trim();
+      if (!text) {
+        reject(new Error('Claude CLI returned an empty response'));
+        return;
+      }
+      resolve(text);
+    });
 
-    if (result.status !== 0) {
-      throw new Error(`Claude CLI exited with code ${result.status}: ${String(result.stderr || '').slice(0, 500)}`);
-    }
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
 
-    return String(result.stdout || '').trim();
-  } finally {
-    try { unlinkSync(tmpFile); } catch { /* ignore */ }
-  }
+    // Send the prompt via stdin and close to signal EOF
+    child.stdin.write(prompt, 'utf-8');
+    child.stdin.end();
+  });
 }
 
 /**

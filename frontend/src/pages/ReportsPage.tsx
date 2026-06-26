@@ -106,7 +106,7 @@ export default function ReportsPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 text-[#7C3AED] animate-spin" />
+        <Loader2 className="w-8 h-8 text-[#155dfc] animate-spin" />
         <span className="ml-3 text-sm text-[#6B7280]">Loading reports...</span>
       </div>
     );
@@ -131,35 +131,35 @@ export default function ReportsPage() {
     <div className="space-y-6">
       <div className="space-y-4">
         {/* Controls Bar */}
-        <div className="relative z-50 bg-white/80 backdrop-blur-sm rounded-xl border border-[#DDD6FE]/60 p-4">
+        <div className="relative z-50 bg-white/80 backdrop-blur-sm rounded-xl border border-[#C9DCFF]/60 p-4">
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
             {/* Run Selector */}
             <div className="relative">
               <button
                 onClick={() => setShowRunDropdown(!showRunDropdown)}
-                className="flex items-center gap-2 px-3 py-2 text-sm bg-[#F5F3FF] border border-[#DDD6FE] rounded-lg hover:bg-[#EDE9FE] transition-colors min-w-[200px]"
+                className="flex items-center gap-2 px-3 py-2 text-sm bg-[#EFF5FF] border border-[#C9DCFF] rounded-lg hover:bg-[#DEEAFF] transition-colors min-w-[200px]"
               >
-                <FileText className="w-4 h-4 text-[#7C3AED]" />
+                <FileText className="w-4 h-4 text-[#155dfc]" />
                 <span className="text-[#1E1B4B] truncate flex-1 text-left">{selectedRunLabel}</span>
-                <ChevronDown className="w-4 h-4 text-[#A5B4FC]" />
+                <ChevronDown className="w-4 h-4 text-[#93B4FB]" />
               </button>
               {showRunDropdown && (
-                <div className="absolute top-full left-0 mt-1 w-72 bg-white rounded-xl border border-[#DDD6FE] shadow-xl shadow-purple-200/60 z-[100] max-h-64 overflow-y-auto">
+                <div className="absolute top-full left-0 mt-1 w-72 bg-white rounded-xl border border-[#C9DCFF] shadow-xl shadow-blue-200/60 z-[100] max-h-64 overflow-y-auto">
                   {data?.recentRuns?.map((run) => (
                     <button
                       key={run.id}
                       onClick={() => { setSelectedRunId(run.id); setShowRunDropdown(false); }}
-                      className={`w-full text-left px-3 py-2 text-sm hover:bg-[#F5F3FF] transition-colors border-t border-[#F5F3FF] ${
-                        selectedRunId === run.id ? 'bg-[#EDE9FE] text-[#7C3AED] font-medium' : 'text-[#1E1B4B]'
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-[#EFF5FF] transition-colors border-t border-[#EFF5FF] ${
+                        selectedRunId === run.id ? 'bg-[#DEEAFF] text-[#155dfc] font-medium' : 'text-[#1E1B4B]'
                       }`}
                     >
                       <div className="flex items-center gap-2">
                         {run.storyKey && (
-                          <span className="px-1.5 py-0.5 bg-[#EDE9FE] text-[#7C3AED] rounded text-xs font-mono">{run.storyKey}</span>
+                          <span className="px-1.5 py-0.5 bg-[#DEEAFF] text-[#155dfc] rounded text-xs font-mono">{run.storyKey}</span>
                         )}
                         <span className="truncate">{run.storyTitle || 'Manual Input'}</span>
                       </div>
-                      <div className="text-xs text-[#A5B4FC] mt-0.5">
+                      <div className="text-xs text-[#93B4FB] mt-0.5">
                         {run.caseCount} cases &middot; {new Date(run.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                       </div>
                     </button>
@@ -171,7 +171,7 @@ export default function ReportsPage() {
             <button
               onClick={() => handleGenerate()}
               disabled={generating}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-[#7C3AED] rounded-lg hover:bg-[#6D28D9] disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md shadow-purple-200"
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-[#155dfc] rounded-lg hover:bg-[#124fd6] disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md shadow-blue-200"
             >
               {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
               {generating ? 'Running tests…' : 'Generate Report'}
@@ -181,7 +181,7 @@ export default function ReportsPage() {
               <a
                 href={allureStatus.reportUrl.replace(/\/index\.html$/, '/download')}
                 download
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-[#7C3AED] bg-white border border-[#DDD6FE] rounded-lg hover:bg-[#F5F3FF] transition-all shadow-sm"
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-[#155dfc] bg-white border border-[#C9DCFF] rounded-lg hover:bg-[#EFF5FF] transition-all shadow-sm"
               >
                 <Download className="w-4 h-4" />
                 Download
@@ -189,7 +189,7 @@ export default function ReportsPage() {
             )}
 
             {allureStatus?.generatedAt && (
-              <span className="text-xs text-[#A5B4FC] ml-auto">
+              <span className="text-xs text-[#93B4FB] ml-auto">
                 Last generated: {new Date(allureStatus.generatedAt).toLocaleString('en-US', {
                   month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
                 })}
@@ -209,12 +209,12 @@ export default function ReportsPage() {
         </div>
 
         {allureLoading ? (
-          <div className="flex items-center justify-center h-96 bg-white/80 backdrop-blur-sm rounded-xl border border-[#DDD6FE]/60">
-            <Loader2 className="w-8 h-8 text-[#7C3AED] animate-spin" />
+          <div className="flex items-center justify-center h-96 bg-white/80 backdrop-blur-sm rounded-xl border border-[#C9DCFF]/60">
+            <Loader2 className="w-8 h-8 text-[#155dfc] animate-spin" />
             <span className="ml-3 text-sm text-[#6B7280]">Checking report status...</span>
           </div>
         ) : allureStatus?.exists && allureStatus.reportUrl ? (
-          <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-[#DDD6FE]/60 overflow-hidden">
+          <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-[#C9DCFF]/60 overflow-hidden">
             <iframe
               key={allureStatus.reportUrl + allureStatus.generatedAt}
               src={allureStatus.reportUrl}
@@ -224,8 +224,8 @@ export default function ReportsPage() {
             />
           </div>
         ) : (
-          <div className="flex flex-col items-center justify-center h-96 bg-white/80 backdrop-blur-sm rounded-xl border border-[#DDD6FE]/60">
-            <FileText className="w-14 h-14 text-[#A5B4FC] mb-4" />
+          <div className="flex flex-col items-center justify-center h-96 bg-white/80 backdrop-blur-sm rounded-xl border border-[#C9DCFF]/60">
+            <FileText className="w-14 h-14 text-[#93B4FB] mb-4" />
             <h3 className="text-lg font-semibold text-[#1E1B4B] mb-2">
               {generating ? 'Running tests and building Allure report…' : 'No Allure Report Generated'}
             </h3>
@@ -237,7 +237,7 @@ export default function ReportsPage() {
             <button
               onClick={() => handleGenerate()}
               disabled={generating}
-              className="flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white bg-[#7C3AED] rounded-lg hover:bg-[#6D28D9] disabled:opacity-50 transition-all shadow-md shadow-purple-200"
+              className="flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white bg-[#155dfc] rounded-lg hover:bg-[#124fd6] disabled:opacity-50 transition-all shadow-md shadow-blue-200"
             >
               {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
               {generating ? 'Generating...' : 'Generate Report'}

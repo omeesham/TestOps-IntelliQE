@@ -3,7 +3,6 @@ import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { ToastProvider } from '@/components/feedback/ToastProvider';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import Layout from '@/components/layout/Layout';
-import LandingPage from '@/pages/LandingPage';
 import LoginPage from '@/pages/LoginPage';
 import DashboardPage from '@/pages/DashboardPage';
 import ReportsPage from '@/pages/ReportsPage';
@@ -25,7 +24,10 @@ function AppRoutes() {
   return (
     <Routes>
       {/* Public routes */}
-      <Route path="/" element={<LandingPage />} />
+      <Route
+        path="/"
+        element={isAuthenticated ? <Navigate to="/chat" replace /> : <Navigate to="/login" replace />}
+      />
       <Route
         path="/login"
         element={isAuthenticated ? <Navigate to="/chat" replace /> : <LoginPage />}

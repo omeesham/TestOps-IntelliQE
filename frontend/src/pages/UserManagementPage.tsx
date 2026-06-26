@@ -34,7 +34,7 @@ const ROLES = [
   { value: 'data_analyst', label: 'Data Analyst', color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
 ];
 
-const inputCls = 'w-full px-4 py-3 bg-[#F5F3FF] border border-[#DDD6FE] rounded-xl text-[#1E1B4B] placeholder:text-gray-400 text-sm outline-none focus:ring-2 focus:ring-[#7C3AED]/30 focus:border-[#7C3AED] transition-all';
+const inputCls = 'w-full px-4 py-3 bg-[#EFF5FF] border border-[#C9DCFF] rounded-xl text-[#1E1B4B] placeholder:text-gray-400 text-sm outline-none focus:ring-2 focus:ring-[#155dfc]/30 focus:border-[#155dfc] transition-all';
 
 function getRoleBadge(role: string) {
   const r = ROLES.find(r => r.value === role);
@@ -228,7 +228,7 @@ function UserManagementContent() {
       <div className="flex items-center gap-3">
         <button
           onClick={() => { setShowCreateModal(true); setError(''); setForm({ username: '', email: '', fullName: '', role: 'qa_engineer', password: '', confirmPassword: '', tenantId: '', isInactive: false }); }}
-          className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:from-[#6D28D9] hover:to-[#4F46E5] text-white rounded-lg text-sm font-semibold shadow-md shadow-purple-500/25 transition-all whitespace-nowrap"
+          className="flex items-center gap-2 px-4 py-2 bg-[#155dfc] hover:bg-[#124fd6] text-white rounded-lg text-sm font-semibold shadow-md shadow-blue-500/25 transition-all whitespace-nowrap"
         >
           <Plus className="w-4 h-4" /> New User
         </button>
@@ -239,7 +239,7 @@ function UserManagementContent() {
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search by username, name, email, or tenant..."
-            className="w-full pl-10 pr-4 py-2 bg-white border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED]"
+            className="w-full pl-10 pr-4 py-2 bg-white border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-[#155dfc]/20 focus:border-[#155dfc]"
           />
         </div>
       </div>
@@ -267,7 +267,7 @@ function UserManagementContent() {
               {pagedUsers.map(u => (
                 <tr key={u.id} className="border-b border-gray-50 hover:bg-gray-50/50">
                   <td className="px-3 py-1.5 truncate">
-                    <button onClick={() => openEdit(u)} className="text-[#7C3AED] hover:underline hover:text-[#6D28D9] transition-colors">
+                    <button onClick={() => openEdit(u)} className="text-[#155dfc] hover:underline hover:text-[#155dfc] transition-colors">
                       {u.username}
                     </button>
                   </td>
@@ -327,7 +327,7 @@ function UserManagementContent() {
               <select
                 value={pageSize}
                 onChange={e => setPageSize(Number(e.target.value))}
-                className="px-1.5 py-0.5 bg-white border border-gray-200 rounded text-xs outline-none focus:ring-1 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED]"
+                className="px-1.5 py-0.5 bg-white border border-gray-200 rounded text-xs outline-none focus:ring-1 focus:ring-[#155dfc]/20 focus:border-[#155dfc]"
               >
                 {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
               </select>
@@ -344,7 +344,7 @@ function UserManagementContent() {
                 Prev
               </button>
               <span className="px-2 text-gray-600">
-                Page <span className="font-semibold text-[#7C3AED]">{currentPage}</span> of {totalPages}
+                Page <span className="font-semibold text-[#155dfc]">{currentPage}</span> of {totalPages}
               </span>
               <button
                 onClick={() => setPage(p => Math.min(totalPages, p + 1))}
@@ -416,7 +416,7 @@ function UserManagementContent() {
                   >
                     {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
                   </select>
-                  <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#7C3AED] pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#155dfc] pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
                   </svg>
                 </div>
@@ -462,7 +462,7 @@ function UserManagementContent() {
                     type="checkbox"
                     checked={form.isInactive}
                     onChange={e => setForm({ ...form, isInactive: e.target.checked })}
-                    className="w-4 h-4 rounded border-gray-300 text-[#7C3AED] focus:ring-[#7C3AED]/30"
+                    className="w-4 h-4 rounded border-gray-300 text-[#155dfc] focus:ring-[#155dfc]/30"
                   />
                   <span className="text-sm text-gray-700">Mark as inactive</span>
                   <span className="text-xs text-gray-400">(admin can reactivate later)</span>
@@ -495,7 +495,7 @@ function UserManagementContent() {
               <button
                 onClick={editingUser ? handleUpdate : handleCreate}
                 disabled={saving}
-                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:from-[#6D28D9] hover:to-[#4F46E5] disabled:from-[#C4B5FD] disabled:to-[#C7D2FE] text-white rounded-xl text-sm font-semibold transition-all shadow-lg shadow-purple-500/25"
+                className="flex items-center gap-2 px-5 py-2.5 bg-[#155dfc] hover:bg-[#124fd6] disabled:bg-[#A8C4FB] text-white rounded-xl text-sm font-semibold transition-all shadow-lg shadow-blue-500/25"
               >
                 {saving && <Loader2 className="w-4 h-4 animate-spin" />}
                 {editingUser ? 'Save Changes' : 'Create User'}
@@ -519,7 +519,7 @@ function UserManagementContent() {
               </div>
             </div>
             <p className="text-sm text-gray-700 mb-5">
-              Are you sure you want to delete <span className="font-semibold text-[#7C3AED]">{confirmDelete.username}</span>? All their data will be removed.
+              Are you sure you want to delete <span className="font-semibold text-[#155dfc]">{confirmDelete.username}</span>? All their data will be removed.
             </p>
             <div className="flex items-center justify-end gap-3">
               <button onClick={() => setConfirmDelete(null)} className="px-4 py-2 text-gray-600 bg-gray-100 rounded-xl text-sm font-medium hover:bg-gray-200">

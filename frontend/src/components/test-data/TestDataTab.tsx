@@ -103,7 +103,7 @@ export default function TestDataTab({ runId }: TestDataTabProps) {
                 <tr key={ds.dataset_id} className="border-b border-gray-800 hover:bg-gray-800/50">
                   <td className="py-2 pr-4 font-mono text-blue-400">{ds.dataset_id}</td>
                   <td className="py-2 pr-4">
-                    <span className="px-2 py-0.5 bg-purple-900/40 text-purple-300 rounded text-xs">{ds.role}</span>
+                    <span className="px-2 py-0.5 bg-blue-900/40 text-blue-300 rounded text-xs">{ds.role}</span>
                   </td>
                   <td className="py-2 pr-4 text-gray-300">{ds.scenario}</td>
                   <td className="py-2 pr-4">
@@ -231,7 +231,7 @@ export default function TestDataTab({ runId }: TestDataTabProps) {
                     <td className="py-2 pr-4 font-mono text-green-400">{m.dataset_id}</td>
                     <td className="py-2">
                       {ds ? (
-                        <span className="px-2 py-0.5 bg-purple-900/40 text-purple-300 rounded text-xs">
+                        <span className="px-2 py-0.5 bg-blue-900/40 text-blue-300 rounded text-xs">
                           {ds.role} / {ds.scenario}
                         </span>
                       ) : '-'}
@@ -288,7 +288,7 @@ function SourceBadge({ source }: { source: string }) {
     static: { icon: FileText, label: 'Static', className: 'bg-gray-700 text-gray-300' },
     database: { icon: HardDrive, label: 'Database', className: 'bg-amber-900/40 text-amber-300' },
     api: { icon: Globe, label: 'API', className: 'bg-cyan-900/40 text-cyan-300' },
-    computed: { icon: Cpu, label: 'Computed', className: 'bg-violet-900/40 text-violet-300' },
+    computed: { icon: Cpu, label: 'Computed', className: 'bg-blue-900/40 text-blue-300' },
     mixed: { icon: Database, label: 'Mixed', className: 'bg-blue-900/40 text-blue-300' },
   };
   const c = config[source] || config.static;

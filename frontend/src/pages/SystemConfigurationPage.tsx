@@ -91,7 +91,7 @@ export default function SystemConfigurationPage() {
           {/* Subtle top-strip loader so users see progress without blocking the UI */}
           {loading && (
             <div className="absolute top-0 left-0 right-0 h-0.5 overflow-hidden">
-              <div className="h-full w-1/3 bg-gradient-to-r from-transparent via-[#7C3AED] to-transparent animate-[shimmer_1.2s_ease-in-out_infinite]"
+              <div className="h-full w-1/3 bg-gradient-to-r from-transparent via-[#155dfc] to-transparent animate-[shimmer_1.2s_ease-in-out_infinite]"
                    style={{ animation: 'shimmer 1.2s ease-in-out infinite' }} />
             </div>
           )}

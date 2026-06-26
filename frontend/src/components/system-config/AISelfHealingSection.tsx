@@ -136,8 +136,8 @@ const GCP_LOCATIONS = [
 ];
 
 const INTEGRATION_ID = 'ai-self-healing';
-const INPUT_CLASS = 'w-full px-3 py-2.5 rounded-xl border border-[#DDD6FE] bg-[#F5F3FF] text-sm outline-none focus:ring-2 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED] placeholder:text-gray-400 transition-all';
-const TOGGLE_CLASS = 'w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-[#7C3AED]/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[\'\'] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#7C3AED]';
+const INPUT_CLASS = 'w-full px-3 py-2.5 rounded-xl border border-[#C9DCFF] bg-[#EFF5FF] text-sm outline-none focus:ring-2 focus:ring-[#155dfc]/20 focus:border-[#155dfc] placeholder:text-gray-400 transition-all';
+const TOGGLE_CLASS = 'w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-[#155dfc]/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[\'\'] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#155dfc]';
 
 function getDefaults(): FormState {
   return {
@@ -266,7 +266,7 @@ export default function AISelfHealingSection({ configs }: Props) {
           autoComplete="off"
           className={`${INPUT_CLASS} pr-10`}
         />
-        <button type="button" onClick={() => toggleSecret(field)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#7C3AED] transition-colors">
+        <button type="button" onClick={() => toggleSecret(field)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#155dfc] transition-colors">
           {visibleSecrets[field] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
         </button>
       </div>
@@ -329,7 +329,7 @@ export default function AISelfHealingSection({ configs }: Props) {
             {!form.cliAutoDetect && (
               <TextInput label="Claude CLI Path" field="cliPath" placeholder="C:\\Users\\you\\.claude\\claude.exe or /usr/local/bin/claude" />
             )}
-            <div className="p-3 bg-[#F5F3FF] border border-[#DDD6FE] rounded-xl text-xs text-[#1E1B4B] space-y-1.5">
+            <div className="p-3 bg-[#EFF5FF] border border-[#C9DCFF] rounded-xl text-xs text-[#1E1B4B] space-y-1.5">
               <p className="font-semibold">How to set up Claude CLI:</p>
               <ol className="list-decimal ml-4 space-y-1 text-[#6B7280]">
                 <li>Install Claude Code: <code className="bg-white px-1 rounded">npm install -g @anthropic-ai/claude-code</code></li>
@@ -398,7 +398,7 @@ export default function AISelfHealingSection({ configs }: Props) {
       case 'oauth':
         return (
           <div className="space-y-4">
-            <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl text-xs text-purple-800">
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">
               OAuth 2.0 Client Credentials flow for enterprise / self-hosted LLM endpoints.
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -433,7 +433,7 @@ export default function AISelfHealingSection({ configs }: Props) {
       {/* ── LLM Provider ── */}
       <div>
         <div className="flex items-center gap-2 mb-4">
-          <Brain className="w-4 h-4 text-[#7C3AED]" />
+          <Brain className="w-4 h-4 text-[#155dfc]" />
           <h3 className="text-sm font-semibold text-[#1E1B4B]">LLM Provider Configuration</h3>
         </div>
 
@@ -463,19 +463,19 @@ export default function AISelfHealingSection({ configs }: Props) {
                   key={am.value}
                   className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
                     form.authMethod === am.value
-                      ? 'border-[#7C3AED] bg-[#F5F3FF] ring-1 ring-[#7C3AED]/30'
-                      : 'border-[#E5E7EB] hover:border-[#DDD6FE] hover:bg-[#FAFAFE]'
+                      ? 'border-[#155dfc] bg-[#EFF5FF] ring-1 ring-[#155dfc]/30'
+                      : 'border-[#E5E7EB] hover:border-[#C9DCFF] hover:bg-[#FAFAFE]'
                   }`}
                 >
                   <input
                     type="radio" name="authMethod" value={am.value}
                     checked={form.authMethod === am.value}
                     onChange={() => handleAuthMethodChange(am.value)}
-                    className="mt-0.5 accent-[#7C3AED]"
+                    className="mt-0.5 accent-[#155dfc]"
                   />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
-                      <Icon className="w-3.5 h-3.5 text-[#7C3AED]" />
+                      <Icon className="w-3.5 h-3.5 text-[#155dfc]" />
                       <span className="text-sm font-medium text-[#1E1B4B]">{am.label}</span>
                     </div>
                     <p className="text-[11px] text-[#6B7280] mt-0.5 leading-snug">{am.desc}</p>
@@ -497,7 +497,7 @@ export default function AISelfHealingSection({ configs }: Props) {
           </div>
           <div>
             <label className="block text-sm font-medium text-[#1E1B4B] mb-1">Temperature: {form.aiTemperature}</label>
-            <input type="range" min="0" max="1" step="0.1" value={form.aiTemperature} onChange={(e) => setForm(prev => ({ ...prev, aiTemperature: parseFloat(e.target.value) }))} className="w-full h-2 bg-[#EDE9FE] rounded-lg appearance-none cursor-pointer accent-[#7C3AED]" />
+            <input type="range" min="0" max="1" step="0.1" value={form.aiTemperature} onChange={(e) => setForm(prev => ({ ...prev, aiTemperature: parseFloat(e.target.value) }))} className="w-full h-2 bg-[#DEEAFF] rounded-lg appearance-none cursor-pointer accent-[#155dfc]" />
             <div className="flex justify-between text-[10px] text-[#6B7280] mt-0.5">
               <span>Precise (0)</span><span>Creative (1)</span>
             </div>
@@ -509,7 +509,7 @@ export default function AISelfHealingSection({ configs }: Props) {
           <button
             onClick={handleTestConnection}
             disabled={testing || !hasCredentials()}
-            className="px-4 py-2 border border-[#7C3AED] text-[#7C3AED] rounded-lg text-sm font-medium hover:bg-[#F5F3FF] transition-all disabled:opacity-50 flex items-center gap-2"
+            className="px-4 py-2 border border-[#155dfc] text-[#155dfc] rounded-lg text-sm font-medium hover:bg-[#EFF5FF] transition-all disabled:opacity-50 flex items-center gap-2"
           >
             {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
             {testing ? 'Testing...' : 'Test Connection'}
@@ -525,15 +525,15 @@ export default function AISelfHealingSection({ configs }: Props) {
       </div>
 
       {/* ── Pipeline Mode ── */}
-      <div className="border-t border-[#EDE9FE] pt-6">
+      <div className="border-t border-[#DEEAFF] pt-6">
         <div className="flex items-center gap-2 mb-4">
-          <Cpu className="w-4 h-4 text-[#7C3AED]" />
+          <Cpu className="w-4 h-4 text-[#155dfc]" />
           <h3 className="text-sm font-semibold text-[#1E1B4B]">Pipeline Orchestration</h3>
         </div>
         <div className="space-y-3">
           {PIPELINE_MODES.map(mode => (
-            <label key={mode.value} className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all ${form.pipelineMode === mode.value ? 'border-[#7C3AED] bg-[#F5F3FF]' : 'border-[#E5E7EB] hover:border-[#DDD6FE]'}`}>
-              <input type="radio" name="pipelineMode" value={mode.value} checked={form.pipelineMode === mode.value} onChange={() => setForm(prev => ({ ...prev, pipelineMode: mode.value }))} className="mt-0.5 accent-[#7C3AED]" />
+            <label key={mode.value} className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all ${form.pipelineMode === mode.value ? 'border-[#155dfc] bg-[#EFF5FF]' : 'border-[#E5E7EB] hover:border-[#C9DCFF]'}`}>
+              <input type="radio" name="pipelineMode" value={mode.value} checked={form.pipelineMode === mode.value} onChange={() => setForm(prev => ({ ...prev, pipelineMode: mode.value }))} className="mt-0.5 accent-[#155dfc]" />
               <div>
                 <span className="text-sm font-medium text-[#1E1B4B]">{mode.label}</span>
                 <p className="text-xs text-[#6B7280] mt-0.5">{mode.desc}</p>
@@ -558,9 +558,9 @@ export default function AISelfHealingSection({ configs }: Props) {
       </div>
 
       {/* ── Self-Healing ── */}
-      <div className="border-t border-[#EDE9FE] pt-6">
+      <div className="border-t border-[#DEEAFF] pt-6">
         <div className="flex items-center gap-2 mb-4">
-          <Shield className="w-4 h-4 text-[#7C3AED]" />
+          <Shield className="w-4 h-4 text-[#155dfc]" />
           <h3 className="text-sm font-semibold text-[#1E1B4B]">Self-Healing</h3>
         </div>
         <div className="space-y-4">
@@ -580,7 +580,7 @@ export default function AISelfHealingSection({ configs }: Props) {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-[#1E1B4B] mb-1">Healing Confidence: {form.healingConfidence}%</label>
-              <input type="range" min="0" max="100" step="1" value={form.healingConfidence} onChange={(e) => setForm(prev => ({ ...prev, healingConfidence: parseInt(e.target.value, 10) }))} className="w-full h-2 bg-[#EDE9FE] rounded-lg appearance-none cursor-pointer accent-[#7C3AED]" />
+              <input type="range" min="0" max="100" step="1" value={form.healingConfidence} onChange={(e) => setForm(prev => ({ ...prev, healingConfidence: parseInt(e.target.value, 10) }))} className="w-full h-2 bg-[#DEEAFF] rounded-lg appearance-none cursor-pointer accent-[#155dfc]" />
               <div className="flex justify-between text-[10px] text-[#6B7280] mt-0.5"><span>0%</span><span>50%</span><span>100%</span></div>
             </div>
             <div>
@@ -600,7 +600,7 @@ export default function AISelfHealingSection({ configs }: Props) {
         )}
         <button
           onClick={handleSave} disabled={saving}
-          className="px-6 py-2.5 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white rounded-lg text-sm font-medium hover:from-[#6D28D9] hover:to-[#4F46E5] shadow-md shadow-purple-500/20 transition-all disabled:opacity-50 flex items-center gap-2"
+          className="px-6 py-2.5 bg-[#155dfc] text-white rounded-lg text-sm font-medium hover:bg-[#124fd6] shadow-md shadow-blue-500/20 transition-all disabled:opacity-50 flex items-center gap-2"
         >
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
           {saving ? 'Saving...' : 'Save Settings'}

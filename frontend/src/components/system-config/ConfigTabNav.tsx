@@ -37,17 +37,17 @@ interface Props {
 
 export default function ConfigTabNav({ activeTab, onTabChange }: Props) {
   return (
-    <nav className="w-60 flex-shrink-0 space-y-0.5">
+    <nav className="w-full space-y-0.5">
       {TABS.map((tab) => {
         const isActive = tab.key === activeTab;
         return (
           <button
             key={tab.key}
             onClick={() => onTabChange(tab.key)}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 text-left ${
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 text-left ${
               isActive
-                ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white shadow-lg shadow-purple-500/20'
-                : 'text-[#6B7280] hover:bg-[#F5F3FF] hover:text-[#1E1B4B]'
+                ? 'bg-[#155dfc] text-white shadow-lg shadow-blue-500/20'
+                : 'text-[#6B7280] hover:bg-[#EFF5FF] hover:text-[#1E1B4B]'
             }`}
           >
             <tab.icon className="w-4 h-4 flex-shrink-0" />

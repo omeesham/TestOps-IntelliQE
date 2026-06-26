@@ -23,7 +23,7 @@ interface FormData {
 }
 
 const INPUT_CLASS =
-  'w-full px-3 py-2.5 rounded-xl border border-[#DDD6FE] bg-[#F5F3FF] text-sm outline-none focus:ring-2 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED] transition-all';
+  'w-full px-3 py-2.5 rounded-xl border border-[#C9DCFF] bg-[#EFF5FF] text-sm outline-none focus:ring-2 focus:ring-[#155dfc]/20 focus:border-[#155dfc] transition-all';
 
 export default function GeneralSettingsSection({ configs }: Props) {
   const [formData, setFormData] = useState<FormData>({
@@ -71,7 +71,7 @@ export default function GeneralSettingsSection({ configs }: Props) {
   };
 
   return (
-    <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-[#DDD6FE]/60 p-6 space-y-6">
+    <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-[#C9DCFF]/60 p-6 space-y-6">
       <div>
         <h3 className="text-sm font-semibold text-[#1E1B4B] mb-1">General Settings</h3>
         <p className="text-xs text-[#6B7280]">Configure default execution parameters for your test pipeline</p>
@@ -154,7 +154,7 @@ export default function GeneralSettingsSection({ configs }: Props) {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="px-6 py-2.5 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white rounded-lg text-sm font-medium hover:from-[#6D28D9] hover:to-[#4F46E5] shadow-md shadow-purple-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          className="px-6 py-2.5 bg-[#155dfc] text-white rounded-lg text-sm font-medium hover:bg-[#124fd6] shadow-md shadow-blue-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
         >
           {saving && <Loader2 className="w-4 h-4 animate-spin" />}
           {saving ? 'Saving...' : 'Save Settings'}

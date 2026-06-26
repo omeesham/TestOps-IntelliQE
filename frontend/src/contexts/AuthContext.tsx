@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, type ReactNode } from 'react';
-import { loginUser } from '@/services/api';
+import { loginUser, ssoCallback } from '@/services/api';
 
 export type UserRole = 'admin' | 'qa_engineer' | 'data_analyst';
 
@@ -16,6 +16,7 @@ interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
   login: (username: string, password: string) => Promise<boolean>;
+  ssoLogin: (code: string, redirectUri: string) => Promise<boolean>;
   logout: () => void;
 }
 
@@ -27,26 +28,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return saved ? JSON.parse(saved) : null;
   });
 
+  const applyAuthResult = (result: any): boolean => {
+    if (!result?.success) return false;
+    const u: User = {
+      username: result.user.username,
+      role: result.user.role as UserRole,
+      displayName: result.user.displayName,
+      tenantId: result.user.tenantId,
+      tenantName: result.user.tenantName,
+      isPlatform: result.user.isPlatform,
+    };
+    setUser(u);
+    sessionStorage.setItem('intelliqe_user', JSON.stringify(u));
+    if (result.token) {
+      sessionStorage.setItem('intelliqe_token', result.token);
+    }
+    return true;
+  };
+
   const login = async (username: string, password: string): Promise<boolean> => {
     try {
-      const result = await loginUser(username, password);
-      if (result.success) {
-        const u: User = {
-          username: result.user.username,
-          role: result.user.role as UserRole,
-          displayName: result.user.displayName,
-          tenantId: result.user.tenantId,
-          tenantName: result.user.tenantName,
-          isPlatform: result.user.isPlatform,
-        };
-        setUser(u);
-        sessionStorage.setItem('intelliqe_user', JSON.stringify(u));
-        if (result.token) {
-          sessionStorage.setItem('intelliqe_token', result.token);
-        }
-        return true;
-      }
+      return applyAuthResult(await loginUser(username, password));
+    } catch {
       return false;
+    }
+  };
+
+  const ssoLogin = async (code: string, redirectUri: string): Promise<boolean> => {
+    try {
+      return applyAuthResult(await ssoCallback(code, redirectUri));
     } catch {
       return false;
     }
@@ -59,7 +69,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, logout }}>
+    <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, ssoLogin, logout }}>
       {children}
     </AuthContext.Provider>
   );

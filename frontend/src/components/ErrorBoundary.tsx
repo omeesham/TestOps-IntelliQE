@@ -45,7 +45,7 @@ export default class ErrorBoundary extends Component<Props, State> {
     const isDev = import.meta.env.MODE !== 'production';
 
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#F5F3FF] p-6">
+      <div className="min-h-screen flex items-center justify-center bg-[#EFF5FF] p-6">
         <div className="max-w-md w-full bg-white rounded-2xl border border-red-200 shadow-lg p-6">
           <div className="flex items-center gap-3 mb-4">
             <div className="w-10 h-10 bg-red-50 rounded-lg flex items-center justify-center">
@@ -74,13 +74,13 @@ export default class ErrorBoundary extends Component<Props, State> {
           <div className="flex items-center gap-2">
             <button
               onClick={this.handleReload}
-              className="flex-1 px-4 py-2 text-sm font-medium text-white bg-[#7C3AED] rounded-lg hover:bg-[#6D28D9] inline-flex items-center justify-center gap-1.5"
+              className="flex-1 px-4 py-2 text-sm font-medium text-white bg-[#155dfc] rounded-lg hover:bg-[#124fd6] inline-flex items-center justify-center gap-1.5"
             >
               <RefreshCw className="w-4 h-4" /> Reload
             </button>
             <button
               onClick={this.handleHome}
-              className="px-4 py-2 text-sm font-medium text-[#7C3AED] border border-[#DDD6FE] rounded-lg hover:bg-[#F5F3FF]"
+              className="px-4 py-2 text-sm font-medium text-[#155dfc] border border-[#C9DCFF] rounded-lg hover:bg-[#EFF5FF]"
             >
               Go home
             </button>
