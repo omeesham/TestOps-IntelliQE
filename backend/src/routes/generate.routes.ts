@@ -108,7 +108,7 @@ router.post('/', (req: Request, res: Response) => {
   // The Claude CLI ignores maxTokens; bound interactive generation with a sane
   // default so a single pass completes quickly. Callers wanting exhaustive
   // coverage can pass an explicit higher maxTestCases.
-  const DEFAULT_MAX_TEST_CASES = 12;
+  const DEFAULT_MAX_TEST_CASES = 15;
   const effectiveMax = Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : DEFAULT_MAX_TEST_CASES;
 
   const runId = crypto.randomUUID();

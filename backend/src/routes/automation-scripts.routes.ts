@@ -199,8 +199,14 @@ router.post('/generate/:testRunId', async (req: Request, res: Response) => {
       // forcing the template fallback. 4 per call keeps every response whole.
       const BATCH_SIZE = 4;
 
+      const batches: any[][] = [];
       for (let start = 0; start < testCases.length; start += BATCH_SIZE) {
-        const batch = testCases.slice(start, start + BATCH_SIZE);
+        batches.push(testCases.slice(start, start + BATCH_SIZE));
+      }
+      // Each batch is an independent Claude call — run them CONCURRENTLY (the
+      // async runner no longer blocks) so a 15-case run takes ~one call's
+      // wall-time instead of 4 serial calls. Concurrency is capped below.
+      const runBatch = async (batch: any[]) => {
         const tcSummary = batch.map((tc: any) => ({
           id: tc.id,
           tcNumber: tc.tc_number,
@@ -269,8 +275,14 @@ Return ONLY a JSON array (no markdown fence, no commentary), one object per inpu
             }
           }
         } catch (err: any) {
-          console.error(`Claude script generation failed for batch starting ${start}:`, err.message);
+          console.error('Claude script generation failed for a batch:', err.message);
         }
+      };
+      // Run batches in parallel, capped so a very large run doesn't spawn dozens
+      // of CLI processes at once. Tunable via SCRIPT_GEN_CONCURRENCY.
+      const MAX_CONCURRENT = Number(process.env.SCRIPT_GEN_CONCURRENCY) || 4;
+      for (let i = 0; i < batches.length; i += MAX_CONCURRENT) {
+        await Promise.all(batches.slice(i, i + MAX_CONCURRENT).map(runBatch));
       }
     }
 

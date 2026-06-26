@@ -9,10 +9,9 @@
  * Windows (or `kill -9 -pid` on POSIX) so the whole process tree dies and
  * no orphans can accumulate overnight.
  */
-import { execSync, spawnSync } from 'child_process';
-import { homedir, tmpdir } from 'os';
+import { execSync, spawn } from 'child_process';
+import { homedir } from 'os';
 import { join } from 'path';
-import { writeFileSync, unlinkSync } from 'fs';
 import Anthropic from '@anthropic-ai/sdk';
 
 let resolvedCliPath: string | null = null;
@@ -127,60 +126,55 @@ async function runViaAnthropicApi(
  * Run a prompt through the Claude CLI and return the response text.
  * Uses `claude -p` (print mode — non-interactive, returns text).
  *
- * Uses spawnSync (not execSync) because spawnSync gives us the child PID
- * back via its return value — but in practice spawnSync also blocks on
- * the whole tree. To guarantee no orphans on timeout, we pipe through a
- * small shell wrapper on POSIX or use `taskkill /T` on Windows via the
- * timeout-kill helper below.
+ * ASYNC (child_process.spawn) so it does NOT block the Node event loop. This is
+ * what lets independent calls — e.g. script-generation batches — run in PARALLEL,
+ * and keeps the backend responsive (SSE, other requests) during long generations
+ * instead of freezing it. The prompt is fed via stdin (no shell-escaping issues).
+ *
+ * Model defaults to a FAST one (sonnet) because the CLI otherwise picks the slow
+ * Opus default; override per-call or via CLAUDE_CLI_MODEL (e.g. 'opus' for max
+ * quality, 'haiku' for max speed). Timeout via CLAUDE_CLI_TIMEOUT_MS (default
+ * 15 min); on timeout the whole process tree is killed so no orphans linger.
  */
-function runViaClaudeCli(prompt: string, options?: { maxTokens?: number; model?: string }): string {
-  const cli = findClaudeCli();
-  if (!cli) throw new Error('Claude CLI not found');
+function runViaClaudeCli(prompt: string, options?: { maxTokens?: number; model?: string }): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const cli = findClaudeCli();
+    if (!cli) { reject(new Error('Claude CLI not found')); return; }
 
-  const args: string[] = ['-p'];
-  if (options?.model) args.push('--model', options.model);
-  // Note: Claude CLI does not support --max-tokens; use --max-budget-usd for cost control
+    const model = options?.model || process.env.CLAUDE_CLI_MODEL || 'sonnet';
+    const args = ['-p', '--model', model];
+    const cliTimeoutMs = Number(process.env.CLAUDE_CLI_TIMEOUT_MS) || 900_000; // 15 min
 
-  // Write prompt to a temp file to avoid shell escaping issues
-  const tmpFile = join(tmpdir(), `claude-prompt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
-  writeFileSync(tmpFile, prompt, 'utf-8');
-
-  try {
-    // spawnSync returns { pid, stdout, stderr, signal, status, error } — with a
-    // hard timeout the child is killed, but on Windows that only kills the
-    // immediate child, not its grandchildren. We manually tree-kill via the
-    // `killSignal` + post-timeout taskkill below as a safety net.
-    const result = spawnSync(cli, args, {
-      timeout: 300000, // 5 minutes
-      encoding: 'utf-8',
+    const child = spawn(cli, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      maxBuffer: 10 * 1024 * 1024,
-      shell: IS_WINDOWS,
+      shell: IS_WINDOWS,   // .cmd shim needs a shell on Windows
       windowsHide: true,
-      input: prompt,
-      killSignal: 'SIGKILL',
     });
 
-    // If spawnSync reported a timeout, result.error?.code === 'ETIMEDOUT' and
-    // result.pid points at the (now-half-dead) child. Tree-kill to sweep up
-    // any surviving grandchildren on Windows.
-    if (result.error) {
-      const err = result.error as NodeJS.ErrnoException;
-      if (err.code === 'ETIMEDOUT' && result.pid) {
-        treeKill(result.pid);
-        throw new Error(`Claude CLI timed out after 5 minutes (tree-killed pid ${result.pid})`);
-      }
-      throw err;
-    }
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const finish = (fn: () => void) => { if (settled) return; settled = true; clearTimeout(timer); fn(); };
 
-    if (result.status !== 0) {
-      throw new Error(`Claude CLI exited with code ${result.status}: ${String(result.stderr || '').slice(0, 500)}`);
-    }
+    timer = setTimeout(() => finish(() => {
+      if (child.pid) treeKill(child.pid);
+      reject(new Error(`Claude CLI timed out after ${Math.round(cliTimeoutMs / 60000)} minutes`));
+    }), cliTimeoutMs);
 
-    return String(result.stdout || '').trim();
-  } finally {
-    try { unlinkSync(tmpFile); } catch { /* ignore */ }
-  }
+    child.stdout.on('data', (d) => { stdout += d.toString(); });
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    child.on('error', (err) => finish(() => reject(err)));
+    child.on('close', (code) => finish(() => {
+      if (code !== 0) reject(new Error(`Claude CLI exited with code ${code}: ${stderr.slice(0, 500)}`));
+      else resolve(stdout.trim());
+    }));
+
+    // Feed the prompt via stdin. Swallow EPIPE if the child exits before we finish writing.
+    child.stdin.on('error', () => { /* ignore */ });
+    child.stdin.write(prompt);
+    child.stdin.end();
+  });
 }
 
 /**

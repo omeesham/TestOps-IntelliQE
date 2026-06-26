@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import {
+  getConfig,
   getConfigsForTenant,
   getConfigsForTenantByCategory,
   upsertConfig,
@@ -13,6 +14,37 @@ import {
 } from '../utils/crypto.js';
 
 const router = Router();
+
+/**
+ * Sentinel sent by the UI for a masked secret the admin left untouched.
+ * When we see it we carry the previously stored value forward instead of
+ * overwriting the credential with the mask. Keeps "edit without re-typing
+ * the key" safe — the configData upsert otherwise replaces the row wholesale.
+ */
+const KEEP_SECRET_SENTINEL = '__KEEP_EXISTING__';
+
+/**
+ * Replace any KEEP_SECRET_SENTINEL values in `incoming` with the matching
+ * decrypted value from the previously stored config. Mutates and returns
+ * `incoming`. Sentinels with no prior value are dropped so we never persist
+ * the placeholder itself.
+ */
+function preserveUntouchedSecrets(
+  incoming: Record<string, any>,
+  existing: Record<string, any> | null,
+): Record<string, any> {
+  const prior = existing ? decryptConfigData(existing) : {};
+  for (const key of Object.keys(incoming)) {
+    if (incoming[key] === KEEP_SECRET_SENTINEL) {
+      if (typeof prior[key] === 'string' && prior[key].length > 0) {
+        incoming[key] = prior[key];
+      } else {
+        delete incoming[key];
+      }
+    }
+  }
+  return incoming;
+}
 
 /**
  * GET /api/configurations
@@ -59,8 +91,12 @@ router.put('/:integrationId', async (req: Request, res: Response) => {
 
     // Step 1: Decrypt any __ENC__ values from frontend transit encryption
     const decryptedData = decryptConfigData(rawConfigData);
-    // Step 2: Re-encrypt sensitive fields for secure at-rest storage in DB
-    const encryptedData = encryptConfigData(decryptedData);
+    // Step 2: Carry forward any masked secrets the admin left untouched
+    // (the UI sends a sentinel rather than the masked credential).
+    const existing = await getConfig(user.tenantId, integrationId as string);
+    const mergedData = preserveUntouchedSecrets(decryptedData, existing?.configData ?? null);
+    // Step 3: Re-encrypt sensitive fields for secure at-rest storage in DB
+    const encryptedData = encryptConfigData(mergedData);
 
     const config = await upsertConfig(
       user.tenantId,
@@ -72,7 +108,7 @@ router.put('/:integrationId', async (req: Request, res: Response) => {
 
     console.log(`Configuration connected: tenant=${user.tenantId}, integration=${integrationId}, by=${user.username}`);
     // Return masked config — never expose real credentials in response
-    res.json({ ok: true, config: { ...config, configData: maskConfigData(decryptedData) } });
+    res.json({ ok: true, config: { ...config, configData: maskConfigData(mergedData) } });
   } catch (err: any) {
     console.error('Connect configuration error:', err.message);
     res.status(500).json({ error: 'Failed to connect integration' });

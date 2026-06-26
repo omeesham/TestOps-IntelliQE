@@ -121,16 +121,7 @@ async function reRunHealedSpecs(
   }
 
   const configPath = path.join(workspace, 'playwright.config.cjs');
-  const channel = process.env.PLAYWRIGHT_CHANNEL || 'msedge';
-  const workers = Number(process.env.PLAYWRIGHT_WORKERS) || 2;
-  await fs.writeFile(configPath, `const { defineConfig } = require('@playwright/test');
-module.exports = defineConfig({
-  testDir: './tests', fullyParallel: true, workers: ${workers}, retries: 0, timeout: 45_000,
-  reporter: [['line'], ['json', { outputFile: './pw-summary.json' }]],
-  use: { actionTimeout: 15_000, navigationTimeout: 30_000, trace: 'off', screenshot: 'off' },
-  projects: [{ name: 'edge', use: { channel: '${channel}' } }],
-});
-`, 'utf-8');
+  await fs.writeFile(configPath, `const { createHarnessConfig } = require(${JSON.stringify(path.join(BACKEND_ROOT, 'playwright.harness.cjs'))});\nmodule.exports = createHarnessConfig({});`, 'utf-8');
 
   const env = {
     ...process.env,

@@ -220,7 +220,7 @@ export async function generatorAgent(state: TestOpsState): Promise<TestOpsState>
   const plan = state.extendedTestPlan as ExtendedTestPlan | undefined;
 
   // First pass.
-  const firstResponse = await runClaudePrompt(buildPrompt(state), { maxTokens: 16384 });
+  const firstResponse = await runClaudePrompt(buildPrompt(state), { maxTokens: 16384, model: 'claude-sonnet-4-6' });
   const firstParsed = parseJsonFromResponse<RawTestCase[]>(firstResponse);
 
   if (!Array.isArray(firstParsed) || firstParsed.length === 0) {
@@ -256,7 +256,7 @@ export async function generatorAgent(state: TestOpsState): Promise<TestOpsState>
 You returned only ${testCases.length} test cases. With ${pr.features.length} features, ${pr.flows.length} flows, ${pr.actors.length} actors, and ${pr.edgeCases.length} edge cases, the plan calls for at least ${minimumExpected} cases. Generate the missing ${needed}+ test cases for scenarios you have NOT yet covered.`;
 
     try {
-      const retryResponse = await runClaudePrompt(retryPrompt, { maxTokens: 16384 });
+      const retryResponse = await runClaudePrompt(retryPrompt, { maxTokens: 16384, model: 'claude-sonnet-4-6' });
       const retryParsed = parseJsonFromResponse<RawTestCase[]>(retryResponse);
       if (Array.isArray(retryParsed) && retryParsed.length > 0) {
         const existingSet = new Set(existingTitles.map((s) => s.toLowerCase().trim()));

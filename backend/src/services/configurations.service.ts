@@ -39,6 +39,35 @@ export async function getConfigsForTenant(tenantId: string): Promise<ConfigRow[]
 }
 
 /**
+ * Get a single configuration for a tenant by integration id.
+ * Returns null when the tenant has no row for that integration.
+ * Note: `configData` is returned exactly as stored (sensitive fields remain
+ * at-rest encrypted) — callers that need plaintext must decrypt themselves.
+ */
+export async function getConfig(tenantId: string, integrationId: string): Promise<ConfigRow | null> {
+  const { rows } = await pool.query(
+    `SELECT id, tenant_id, integration_id, status, config_data, connected_by, connected_at, last_sync_at, created_at, updated_at
+     FROM client_configurations
+     WHERE tenant_id = $1 AND integration_id = $2`,
+    [tenantId, integrationId]
+  );
+  if (rows.length === 0) return null;
+  const r = rows[0];
+  return {
+    id: r.id,
+    tenantId: r.tenant_id,
+    integrationId: r.integration_id,
+    status: r.status,
+    configData: r.config_data,
+    connectedBy: r.connected_by,
+    connectedAt: r.connected_at,
+    lastSyncAt: r.last_sync_at,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+/**
  * Get configurations for a tenant filtered by category.
  */
 export async function getConfigsForTenantByCategory(tenantId: string, category: string): Promise<ConfigRow[]> {

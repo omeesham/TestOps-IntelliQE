@@ -3,9 +3,25 @@ import type { Request, Response } from 'express';
 import pool from '../db.js';
 import { loadPipelineDefinition, loadPipelineDefinitionForClient, savePipelineDefinition } from '../orchestrator/orchestrator.js';
 import { getUsageStats, isWorkerConnected, getLastHeartbeat, setPendingWorkerCommand } from '../services/pipeline-queries.js';
+import { getConfig } from '../services/configurations.service.js';
+import { decryptConfigData } from '../utils/crypto.js';
 
 const SCHEMA = '"JBSTestOpsAI"';
 const router = Router();
+
+// Shared fetch timeout for provider probes (connection test + model listing) —
+// keeps a hung endpoint from holding the request open and lets us surface a
+// clean "timeout" status to the UI.
+const TIMEOUT_MS = 15000;
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<globalThis.Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // GET /pipeline-definition
 router.get('/pipeline-definition', async (req: Request, res: Response) => {
@@ -81,7 +97,9 @@ router.post('/worker/:action', async (req: Request, res: Response) => {
 // POST /test-ai-connection — validates the AI API key by making a minimal request
 router.post('/test-ai-connection', async (req: Request, res: Response) => {
   try {
-    const { provider, authMethod, apiKey, model, baseUrl, cliPath } = req.body;
+    const { provider, authMethod, cliPath, integrationId } = req.body;
+    let { apiKey, model, baseUrl } = req.body;
+    const norm = String(provider || '').toLowerCase();
 
     // Claude CLI auth — test by running `claude --version`
     if (authMethod === 'claude-cli') {
@@ -138,52 +156,184 @@ router.post('/test-ai-connection', async (req: Request, res: Response) => {
       return;
     }
 
-    if (!apiKey && authMethod === 'api-key') { res.status(400).json({ error: 'API key is required' }); return; }
+    // When the UI tests an already-saved provider it sends no inline key (the
+    // browser only ever holds the mask). Resolve the real credential from the
+    // stored, at-rest-encrypted config so we test exactly what's persisted.
+    if ((!apiKey || apiKey === '__KEEP_EXISTING__') && integrationId) {
+      const tenantId = (req as any).user?.tenantId;
+      if (tenantId) {
+        const existing = await getConfig(tenantId, integrationId);
+        if (existing?.configData) {
+          const dec = decryptConfigData(existing.configData);
+          if (dec.apiKey) apiKey = dec.apiKey;
+          if (!baseUrl && dec.endpoint) baseUrl = dec.endpoint;
+          if (!model && dec.model) model = dec.model;
+        }
+      }
+    }
 
-    if (provider === 'claude' || provider === 'anthropic') {
-      // Test Anthropic API
-      const testRes = await fetch(`${baseUrl || 'https://api.anthropic.com'}/v1/messages`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model: model || 'claude-sonnet-4-20250514',
-          max_tokens: 10,
-          messages: [{ role: 'user', content: 'Say hello in one word.' }],
-        }),
-      });
-      if (testRes.ok) {
-        res.json({ ok: true, message: `Connected to ${model || 'Claude'} successfully!` });
+    const keyless = norm === 'ollama';
+    if (!apiKey && !keyless) {
+      res.status(400).json({ ok: false, status: 'not-configured', error: 'API key is required' });
+      return;
+    }
+
+    // Map an HTTP error code onto one of the UI's connection states.
+    const statusForHttp = (code: number): 'invalid-key' | 'failed' =>
+      (code === 401 || code === 403) ? 'invalid-key' : 'failed';
+
+    try {
+      if (norm === 'claude' || norm === 'anthropic') {
+        const testRes = await fetchWithTimeout(`${baseUrl || 'https://api.anthropic.com'}/v1/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: model || 'claude-sonnet-4-20250514',
+            max_tokens: 10,
+            messages: [{ role: 'user', content: 'Say hello in one word.' }],
+          }),
+        });
+        if (testRes.ok) {
+          res.json({ ok: true, status: 'connected', message: `Connected to ${model || 'Claude'} successfully!` });
+        } else {
+          const err = await testRes.json().catch(() => ({ error: { message: 'Unknown error' } }));
+          res.status(400).json({ ok: false, status: statusForHttp(testRes.status), error: err.error?.message || `API returned ${testRes.status}` });
+        }
+      } else if (norm === 'openai' || norm === 'groq' || norm === 'mistral') {
+        // OpenAI-compatible providers expose GET /models — a cheap key check.
+        const base = baseUrl || (norm === 'groq' ? 'https://api.groq.com/openai/v1'
+          : norm === 'mistral' ? 'https://api.mistral.ai/v1'
+          : 'https://api.openai.com/v1');
+        const testRes = await fetchWithTimeout(`${base}/models`, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+        });
+        if (testRes.ok) {
+          res.json({ ok: true, status: 'connected', message: `Connected to ${provider} successfully!` });
+        } else {
+          const err = await testRes.json().catch(() => ({ error: { message: 'Unknown error' } }));
+          res.status(400).json({ ok: false, status: statusForHttp(testRes.status), error: err.error?.message || `API returned ${testRes.status}` });
+        }
+      } else if (norm === 'gemini' || norm === 'google') {
+        const base = baseUrl || 'https://generativelanguage.googleapis.com';
+        const testRes = await fetchWithTimeout(`${base}/v1beta/models?key=${encodeURIComponent(apiKey)}`, { method: 'GET' });
+        if (testRes.ok) {
+          res.json({ ok: true, status: 'connected', message: `Connected to ${model || 'Gemini'} successfully!` });
+        } else {
+          const err = await testRes.json().catch(() => ({ error: { message: 'Unknown error' } }));
+          res.status(400).json({ ok: false, status: statusForHttp(testRes.status), error: err.error?.message || `API returned ${testRes.status}` });
+        }
+      } else if (norm === 'ollama') {
+        const base = baseUrl || 'http://localhost:11434';
+        const testRes = await fetchWithTimeout(`${base}/api/tags`, { method: 'GET' });
+        if (testRes.ok) {
+          res.json({ ok: true, status: 'connected', message: 'Connected to Ollama host successfully!' });
+        } else {
+          res.status(400).json({ ok: false, status: 'failed', error: `Ollama host returned ${testRes.status}` });
+        }
       } else {
-        const err = await testRes.json().catch(() => ({ error: { message: 'Unknown error' } }));
-        res.status(400).json({ error: err.error?.message || `API returned ${testRes.status}` });
+        // Provider without a live probe yet — accept the key, defer validation.
+        res.json({ ok: true, status: 'connected', message: `API key saved for ${provider}. Live validation is not available for this provider yet.` });
       }
-    } else if (provider === 'openai') {
-      const testRes = await fetch(`${baseUrl || 'https://api.openai.com/v1'}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model: model || 'gpt-4o-mini',
-          max_tokens: 10,
-          messages: [{ role: 'user', content: 'Say hello in one word.' }],
-        }),
-      });
-      if (testRes.ok) {
-        res.json({ ok: true, message: `Connected to ${model || 'OpenAI'} successfully!` });
+    } catch (inner: any) {
+      if (inner?.name === 'AbortError') {
+        res.status(504).json({ ok: false, status: 'timeout', error: `Connection timed out after ${TIMEOUT_MS / 1000}s` });
       } else {
-        const err = await testRes.json().catch(() => ({ error: { message: 'Unknown error' } }));
-        res.status(400).json({ error: err.error?.message || `API returned ${testRes.status}` });
+        res.status(502).json({ ok: false, status: 'failed', error: inner?.message || 'Connection failed' });
       }
-    } else {
-      // For other providers, just validate the key format
-      res.json({ ok: true, message: `API key saved for ${provider}. Connection test not implemented for this provider.` });
     }
   } catch (err: any) {
-    res.status(500).json({ error: err.message || 'Connection test failed' });
+    res.status(500).json({ ok: false, status: 'failed', error: err.message || 'Connection test failed' });
   }
+});
+
+// POST /list-models — fetch the live model catalogue for a provider after a
+// successful connection. Falls back to a curated list when the provider has no
+// list endpoint or the call fails, so the UI always has something to show.
+router.post('/list-models', async (req: Request, res: Response) => {
+  const { provider, integrationId } = req.body || {};
+  let { apiKey, baseUrl } = req.body || {};
+  const norm = String(provider || '').toLowerCase();
+
+  // Resolve the stored credential when the UI lists models for a saved provider
+  // (it never holds the plaintext key). Mirrors the test-connection resolution.
+  if ((!apiKey || apiKey === '__KEEP_EXISTING__') && integrationId) {
+    const tenantId = (req as any).user?.tenantId;
+    if (tenantId) {
+      const existing = await getConfig(tenantId, integrationId);
+      if (existing?.configData) {
+        const dec = decryptConfigData(existing.configData);
+        if (dec.apiKey) apiKey = dec.apiKey;
+        if (!baseUrl && dec.endpoint) baseUrl = dec.endpoint;
+      }
+    }
+  }
+
+  const FALLBACKS: Record<string, string[]> = {
+    anthropic: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-sonnet-4-20250514', 'claude-opus-4-20250514'],
+    claude: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-sonnet-4-20250514', 'claude-opus-4-20250514'],
+    openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o1', 'o1-mini'],
+    gemini: ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
+    google: ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
+    groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
+    mistral: ['mistral-large-latest', 'mistral-small-latest', 'codestral-latest'],
+    cohere: ['command-r-plus', 'command-r', 'command'],
+    'azure-openai': ['gpt-4o', 'gpt-4-turbo', 'gpt-35-turbo'],
+    'aws-bedrock': ['anthropic.claude-3-5-sonnet-20241022-v2:0', 'anthropic.claude-3-haiku-20240307-v1:0'],
+    ollama: ['llama3.2', 'llama3.1', 'mistral', 'qwen2.5'],
+  };
+
+  const respond = (models: string[], source: 'live' | 'fallback') =>
+    res.json({ models: Array.from(new Set(models)).filter(Boolean), source });
+
+  try {
+    if ((norm === 'anthropic' || norm === 'claude') && apiKey) {
+      const r = await fetchWithTimeout(`${baseUrl || 'https://api.anthropic.com'}/v1/models?limit=100`, {
+        headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      });
+      if (r.ok) {
+        const data: any = await r.json();
+        const ids = (data.data || []).map((m: any) => m.id).filter(Boolean);
+        return respond(ids.length ? ids : FALLBACKS[norm], ids.length ? 'live' : 'fallback');
+      }
+    } else if ((norm === 'openai' || norm === 'groq' || norm === 'mistral') && apiKey) {
+      const base = baseUrl || (norm === 'groq' ? 'https://api.groq.com/openai/v1'
+        : norm === 'mistral' ? 'https://api.mistral.ai/v1'
+        : 'https://api.openai.com/v1');
+      const r = await fetchWithTimeout(`${base}/models`, { headers: { 'Authorization': `Bearer ${apiKey}` } });
+      if (r.ok) {
+        const data: any = await r.json();
+        const ids = (data.data || []).map((m: any) => m.id).filter(Boolean).sort();
+        return respond(ids.length ? ids : FALLBACKS[norm], ids.length ? 'live' : 'fallback');
+      }
+    } else if ((norm === 'gemini' || norm === 'google') && apiKey) {
+      const base = baseUrl || 'https://generativelanguage.googleapis.com';
+      const r = await fetchWithTimeout(`${base}/v1beta/models?key=${encodeURIComponent(apiKey)}`, {});
+      if (r.ok) {
+        const data: any = await r.json();
+        const ids = (data.models || [])
+          .map((m: any) => String(m.name || '').replace(/^models\//, ''))
+          .filter((id: string) => id);
+        return respond(ids.length ? ids : FALLBACKS[norm], ids.length ? 'live' : 'fallback');
+      }
+    } else if (norm === 'ollama') {
+      const base = baseUrl || 'http://localhost:11434';
+      const r = await fetchWithTimeout(`${base}/api/tags`, {});
+      if (r.ok) {
+        const data: any = await r.json();
+        const ids = (data.models || []).map((m: any) => m.name).filter(Boolean);
+        return respond(ids.length ? ids : FALLBACKS[norm], ids.length ? 'live' : 'fallback');
+      }
+    }
+  } catch {
+    /* fall through to curated list */
+  }
+
+  return respond(FALLBACKS[norm] || [], 'fallback');
 });
 
 // GET /ai-config — returns the saved AI configuration for use by the pipeline

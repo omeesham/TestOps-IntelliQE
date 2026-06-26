@@ -401,12 +401,14 @@ export async function deleteAutomationScript(id: string) {
 }
 
 export async function generateScriptsForRun(testRunId: string, regenerate = false) {
-  // POM script generation runs several batched Claude calls server-side; allow
-  // up to 6 min so the default 2-min client timeout doesn't abort it.
+  // POM script generation runs several batched Claude calls server-side (4 cases
+  // per call). On the slow CLI fallback an uncapped run (15+ cases) is 4+ serial
+  // calls and can take 10-20 min, so allow up to 30 min. (With a funded API key
+  // this is far faster and async — see CLAUDE.md.)
   const { data } = await api.post(
     `/automation-scripts/generate/${testRunId}`,
     { regenerate },
-    { timeout: 360_000 },
+    { timeout: 1_800_000 },
   );
   return data;
 }
@@ -448,11 +450,15 @@ export async function getReportsSummary() {
   return data;
 }
 
-export async function generateAllureReport(runId?: string) {
-  // Building the report normally reuses allure-results captured during the run
-  // (fast, ~3s). Worst case it re-executes the saved scripts, so allow up to
-  // 6 min rather than the default 2-min client timeout.
-  const { data } = await api.post('/allure/generate', { runId }, { timeout: 360_000 });
+export async function generateAllureReport(
+  runId?: string,
+  // The wizard passes its final in-app per-test results so the downloadable
+  // report is built from the SAME data the Test Execution Report shows (one
+  // source of truth — no stale snapshot, no flaky re-run). Omitted elsewhere
+  // (e.g. Reports page), which keeps the original snapshot/re-run behaviour.
+  results?: { testCaseId: string; status: string; durationMs?: number; error?: string }[],
+) {
+  const { data } = await api.post('/allure/generate', { runId, results }, { timeout: 360_000 });
   return data;
 }
 
@@ -543,6 +549,60 @@ export async function disconnectIntegration(integrationId: string) {
 export async function testNotificationIntegration(integrationId: string) {
   const { data } = await api.post(`/configurations/${integrationId}/test`);
   return data;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   LLM provider configuration — connection test + model discovery
+   ───────────────────────────────────────────────────────────── */
+export type LLMConnectionStatus =
+  | 'connected' | 'invalid-key' | 'failed' | 'timeout' | 'not-configured';
+
+export interface LLMTestResult {
+  ok: boolean;
+  status: LLMConnectionStatus;
+  message?: string;
+  error?: string;
+}
+
+/** Validate a provider's credentials live. Never throws — returns a typed result. */
+export async function testLLMConnection(payload: {
+  provider: string;
+  apiKey?: string;
+  model?: string;
+  baseUrl?: string;
+  orgId?: string;
+  projectId?: string;
+}): Promise<LLMTestResult> {
+  try {
+    const { data } = await api.post('/pipeline-admin/test-ai-connection', {
+      authMethod: 'api-key',
+      ...payload,
+    });
+    return { ok: !!data.ok, status: data.status || 'connected', message: data.message };
+  } catch (err: any) {
+    const body = err?.response?.data || {};
+    return {
+      ok: false,
+      status: body.status || 'failed',
+      error: body.error || err?.message || 'Connection failed',
+    };
+  }
+}
+
+/** Retrieve a provider's available models (live after a successful connection,
+ *  curated fallback otherwise). */
+export async function listLLMModels(payload: {
+  provider: string;
+  apiKey?: string;
+  baseUrl?: string;
+  integrationId?: string;
+}): Promise<{ models: string[]; source: 'live' | 'fallback' }> {
+  try {
+    const { data } = await api.post('/pipeline-admin/list-models', payload);
+    return { models: data.models || [], source: data.source || 'fallback' };
+  } catch {
+    return { models: [], source: 'fallback' };
+  }
 }
 
 /* ─────────────────────────────────────────────────────────────

@@ -6,7 +6,7 @@ import RequirementSourcesSection from '@/components/system-config/RequirementSou
 import DataSourcesSection from '@/components/system-config/DataSourcesSection';
 import GitRepositoriesSection from '@/components/system-config/GitRepositoriesSection';
 import NotificationsSection from '@/components/system-config/NotificationsSection';
-import AISelfHealingSection from '@/components/system-config/AISelfHealingSection';
+import LLMConfigurationSection from '@/components/system-config/LLMConfigurationSection';
 import VoiceAssistantSection from '@/components/system-config/VoiceAssistantSection';
 import { getConfigurations } from '@/services/api';
 import ErrorAlert from '@/components/feedback/ErrorAlert';
@@ -69,8 +69,8 @@ export default function SystemConfigurationPage() {
         return <GitRepositoriesSection configs={configs} onRefresh={fetchConfigs} />;
       case 'notifications':
         return <NotificationsSection configs={configs} onRefresh={fetchConfigs} />;
-      case 'ai-healing':
-        return <AISelfHealingSection configs={configs} />;
+      case 'llm-config':
+        return <LLMConfigurationSection configs={configs} onRefresh={fetchConfigs} />;
       case 'voice':
         return <VoiceAssistantSection />;
       default:

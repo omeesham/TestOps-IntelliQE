@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs/promises';
-import { getOrGenerateRealReport, getReportStatus } from '../services/allure-report.service.js';
+import { getOrGenerateRealReport, getReportStatus, getOrGenerateReportFromExecution, type ExecOutcome } from '../services/allure-report.service.js';
 import { PlaywrightRunError } from '../services/playwright-runner.service.js';
 import { authMiddleware } from '../middleware/auth.middleware.js';
 
@@ -24,11 +24,35 @@ const inFlight = new Map<string, Promise<any>>();
 router.post('/generate', authMiddleware, async (req: Request, res: Response) => {
   try {
     const user = req.user!;
-    const { runId } = req.body || {};
+    const { runId, results } = req.body || {};
     if (!runId) {
       res.status(400).json({ error: 'runId is required to generate a real Allure report' });
       return;
     }
+
+    // Preferred path: build the report from the wizard's ACTUAL in-app results so
+    // the downloadable report matches the Test Execution Report exactly — one
+    // source of truth, immune to stale snapshots and flaky re-runs.
+    if (Array.isArray(results) && results.length > 0) {
+      const execMap = new Map<string, ExecOutcome>();
+      for (const r of results) {
+        if (r && r.testCaseId) {
+          execMap.set(String(r.testCaseId), {
+            status: String(r.status || 'unknown'),
+            durationMs: Number.isFinite(Number(r.durationMs)) ? Number(r.durationMs) : undefined,
+            error: r.error ? String(r.error) : undefined,
+          });
+        }
+      }
+      const result = await getOrGenerateReportFromExecution(user.tenantId, user.isPlatform, runId, execMap);
+      res.json({
+        ok: true,
+        generatedAt: result.generatedAt,
+        reportUrl: `/api/allure/report/${user.tenantId}/${runId}/index.html`,
+      });
+      return;
+    }
+
     const key = `${user.tenantId}:${runId}`;
 
     // Deduplicate concurrent requests

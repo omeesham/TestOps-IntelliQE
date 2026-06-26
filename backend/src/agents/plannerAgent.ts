@@ -132,7 +132,7 @@ RULES:
 
   let parsed: Partial<ExtendedTestPlan>;
   try {
-    const response = await runClaudePrompt(prompt, { maxTokens: 4000 });
+    const response = await runClaudePrompt(prompt, { maxTokens: 4000, model: 'claude-sonnet-4-6' });
     parsed = parseJsonFromResponse<ExtendedTestPlan>(response);
   } catch (err) {
     // eslint-disable-next-line no-console
