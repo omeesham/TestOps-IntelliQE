@@ -85,7 +85,7 @@ export default function DataSourcesSection({ configs, onRefresh }: Props) {
           <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-emerald-50 border-emerald-200 text-emerald-600">
             {connectedCount} connected
           </span>
-          <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-[#F5F3FF] border-[#DDD6FE] text-[#7C3AED]">
+          <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-[#EFF5FF] border-[#C9DCFF] text-[#155dfc]">
             {availableCount} available
           </span>
         </div>

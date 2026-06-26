@@ -1,4 +1,5 @@
 /**
+<<<<<<< HEAD
  * Claude runner — generates AI responses via the Anthropic API (official SDK).
  *
  * ┌──────────────────────────────────────────────────────────────────────────┐
@@ -16,6 +17,18 @@
  * │ as a generate-route preflight. It can also be passed per call.            │
  * └──────────────────────────────────────────────────────────────────────────┘
  */
+=======
+ * Claude CLI runner — invokes Claude Code to generate AI responses.
+ *
+ * Auth strategy (in priority order):
+ *   1. ANTHROPIC_API_KEY set → Anthropic SDK (durable, headless, portable).
+ *   2. Otherwise → locally-authenticated `claude` CLI (subscription login).
+ *      The CLI path is fully async so the Node.js event loop is never blocked.
+ */
+import { execSync, spawn } from 'child_process';
+import { homedir } from 'os';
+import { join } from 'path';
+>>>>>>> adedfc4 (ux changes)
 import Anthropic from '@anthropic-ai/sdk';
 // ── CLI fallback imports (disabled — see the commented block at end of file) ──
 // import { execSync, spawn } from 'child_process';
@@ -34,7 +47,30 @@ export interface RunClaudeOptions {
   baseUrl?: string;
 }
 
+<<<<<<< HEAD
 /** Default model when neither the call site nor LLM Configuration specifies one. */
+=======
+/**
+ * Run a prompt through Claude and return the response text.
+ *
+ * Auth strategy, in priority order:
+ *   1. ANTHROPIC_API_KEY set → Anthropic SDK (durable, portable, preferred).
+ *   2. Otherwise → locally-authenticated `claude` CLI (subscription login).
+ */
+export async function runClaudePrompt(
+  prompt: string,
+  options?: { maxTokens?: number; model?: string },
+): Promise<string> {
+  // Empty string is intentionally treated as "not set" so a placeholder
+  // `ANTHROPIC_API_KEY=` line in .env falls through to the CLI fallback.
+  if (process.env.ANTHROPIC_API_KEY) {
+    return runViaAnthropicApi(prompt, options);
+  }
+  return runViaClaudeCli(prompt, options);
+}
+
+/** Default model for the API path; override with ANTHROPIC_MODEL (e.g. claude-sonnet-4-6 for lower cost). */
+>>>>>>> adedfc4 (ux changes)
 const DEFAULT_API_MODEL = 'claude-opus-4-8';
 
 /**
@@ -122,12 +158,102 @@ async function runViaAnthropicApi(prompt: string, options?: RunClaudeOptions): P
 }
 
 /**
+<<<<<<< HEAD
  * Preflight used by callers before starting a pipeline. With the CLI removed,
  * "authenticated" means an Anthropic API key is present in the environment —
  * hydrated from LLM Configuration at startup / on config save / per request.
  *
  * Name kept for backward compatibility with existing call sites
  * (generate.routes, automation-scripts.routes, healing.service).
+=======
+ * Run a prompt through the Claude CLI and return the response text.
+ * Uses `claude --print` (non-interactive print mode) with the prompt piped
+ * via stdin. Fully async so the Node.js event loop is never blocked.
+ */
+async function runViaClaudeCli(prompt: string, options?: { maxTokens?: number; model?: string }): Promise<string> {
+  const cli = findClaudeCli();
+  if (!cli) throw new Error('Claude CLI not found');
+
+  const args: string[] = ['--print'];
+  if (options?.model) args.push('--model', options.model);
+
+  return new Promise<string>((resolve, reject) => {
+    // On Windows, .cmd files require cmd.exe as the interpreter; pass shell
+    // explicitly via cmd /c instead of `shell: true` to avoid DEP0190.
+    const [spawnCmd, spawnArgs] = IS_WINDOWS
+      ? ['cmd', ['/c', cli, ...args]]
+      : [cli, args];
+
+    const child = spawn(spawnCmd, spawnArgs, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf-8'); });
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf-8'); });
+
+    const timer = setTimeout(() => {
+      if (child.pid) treeKill(child.pid);
+      reject(new Error(`Claude CLI timed out after 5 minutes (tree-killed pid ${child.pid})`));
+    }, 300_000);
+
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(new Error(`Claude CLI exited with code ${code}: ${stderr.slice(0, 500)}`));
+        return;
+      }
+      const text = stdout.trim();
+      if (!text) {
+        reject(new Error('Claude CLI returned an empty response'));
+        return;
+      }
+      resolve(text);
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+
+    // Send the prompt via stdin and close to signal EOF
+    child.stdin.write(prompt, 'utf-8');
+    child.stdin.end();
+  });
+}
+
+/**
+ * Kill a process tree. On Windows, `taskkill /F /T /PID` kills the pid and
+ * all its descendants — critical because Claude CLI spawns helper processes
+ * that Node's own process.kill cannot reach.
+ */
+function treeKill(pid: number): void {
+  if (IS_WINDOWS) {
+    try { execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore', timeout: 5000 }); } catch { /* already dead */ }
+  } else {
+    try { process.kill(-pid, 'SIGKILL'); } catch { /* already dead */ }
+  }
+}
+
+/**
+ * Check if Claude CLI is available.
+ */
+export function isClaudeCliAvailable(): boolean {
+  return findClaudeCli() !== null;
+}
+
+/**
+ * Check if Claude is actually usable — i.e. the CLI is present AND authenticated.
+ *
+ * `isClaudeCliAvailable()` only proves the binary exists; `claude -p` still fails
+ * with "Not logged in" until the user runs `claude auth login`. The generation
+ * agents have no offline fallback, so callers should preflight with THIS before
+ * starting a pipeline to fail fast with an actionable message instead of a deep
+ * JSON-parse error. An ANTHROPIC_API_KEY in the environment also satisfies auth.
+>>>>>>> adedfc4 (ux changes)
  */
 export function isClaudeCliAuthenticated(): boolean {
   return !!process.env.ANTHROPIC_API_KEY;

@@ -139,7 +139,7 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
 
             {/* Trigger Events + Test — only shown when this notification channel is connected */}
             {item.status === 'connected' && (
-              <div className="mt-2 ml-2 p-4 bg-[#F5F3FF] border border-[#DDD6FE]/60 rounded-xl space-y-3">
+              <div className="mt-2 ml-2 p-4 bg-[#EFF5FF] border border-[#C9DCFF]/60 rounded-xl space-y-3">
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-semibold text-[#1E1B4B]">Trigger Events</h4>
                   <button
@@ -150,7 +150,7 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
                         ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                         : testStatus[item.id] === 'failed'
                         ? 'bg-red-50 text-red-600 border border-red-200'
-                        : 'bg-white text-[#7C3AED] border border-[#DDD6FE] hover:bg-[#F5F3FF] hover:shadow-sm'
+                        : 'bg-white text-[#155dfc] border border-[#C9DCFF] hover:bg-[#EFF5FF] hover:shadow-sm'
                     } disabled:opacity-50`}
                   >
                     {testStatus[item.id] === 'sending' ? (
@@ -174,9 +174,9 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
                         type="checkbox"
                         checked={triggerEvents[item.id]?.[evt.key] ?? false}
                         onChange={(e) => handleTriggerToggle(item.id, evt.key, e.target.checked)}
-                        className="w-4 h-4 text-[#7C3AED] rounded border-[#DDD6FE] focus:ring-[#7C3AED]/20"
+                        className="w-4 h-4 text-[#155dfc] rounded border-[#C9DCFF] focus:ring-[#155dfc]/20"
                       />
-                      <span className="text-xs text-[#1E1B4B] group-hover:text-[#7C3AED] transition-colors">
+                      <span className="text-xs text-[#1E1B4B] group-hover:text-[#155dfc] transition-colors">
                         {evt.label}
                       </span>
                     </label>

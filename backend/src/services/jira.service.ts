@@ -117,11 +117,21 @@ async function request<T>(creds: JiraCreds, url: string, params?: Record<string,
 
 // --- Issue type discovery ---
 async function getIssueTypeNames(creds: JiraCreds): Promise<string[]> {
-  const url = `${creds.baseUrl}/rest/api/3/issuetype`;
-  const all = await request<any[]>(creds, url);
-  const names = (all || []).map((t) => String(t?.name || '').trim()).filter(Boolean);
-  const matched = Array.from(new Set(names.filter((n) => /story/i.test(n) || /^task$/i.test(n))));
-  return matched.length ? matched : ['Story', 'Task'];
+  try {
+    const url = `${creds.baseUrl}/rest/api/3/issuetype`;
+    const raw = await request<any>(creds, url);
+    // Cloud returns a plain array; some Server/DC versions return { values: [...] }
+    // or { issueTypes: [...] }. Normalise to an array before mapping.
+    const all: any[] = Array.isArray(raw)
+      ? raw
+      : (raw?.values ?? raw?.issueTypes ?? []);
+    const names = all.map((t) => String(t?.name || '').trim()).filter(Boolean);
+    const matched = Array.from(new Set(names.filter((n) => /story/i.test(n) || /^task$/i.test(n))));
+    return matched.length ? matched : ['Story', 'Task'];
+  } catch {
+    // If the issuetype endpoint is unavailable, fall back to the most common names.
+    return ['Story', 'Task'];
+  }
 }
 
 // --- HTML to plain text helpers ---
@@ -191,33 +201,63 @@ export async function testConnection(creds: JiraCreds): Promise<any> {
   return { accountId: me.accountId, displayName: me.displayName, locale: me.locale };
 }
 
+/** Run a JQL search, trying Cloud and Server endpoints in order. */
+async function jqlSearch(creds: JiraCreds, jql: string, maxResults = 100): Promise<any[]> {
+  const params = { jql, maxResults, fields: 'summary,issuetype,status' };
+  const endpoints = [
+    `${creds.baseUrl}/rest/api/3/search`,       // works on both Cloud and Server
+    `${creds.baseUrl}/rest/api/3/search/jql`,   // newer Cloud alias
+  ];
+  let lastErr: unknown;
+  for (const url of endpoints) {
+    try {
+      const data = await request<any>(creds, url, params);
+      const issues = Array.isArray(data?.issues) ? data.issues : [];
+      console.log(`[JIRA] jqlSearch OK — url=${url} jql="${jql}" issues=${issues.length} total=${data?.total}`);
+      return issues;
+    } catch (err: any) {
+      console.warn(`[JIRA] jqlSearch FAIL — url=${url} jql="${jql}" status=${err?.response?.status} msg=${err?.response?.data?.errorMessages?.[0] || err?.message}`);
+      lastErr = err;
+    }
+  }
+  throw lastErr;
+}
+
 export async function getStories(creds: JiraCreds): Promise<StorySummary[]> {
-  // Use the new /search/jql endpoint (old /search was removed by Atlassian)
-  const url = `${creds.baseUrl}/rest/api/3/search/jql`;
   const issueTypeNames = await getIssueTypeNames(creds);
   const quoted = issueTypeNames.map((n) => `"${n.replace(/"/g, '\\"')}"`).join(', ');
-  // Scope to the connected project (e.g. project = "IQ") so the wizard lists
-  // only that project's issues, not every project on the JIRA site. When no
-  // project was captured, fall back to a site-wide query.
-  const projectClause = creds.projectKey ? `project = "${creds.projectKey.replace(/"/g, '\\"')}" AND ` : '';
-  const jql = `${projectClause}issuetype in (${quoted}) ORDER BY created DESC`;
-  const params = { jql, maxResults: 50, fields: 'summary,issuetype' };
-  try {
-    const data = await request<any>(creds, url, params);
-    const issues = Array.isArray(data.issues) ? data.issues : [];
-    return issues.map((i: any) => ({ key: i.key, summary: i.fields?.summary ?? '' }));
-  } catch {
-    // Fallback: broad search then filter client-side. The new /search/jql
-    // endpoint rejects fully-unbounded JQL ("Unbounded JQL queries are not
-    // allowed here"), so bound it with the project clause (or a wide date floor).
-    const fallbackJql = `${projectClause}created >= "1970/01/01" ORDER BY created DESC`;
-    const fallbackParams = { jql: fallbackJql, maxResults: 100, fields: 'summary,issuetype' };
-    const data = await request<any>(creds, url, fallbackParams);
-    const issues = (data.issues || []).filter((i: any) =>
-      ((n) => /story/i.test(n) || /^task$/i.test(n))(String(i?.fields?.issuetype?.name || ''))
-    );
-    return issues.map((i: any) => ({ key: i.key, summary: i.fields?.summary ?? '' }));
+  const pKey = creds.projectKey ? creds.projectKey.replace(/"/g, '\\"') : '';
+
+  console.log(`[JIRA] getStories — baseUrl=${creds.baseUrl} projectKey=${pKey || '(none)'} issueTypes=${quoted}`);
+
+  // Escalating JQL strategies — stop at the first one that returns results.
+  // Use absolute date floors (not bare ORDER BY) to avoid "unbounded query"
+  // rejections on Atlassian Cloud's /search endpoint.
+  const jqlCandidates = [
+    // 1. Project + known story/task types (ideal)
+    pKey ? `project = "${pKey}" AND issuetype in (${quoted}) ORDER BY created DESC` : null,
+    // 2. Project, all issue types (catches boards using Bug/Epic/Feature/etc.)
+    pKey ? `project = "${pKey}" ORDER BY created DESC` : null,
+    // 3. Site-wide story/task types — project key wrong or missing
+    `issuetype in (${quoted}) AND created >= "2000-01-01" ORDER BY created DESC`,
+    // 4. Site-wide, all issues since 2000 — absolute last resort
+    `created >= "2000-01-01" ORDER BY created DESC`,
+  ].filter(Boolean) as string[];
+
+  for (const jql of jqlCandidates) {
+    try {
+      const issues = await jqlSearch(creds, jql);
+      if (issues.length > 0) {
+        return issues.map((i: any) => ({ key: i.key, summary: i.fields?.summary ?? '' }));
+      }
+      console.log(`[JIRA] JQL returned 0 issues, trying next candidate`);
+    } catch (err: any) {
+      console.warn(`[JIRA] JQL candidate failed: ${err?.message}`);
+      // continue to next candidate
+    }
   }
+
+  return []; // genuinely no issues found
 }
 
 export async function getStory(creds: JiraCreds, key: string): Promise<StoryDetails> {

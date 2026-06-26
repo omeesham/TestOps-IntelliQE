@@ -46,13 +46,13 @@ export default function ConnectModal({ integration, saving, error, onSave, onClo
                   value={formData[field.key] || ''}
                   onChange={(e) => setFormData(prev => ({ ...prev, [field.key]: e.target.value }))}
                   autoComplete="off"
-                  className="w-full px-3 py-2 border border-[#DDD6FE] rounded-lg text-sm outline-none focus:ring-2 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED] pr-10"
+                  className="w-full px-3 py-2 border border-[#C9DCFF] rounded-lg text-sm outline-none focus:ring-2 focus:ring-[#155dfc]/20 focus:border-[#155dfc] pr-10"
                 />
                 {field.type === 'password' && (
                   <button
                     type="button"
                     onClick={() => toggleVisibility(field.key)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#7C3AED] transition-colors"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#155dfc] transition-colors"
                   >
                     {visibleFields.has(field.key) ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
@@ -69,7 +69,7 @@ export default function ConnectModal({ integration, saving, error, onSave, onClo
           <button
             onClick={() => onSave(formData)}
             disabled={saving}
-            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white rounded-lg text-sm font-medium hover:from-[#6D28D9] hover:to-[#4F46E5] shadow-md shadow-purple-500/20 transition-all disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 bg-[#155dfc] text-white rounded-lg text-sm font-medium hover:bg-[#124fd6] shadow-md shadow-blue-500/20 transition-all disabled:opacity-50"
           >
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plug className="w-4 h-4" />}
             {saving ? 'Connecting...' : 'Connect'}

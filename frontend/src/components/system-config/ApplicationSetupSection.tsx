@@ -31,7 +31,7 @@ interface AppFormData {
 }
 
 const INPUT_CLASS =
-  'w-full px-3 py-2.5 rounded-xl border border-[#DDD6FE] bg-[#F5F3FF] text-sm outline-none focus:ring-2 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED] transition-all';
+  'w-full px-3 py-2.5 rounded-xl border border-[#C9DCFF] bg-[#EFF5FF] text-sm outline-none focus:ring-2 focus:ring-[#155dfc]/20 focus:border-[#155dfc] transition-all';
 
 function slugify(name: string): string {
   return name
@@ -181,7 +181,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
   const showForm = isNewApp || selectedAppId !== null;
 
   return (
-    <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-[#DDD6FE]/60 p-6">
+    <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-[#C9DCFF]/60 p-6">
       <div className="mb-4">
         <h3 className="text-sm font-semibold text-[#1E1B4B] mb-1">Applications Under Test</h3>
         <p className="text-xs text-[#6B7280]">
@@ -200,14 +200,14 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
         <div className="space-y-3">
           <button
             onClick={startNewApp}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white rounded-lg text-sm font-medium hover:from-[#6D28D9] hover:to-[#4F46E5] shadow-md shadow-purple-500/20 transition-all"
+            className="inline-flex items-center gap-2 px-4 py-2.5 bg-[#155dfc] text-white rounded-lg text-sm font-medium hover:bg-[#124fd6] shadow-md shadow-blue-500/20 transition-all"
           >
             <Plus className="w-4 h-4" />
             Add Application
           </button>
 
           {appConfigs.length === 0 && !isNewApp ? (
-            <div className="p-4 bg-[#F5F3FF] border border-[#DDD6FE]/60 rounded-xl text-center">
+            <div className="p-4 bg-[#EFF5FF] border border-[#C9DCFF]/60 rounded-xl text-center">
               <p className="text-xs text-[#6B7280]">
                 No applications configured. Add your first application to get started.
               </p>
@@ -221,8 +221,8 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
                   key={cfg.integrationId}
                   className={`p-3 rounded-xl border cursor-pointer transition-all ${
                     isSelected
-                      ? 'border-[#7C3AED] bg-[#F5F3FF] shadow-sm'
-                      : 'border-[#DDD6FE]/60 bg-white hover:border-[#7C3AED]/40'
+                      ? 'border-[#155dfc] bg-[#EFF5FF] shadow-sm'
+                      : 'border-[#C9DCFF]/60 bg-white hover:border-[#155dfc]/40'
                   }`}
                   onClick={() => selectApp(cfg)}
                 >
@@ -243,7 +243,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
                     </button>
                   </div>
                   {d.environment && (
-                    <span className="inline-block mt-1.5 px-2 py-0.5 bg-[#EDE9FE] text-[#7C3AED] text-[10px] font-medium rounded-full">
+                    <span className="inline-block mt-1.5 px-2 py-0.5 bg-[#DEEAFF] text-[#155dfc] text-[10px] font-medium rounded-full">
                       {d.environment}
                     </span>
                   )}
@@ -299,12 +299,12 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
               </div>
 
               {/* Roles Section */}
-              <div className="border-t border-[#EDE9FE] pt-4">
+              <div className="border-t border-[#DEEAFF] pt-4">
                 <div className="flex items-center justify-between mb-3">
                   <label className="text-sm font-medium text-[#1E1B4B]">Test User Roles</label>
                   <button
                     onClick={addRole}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#7C3AED] bg-[#F5F3FF] hover:bg-[#EDE9FE] rounded-lg border border-[#DDD6FE]/60 transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#155dfc] bg-[#EFF5FF] hover:bg-[#DEEAFF] rounded-lg border border-[#C9DCFF]/60 transition-colors"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     Add Role
@@ -320,7 +320,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
                     {formData.roles.map((role, idx) => (
                       <div
                         key={idx}
-                        className="p-3 bg-[#F5F3FF]/50 border border-[#DDD6FE]/40 rounded-xl"
+                        className="p-3 bg-[#EFF5FF]/50 border border-[#C9DCFF]/40 rounded-xl"
                       >
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                           {/* Role Name */}
@@ -369,7 +369,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
                                 <button
                                   type="button"
                                   onClick={() => togglePasswordVisibility(idx)}
-                                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#7C3AED] transition-colors"
+                                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#155dfc] transition-colors"
                                 >
                                   {visiblePasswords.has(idx) ? (
                                     <EyeOff className="w-4 h-4" />
@@ -380,7 +380,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
                               </div>
                               <button
                                 onClick={() => removeRole(idx)}
-                                className="p-2.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl border border-[#DDD6FE]/60 transition-colors flex-shrink-0"
+                                className="p-2.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl border border-[#C9DCFF]/60 transition-colors flex-shrink-0"
                                 title="Remove role"
                               >
                                 <Trash2 className="w-4 h-4" />
@@ -399,7 +399,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
                 <button
                   onClick={handleSave}
                   disabled={saving}
-                  className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white rounded-lg text-sm font-medium hover:from-[#6D28D9] hover:to-[#4F46E5] shadow-md shadow-purple-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex items-center gap-2 px-6 py-2.5 bg-[#155dfc] text-white rounded-lg text-sm font-medium hover:bg-[#124fd6] shadow-md shadow-blue-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                   {saving ? 'Saving...' : 'Save Application'}
@@ -409,8 +409,8 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
           ) : (
             <div className="flex items-center justify-center h-full min-h-[200px]">
               <div className="text-center">
-                <div className="w-12 h-12 bg-[#F5F3FF] rounded-xl flex items-center justify-center mx-auto mb-3 border border-[#DDD6FE]/60">
-                  <Plus className="w-5 h-5 text-[#7C3AED]" />
+                <div className="w-12 h-12 bg-[#EFF5FF] rounded-xl flex items-center justify-center mx-auto mb-3 border border-[#C9DCFF]/60">
+                  <Plus className="w-5 h-5 text-[#155dfc]" />
                 </div>
                 <p className="text-sm text-[#6B7280]">
                   Select an application from the list or add a new one

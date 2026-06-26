@@ -29,10 +29,10 @@ export default function Header() {
   };
 
   return (
-    <header className="h-14 bg-white/80 backdrop-blur-xl border-b border-[#DDD6FE]/60 flex items-center justify-between px-6 z-30 flex-shrink-0">
+    <header className="h-14 bg-white/80 backdrop-blur-xl border-b border-[#C9DCFF]/60 flex items-center justify-between px-6 z-30 flex-shrink-0">
       <h1 className="text-lg font-bold text-[#1E1B4B]">{pageTitle}</h1>
       <div className="flex items-center gap-2">
-        <div className="w-8 h-8 bg-gradient-to-br from-[#7C3AED] to-[#6366F1] rounded-full flex items-center justify-center shadow-md shadow-purple-500/20">
+        <div className="w-8 h-8 bg-[#155dfc] rounded-full flex items-center justify-center shadow-md shadow-blue-500/20">
           <User className="w-4 h-4 text-white" />
         </div>
         <div className="text-sm hidden sm:block">

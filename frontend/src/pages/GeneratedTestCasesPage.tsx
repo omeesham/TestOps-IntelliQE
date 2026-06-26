@@ -44,8 +44,8 @@ const TYPE_COLORS: Record<string, string> = {
   negative: 'bg-red-50 text-red-700',
   edge: 'bg-amber-50 text-amber-700',
   e2e: 'bg-blue-50 text-blue-700',
-  smoke: 'bg-violet-50 text-violet-700',
-  regression: 'bg-indigo-50 text-indigo-700',
+  smoke: 'bg-blue-50 text-blue-700',
+  regression: 'bg-blue-50 text-blue-700',
   security: 'bg-rose-50 text-rose-700',
 };
 const STATUS_CONFIG: Record<string, { bg: string; icon: any; label: string }> = {
@@ -53,7 +53,7 @@ const STATUS_CONFIG: Record<string, { bg: string; icon: any; label: string }> = 
   reviewed:  { bg: 'bg-emerald-100 text-emerald-700', icon: CheckCircle2, label: 'Reviewed' },
   approved:  { bg: 'bg-emerald-100 text-emerald-700', icon: CheckCircle2, label: 'Reviewed' },
   scripted:  { bg: 'bg-blue-100 text-blue-700', icon: FileText, label: 'Scripted' },
-  executed:  { bg: 'bg-violet-100 text-violet-700', icon: Check, label: 'Executed' },
+  executed:  { bg: 'bg-blue-100 text-blue-700', icon: Check, label: 'Executed' },
   failed:    { bg: 'bg-red-100 text-red-700', icon: AlertTriangle, label: 'Failed' },
 };
 
@@ -352,7 +352,7 @@ export default function GeneratedTestCasesPage() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={() => setShowAddForm(true)} className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-[#7C3AED] text-white rounded-lg hover:bg-[#6D28D9] transition">
+              <button onClick={() => setShowAddForm(true)} className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-[#155dfc] text-white rounded-lg hover:bg-[#124fd6] transition">
                 <Plus className="w-3.5 h-3.5" /> Add Test Case
               </button>
               <button
@@ -389,10 +389,10 @@ export default function GeneratedTestCasesPage() {
         {/* Module / submodule badges + tag filter */}
         <div className="flex items-center gap-2 flex-wrap bg-white border border-gray-100 rounded-xl px-3 py-2 shadow-sm">
           {selectedRun.module && (
-            <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 text-xs font-medium border border-indigo-100">Module: {selectedRun.module}</span>
+            <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 text-xs font-medium border border-blue-100">Module: {selectedRun.module}</span>
           )}
           {selectedRun.submodule && (
-            <span className="px-2 py-0.5 rounded-md bg-violet-50 text-violet-700 text-xs font-medium border border-violet-100">Submodule: {selectedRun.submodule}</span>
+            <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 text-xs font-medium border border-blue-100">Submodule: {selectedRun.submodule}</span>
           )}
           <div className="flex items-center gap-2 ml-auto flex-wrap">
             <Filter className="w-4 h-4 text-gray-400" />
@@ -408,7 +408,7 @@ export default function GeneratedTestCasesPage() {
                     setDetailTagFilters(next);
                   }}
                   className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
-                    active ? 'bg-[#7C3AED] text-white border-[#7C3AED]' : 'bg-white text-gray-600 border-gray-200 hover:border-[#7C3AED] hover:text-[#7C3AED]'
+                    active ? 'bg-[#155dfc] text-white border-[#155dfc]' : 'bg-white text-gray-600 border-gray-200 hover:border-[#155dfc] hover:text-[#155dfc]'
                   }`}
                 >
                   {tag}
@@ -416,15 +416,15 @@ export default function GeneratedTestCasesPage() {
               );
             })}
             {detailTagFilters.size > 0 && (
-              <button onClick={() => setDetailTagFilters(new Set())} className="text-xs text-gray-500 hover:text-[#7C3AED] underline">Clear</button>
+              <button onClick={() => setDetailTagFilters(new Set())} className="text-xs text-gray-500 hover:text-[#155dfc] underline">Clear</button>
             )}
           </div>
         </div>
 
         {/* Bulk actions bar */}
         {selectedTcIds.size > 0 && (
-          <div className="flex items-center gap-3 bg-purple-50 border border-purple-200 rounded-2xl px-4 py-3">
-            <span className="text-sm font-medium text-purple-700">{selectedTcIds.size} selected</span>
+          <div className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-2xl px-4 py-3">
+            <span className="text-sm font-medium text-blue-700">{selectedTcIds.size} selected</span>
             <button onClick={handleBulkReview} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">
               <CheckCircle2 className="w-3.5 h-3.5" /> Mark as Reviewed
             </button>
@@ -434,7 +434,7 @@ export default function GeneratedTestCasesPage() {
 
         {/* Add Test Case Form */}
         {showAddForm && (
-          <div className="bg-white border border-purple-200 rounded-2xl p-5 shadow-sm">
+          <div className="bg-white border border-blue-200 rounded-2xl p-5 shadow-sm">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold text-sm">Add New Test Case</h3>
               <button onClick={() => setShowAddForm(false)} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
@@ -442,7 +442,7 @@ export default function GeneratedTestCasesPage() {
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2">
                 <label className="text-[10px] font-medium text-gray-500 uppercase">Title / Scenario</label>
-                <input value={addDraft.title} onChange={e => setAddDraft({ ...addDraft, title: e.target.value })} className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-300 outline-none" placeholder="e.g. Verify login with valid credentials" />
+                <input value={addDraft.title} onChange={e => setAddDraft({ ...addDraft, title: e.target.value })} className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-300 outline-none" placeholder="e.g. Verify login with valid credentials" />
               </div>
               <div>
                 <label className="text-[10px] font-medium text-gray-500 uppercase">Priority</label>
@@ -472,7 +472,7 @@ export default function GeneratedTestCasesPage() {
                     )}
                   </div>
                 ))}
-                <button onClick={() => setAddDraft({ ...addDraft, steps: [...addDraft.steps, ''] })} className="text-xs text-purple-600 mt-1 hover:underline">+ Add Step</button>
+                <button onClick={() => setAddDraft({ ...addDraft, steps: [...addDraft.steps, ''] })} className="text-xs text-blue-600 mt-1 hover:underline">+ Add Step</button>
               </div>
               <div className="col-span-2">
                 <label className="text-[10px] font-medium text-gray-500 uppercase">Expected Result</label>
@@ -485,7 +485,7 @@ export default function GeneratedTestCasesPage() {
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button onClick={() => setShowAddForm(false)} className="px-4 py-2 text-sm text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">Cancel</button>
-              <button onClick={handleAddTc} disabled={!addDraft.title.trim()} className="px-4 py-2 text-sm text-white bg-[#7C3AED] rounded-lg hover:bg-[#6D28D9] disabled:opacity-40">Add Test Case</button>
+              <button onClick={handleAddTc} disabled={!addDraft.title.trim()} className="px-4 py-2 text-sm text-white bg-[#155dfc] rounded-lg hover:bg-[#124fd6] disabled:opacity-40">Add Test Case</button>
             </div>
           </div>
         )}
@@ -502,14 +502,14 @@ export default function GeneratedTestCasesPage() {
               onClick={() => setDetailTab(key)}
               className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium rounded-t-lg transition-colors border-b-2 ${
                 detailTab === key
-                  ? 'border-[#7C3AED] text-[#7C3AED] bg-purple-50'
+                  ? 'border-[#155dfc] text-[#155dfc] bg-blue-50'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
               }`}
             >
               <Icon className="w-4 h-4" />
               {label}
               {count !== undefined && (
-                <span className={`ml-1 text-xs px-1.5 py-0.5 rounded-full ${detailTab === key ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-500'}`}>{count}</span>
+                <span className={`ml-1 text-xs px-1.5 py-0.5 rounded-full ${detailTab === key ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>{count}</span>
               )}
             </button>
           ))}
@@ -539,7 +539,7 @@ export default function GeneratedTestCasesPage() {
                 <tr className="bg-gray-50 border-b border-gray-100">
                   <th className="px-3 py-1.5 w-10">
                     <input type="checkbox" checked={allPageSelected} onChange={toggleSelectAll}
-                      className="w-4 h-4 rounded border-gray-300 text-[#7C3AED] focus:ring-purple-300 cursor-pointer" />
+                      className="w-4 h-4 rounded border-gray-300 text-[#155dfc] focus:ring-blue-300 cursor-pointer" />
                   </th>
                   <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap w-24">TC #</th>
                   <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Test Scenario</th>
@@ -562,7 +562,7 @@ export default function GeneratedTestCasesPage() {
                             if (newSet.has(tc.id)) newSet.delete(tc.id); else newSet.add(tc.id);
                             setSelectedTcIds(newSet);
                           }}
-                          className="w-4 h-4 rounded border-gray-300 text-[#7C3AED] focus:ring-purple-300 cursor-pointer" />
+                          className="w-4 h-4 rounded border-gray-300 text-[#155dfc] focus:ring-blue-300 cursor-pointer" />
                       </td>
                       <td className="px-3 py-1.5 text-sm font-mono text-gray-500 whitespace-nowrap">{tc.tc_number}</td>
                       <td className="px-3 py-1.5">
@@ -584,7 +584,7 @@ export default function GeneratedTestCasesPage() {
                           </div>
                         )}
                         {editingTc?.id === tc.id && editDraft && (
-                          <div className="mt-3 space-y-2 border-t border-purple-100 pt-3">
+                          <div className="mt-3 space-y-2 border-t border-blue-100 pt-3">
                             <input value={editDraft.title} onChange={e => setEditDraft({ ...editDraft, title: e.target.value })} className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg" />
                             <div className="grid grid-cols-3 gap-2">
                               <select value={editDraft.priority} onChange={e => setEditDraft({ ...editDraft, priority: e.target.value })} className="px-2 py-1.5 text-xs border border-gray-200 rounded-lg">
@@ -609,11 +609,11 @@ export default function GeneratedTestCasesPage() {
                                 )}
                               </div>
                             ))}
-                            <button onClick={() => setEditDraft({ ...editDraft, steps: [...editDraft.steps, ''] })} className="text-[10px] text-purple-600 hover:underline">+ Add Step</button>
+                            <button onClick={() => setEditDraft({ ...editDraft, steps: [...editDraft.steps, ''] })} className="text-[10px] text-blue-600 hover:underline">+ Add Step</button>
                             <textarea value={editDraft.expected} onChange={e => setEditDraft({ ...editDraft, expected: e.target.value })} rows={2} placeholder="Expected Result" className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded-lg" />
                             <div className="flex justify-end gap-2">
                               <button onClick={() => { setEditingTc(null); setEditDraft(null); }} className="px-3 py-1.5 text-xs text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">Cancel</button>
-                              <button onClick={handleUpdateTc} className="px-3 py-1.5 text-xs text-white bg-[#7C3AED] rounded-lg hover:bg-[#6D28D9]">Save</button>
+                              <button onClick={handleUpdateTc} className="px-3 py-1.5 text-xs text-white bg-[#155dfc] rounded-lg hover:bg-[#124fd6]">Save</button>
                             </div>
                           </div>
                         )}
@@ -667,7 +667,7 @@ export default function GeneratedTestCasesPage() {
                 <div className="flex items-center gap-1">
                   <button disabled={tcPage <= 1} onClick={() => setTcPage(1)} className="p-1 rounded hover:bg-gray-100 disabled:opacity-30"><ChevronsLeft className="w-3.5 h-3.5" /></button>
                   <button disabled={tcPage <= 1} onClick={() => setTcPage(tcPage - 1)} className="p-1 rounded hover:bg-gray-100 disabled:opacity-30"><ChevronLeft className="w-3.5 h-3.5" /></button>
-                  <span className="px-2 py-1 bg-[#7C3AED] text-white rounded text-[10px] font-bold">{tcPage}</span>
+                  <span className="px-2 py-1 bg-[#155dfc] text-white rounded text-[10px] font-bold">{tcPage}</span>
                   <button disabled={tcPage >= tcTotalPages} onClick={() => setTcPage(tcPage + 1)} className="p-1 rounded hover:bg-gray-100 disabled:opacity-30"><ChevronRight className="w-3.5 h-3.5" /></button>
                   <button disabled={tcPage >= tcTotalPages} onClick={() => setTcPage(tcTotalPages)} className="p-1 rounded hover:bg-gray-100 disabled:opacity-30"><ChevronsRight className="w-3.5 h-3.5" /></button>
                 </div>
@@ -690,7 +690,7 @@ export default function GeneratedTestCasesPage() {
       <div className="flex items-center gap-2 flex-wrap">
         <button
           onClick={() => navigate('/chat')}
-          className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-[#7C3AED] hover:bg-[#6D28D9] text-white rounded-md text-sm font-medium transition-colors"
+          className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-[#155dfc] hover:bg-[#124fd6] text-white rounded-md text-sm font-medium transition-colors"
         >
           <Plus className="w-3.5 h-3.5" /> Generate New
         </button>
@@ -700,7 +700,7 @@ export default function GeneratedTestCasesPage() {
         <select
           value={moduleFilter}
           onChange={(e) => { setModuleFilter(e.target.value); setSubmoduleFilter(''); }}
-          className="h-9 px-3 pr-8 bg-white border border-gray-200 rounded-md text-sm text-gray-700 outline-none hover:border-gray-300 focus:border-[#7C3AED] focus:ring-1 focus:ring-[#7C3AED]/20 transition-colors"
+          className="h-9 px-3 pr-8 bg-white border border-gray-200 rounded-md text-sm text-gray-700 outline-none hover:border-gray-300 focus:border-[#155dfc] focus:ring-1 focus:ring-[#155dfc]/20 transition-colors"
         >
           <option value="">All modules</option>
           {facets.modules.map((m) => <option key={m} value={m}>{m}</option>)}
@@ -710,7 +710,7 @@ export default function GeneratedTestCasesPage() {
           value={submoduleFilter}
           onChange={(e) => setSubmoduleFilter(e.target.value)}
           disabled={!moduleFilter}
-          className="h-9 px-3 pr-8 bg-white border border-gray-200 rounded-md text-sm text-gray-700 outline-none hover:border-gray-300 focus:border-[#7C3AED] focus:ring-1 focus:ring-[#7C3AED]/20 disabled:bg-gray-50 disabled:text-gray-400 disabled:hover:border-gray-200 transition-colors"
+          className="h-9 px-3 pr-8 bg-white border border-gray-200 rounded-md text-sm text-gray-700 outline-none hover:border-gray-300 focus:border-[#155dfc] focus:ring-1 focus:ring-[#155dfc]/20 disabled:bg-gray-50 disabled:text-gray-400 disabled:hover:border-gray-200 transition-colors"
         >
           <option value="">All submodules</option>
           {facets.submodules
@@ -721,7 +721,7 @@ export default function GeneratedTestCasesPage() {
         {(moduleFilter || submoduleFilter) && (
           <button
             onClick={() => { setModuleFilter(''); setSubmoduleFilter(''); }}
-            className="text-xs text-gray-500 hover:text-[#7C3AED] px-1.5"
+            className="text-xs text-gray-500 hover:text-[#155dfc] px-1.5"
           >
             Clear
           </button>
@@ -733,7 +733,7 @@ export default function GeneratedTestCasesPage() {
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search by Jira ID, story title, user…"
-            className="w-full h-9 pl-9 pr-3 bg-white border border-gray-200 rounded-md text-sm text-gray-700 placeholder:text-gray-400 outline-none hover:border-gray-300 focus:border-[#7C3AED] focus:ring-1 focus:ring-[#7C3AED]/20 transition-colors"
+            className="w-full h-9 pl-9 pr-3 bg-white border border-gray-200 rounded-md text-sm text-gray-700 placeholder:text-gray-400 outline-none hover:border-gray-300 focus:border-[#155dfc] focus:ring-1 focus:ring-[#155dfc]/20 transition-colors"
           />
         </div>
       </div>
@@ -775,7 +775,7 @@ export default function GeneratedTestCasesPage() {
                       ) : (
                         <button
                           onClick={() => openRunDetail(run)}
-                          className="text-[#7C3AED] hover:underline text-sm"
+                          className="text-[#155dfc] hover:underline text-sm"
                           title="Open test suite"
                         >
                           Manual
@@ -784,7 +784,7 @@ export default function GeneratedTestCasesPage() {
                     </td>
                     <td className="px-3 py-1.5 text-gray-700 truncate max-w-xs">{run.story_title || 'Manual Test Suite'}</td>
                     <td className="px-3 py-1.5">
-                      <span className="px-2 py-0.5 rounded-md bg-purple-100 text-purple-700 text-sm border border-purple-200 lowercase">{run.source || 'manual'}</span>
+                      <span className="px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 text-sm border border-blue-200 lowercase">{run.source || 'manual'}</span>
                     </td>
                     <td className="px-3 py-1.5 text-gray-700">{run.username}</td>
                     <td className="px-3 py-1.5 text-gray-700">{total}</td>
@@ -820,7 +820,7 @@ export default function GeneratedTestCasesPage() {
               <select
                 value={pagination.limit}
                 onChange={e => { fetchRuns(1, Number(e.target.value)); }}
-                className="px-1.5 py-0.5 bg-white border border-gray-200 rounded text-xs outline-none focus:ring-1 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED]"
+                className="px-1.5 py-0.5 bg-white border border-gray-200 rounded text-xs outline-none focus:ring-1 focus:ring-[#155dfc]/20 focus:border-[#155dfc]"
               >
                 {[5, 10, 25, 50].map(n => <option key={n} value={n}>{n}</option>)}
               </select>
@@ -828,7 +828,7 @@ export default function GeneratedTestCasesPage() {
                 {Math.min((pagination.page - 1) * pagination.limit + 1, pagination.total)}–{Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total}
               </span>
               <span className="ml-4 flex items-center gap-3 text-gray-600">
-                <span>Total Test Cases: <span className="font-semibold text-[#7C3AED]">{totalTcCount}</span></span>
+                <span>Total Test Cases: <span className="font-semibold text-[#155dfc]">{totalTcCount}</span></span>
                 <span>Reviewed: <span className="font-semibold text-emerald-600">{totalReviewed}</span></span>
                 <span>Scripted: <span className="font-semibold text-blue-600">{totalScripted}</span></span>
               </span>
@@ -842,7 +842,7 @@ export default function GeneratedTestCasesPage() {
                 Prev
               </button>
               <span className="px-2 text-gray-600">
-                Page <span className="font-semibold text-[#7C3AED]">{pagination.page}</span> of {pagination.totalPages}
+                Page <span className="font-semibold text-[#155dfc]">{pagination.page}</span> of {pagination.totalPages}
               </span>
               <button
                 disabled={pagination.page >= pagination.totalPages}

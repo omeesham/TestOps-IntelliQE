@@ -123,7 +123,7 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-32">
-        <Loader2 className="w-4 h-4 text-[#7C3AED] animate-spin" />
+        <Loader2 className="w-4 h-4 text-[#155dfc] animate-spin" />
         <span className="ml-2 text-xs text-[#9CA3AF]">Loading…</span>
       </div>
     );
@@ -144,7 +144,7 @@ export default function DashboardPage() {
       <section className="bg-white rounded-lg border border-[#E5E7EB]">
         <header className="flex items-center justify-between px-4 py-2.5 border-b border-[#F3F4F6]">
           <h2 className="text-xs font-semibold text-[#1E1B4B] uppercase tracking-wider">Recent Runs</h2>
-          <Link to="/generated-tests" className="text-[11px] text-[#7C3AED] hover:underline inline-flex items-center gap-1">
+          <Link to="/generated-tests" className="text-[11px] text-[#155dfc] hover:underline inline-flex items-center gap-1">
             View all <ArrowRight className="w-3 h-3" />
           </Link>
         </header>
@@ -259,7 +259,7 @@ function Tab({
       onClick={onClick}
       className={
         'px-2.5 py-1 rounded font-medium transition-colors ' +
-        (active ? 'bg-[#F5F3FF] text-[#7C3AED]' : 'text-[#6B7280] hover:text-[#1E1B4B]')
+        (active ? 'bg-[#EFF5FF] text-[#155dfc]' : 'text-[#6B7280] hover:text-[#1E1B4B]')
       }
     >
       {children}
@@ -269,7 +269,7 @@ function Tab({
 
 function Row({ cov, showParent }: { cov: CoverageGroup; showParent?: boolean }) {
   const pct = cov.scriptedPct;
-  const barColor = pct >= 80 ? '#16A34A' : pct >= 50 ? '#7C3AED' : pct > 0 ? '#D97706' : '#E5E7EB';
+  const barColor = pct >= 80 ? '#16A34A' : pct >= 50 ? '#155dfc' : pct > 0 ? '#D97706' : '#E5E7EB';
   return (
     <div className="grid grid-cols-12 items-center gap-3 text-[11px]">
       <div className="col-span-4 min-w-0">
@@ -296,7 +296,7 @@ function Empty({ text, linkTo, linkText }: { text: string; linkTo?: string; link
     <div className="text-center py-4 text-xs text-[#9CA3AF]">
       <div>{text}</div>
       {linkTo && linkText && (
-        <Link to={linkTo} className="inline-block mt-1 text-[#7C3AED] hover:underline">
+        <Link to={linkTo} className="inline-block mt-1 text-[#155dfc] hover:underline">
           {linkText} →
         </Link>
       )}

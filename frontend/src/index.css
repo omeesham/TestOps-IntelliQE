@@ -1,17 +1,17 @@
 @import "tailwindcss";
 
 @theme {
-  /* Agentic AI Workspace — Purple / Blue / Teal palette */
-  --color-primary: #7C3AED;
+  /* Agentic AI Workspace — Blue / Teal palette */
+  --color-primary: #155dfc;
   --color-primary-foreground: #ffffff;
-  --color-secondary: #EEF2FF;
+  --color-secondary: #EFF5FF;
   --color-secondary-foreground: #1E1B4B;
-  --color-background: #F5F3FF;
+  --color-background: #EFF5FF;
   --color-foreground: #1E1B4B;
   --color-card: #ffffff;
   --color-card-foreground: #1E1B4B;
-  --color-border: #DDD6FE;
-  --color-muted: #EDE9FE;
+  --color-border: #C9DCFF;
+  --color-muted: #DEEAFF;
   --color-muted-foreground: #6B7280;
   --color-accent: #ECFEFF;
   --color-accent-foreground: #164E63;
@@ -21,14 +21,17 @@
   --color-warning: #F59E0B;
 
   /* Extended agentic palette */
-  --color-agent-purple: #7C3AED;
+  --color-agent-purple: #155dfc;
   --color-agent-blue: #3B82F6;
   --color-agent-teal: #06B6D4;
-  --color-agent-indigo: #6366F1;
-  --color-sidebar: #1E1B4B;
-  --color-sidebar-foreground: #C4B5FD;
-  --color-sidebar-active: #7C3AED;
-  --color-sidebar-hover: rgba(124, 58, 237, 0.15);
+  --color-agent-indigo: #155dfc;
+  /* Light sidebar (reference UX) */
+  --color-sidebar: #FFFFFF;
+  --color-sidebar-foreground: #475569;
+  --color-sidebar-active: #155dfc;
+  --color-sidebar-active-bg: #EFF5FF;
+  --color-sidebar-hover: #F8FAFC;
+  --color-sidebar-border: #E5E7EB;
 
   --radius: 12px;
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
@@ -45,6 +48,9 @@
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
     margin: 0;
     height: 100%;
     overflow: hidden;
@@ -94,8 +100,8 @@
 }
 
 @keyframes pulseGlow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.4); }
-  50% { box-shadow: 0 0 0 8px rgba(124, 58, 237, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(21, 93, 252, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(21, 93, 252, 0); }
 }
 .animate-pulseGlow {
   animation: pulseGlow 2s ease-in-out infinite;
