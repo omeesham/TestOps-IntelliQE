@@ -4,7 +4,7 @@ import {
   Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
   Trash2, Edit3, Plus, Eye, Download, FileText, X, Check, Clock,
   Tag, User, Calendar, Hash, AlertTriangle, CheckCircle2, Circle,
-  MoreHorizontal, Copy, ExternalLink, Filter,
+  MoreHorizontal, Copy, ExternalLink, Filter, ClipboardList,
 } from 'lucide-react';
 import {
   listTestRuns, getTestRun, updateTestCase, addTestCase, deleteTestCase, deleteTestRun, exportTestCases,
@@ -49,12 +49,12 @@ const TYPE_COLORS: Record<string, string> = {
   security: 'bg-rose-50 text-rose-700',
 };
 const STATUS_CONFIG: Record<string, { bg: string; icon: any; label: string }> = {
-  generated: { bg: 'bg-gray-100 text-gray-600', icon: Clock, label: 'Generated' },
-  reviewed:  { bg: 'bg-emerald-100 text-emerald-700', icon: CheckCircle2, label: 'Reviewed' },
-  approved:  { bg: 'bg-emerald-100 text-emerald-700', icon: CheckCircle2, label: 'Reviewed' },
-  scripted:  { bg: 'bg-blue-100 text-blue-700', icon: FileText, label: 'Scripted' },
-  executed:  { bg: 'bg-violet-100 text-violet-700', icon: Check, label: 'Executed' },
-  failed:    { bg: 'bg-red-100 text-red-700', icon: AlertTriangle, label: 'Failed' },
+  generated: { bg: 'bg-gray-50 text-gray-600 border border-gray-200', icon: Clock, label: 'Generated' },
+  reviewed:  { bg: 'bg-emerald-50 text-emerald-700 border border-emerald-200', icon: CheckCircle2, label: 'Reviewed' },
+  approved:  { bg: 'bg-emerald-50 text-emerald-700 border border-emerald-200', icon: CheckCircle2, label: 'Reviewed' },
+  scripted:  { bg: 'bg-violet-50 text-violet-700 border border-violet-200', icon: FileText, label: 'Scripted' },
+  executed:  { bg: 'bg-violet-50 text-violet-700 border border-violet-200', icon: Check, label: 'Executed' },
+  failed:    { bg: 'bg-rose-50 text-rose-700 border border-rose-200', icon: AlertTriangle, label: 'Failed' },
 };
 
 export default function GeneratedTestCasesPage() {
@@ -302,23 +302,23 @@ export default function GeneratedTestCasesPage() {
   const ConfirmModal = () => {
     if (!confirmDelete) return null;
     return (
-      <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center" onClick={() => setConfirmDelete(null)}>
-        <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+      <div className="fixed inset-0 bg-[#1E3A8A]/40 backdrop-blur-sm z-50 flex items-center justify-center" onClick={() => setConfirmDelete(null)}>
+        <div className="bg-white/90 backdrop-blur-sm rounded-2xl border border-[#DCE7FF] shadow-2xl p-6 max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
           <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
-              <AlertTriangle className="w-5 h-5 text-red-600" />
+            <div className="w-10 h-10 rounded-full bg-rose-50 border border-rose-200 flex items-center justify-center">
+              <AlertTriangle className="w-5 h-5 text-rose-600" />
             </div>
             <div>
-              <h3 className="font-semibold text-gray-900">Confirm Delete</h3>
-              <p className="text-sm text-gray-500">
+              <h3 className="font-semibold text-[#1E3A8A]">Confirm Delete</h3>
+              <p className="text-sm text-[#6B7280]">
                 {confirmDeleteType === 'run' ? 'This will delete the entire test suite and all test cases.' : 'This will permanently delete this test case.'}
               </p>
             </div>
           </div>
           <div className="flex justify-end gap-2">
-            <button onClick={() => setConfirmDelete(null)} className="px-4 py-2 text-sm text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">Cancel</button>
+            <button onClick={() => setConfirmDelete(null)} className="px-4 py-2 text-sm text-[#2143A8] bg-white border border-[#C5D6FF] rounded-lg hover:bg-[#EEF4FF]">Cancel</button>
             <button onClick={() => confirmDeleteType === 'run' ? handleDeleteRun(confirmDelete) : handleDeleteTc(confirmDelete)}
-              className="px-4 py-2 text-sm text-white bg-red-600 rounded-lg hover:bg-red-700">Delete</button>
+              className="px-4 py-2 text-sm text-white bg-rose-600 rounded-lg hover:bg-rose-700">Delete</button>
           </div>
         </div>
       </div>
@@ -334,51 +334,54 @@ export default function GeneratedTestCasesPage() {
         <ConfirmModal />
 
         {/* Back + Header */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+        <div className="bg-white/80 backdrop-blur-sm rounded-2xl border border-[#DCE7FF] shadow-sm p-5">
           <div className="flex items-center justify-between flex-wrap gap-3">
             <div className="flex items-center gap-3">
-              <button onClick={closeDetail} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500">
+              <button onClick={closeDetail} className="p-2 rounded-lg hover:bg-[#EEF4FF] text-[#2143A8]">
                 <ChevronLeft className="w-5 h-5" />
               </button>
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#3366FF] to-[#2645D6] flex items-center justify-center shadow-md shadow-violet-500/25 flex-shrink-0">
+                <ClipboardList className="w-5 h-5 text-white" />
+              </div>
               <div>
                 <div className="flex items-center gap-2">
                   {selectedRun.story_key && (
-                    <span className="px-2.5 py-1 rounded-md bg-blue-50 text-blue-700 text-xs font-bold font-mono border border-blue-200">
+                    <span className="px-2.5 py-1 rounded-md bg-[#DCE7FF] text-[#2143A8] text-xs font-bold font-mono border border-[#C5D6FF]">
                       {selectedRun.story_key}
                     </span>
                   )}
-                  <h2 className="text-lg font-bold text-gray-900">{selectedRun.story_title || 'Manual Test Suite'}</h2>
+                  <h2 className="text-lg font-semibold text-[#1E3A8A]">{selectedRun.story_title || 'Manual Test Suite'}</h2>
                 </div>
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={() => setShowAddForm(true)} className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-[#7C3AED] text-white rounded-lg hover:bg-[#6D28D9] transition">
+              <button onClick={() => setShowAddForm(true)} className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-lg shadow-md shadow-violet-200 transition">
                 <Plus className="w-3.5 h-3.5" /> Add Test Case
               </button>
               <button
                 onClick={handleGenerateScripts}
                 disabled={generatingScripts || reviewedCount === 0}
-                className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition disabled:opacity-40 disabled:cursor-not-allowed shadow-md shadow-emerald-200"
                 title={reviewedCount === 0 ? 'Review test cases first' : `Generate scripts for ${reviewedCount} reviewed test cases`}
               >
                 {generatingScripts ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Code2 className="w-3.5 h-3.5" />}
                 {generatingScripts ? 'Generating...' : 'Generate Scripts'}
               </button>
               <div className="relative">
-                <button onClick={() => setActionMenuId(actionMenuId === 'export' ? null : 'export')} className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50">
+                <button onClick={() => setActionMenuId(actionMenuId === 'export' ? null : 'export')} className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-white border border-[#C5D6FF] text-[#2143A8] rounded-lg hover:bg-[#EEF4FF]">
                   <Download className="w-3.5 h-3.5" /> Export
                 </button>
                 {actionMenuId === 'export' && (
-                  <div className="absolute right-0 mt-1 w-40 bg-white border border-gray-200 rounded-lg shadow-lg z-20">
+                  <div className="absolute right-0 mt-1 w-40 bg-white/90 backdrop-blur-sm border border-[#DCE7FF] rounded-xl shadow-lg shadow-violet-500/10 z-20">
                     {['csv', 'jira', 'testrail'].map(fmt => (
                       <button key={fmt} onClick={() => { handleExport(selectedRun.id, fmt); setActionMenuId(null); }}
-                        className="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 capitalize">{fmt === 'csv' ? 'Excel CSV' : fmt === 'jira' ? 'Jira / Xray' : 'TestRail'}</button>
+                        className="w-full text-left px-3 py-2 text-xs text-[#1E3A8A] hover:bg-[#EEF4FF] capitalize">{fmt === 'csv' ? 'Excel CSV' : fmt === 'jira' ? 'Jira / Xray' : 'TestRail'}</button>
                     ))}
                   </div>
                 )}
               </div>
               <button onClick={() => { setConfirmDelete(selectedRun.id); setConfirmDeleteType('run'); }}
-                className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100">
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-rose-700 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100">
                 <Trash2 className="w-3.5 h-3.5" /> Delete
               </button>
             </div>
@@ -387,7 +390,7 @@ export default function GeneratedTestCasesPage() {
         </div>
 
         {/* Module / submodule badges + tag filter */}
-        <div className="flex items-center gap-2 flex-wrap bg-white border border-gray-100 rounded-xl px-3 py-2 shadow-sm">
+        <div className="flex items-center gap-2 flex-wrap bg-white/80 backdrop-blur-sm border border-[#DCE7FF] rounded-2xl px-3 py-2 shadow-sm">
           {selectedRun.module && (
             <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 text-xs font-medium border border-indigo-100">Module: {selectedRun.module}</span>
           )}
@@ -395,8 +398,8 @@ export default function GeneratedTestCasesPage() {
             <span className="px-2 py-0.5 rounded-md bg-violet-50 text-violet-700 text-xs font-medium border border-violet-100">Submodule: {selectedRun.submodule}</span>
           )}
           <div className="flex items-center gap-2 ml-auto flex-wrap">
-            <Filter className="w-4 h-4 text-gray-400" />
-            <span className="text-xs font-semibold text-gray-500">Tags:</span>
+            <Filter className="w-4 h-4 text-[#6B7280]" />
+            <span className="text-xs font-semibold text-[#6B7280]">Tags:</span>
             {TAG_VOCAB.map((tag) => {
               const active = detailTagFilters.has(tag);
               return (
@@ -408,7 +411,7 @@ export default function GeneratedTestCasesPage() {
                     setDetailTagFilters(next);
                   }}
                   className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
-                    active ? 'bg-[#7C3AED] text-white border-[#7C3AED]' : 'bg-white text-gray-600 border-gray-200 hover:border-[#7C3AED] hover:text-[#7C3AED]'
+                    active ? 'bg-[#3366FF] text-white border-[#3366FF]' : 'bg-white text-[#6B7280] border-[#C5D6FF] hover:border-[#3366FF] hover:text-[#2143A8]'
                   }`}
                 >
                   {tag}
@@ -416,82 +419,82 @@ export default function GeneratedTestCasesPage() {
               );
             })}
             {detailTagFilters.size > 0 && (
-              <button onClick={() => setDetailTagFilters(new Set())} className="text-xs text-gray-500 hover:text-[#7C3AED] underline">Clear</button>
+              <button onClick={() => setDetailTagFilters(new Set())} className="text-xs text-[#6B7280] hover:text-[#2143A8] underline">Clear</button>
             )}
           </div>
         </div>
 
         {/* Bulk actions bar */}
         {selectedTcIds.size > 0 && (
-          <div className="flex items-center gap-3 bg-purple-50 border border-purple-200 rounded-2xl px-4 py-3">
-            <span className="text-sm font-medium text-purple-700">{selectedTcIds.size} selected</span>
-            <button onClick={handleBulkReview} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">
+          <div className="flex items-center gap-3 bg-[#EEF4FF] border border-[#C5D6FF] rounded-2xl px-4 py-3">
+            <span className="text-sm font-medium text-[#2143A8]">{selectedTcIds.size} selected</span>
+            <button onClick={handleBulkReview} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 shadow-md shadow-emerald-200">
               <CheckCircle2 className="w-3.5 h-3.5" /> Mark as Reviewed
             </button>
-            <button onClick={() => setSelectedTcIds(new Set())} className="text-xs text-gray-500 hover:text-gray-700">Clear selection</button>
+            <button onClick={() => setSelectedTcIds(new Set())} className="text-xs text-[#6B7280] hover:text-[#1E3A8A]">Clear selection</button>
           </div>
         )}
 
         {/* Add Test Case Form */}
         {showAddForm && (
-          <div className="bg-white border border-purple-200 rounded-2xl p-5 shadow-sm">
+          <div className="bg-white/80 backdrop-blur-sm border border-[#DCE7FF] rounded-2xl p-5 shadow-sm">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold text-sm">Add New Test Case</h3>
-              <button onClick={() => setShowAddForm(false)} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
+              <h3 className="font-semibold text-sm text-[#1E3A8A]">Add New Test Case</h3>
+              <button onClick={() => setShowAddForm(false)} className="text-[#6B7280] hover:text-[#2143A8]"><X className="w-4 h-4" /></button>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2">
-                <label className="text-[10px] font-medium text-gray-500 uppercase">Title / Scenario</label>
-                <input value={addDraft.title} onChange={e => setAddDraft({ ...addDraft, title: e.target.value })} className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-300 outline-none" placeholder="e.g. Verify login with valid credentials" />
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-violet-700">Title / Scenario</label>
+                <input value={addDraft.title} onChange={e => setAddDraft({ ...addDraft, title: e.target.value })} className="w-full mt-1 px-3 py-2 text-sm border border-[#C5D6FF] rounded-lg focus:ring-2 focus:ring-violet-300 focus:border-[#3366FF] outline-none" placeholder="e.g. Verify login with valid credentials" />
               </div>
               <div>
-                <label className="text-[10px] font-medium text-gray-500 uppercase">Priority</label>
-                <select value={addDraft.priority} onChange={e => setAddDraft({ ...addDraft, priority: e.target.value })} className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg">
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-violet-700">Priority</label>
+                <select value={addDraft.priority} onChange={e => setAddDraft({ ...addDraft, priority: e.target.value })} className="w-full mt-1 px-3 py-2 text-sm border border-[#C5D6FF] rounded-lg">
                   {['P0','P1','P2','P3'].map(p => <option key={p} value={p}>{p}</option>)}
                 </select>
               </div>
               <div>
-                <label className="text-[10px] font-medium text-gray-500 uppercase">Type</label>
-                <select value={addDraft.type} onChange={e => setAddDraft({ ...addDraft, type: e.target.value })} className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg">
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-violet-700">Type</label>
+                <select value={addDraft.type} onChange={e => setAddDraft({ ...addDraft, type: e.target.value })} className="w-full mt-1 px-3 py-2 text-sm border border-[#C5D6FF] rounded-lg">
                   {['positive','negative','edge','e2e','smoke','regression','security'].map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
               </div>
               <div className="col-span-2">
-                <label className="text-[10px] font-medium text-gray-500 uppercase">Feature</label>
-                <input value={addDraft.feature} onChange={e => setAddDraft({ ...addDraft, feature: e.target.value })} className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg" placeholder="e.g. Authentication" />
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-violet-700">Feature</label>
+                <input value={addDraft.feature} onChange={e => setAddDraft({ ...addDraft, feature: e.target.value })} className="w-full mt-1 px-3 py-2 text-sm border border-[#C5D6FF] rounded-lg" placeholder="e.g. Authentication" />
               </div>
               <div className="col-span-2">
-                <label className="text-[10px] font-medium text-gray-500 uppercase">Test Steps</label>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-violet-700">Test Steps</label>
                 {addDraft.steps.map((step, idx) => (
                   <div key={idx} className="flex items-center gap-2 mt-1">
-                    <span className="text-[10px] text-gray-400 w-4">{idx + 1}.</span>
+                    <span className="text-[10px] text-[#6B7280] w-4">{idx + 1}.</span>
                     <input value={step} onChange={e => { const s = [...addDraft.steps]; s[idx] = e.target.value; setAddDraft({ ...addDraft, steps: s }); }}
-                      className="flex-1 px-3 py-1.5 text-sm border border-gray-200 rounded-lg" placeholder={`Step ${idx + 1}`} />
+                      className="flex-1 px-3 py-1.5 text-sm border border-[#C5D6FF] rounded-lg" placeholder={`Step ${idx + 1}`} />
                     {addDraft.steps.length > 1 && (
-                      <button onClick={() => setAddDraft({ ...addDraft, steps: addDraft.steps.filter((_: any, i: number) => i !== idx) })} className="text-red-400 hover:text-red-600"><X className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => setAddDraft({ ...addDraft, steps: addDraft.steps.filter((_: any, i: number) => i !== idx) })} className="text-rose-400 hover:text-rose-600"><X className="w-3.5 h-3.5" /></button>
                     )}
                   </div>
                 ))}
-                <button onClick={() => setAddDraft({ ...addDraft, steps: [...addDraft.steps, ''] })} className="text-xs text-purple-600 mt-1 hover:underline">+ Add Step</button>
+                <button onClick={() => setAddDraft({ ...addDraft, steps: [...addDraft.steps, ''] })} className="text-xs text-[#2143A8] mt-1 hover:underline">+ Add Step</button>
               </div>
               <div className="col-span-2">
-                <label className="text-[10px] font-medium text-gray-500 uppercase">Expected Result</label>
-                <textarea value={addDraft.expected} onChange={e => setAddDraft({ ...addDraft, expected: e.target.value })} rows={2} className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg" placeholder="Expected outcome" />
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-violet-700">Expected Result</label>
+                <textarea value={addDraft.expected} onChange={e => setAddDraft({ ...addDraft, expected: e.target.value })} rows={2} className="w-full mt-1 px-3 py-2 text-sm border border-[#C5D6FF] rounded-lg" placeholder="Expected outcome" />
               </div>
               <div className="col-span-2">
-                <label className="text-[10px] font-medium text-gray-500 uppercase">Precondition</label>
-                <input value={addDraft.precondition} onChange={e => setAddDraft({ ...addDraft, precondition: e.target.value })} className="w-full mt-1 px-3 py-2 text-sm border border-gray-200 rounded-lg" placeholder="e.g. User must be logged in" />
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-violet-700">Precondition</label>
+                <input value={addDraft.precondition} onChange={e => setAddDraft({ ...addDraft, precondition: e.target.value })} className="w-full mt-1 px-3 py-2 text-sm border border-[#C5D6FF] rounded-lg" placeholder="e.g. User must be logged in" />
               </div>
             </div>
             <div className="flex justify-end gap-2 mt-4">
-              <button onClick={() => setShowAddForm(false)} className="px-4 py-2 text-sm text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">Cancel</button>
-              <button onClick={handleAddTc} disabled={!addDraft.title.trim()} className="px-4 py-2 text-sm text-white bg-[#7C3AED] rounded-lg hover:bg-[#6D28D9] disabled:opacity-40">Add Test Case</button>
+              <button onClick={() => setShowAddForm(false)} className="px-4 py-2 text-sm text-[#2143A8] bg-white border border-[#C5D6FF] rounded-lg hover:bg-[#EEF4FF]">Cancel</button>
+              <button onClick={handleAddTc} disabled={!addDraft.title.trim()} className="px-4 py-2 text-sm text-white bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 rounded-lg shadow-md shadow-violet-200 disabled:opacity-50">Add Test Case</button>
             </div>
           </div>
         )}
 
         {/* Tab Navigation */}
-        <div className="flex gap-1 bg-white rounded-2xl border border-gray-100 shadow-sm px-2 pt-2">
+        <div className="flex gap-1 bg-white/80 backdrop-blur-sm rounded-2xl border border-[#DCE7FF] shadow-sm px-2 pt-2">
           {[
             { key: 'cases' as const, label: 'Test Cases', icon: FileText, count: testCases.length },
             { key: 'data' as const, label: 'Test Data', icon: Database },
@@ -502,14 +505,14 @@ export default function GeneratedTestCasesPage() {
               onClick={() => setDetailTab(key)}
               className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium rounded-t-lg transition-colors border-b-2 ${
                 detailTab === key
-                  ? 'border-[#7C3AED] text-[#7C3AED] bg-purple-50'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                  ? 'border-[#3366FF] text-[#2143A8] bg-[#EEF4FF]'
+                  : 'border-transparent text-[#6B7280] hover:text-[#1E3A8A] hover:bg-[#EEF4FF]'
               }`}
             >
               <Icon className="w-4 h-4" />
               {label}
               {count !== undefined && (
-                <span className={`ml-1 text-xs px-1.5 py-0.5 rounded-full ${detailTab === key ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-500'}`}>{count}</span>
+                <span className={`ml-1 text-xs px-1.5 py-0.5 rounded-full ${detailTab === key ? 'bg-[#DCE7FF] text-[#2143A8]' : 'bg-gray-100 text-[#6B7280]'}`}>{count}</span>
               )}
             </button>
           ))}
@@ -517,36 +520,36 @@ export default function GeneratedTestCasesPage() {
 
         {/* Test Data Tab */}
         {detailTab === 'data' && (
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+          <div className="bg-white/80 backdrop-blur-sm rounded-2xl border border-[#DCE7FF] shadow-sm p-5">
             <TestDataTab runId={selectedRun.id} />
           </div>
         )}
 
         {/* Reports Tab */}
         {detailTab === 'reports' && (
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+          <div className="bg-white/80 backdrop-blur-sm rounded-2xl border border-[#DCE7FF] shadow-sm p-5">
             <ReportsTab runId={selectedRun.id} />
           </div>
         )}
 
         {/* Test Cases Table */}
         {detailTab === 'cases' && (detailLoading ? (
-          <div className="bg-white rounded-2xl p-12 text-center text-gray-400 animate-pulse">Loading test cases...</div>
+          <div className="bg-white/80 backdrop-blur-sm rounded-2xl border border-[#DCE7FF] shadow-sm p-12 text-center text-[#6B7280] animate-pulse">Loading test cases...</div>
         ) : (
-          <div ref={tableRef} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div ref={tableRef} className="bg-white/80 backdrop-blur-sm rounded-2xl border border-[#DCE7FF] shadow-sm overflow-hidden">
             <table className="w-full text-sm">
               <thead>
-                <tr className="bg-gray-50 border-b border-gray-100">
+                <tr className="bg-[#EEF4FF] border-b border-[#DCE7FF]">
                   <th className="px-3 py-1.5 w-10">
                     <input type="checkbox" checked={allPageSelected} onChange={toggleSelectAll}
-                      className="w-4 h-4 rounded border-gray-300 text-[#7C3AED] focus:ring-purple-300 cursor-pointer" />
+                      className="w-4 h-4 rounded border-[#C5D6FF] text-[#2143A8] focus:ring-violet-300 cursor-pointer" />
                   </th>
-                  <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap w-24">TC #</th>
-                  <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Test Scenario</th>
-                  <th className="text-center px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap w-16">Priority</th>
-                  <th className="text-center px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap w-24">Type</th>
-                  <th className="text-center px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap w-24">Review</th>
-                  <th className="text-center px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap w-24">Actions</th>
+                  <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap w-24">TC #</th>
+                  <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider">Test Scenario</th>
+                  <th className="text-center px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap w-16">Priority</th>
+                  <th className="text-center px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap w-24">Type</th>
+                  <th className="text-center px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap w-24">Review</th>
+                  <th className="text-center px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap w-24">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -554,7 +557,7 @@ export default function GeneratedTestCasesPage() {
                   const isReviewed = tc.status === 'reviewed' || tc.status === 'approved';
                   const statusCfg = STATUS_CONFIG[tc.status] || STATUS_CONFIG.generated;
                   return (
-                    <tr key={tc.id} className={`border-b border-gray-50 hover:bg-gray-50/50 ${isReviewed ? 'bg-emerald-50/30' : ''}`}>
+                    <tr key={tc.id} className={`border-b border-[#EEF4FF] hover:bg-[#EEF4FF]/60 ${isReviewed ? 'bg-emerald-50/30' : ''}`}>
                       <td className="px-3 py-1.5">
                         <input type="checkbox" checked={selectedTcIds.has(tc.id)}
                           onChange={() => {
@@ -562,58 +565,58 @@ export default function GeneratedTestCasesPage() {
                             if (newSet.has(tc.id)) newSet.delete(tc.id); else newSet.add(tc.id);
                             setSelectedTcIds(newSet);
                           }}
-                          className="w-4 h-4 rounded border-gray-300 text-[#7C3AED] focus:ring-purple-300 cursor-pointer" />
+                          className="w-4 h-4 rounded border-[#C5D6FF] text-[#2143A8] focus:ring-violet-300 cursor-pointer" />
                       </td>
-                      <td className="px-3 py-1.5 text-sm font-mono text-gray-500 whitespace-nowrap">{tc.tc_number}</td>
+                      <td className="px-3 py-1.5 text-sm font-mono text-[#6B7280] whitespace-nowrap">{tc.tc_number}</td>
                       <td className="px-3 py-1.5">
                         <button onClick={() => setExpandedTcId(expandedTcId === tc.id ? null : tc.id)} className="text-left w-full">
-                          <span className="text-sm text-gray-700">{tc.title}</span>
+                          <span className="text-sm text-[#1E3A8A]">{tc.title}</span>
                         </button>
                         {expandedTcId === tc.id && !editingTc && (
-                          <div className="mt-3 space-y-3 text-xs text-gray-600 border-t border-gray-100 pt-3">
-                            {tc.precondition && <div><span className="font-semibold text-gray-500">Precondition:</span> {tc.precondition}</div>}
+                          <div className="mt-3 space-y-3 text-xs text-[#6B7280] border-t border-[#DCE7FF] pt-3">
+                            {tc.precondition && <div><span className="font-semibold text-[#2143A8]">Precondition:</span> {tc.precondition}</div>}
                             {(tc.steps || []).length > 0 && (
                               <div>
-                                <span className="font-semibold text-gray-500">Steps:</span>
+                                <span className="font-semibold text-[#2143A8]">Steps:</span>
                                 <ol className="list-decimal list-inside mt-1 space-y-0.5">
                                   {(tc.steps || []).map((s: string, i: number) => <li key={i}>{s}</li>)}
                                 </ol>
                               </div>
                             )}
-                            {tc.expected && <div><span className="font-semibold text-gray-500">Expected:</span> {tc.expected}</div>}
+                            {tc.expected && <div><span className="font-semibold text-[#2143A8]">Expected:</span> {tc.expected}</div>}
                           </div>
                         )}
                         {editingTc?.id === tc.id && editDraft && (
-                          <div className="mt-3 space-y-2 border-t border-purple-100 pt-3">
-                            <input value={editDraft.title} onChange={e => setEditDraft({ ...editDraft, title: e.target.value })} className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg" />
+                          <div className="mt-3 space-y-2 border-t border-[#C5D6FF] pt-3">
+                            <input value={editDraft.title} onChange={e => setEditDraft({ ...editDraft, title: e.target.value })} className="w-full px-2 py-1.5 text-sm border border-[#C5D6FF] rounded-lg" />
                             <div className="grid grid-cols-3 gap-2">
-                              <select value={editDraft.priority} onChange={e => setEditDraft({ ...editDraft, priority: e.target.value })} className="px-2 py-1.5 text-xs border border-gray-200 rounded-lg">
+                              <select value={editDraft.priority} onChange={e => setEditDraft({ ...editDraft, priority: e.target.value })} className="px-2 py-1.5 text-xs border border-[#C5D6FF] rounded-lg">
                                 {['P0','P1','P2','P3'].map(p => <option key={p} value={p}>{p}</option>)}
                               </select>
-                              <select value={editDraft.type} onChange={e => setEditDraft({ ...editDraft, type: e.target.value })} className="px-2 py-1.5 text-xs border border-gray-200 rounded-lg">
+                              <select value={editDraft.type} onChange={e => setEditDraft({ ...editDraft, type: e.target.value })} className="px-2 py-1.5 text-xs border border-[#C5D6FF] rounded-lg">
                                 {['positive','negative','edge','e2e','smoke','regression','security'].map(t => <option key={t} value={t}>{t}</option>)}
                               </select>
-                              <select value={editDraft.status} onChange={e => setEditDraft({ ...editDraft, status: e.target.value })} className="px-2 py-1.5 text-xs border border-gray-200 rounded-lg">
+                              <select value={editDraft.status} onChange={e => setEditDraft({ ...editDraft, status: e.target.value })} className="px-2 py-1.5 text-xs border border-[#C5D6FF] rounded-lg">
                                 {['generated','reviewed','scripted','executed','failed'].map(s => <option key={s} value={s}>{s}</option>)}
                               </select>
                             </div>
-                            <input value={editDraft.feature} onChange={e => setEditDraft({ ...editDraft, feature: e.target.value })} placeholder="Feature" className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded-lg" />
-                            <input value={editDraft.precondition} onChange={e => setEditDraft({ ...editDraft, precondition: e.target.value })} placeholder="Precondition" className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded-lg" />
+                            <input value={editDraft.feature} onChange={e => setEditDraft({ ...editDraft, feature: e.target.value })} placeholder="Feature" className="w-full px-2 py-1.5 text-xs border border-[#C5D6FF] rounded-lg" />
+                            <input value={editDraft.precondition} onChange={e => setEditDraft({ ...editDraft, precondition: e.target.value })} placeholder="Precondition" className="w-full px-2 py-1.5 text-xs border border-[#C5D6FF] rounded-lg" />
                             {(editDraft.steps || []).map((step: string, idx: number) => (
                               <div key={idx} className="flex items-center gap-1">
-                                <span className="text-[10px] text-gray-400 w-4">{idx+1}.</span>
+                                <span className="text-[10px] text-[#6B7280] w-4">{idx+1}.</span>
                                 <input value={step} onChange={e => { const s = [...editDraft.steps]; s[idx] = e.target.value; setEditDraft({ ...editDraft, steps: s }); }}
-                                  className="flex-1 px-2 py-1 text-xs border border-gray-200 rounded-lg" />
+                                  className="flex-1 px-2 py-1 text-xs border border-[#C5D6FF] rounded-lg" />
                                 {editDraft.steps.length > 1 && (
-                                  <button onClick={() => setEditDraft({ ...editDraft, steps: editDraft.steps.filter((_: any, i: number) => i !== idx) })} className="text-red-400"><X className="w-3 h-3" /></button>
+                                  <button onClick={() => setEditDraft({ ...editDraft, steps: editDraft.steps.filter((_: any, i: number) => i !== idx) })} className="text-rose-400"><X className="w-3 h-3" /></button>
                                 )}
                               </div>
                             ))}
-                            <button onClick={() => setEditDraft({ ...editDraft, steps: [...editDraft.steps, ''] })} className="text-[10px] text-purple-600 hover:underline">+ Add Step</button>
-                            <textarea value={editDraft.expected} onChange={e => setEditDraft({ ...editDraft, expected: e.target.value })} rows={2} placeholder="Expected Result" className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded-lg" />
+                            <button onClick={() => setEditDraft({ ...editDraft, steps: [...editDraft.steps, ''] })} className="text-[10px] text-[#2143A8] hover:underline">+ Add Step</button>
+                            <textarea value={editDraft.expected} onChange={e => setEditDraft({ ...editDraft, expected: e.target.value })} rows={2} placeholder="Expected Result" className="w-full px-2 py-1.5 text-xs border border-[#C5D6FF] rounded-lg" />
                             <div className="flex justify-end gap-2">
-                              <button onClick={() => { setEditingTc(null); setEditDraft(null); }} className="px-3 py-1.5 text-xs text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">Cancel</button>
-                              <button onClick={handleUpdateTc} className="px-3 py-1.5 text-xs text-white bg-[#7C3AED] rounded-lg hover:bg-[#6D28D9]">Save</button>
+                              <button onClick={() => { setEditingTc(null); setEditDraft(null); }} className="px-3 py-1.5 text-xs text-[#2143A8] bg-white border border-[#C5D6FF] rounded-lg hover:bg-[#EEF4FF]">Cancel</button>
+                              <button onClick={handleUpdateTc} className="px-3 py-1.5 text-xs text-white bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 rounded-lg shadow-md shadow-violet-200">Save</button>
                             </div>
                           </div>
                         )}
@@ -623,11 +626,11 @@ export default function GeneratedTestCasesPage() {
                       <td className="px-3 py-1.5 text-center">
                         <button onClick={() => handleToggleReview(tc)} className="flex items-center justify-center mx-auto gap-1 group/rev" title={isReviewed ? 'Mark as pending' : 'Mark as reviewed'}>
                           {isReviewed ? (
-                            <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-700 text-sm">
+                            <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-sm">
                               <CheckCircle2 className="w-3.5 h-3.5" /> Reviewed
                             </span>
                           ) : (
-                            <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 text-gray-500 text-sm group-hover/rev:bg-emerald-50 group-hover/rev:text-emerald-600 transition">
+                            <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-50 text-gray-500 border border-gray-200 text-sm group-hover/rev:bg-emerald-50 group-hover/rev:text-emerald-600 group-hover/rev:border-emerald-200 transition">
                               <Circle className="w-3.5 h-3.5" /> Pending
                             </span>
                           )}
@@ -636,11 +639,11 @@ export default function GeneratedTestCasesPage() {
                       <td className="px-3 py-1.5 text-center">
                         <div className="flex items-center justify-center gap-1">
                           <button onClick={() => setExpandedTcId(expandedTcId === tc.id ? null : tc.id)}
-                            className="p-1.5 rounded-md hover:bg-blue-50 text-blue-500" title="View details"><Eye className="w-3.5 h-3.5" /></button>
+                            className="p-1.5 rounded-md hover:bg-[#EEF4FF] text-[#2143A8]" title="View details"><Eye className="w-3.5 h-3.5" /></button>
                           <button onClick={() => { setEditingTc(tc); setEditDraft({ title: tc.title, steps: tc.steps || [''], expected: tc.expected, priority: tc.priority, type: tc.type, feature: tc.feature, precondition: tc.precondition, status: tc.status }); setExpandedTcId(tc.id); }}
                             className="p-1.5 rounded-md hover:bg-amber-50 text-amber-600" title="Edit"><Edit3 className="w-3.5 h-3.5" /></button>
                           <button onClick={() => { setConfirmDelete(tc.id); setConfirmDeleteType('case'); }}
-                            className="p-1.5 rounded-md hover:bg-red-50 text-red-500" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                            className="p-1.5 rounded-md hover:bg-rose-50 text-rose-500" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
                         </div>
                       </td>
                     </tr>
@@ -651,25 +654,25 @@ export default function GeneratedTestCasesPage() {
 
             {/* Pagination */}
             {testCases.length > 0 && (
-              <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 text-xs text-gray-500">
+              <div className="flex items-center justify-between px-4 py-3 border-t border-[#DCE7FF] bg-[#EEF4FF]/50 text-xs text-[#6B7280]">
                 <div className="flex items-center gap-2">
                   <span>Rows</span>
-                  <select value={tcPageSize} onChange={e => { setTcPageSize(Number(e.target.value)); setTcPage(1); }} className="border border-gray-200 rounded px-2 py-1 text-xs">
+                  <select value={tcPageSize} onChange={e => { setTcPageSize(Number(e.target.value)); setTcPage(1); }} className="border border-[#C5D6FF] rounded px-2 py-1 text-xs">
                     {[10, 15, 20, 25].map(n => <option key={n} value={n}>{n}</option>)}
                   </select>
                 </div>
                 <div className="flex items-center gap-4">
                   <span>Showing {(tcPage-1)*tcPageSize+1}–{Math.min(tcPage*tcPageSize, testCases.length)} of {testCases.length}</span>
-                  <span className="flex items-center gap-1"><Hash className="w-3 h-3 text-gray-400" /> Total: <strong className="text-gray-700">{testCases.length}</strong></span>
+                  <span className="flex items-center gap-1"><Hash className="w-3 h-3 text-[#6B7280]" /> Total: <strong className="text-[#1E3A8A]">{testCases.length}</strong></span>
                   <span className="flex items-center gap-1 text-emerald-600"><CheckCircle2 className="w-3 h-3" /> Reviewed: <strong>{reviewedCount}</strong></span>
                   <span className="flex items-center gap-1 text-amber-600"><Clock className="w-3 h-3" /> Pending: <strong>{testCases.length - reviewedCount}</strong></span>
                 </div>
                 <div className="flex items-center gap-1">
-                  <button disabled={tcPage <= 1} onClick={() => setTcPage(1)} className="p-1 rounded hover:bg-gray-100 disabled:opacity-30"><ChevronsLeft className="w-3.5 h-3.5" /></button>
-                  <button disabled={tcPage <= 1} onClick={() => setTcPage(tcPage - 1)} className="p-1 rounded hover:bg-gray-100 disabled:opacity-30"><ChevronLeft className="w-3.5 h-3.5" /></button>
-                  <span className="px-2 py-1 bg-[#7C3AED] text-white rounded text-[10px] font-bold">{tcPage}</span>
-                  <button disabled={tcPage >= tcTotalPages} onClick={() => setTcPage(tcPage + 1)} className="p-1 rounded hover:bg-gray-100 disabled:opacity-30"><ChevronRight className="w-3.5 h-3.5" /></button>
-                  <button disabled={tcPage >= tcTotalPages} onClick={() => setTcPage(tcTotalPages)} className="p-1 rounded hover:bg-gray-100 disabled:opacity-30"><ChevronsRight className="w-3.5 h-3.5" /></button>
+                  <button disabled={tcPage <= 1} onClick={() => setTcPage(1)} className="p-1 rounded hover:bg-[#DCE7FF] text-[#2143A8] disabled:opacity-30"><ChevronsLeft className="w-3.5 h-3.5" /></button>
+                  <button disabled={tcPage <= 1} onClick={() => setTcPage(tcPage - 1)} className="p-1 rounded hover:bg-[#DCE7FF] text-[#2143A8] disabled:opacity-30"><ChevronLeft className="w-3.5 h-3.5" /></button>
+                  <span className="px-2 py-1 bg-gradient-to-r from-violet-600 to-indigo-600 text-white rounded text-[10px] font-bold">{tcPage}</span>
+                  <button disabled={tcPage >= tcTotalPages} onClick={() => setTcPage(tcPage + 1)} className="p-1 rounded hover:bg-[#DCE7FF] text-[#2143A8] disabled:opacity-30"><ChevronRight className="w-3.5 h-3.5" /></button>
+                  <button disabled={tcPage >= tcTotalPages} onClick={() => setTcPage(tcTotalPages)} className="p-1 rounded hover:bg-[#DCE7FF] text-[#2143A8] disabled:opacity-30"><ChevronsRight className="w-3.5 h-3.5" /></button>
                 </div>
               </div>
             )}
@@ -686,21 +689,32 @@ export default function GeneratedTestCasesPage() {
     <div className="-m-6 p-4 space-y-3">
       <ConfirmModal />
 
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-6">
+        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#3366FF] to-[#2645D6] flex items-center justify-center shadow-md shadow-violet-500/25">
+          <ClipboardList className="w-5 h-5 text-white" />
+        </div>
+        <div>
+          <h1 className="text-lg font-semibold text-[#1E3A8A]">Generated Test Cases</h1>
+          <p className="text-sm text-[#6B7280]">Review and manage AI-generated cases</p>
+        </div>
+      </div>
+
       {/* Unified toolbar: Generate · Module · Submodule · Search */}
       <div className="flex items-center gap-2 flex-wrap">
         <button
           onClick={() => navigate('/chat')}
-          className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-[#7C3AED] hover:bg-[#6D28D9] text-white rounded-md text-sm font-medium transition-colors"
+          className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-lg text-sm font-medium shadow-md shadow-violet-200 transition-colors"
         >
           <Plus className="w-3.5 h-3.5" /> Generate New
         </button>
 
-        <div className="h-6 w-px bg-gray-200 mx-1" />
+        <div className="h-6 w-px bg-[#C5D6FF] mx-1" />
 
         <select
           value={moduleFilter}
           onChange={(e) => { setModuleFilter(e.target.value); setSubmoduleFilter(''); }}
-          className="h-9 px-3 pr-8 bg-white border border-gray-200 rounded-md text-sm text-gray-700 outline-none hover:border-gray-300 focus:border-[#7C3AED] focus:ring-1 focus:ring-[#7C3AED]/20 transition-colors"
+          className="h-9 px-3 pr-8 bg-white border border-[#C5D6FF] rounded-lg text-sm text-[#1E3A8A] outline-none hover:border-[#AEC4F5] focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF]/20 transition-colors"
         >
           <option value="">All modules</option>
           {facets.modules.map((m) => <option key={m} value={m}>{m}</option>)}
@@ -710,7 +724,7 @@ export default function GeneratedTestCasesPage() {
           value={submoduleFilter}
           onChange={(e) => setSubmoduleFilter(e.target.value)}
           disabled={!moduleFilter}
-          className="h-9 px-3 pr-8 bg-white border border-gray-200 rounded-md text-sm text-gray-700 outline-none hover:border-gray-300 focus:border-[#7C3AED] focus:ring-1 focus:ring-[#7C3AED]/20 disabled:bg-gray-50 disabled:text-gray-400 disabled:hover:border-gray-200 transition-colors"
+          className="h-9 px-3 pr-8 bg-white border border-[#C5D6FF] rounded-lg text-sm text-[#1E3A8A] outline-none hover:border-[#AEC4F5] focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF]/20 disabled:bg-[#EEF4FF] disabled:text-[#6B7280] disabled:hover:border-[#C5D6FF] transition-colors"
         >
           <option value="">All submodules</option>
           {facets.submodules
@@ -721,39 +735,39 @@ export default function GeneratedTestCasesPage() {
         {(moduleFilter || submoduleFilter) && (
           <button
             onClick={() => { setModuleFilter(''); setSubmoduleFilter(''); }}
-            className="text-xs text-gray-500 hover:text-[#7C3AED] px-1.5"
+            className="text-xs text-[#6B7280] hover:text-[#2143A8] px-1.5"
           >
             Clear
           </button>
         )}
 
         <div className="relative ml-auto w-72">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#6B7280]" />
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search by Jira ID, story title, user…"
-            className="w-full h-9 pl-9 pr-3 bg-white border border-gray-200 rounded-md text-sm text-gray-700 placeholder:text-gray-400 outline-none hover:border-gray-300 focus:border-[#7C3AED] focus:ring-1 focus:ring-[#7C3AED]/20 transition-colors"
+            className="w-full h-9 pl-9 pr-3 bg-white border border-[#C5D6FF] rounded-lg text-sm text-[#1E3A8A] placeholder:text-[#6B7280] outline-none hover:border-[#AEC4F5] focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF]/20 transition-colors"
           />
         </div>
       </div>
 
       {/* Test Runs Table */}
       {loading ? (
-        <div className="bg-white rounded-2xl p-12 text-center text-gray-400 animate-pulse">Loading test suites...</div>
+        <div className="bg-white/80 backdrop-blur-sm rounded-2xl border border-[#DCE7FF] shadow-sm p-12 text-center text-[#6B7280] animate-pulse">Loading test suites...</div>
       ) : (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-x-auto">
+        <div className="bg-white/80 backdrop-blur-sm rounded-2xl border border-[#DCE7FF] shadow-sm overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-gray-50 border-b border-gray-100">
-                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Jira ID</th>
-                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Story</th>
-                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Source</th>
-                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">User</th>
-                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Cases</th>
-                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Review Status</th>
-                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Created</th>
-                <th className="px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider"></th>
+              <tr className="bg-[#EEF4FF] border-b border-[#DCE7FF]">
+                <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap">Jira ID</th>
+                <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider">Story</th>
+                <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap">Source</th>
+                <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider">User</th>
+                <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap">Cases</th>
+                <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap">Review Status</th>
+                <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap">Created</th>
+                <th className="px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider"></th>
               </tr>
             </thead>
             <tbody>
@@ -762,12 +776,12 @@ export default function GeneratedTestCasesPage() {
                 const total = Number(run.test_case_count) || 0;
                 const pct = total > 0 ? Math.round((reviewed / total) * 100) : 0;
                 return (
-                  <tr key={run.id} className="border-b border-gray-50 hover:bg-gray-50/50 cursor-pointer" onClick={() => openRunDetail(run)}>
+                  <tr key={run.id} className="border-b border-[#EEF4FF] hover:bg-[#EEF4FF]/60 cursor-pointer transition-colors" onClick={() => openRunDetail(run)}>
                     <td className="px-3 py-1.5" onClick={e => e.stopPropagation()}>
                       {run.story_key ? (
                         <button
                           onClick={() => openRunDetail(run)}
-                          className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 text-sm font-mono border border-blue-200 hover:bg-blue-100 hover:underline transition-colors"
+                          className="px-2 py-0.5 rounded-md bg-[#DCE7FF] text-[#2143A8] text-sm font-mono border border-[#C5D6FF] hover:bg-[#C5D6FF] hover:underline transition-colors"
                           title="Open test suite"
                         >
                           {run.story_key}
@@ -775,36 +789,36 @@ export default function GeneratedTestCasesPage() {
                       ) : (
                         <button
                           onClick={() => openRunDetail(run)}
-                          className="text-[#7C3AED] hover:underline text-sm"
+                          className="text-[#2143A8] hover:underline text-sm"
                           title="Open test suite"
                         >
                           Manual
                         </button>
                       )}
                     </td>
-                    <td className="px-3 py-1.5 text-gray-700 truncate max-w-xs">{run.story_title || 'Manual Test Suite'}</td>
+                    <td className="px-3 py-1.5 text-[#1E3A8A] truncate max-w-xs">{run.story_title || 'Manual Test Suite'}</td>
                     <td className="px-3 py-1.5">
-                      <span className="px-2 py-0.5 rounded-md bg-purple-100 text-purple-700 text-sm border border-purple-200 lowercase">{run.source || 'manual'}</span>
+                      <span className="px-2 py-0.5 rounded-md bg-[#DCE7FF] text-[#2143A8] text-sm border border-[#C5D6FF] lowercase">{run.source || 'manual'}</span>
                     </td>
-                    <td className="px-3 py-1.5 text-gray-700">{run.username}</td>
-                    <td className="px-3 py-1.5 text-gray-700">{total}</td>
+                    <td className="px-3 py-1.5 text-[#1E3A8A]">{run.username}</td>
+                    <td className="px-3 py-1.5 text-[#1E3A8A]">{total}</td>
                     <td className="px-3 py-1.5">
                       <div className="flex items-center gap-2">
-                        <span className={`text-sm ${pct === 100 ? 'text-emerald-600' : pct > 0 ? 'text-amber-600' : 'text-gray-400'}`}>
+                        <span className={`text-sm ${pct === 100 ? 'text-emerald-600' : pct > 0 ? 'text-amber-600' : 'text-[#6B7280]'}`}>
                           {reviewed}/{total}
                         </span>
-                        <div className="w-14 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                          <div className={`h-full rounded-full ${pct === 100 ? 'bg-emerald-500' : pct > 0 ? 'bg-amber-500' : 'bg-gray-200'}`} style={{ width: `${pct}%` }} />
+                        <div className="w-14 h-1.5 bg-violet-100 rounded-full overflow-hidden">
+                          <div className={`h-full rounded-full transition-all ${pct === 100 ? 'bg-emerald-500' : pct > 0 ? 'bg-gradient-to-r from-violet-500 to-indigo-500' : 'bg-violet-200'}`} style={{ width: `${pct}%` }} />
                         </div>
                       </div>
                     </td>
-                    <td className="px-3 py-1.5 text-gray-700 whitespace-nowrap">
+                    <td className="px-3 py-1.5 text-[#6B7280] whitespace-nowrap">
                       {new Date(run.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
                     </td>
                     <td className="px-3 py-1.5 text-center" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-center gap-1">
                         <button onClick={() => handleExport(run.id, 'csv')} className="p-1.5 rounded-lg hover:bg-emerald-50 text-emerald-500 transition-colors" title="Export CSV"><Download className="w-4 h-4" /></button>
-                        <button onClick={() => { setConfirmDelete(run.id); setConfirmDeleteType('run'); }} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 transition-colors" title="Delete"><Trash2 className="w-4 h-4" /></button>
+                        <button onClick={() => { setConfirmDelete(run.id); setConfirmDeleteType('run'); }} className="p-1.5 rounded-lg hover:bg-rose-50 text-rose-400 transition-colors" title="Delete"><Trash2 className="w-4 h-4" /></button>
                       </div>
                     </td>
                   </tr>
@@ -814,40 +828,40 @@ export default function GeneratedTestCasesPage() {
           </table>
 
           {/* Pagination */}
-          <div className="flex items-center justify-between px-4 py-1.5 border-t border-gray-100 bg-gray-50/50 text-xs">
-            <div className="flex items-center gap-1.5 text-gray-600">
+          <div className="flex items-center justify-between px-4 py-1.5 border-t border-[#DCE7FF] bg-[#EEF4FF]/50 text-xs">
+            <div className="flex items-center gap-1.5 text-[#6B7280]">
               <span>Rows:</span>
               <select
                 value={pagination.limit}
                 onChange={e => { fetchRuns(1, Number(e.target.value)); }}
-                className="px-1.5 py-0.5 bg-white border border-gray-200 rounded text-xs outline-none focus:ring-1 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED]"
+                className="px-1.5 py-0.5 bg-white border border-[#C5D6FF] rounded text-xs outline-none focus:ring-1 focus:ring-[#3366FF]/20 focus:border-[#3366FF]"
               >
                 {[5, 10, 25, 50].map(n => <option key={n} value={n}>{n}</option>)}
               </select>
-              <span className="ml-2 text-gray-500">
+              <span className="ml-2 text-[#6B7280]">
                 {Math.min((pagination.page - 1) * pagination.limit + 1, pagination.total)}–{Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total}
               </span>
-              <span className="ml-4 flex items-center gap-3 text-gray-600">
-                <span>Total Test Cases: <span className="font-semibold text-[#7C3AED]">{totalTcCount}</span></span>
+              <span className="ml-4 flex items-center gap-3 text-[#6B7280]">
+                <span>Total Test Cases: <span className="font-semibold text-[#2143A8]">{totalTcCount}</span></span>
                 <span>Reviewed: <span className="font-semibold text-emerald-600">{totalReviewed}</span></span>
-                <span>Scripted: <span className="font-semibold text-blue-600">{totalScripted}</span></span>
+                <span>Scripted: <span className="font-semibold text-indigo-600">{totalScripted}</span></span>
               </span>
             </div>
             <div className="flex items-center gap-1">
               <button
                 disabled={pagination.page <= 1}
                 onClick={() => fetchRuns(pagination.page - 1, pagination.limit)}
-                className="px-2 py-0.5 rounded font-medium text-gray-600 hover:bg-white border border-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="px-2 py-0.5 rounded font-medium text-[#2143A8] hover:bg-white border border-[#C5D6FF] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 Prev
               </button>
-              <span className="px-2 text-gray-600">
-                Page <span className="font-semibold text-[#7C3AED]">{pagination.page}</span> of {pagination.totalPages}
+              <span className="px-2 text-[#6B7280]">
+                Page <span className="font-semibold text-[#2143A8]">{pagination.page}</span> of {pagination.totalPages}
               </span>
               <button
                 disabled={pagination.page >= pagination.totalPages}
                 onClick={() => fetchRuns(pagination.page + 1, pagination.limit)}
-                className="px-2 py-0.5 rounded font-medium text-gray-600 hover:bg-white border border-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="px-2 py-0.5 rounded font-medium text-[#2143A8] hover:bg-white border border-[#C5D6FF] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 Next
               </button>

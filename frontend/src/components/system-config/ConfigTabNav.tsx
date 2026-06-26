@@ -46,8 +46,8 @@ export default function ConfigTabNav({ activeTab, onTabChange }: Props) {
             onClick={() => onTabChange(tab.key)}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all duration-200 text-left ${
               isActive
-                ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white shadow-lg shadow-purple-500/20'
-                : 'text-[#6B7280] hover:bg-[#F5F3FF] hover:text-[#1E1B4B]'
+                ? 'bg-gradient-to-r from-[#3366FF] to-[#2645D6] text-white shadow-lg shadow-purple-500/20'
+                : 'text-[#6B7280] hover:bg-[#EEF4FF] hover:text-[#1E3A8A]'
             }`}
           >
             <tab.icon className="w-4 h-4 flex-shrink-0" />

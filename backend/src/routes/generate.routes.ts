@@ -1,9 +1,141 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
+import crypto from 'crypto';
 import { runGenerationOnly } from '../agents/pipeline.js';
+import { isClaudeCliAuthenticated } from '../agents/claude-runner.js';
+import { broadcastSSE } from '../services/sse-manager.js';
+import { createJob, updateJob, getJob } from '../services/generation-jobs.js';
+import { getConfigsForTenant } from '../services/configurations.service.js';
+import { decryptStoredDeep } from '../utils/crypto.js';
 
 const router = Router();
 
+const nowIso = () => new Date().toISOString();
+
+interface ResolvedRole { roleName: string; username: string; password: string }
+interface ResolvedAppContext {
+  targetUrl?: string;
+  appName?: string;
+  environment?: string;
+  roles?: ResolvedRole[];
+  /** Mobile path only — drives native-mobile test generation. */
+  platform?: 'android' | 'ios';
+  appMetadata?: {
+    packageName?: string;
+    bundleId?: string;
+    mainActivity?: string;
+    versionName?: string;
+    permissions?: string[];
+    fileName?: string;
+  };
+}
+
+/**
+ * Merge a saved Application Setup config (looked up by `appId`) into the
+ * app context the client sent. The client only ever transmits non-sensitive
+ * fields (URL, app name, username) — the role PASSWORD lives encrypted at rest
+ * and is decrypted here, server-side, so it never reaches the browser.
+ *
+ * Precedence: explicit client values win; saved values fill the gaps. A blank
+ * client password for a known username is back-filled from the saved role.
+ */
+async function resolveAppContextFromConfig(
+  tenantId: string,
+  appId: string,
+  incoming: ResolvedAppContext | undefined,
+): Promise<ResolvedAppContext | undefined> {
+  const configs = await getConfigsForTenant(tenantId);
+  const cfg = configs.find((c) => c.integrationId === appId && c.integrationId.startsWith('app-'));
+  if (!cfg) return incoming;
+
+  const data = cfg.configData || {};
+  const storedRoles: ResolvedRole[] = Array.isArray(data.roles)
+    ? data.roles
+        .filter((r: any) => r && typeof r === 'object')
+        .map((r: any) => ({
+          roleName: String(r.roleName || 'user'),
+          username: String(r.username || ''),
+          // decryptStoredDeep handles both __AES__ and legacy __ENC__, and peels
+          // any accidental multi-layer encryption from earlier re-saves.
+          password: r.password ? decryptStoredDeep(String(r.password)) : '',
+        }))
+    : [];
+
+  const incomingRoles = incoming?.roles?.filter((r) => r && r.username) || [];
+  let roles: ResolvedRole[];
+  if (incomingRoles.length === 0) {
+    // Client gave no usable credentials — use the saved roles wholesale.
+    roles = storedRoles.filter((r) => r.username);
+  } else {
+    // Back-fill missing passwords by matching the username against saved roles.
+    roles = incomingRoles.map((r) => {
+      if (r.password) return r;
+      const match = storedRoles.find((s) => s.username === r.username) || storedRoles[0];
+      return { ...r, password: match?.password || '' };
+    });
+  }
+
+  return {
+    targetUrl: incoming?.targetUrl || data.baseUrl || '',
+    appName: incoming?.appName || data.appName || '',
+    environment: incoming?.environment || data.environment || '',
+    roles: roles.length ? roles : undefined,
+  };
+}
+
+/**
+ * Map an internal pipeline/Claude error to a friendly, user-facing message.
+ * The chat UI must never show raw strings like "timeout of 300000ms exceeded"
+ * or stack traces — only these calm, actionable messages.
+ */
+function mapGenError(err: unknown): { message: string; code: string } {
+  const raw = ((err as Error)?.message || String(err || '')).toLowerCase();
+
+  if (raw.includes('not authenticated') || raw.includes('claude_not_authenticated') || raw.includes('not logged in')) {
+    return {
+      code: 'CLAUDE_NOT_AUTHENTICATED',
+      message: 'The AI engine isn’t connected right now. Please make sure ANTHROPIC_API_KEY is set on the server (or the Claude CLI is signed in), then try again.',
+    };
+  }
+  if (raw.includes('rate limit') || raw.includes('rate_limit') || raw.includes('429')) {
+    return {
+      code: 'AI_RATE_LIMIT',
+      message: 'The AI engine is busy right now (rate limit). Please wait a few seconds and try again.',
+    };
+  }
+  if (raw.includes('claude') && raw.includes('not found')) {
+    return {
+      code: 'CLAUDE_NOT_FOUND',
+      message: 'The AI engine isn’t available on the server. Please contact your administrator, then try again.',
+    };
+  }
+  if (raw.includes('timed out') || raw.includes('timeout') || raw.includes('etimedout')) {
+    return {
+      code: 'AI_TIMEOUT',
+      message: 'The AI took longer than expected on this run. Please try again — a single story or a smaller scope usually completes faster.',
+    };
+  }
+  if (raw.includes('no test cases')) {
+    return {
+      code: 'NO_TEST_CASES',
+      message: 'The AI couldn’t produce test cases for this input. Try a different story, or add a little more detail to the requirements.',
+    };
+  }
+  return {
+    code: 'GENERATION_FAILED',
+    message: 'Something went wrong while generating test cases. Please try again.',
+  };
+}
+
+/**
+ * POST /api/generate
+ *
+ * Kicks off the multi-stage Claude generation pipeline as a BACKGROUND job and
+ * returns a `runId` immediately (202). Progress and the final result/error are
+ * streamed over SSE (`/api/pipeline-events/:runId`). The client never holds a
+ * long request open, so it can no longer hit an axios timeout — which was the
+ * root cause of the "timeout of 300000ms exceeded" failures.
+ */
 router.post('/', async (req: Request, res: Response) => {
   const {
     requirements,
@@ -12,63 +144,148 @@ router.post('/', async (req: Request, res: Response) => {
     targetUrl,
     appName,
     environment,
-    // Optional credentials so the explore agent can crawl behind a login.
-    // Shape: [{ roleName, username, password }]
     roles,
-    // Explicit "explore mode" flag — when true, send an empty requirements
-    // string to force shouldExploreFirst() to fire even if the caller padded
-    // the body with placeholder text.
     exploreMode,
+    appId,
+    platform,
+    appMetadata,
   } = req.body;
 
-  // When exploreMode is requested we DELIBERATELY pass an empty requirements
-  // string so the pipeline's shouldExploreFirst() guard triggers.
+  // Mobile path: only accept the two supported native platforms.
+  const mobilePlatform: 'android' | 'ios' | undefined =
+    platform === 'android' || platform === 'ios' ? platform : undefined;
+
+  // Preflight: the generation agents call Claude with no offline fallback, so a
+  // logged-out CLI yields an opaque failure. Fail fast with an actionable code.
+  if (!isClaudeCliAuthenticated()) {
+    res.status(503).json({
+      error: 'AI engine not connected. Set ANTHROPIC_API_KEY in the backend environment (recommended — create one at console.anthropic.com), or sign in the Claude CLI with `claude auth login --claudeai` on the server, then retry.',
+      code: 'CLAUDE_NOT_AUTHENTICATED',
+    });
+    return;
+  }
+
   const reqText = exploreMode === true
     ? ''
     : (requirements || `Generate ${testType || 'general'} tests`);
   const parsedMax = Number(maxTestCases);
 
-  const appContext = targetUrl || appName || environment || (Array.isArray(roles) && roles.length > 0)
-    ? {
-        targetUrl,
-        appName,
-        environment,
-        roles: Array.isArray(roles)
-          ? roles.filter((r: any) => r && typeof r === 'object').map((r: any) => ({
-              roleName: String(r.roleName || 'user'),
-              username: String(r.username || ''),
-              password: String(r.password || ''),
-            }))
-          : undefined,
-      }
-    : undefined;
+  let appContext: ResolvedAppContext | undefined =
+    targetUrl || appName || environment || mobilePlatform || (Array.isArray(roles) && roles.length > 0)
+      ? {
+          targetUrl,
+          appName,
+          environment,
+          platform: mobilePlatform,
+          appMetadata: mobilePlatform && appMetadata && typeof appMetadata === 'object'
+            ? {
+                packageName: appMetadata.packageName ? String(appMetadata.packageName) : undefined,
+                bundleId: appMetadata.bundleId ? String(appMetadata.bundleId) : undefined,
+                mainActivity: appMetadata.mainActivity ? String(appMetadata.mainActivity) : undefined,
+                versionName: appMetadata.versionName ? String(appMetadata.versionName) : undefined,
+                permissions: Array.isArray(appMetadata.permissions)
+                  ? appMetadata.permissions.map((p: any) => String(p)).slice(0, 60)
+                  : undefined,
+                fileName: appMetadata.fileName ? String(appMetadata.fileName) : undefined,
+              }
+            : undefined,
+          roles: Array.isArray(roles)
+            ? roles.filter((r: any) => r && typeof r === 'object').map((r: any) => ({
+                roleName: String(r.roleName || 'user'),
+                username: String(r.username || ''),
+                password: String(r.password || ''),
+              }))
+            : undefined,
+        }
+      : undefined;
 
-  try {
-    const state = await runGenerationOnly(reqText, {
-      maxTestCases: Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : undefined,
-      appContext,
-    });
-
-    res.json({
-      testCases: state.testCases,
-      automationScripts: state.automationScripts,
-      testPlan: state.testPlan,
-      extendedTestPlan: state.extendedTestPlan,
-      parsedRequirements: state.parsedRequirements,
-      exploredApp: state.exploredApp || null,
-      summary: {
-        totalTestCases: state.testCases.length,
-        totalScripts: state.automationScripts.length,
-        features: state.parsedRequirements?.features || [],
-        // Echo back whether explore actually ran — useful for UI feedback
-        exploreRan: Boolean(state.exploredApp),
-      },
-    });
-  } catch (err) {
-    const message = (err as Error).message || 'Test generation failed';
-    console.error('[generate] Pipeline error:', message);
-    res.status(500).json({ error: message });
+  // When the client references a saved application (Application Setup), resolve
+  // its URL + credentials server-side. The role password is never sent by the
+  // browser — it's decrypted here from at-rest storage. Client values win.
+  if (appId && req.user?.tenantId) {
+    try {
+      appContext = await resolveAppContextFromConfig(req.user.tenantId, String(appId), appContext);
+    } catch (err) {
+      console.error('[generate] Failed to resolve app config for', appId, '-', (err as Error)?.message || err);
+      // Non-fatal: fall through with whatever the client supplied.
+    }
   }
+
+  // The Claude CLI ignores maxTokens; bound interactive generation with a sane
+  // default so a single pass completes quickly. Callers wanting exhaustive
+  // coverage can pass an explicit higher maxTestCases.
+  const DEFAULT_MAX_TEST_CASES = 12;
+  const effectiveMax = Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : DEFAULT_MAX_TEST_CASES;
+
+  const runId = crypto.randomUUID();
+  createJob(runId, req.user?.tenantId);
+  // Respond right away — the work continues in the background below.
+  res.status(202).json({ runId });
+
+  // Fire-and-forget. The response is already sent; failures are captured into
+  // the job + broadcast over SSE, never thrown to a closed response.
+  void (async () => {
+    try {
+      const state = await runGenerationOnly(reqText, {
+        maxTestCases: effectiveMax,
+        appContext,
+        onProgress: (stage, status, detail) => {
+          updateJob(runId, { stage, detail });
+          broadcastSSE(runId, { type: 'gen_stage', runId, stage, status, detail, timestamp: nowIso() });
+        },
+      });
+
+      const result = {
+        testCases: state.testCases,
+        automationScripts: state.automationScripts,
+        testPlan: state.testPlan,
+        extendedTestPlan: state.extendedTestPlan,
+        parsedRequirements: state.parsedRequirements,
+        exploredApp: state.exploredApp || null,
+        summary: {
+          totalTestCases: state.testCases.length,
+          totalScripts: state.automationScripts.length,
+          features: state.parsedRequirements?.features || [],
+          exploreRan: Boolean(state.exploredApp),
+        },
+      };
+
+      updateJob(runId, { status: 'done', result, stage: 'test-design', detail: 'Completed' });
+      broadcastSSE(runId, { type: 'generation_complete', runId, timestamp: nowIso() });
+    } catch (err) {
+      const { message, code } = mapGenError(err);
+      console.error('[generate] Pipeline error:', (err as Error)?.message || err);
+      updateJob(runId, { status: 'error', error: message, code });
+      broadcastSSE(runId, { type: 'generation_error', runId, error: message, code, timestamp: nowIso() });
+    }
+  })();
+});
+
+/**
+ * GET /api/generate/result/:runId
+ *
+ * Returns the job's status + final result (or friendly error). Used by the
+ * frontend as the completion fetch and as a poll fallback if an SSE event is
+ * missed. Scoped to the requesting tenant. (Mounted behind authMiddleware.)
+ */
+router.get('/result/:runId', (req: Request, res: Response) => {
+  const runId = String(req.params.runId);
+  const job = getJob(runId);
+  if (!job || (job.tenantId && req.user?.tenantId && job.tenantId !== req.user.tenantId)) {
+    res.status(404).json({
+      status: 'unknown',
+      error: 'This generation run is no longer available. Please start a new generation.',
+    });
+    return;
+  }
+  res.json({
+    status: job.status,
+    stage: job.stage,
+    detail: job.detail,
+    result: job.status === 'done' ? job.result : undefined,
+    error: job.status === 'error' ? job.error : undefined,
+    code: job.code,
+  });
 });
 
 export default router;

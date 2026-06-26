@@ -1,7 +1,8 @@
 import type { TestOpsState, AutomationScript } from './state.js';
 import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
+import { buildHealingPrompt, type HealingFix } from './healing-prompt.js';
 
-export function healingAgent(state: TestOpsState): TestOpsState {
+export async function healingAgent(state: TestOpsState): Promise<TestOpsState> {
   if (!state.failureReason) return state;
 
   const failedCases = state.testCases.filter((tc) => tc.status === 'failed');
@@ -12,6 +13,15 @@ export function healingAgent(state: TestOpsState): TestOpsState {
     scriptMap.set(script.testCaseId, script);
   }
 
+  // Per-test error from the real execution run — far more useful to the healer
+  // than the single global failureReason that was previously sent for EVERY
+  // test. Falls back to the global reason when a per-test message is missing.
+  const errorByTcId = new Map<string, string>();
+  for (const d of state.executionResults?.details || []) {
+    if (d.status === 'failed' && d.error) errorByTcId.set(d.testCaseId, d.error);
+  }
+
+  const targetUrl = state.appContext?.targetUrl;
   const healedScripts: AutomationScript[] = [];
 
   for (const tc of failedCases) {
@@ -19,40 +29,23 @@ export function healingAgent(state: TestOpsState): TestOpsState {
     if (!script) continue;
 
     try {
-      const prompt = `You are a Playwright automation engineer. A test failed and needs to be fixed.
+      const prompt = buildHealingPrompt({
+        title: tc.title || tc.scenario,
+        feature: tc.feature,
+        type: tc.type,
+        precondition: tc.precondition,
+        steps: tc.steps,
+        expectedResult: tc.expectedResult,
+        fileName: script.fileName,
+        code: script.code,
+        error: errorByTcId.get(tc.id) || state.failureReason || 'Test failed during execution.',
+        targetUrl,
+      });
 
-Test Case:
-- Scenario: ${tc.scenario}
-- Feature: ${tc.feature}
-- Steps: ${tc.steps.join(' | ')}
-- Expected Result: ${tc.expectedResult}
-- Type: ${tc.type}
+      const response = await runClaudePrompt(prompt, { maxTokens: 8000 });
+      const fixed = parseJsonFromResponse<HealingFix>(response);
 
-Failing script (${script.fileName}):
-\`\`\`typescript
-${script.code}
-\`\`\`
-
-Failure reason: ${state.failureReason}
-
-Common causes: brittle selectors, missing waits, wrong assertions, wrong URL paths.
-
-Return ONLY a JSON object (no markdown):
-{
-  "fileName": "same-or-corrected-filename.spec.ts",
-  "code": "full corrected TypeScript Playwright script"
-}
-
-Rules:
-- Use getByRole, getByLabel, getByText, getByPlaceholder — not CSS selectors
-- Add explicit waits where needed (waitForSelector, waitForURL, expect with timeout)
-- Fix incorrect assertions based on the expected result
-- The script must be complete and runnable with @playwright/test`;
-
-      const response = runClaudePrompt(prompt, { maxTokens: 4096 });
-      const fixed = parseJsonFromResponse<{ fileName: string; code: string }>(response);
-
-      if (fixed?.code?.trim()) {
+      if (fixed?.code?.trim() && fixed.code.trim() !== script.code.trim()) {
         healedScripts.push({
           testCaseId: tc.id,
           fileName: fixed.fileName?.trim() || script.fileName,

@@ -9,14 +9,17 @@
     "worker:start": "tsx --env-file-if-exists=.env src/worker/index.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.105.0",
     "@gitbeaker/rest": "^43.8.0",
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "@octokit/rest": "^22.0.1",
     "@playwright/test": "^1.48.0",
     "@types/bcrypt": "^6.0.0",
     "@types/jsonwebtoken": "^9.0.7",
+    "allure": "^3.13.0",
     "allure-commandline": "^2.30.0",
     "allure-playwright": "^3.0.0",
+    "app-info-parser": "^1.1.6",
     "archiver": "^7.0.1",
     "axios": "^1.13.6",
     "bcrypt": "^6.0.0",
@@ -53,6 +56,12 @@
     "@azure/keyvault-secrets": "^4.9.0",
     "@azure/storage-blob": "^12.31.0",
     "@google-cloud/secret-manager": "^5.6.0",
-    "@google-cloud/storage": "^7.13.0"
+    "@google-cloud/storage": "^7.13.0",
+    "@wdio/cli": "^9.0.0",
+    "@wdio/local-runner": "^9.0.0",
+    "@wdio/mocha-framework": "^9.0.0",
+    "@wdio/json-reporter": "^9.0.0",
+    "@wdio/spec-reporter": "^9.0.0",
+    "webdriverio": "^9.0.0"
   }
 }

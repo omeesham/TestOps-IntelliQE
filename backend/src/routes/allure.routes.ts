@@ -17,6 +17,21 @@ const router = Router();
 const inFlight = new Map<string, Promise<any>>();
 
 /**
+ * Reject a tenantId/scope URL segment that could escape its directory. Express
+ * URL-decodes %2F/%2E inside a single param, so a raw `includes` check on the
+ * decoded value is what stops `..%2Fother-tenant` style cross-tenant traversal.
+ */
+function unsafeSegment(s: string): boolean {
+  return !s || s.includes('/') || s.includes('\\') || s.includes('..') || s.includes('\0');
+}
+
+/** True when `target` is NOT strictly contained within `baseDir`. */
+function escapesDir(baseDir: string, target: string): boolean {
+  const rel = path.relative(baseDir, target);
+  return rel === '' ? false : rel.startsWith('..') || path.isAbsolute(rel);
+}
+
+/**
  * POST /api/allure/generate  (auth required)
  * Trigger Allure report generation.
  * Body: { runId?: string }
@@ -93,6 +108,42 @@ router.get('/status', authMiddleware, async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/allure/report/:tenantId/:scope/download  (NO auth — tenant UUID is an opaque token)
+ * Download the single self-contained report HTML as a file attachment.
+ * Registered BEFORE the wildcard serve route so "download" isn't treated as a filename.
+ */
+router.get('/report/:tenantId/:scope/download', async (req: Request, res: Response) => {
+  try {
+    const tenantId = String(req.params.tenantId || '');
+    const scope = String(req.params.scope || '');
+    // Validate the path segments BEFORE building baseDir — otherwise a crafted
+    // tenantId/scope (e.g. "..%2Fother-tenant") escapes into another tenant's dir.
+    if (unsafeSegment(tenantId) || unsafeSegment(scope)) {
+      res.status(400).json({ error: 'Invalid path' });
+      return;
+    }
+    const baseDir = path.join(BACKEND_ROOT, 'allure-reports', tenantId, scope);
+    const indexFile = path.resolve(baseDir, 'index.html');
+
+    // Directory traversal protection
+    if (escapesDir(baseDir, indexFile)) {
+      res.status(400).json({ error: 'Invalid path' });
+      return;
+    }
+    try {
+      await fs.access(indexFile);
+    } catch {
+      res.status(404).json({ error: 'Report not found. Generate the report first, then download.' });
+      return;
+    }
+    res.download(indexFile, `allure-report-${scope.slice(0, 8)}.html`);
+  } catch (err: any) {
+    console.error('Allure download error:', err.message);
+    res.status(500).json({ error: 'Failed to download report file' });
+  }
+});
+
+/**
  * GET /api/allure/report/:tenantId/:scope/*  (NO auth — static files for iframe)
  * Serve static Allure HTML report files.
  * Security: tenant ID in URL acts as an opaque token (UUIDs are unguessable).
@@ -101,6 +152,11 @@ router.get('/report/:tenantId/:scope/{*filePath}', async (req: Request, res: Res
   try {
     const tenantId = String(req.params.tenantId || '');
     const scope = String(req.params.scope || '');
+    // Validate the tenant/scope segments before they become trusted path roots.
+    if (unsafeSegment(tenantId) || unsafeSegment(scope)) {
+      res.status(400).json({ error: 'Invalid path' });
+      return;
+    }
 
     const rawFilePath = req.params.filePath;
     const filePath = Array.isArray(rawFilePath) ? rawFilePath.join('/') : (rawFilePath || '');
@@ -108,8 +164,8 @@ router.get('/report/:tenantId/:scope/{*filePath}', async (req: Request, res: Res
     const baseDir = path.join(BACKEND_ROOT, 'allure-reports', tenantId, scope);
     const requestedFile = path.resolve(baseDir, filePath);
 
-    // Directory traversal protection
-    if (!requestedFile.startsWith(baseDir)) {
+    // Directory traversal protection — boundary-checked, not a bare prefix match.
+    if (escapesDir(baseDir, requestedFile)) {
       res.status(400).json({ error: 'Invalid path' });
       return;
     }

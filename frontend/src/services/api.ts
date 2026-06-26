@@ -192,9 +192,44 @@ export async function extractDocumentText(file: File): Promise<ExtractedDocument
 }
 
 /* ─────────────────────────────────────────────────────────────
+   Mobile app metadata (APK/IPA) — used by the Mobile Automation path
+   ───────────────────────────────────────────────────────────── */
+export interface MobileAppMetadata {
+  platform: 'android' | 'ios';
+  fileName: string;
+  sizeBytes: number;
+  appName?: string;
+  packageName?: string;
+  mainActivity?: string;
+  bundleId?: string;
+  versionName?: string;
+  versionCode?: string;
+  permissions?: string[];
+  warning?: string;
+}
+
+export async function extractMobileAppMetadata(file: File): Promise<MobileAppMetadata> {
+  const form = new FormData();
+  form.append('file', file);
+  const { data } = await api.post('/mobile/extract', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    // Mobile builds are large; allow generous time to upload + parse.
+    timeout: 180_000,
+  });
+  return data;
+}
+
+/* ─────────────────────────────────────────────────────────────
    Test generation (chat wizard core)
    ───────────────────────────────────────────────────────────── */
-export async function generateTests(
+/**
+ * Start a generation run. The backend now runs the multi-stage Claude pipeline
+ * as a BACKGROUND job and returns `{ runId }` immediately (202) — no long-held
+ * request, so this can never hit an axios timeout. Progress + the final result
+ * stream over SSE (subscribeToPipelineEvents); the result is also fetchable via
+ * getGenerationResult (used as a poll fallback).
+ */
+export async function startGeneration(
   requirements: string,
   testType?: string,
   options?: {
@@ -205,8 +240,25 @@ export async function generateTests(
     exploreMode?: boolean;
     /** Optional credentials so the explore agent can log in. */
     roles?: { roleName?: string; username: string; password: string }[];
+    /**
+     * Application Setup integration id (e.g. "app-acme-portal"). When provided,
+     * the backend loads the saved URL + credentials for this app and fills in
+     * any details the client didn't send — notably the role password, which is
+     * never exposed to the browser. Client-supplied values take precedence.
+     */
+    appId?: string;
+    /** Mobile Application Automation — native platform + uploaded build metadata. */
+    platform?: 'android' | 'ios';
+    appMetadata?: {
+      packageName?: string;
+      bundleId?: string;
+      mainActivity?: string;
+      versionName?: string;
+      permissions?: string[];
+      fileName?: string;
+    };
   },
-) {
+): Promise<{ runId: string }> {
   const { data } = await api.post('/generate', {
     requirements,
     testType,
@@ -215,8 +267,32 @@ export async function generateTests(
     appName: options?.appName,
     exploreMode: options?.exploreMode,
     roles: options?.roles,
+    appId: options?.appId,
+    platform: options?.platform,
+    appMetadata: options?.appMetadata,
   });
   return data;
+}
+
+export interface GenerationResult {
+  status: 'running' | 'done' | 'error' | 'unknown';
+  stage?: string;
+  detail?: string;
+  result?: any;
+  error?: string;
+  code?: string;
+}
+
+/** Fetch a generation job's status/result by runId. Returns the 404 body (status:'unknown') rather than throwing if the job has expired. */
+export async function getGenerationResult(runId: string): Promise<GenerationResult> {
+  try {
+    const { data } = await api.get(`/generate/result/${runId}`);
+    return data;
+  } catch (err: any) {
+    const data = err?.response?.data;
+    if (data && typeof data === 'object') return data as GenerationResult;
+    throw err;
+  }
 }
 
 export async function executeTests(
@@ -241,6 +317,16 @@ export async function saveTestCases(payload: {
   source?: string;
   columns: string[];
   testCases: any[];
+  /** Mobile Application Automation — marks the run so scripts/execution use Appium. */
+  platform?: 'android' | 'ios';
+  appMetadata?: {
+    packageName?: string;
+    bundleId?: string;
+    mainActivity?: string;
+    versionName?: string;
+    permissions?: string[];
+    fileName?: string;
+  };
 }) {
   const { data } = await api.post('/test-cases/save', payload);
   return data;
@@ -372,13 +458,43 @@ export async function deleteAutomationScript(id: string) {
   return data;
 }
 
-export async function generateScriptsForRun(testRunId: string) {
-  const { data } = await api.post(`/automation-scripts/generate/${testRunId}`);
+export async function generateScriptsForRun(testRunId: string, regenerate = false) {
+  // POM script generation runs several batched Claude calls server-side; allow
+  // up to 6 min so the default 2-min client timeout doesn't abort it.
+  const { data } = await api.post(
+    `/automation-scripts/generate/${testRunId}`,
+    { regenerate },
+    { timeout: 360_000 },
+  );
   return data;
 }
 
 export async function getScriptsByRun(testRunId: string) {
   const { data } = await api.get(`/automation-scripts/by-run/${testRunId}`);
+  return data;
+}
+
+// Actually run the saved Playwright scripts for a run and return per-test
+// pass/fail. Real browser execution can take a few minutes for a full suite.
+export async function executeScriptsForRun(testRunId: string) {
+  const { data } = await api.post(`/automation-scripts/execute/${testRunId}`, {}, { timeout: 600_000 });
+  return data;
+}
+
+// Auto-heal the failing scripts for a run: the backend AI-fixes each failing
+// script (using its real code + real error + intent), saves the fix, re-runs the
+// healed subset, and returns per-test results keyed by testCaseId (each detail
+// carries a `healFix` description and `healed` flag). AI + browser re-run can
+// take a few minutes, so use the long timeout.
+export async function healScriptsForRun(
+  testRunId: string,
+  failures: { testCaseId: string; error?: string }[],
+) {
+  const { data } = await api.post(
+    `/automation-scripts/heal/${testRunId}`,
+    { failures },
+    { timeout: 600_000 },
+  );
   return data;
 }
 
@@ -390,8 +506,74 @@ export async function getReportsSummary() {
   return data;
 }
 
+export interface CoverageReport {
+  range: { from: string | null; to: string | null; granularity: 'day' | 'month' };
+  summary: {
+    total: number; scripted: number; executed: number; passed: number; failed: number;
+    notRun: number; totalRuns: number; automationCoverage: number; passRate: number;
+  };
+  byStatus: { name: string; value: number }[];
+  byType: { name: string; value: number }[];
+  byPriority: { name: string; value: number }[];
+  byFeature: { name: string; value: number }[];
+  trend: { bucket: string; total: number; passed: number; failed: number }[];
+  runs: {
+    id: string; storyKey: string | null; storyTitle: string | null; source: string | null;
+    platform: string | null; createdAt: string; total: number; passed: number; failed: number; notRun: number;
+  }[];
+}
+
+export async function getCoverageReport(range?: { from?: string; to?: string }): Promise<CoverageReport> {
+  const params: Record<string, string> = {};
+  if (range?.from) params.from = range.from;
+  if (range?.to) params.to = range.to;
+  const { data } = await api.get('/reports/coverage', { params });
+  return data;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   TestRail integration (TestRail = data source, IntelliQE = viz)
+   ───────────────────────────────────────────────────────────── */
+export interface TestRailStatus {
+  connected: boolean; baseUrl: string | null; email: string | null;
+  lastSyncedAt: string | null; syncStatus: string | null; projectsCount: number; runsCount: number;
+}
+export interface TestRailDashboardData {
+  projects: { id: number; name: string; isCompleted: boolean }[];
+  lastSyncedAt: string | null;
+  summary: { runs: number; total: number; passed: number; failed: number; blocked: number; retest: number; untested: number; executed: number; passRate: number };
+  byStatus: { name: string; value: number }[];
+  perRun: { id: number; name: string; passed: number; failed: number; blocked: number; untested: number; total: number; createdOn: string | null }[];
+  trend: { bucket: string; passed: number; failed: number; blocked: number }[];
+  milestones: { id: number; name: string; isCompleted: boolean; startedOn: string | null; dueOn: string | null }[];
+}
+
+export async function getTestRailStatus(): Promise<TestRailStatus> {
+  const { data } = await api.get('/testrail/status');
+  return data;
+}
+export async function connectTestRail(baseUrl: string, email: string, apiKey: string) {
+  const { data } = await api.post('/testrail/connect', { baseUrl, email, apiKey: encryptField(apiKey) }, { timeout: 120_000 });
+  return data;
+}
+export async function syncTestRail() {
+  const { data } = await api.post('/testrail/sync', {}, { timeout: 180_000 });
+  return data;
+}
+export async function getTestRailDashboard(projectId?: number): Promise<TestRailDashboardData> {
+  const { data } = await api.get('/testrail/dashboard', { params: projectId ? { projectId } : {} });
+  return data;
+}
+export async function disconnectTestRail() {
+  const { data } = await api.delete('/testrail/disconnect');
+  return data;
+}
+
 export async function generateAllureReport(runId?: string) {
-  const { data } = await api.post('/allure/generate', { runId });
+  // Building the report normally reuses allure-results captured during the run
+  // (fast, ~3s). Worst case it re-executes the saved scripts, so allow up to
+  // 6 min rather than the default 2-min client timeout.
+  const { data } = await api.post('/allure/generate', { runId }, { timeout: 360_000 });
   return data;
 }
 
@@ -399,6 +581,100 @@ export async function getAllureReportStatus(runId?: string) {
   const params: Record<string, any> = {};
   if (runId) params.runId = runId;
   const { data } = await api.get('/allure/status', { params });
+  return data;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Execution Recordings (CDP screen capture of test runs + timing)
+   ───────────────────────────────────────────────────────────── */
+export interface RecordedTest {
+  testCaseId: string | null;
+  tcNumber: string | null;
+  title: string;
+  status: 'passed' | 'failed' | 'not_run';
+  durationMs: number;
+  /** Frame-bundle file name (fetch via getRecordingFrames), or null if none captured. */
+  framesFile: string | null;
+  frameCount: number;
+  /** First frame as base64 JPEG, for an instant poster without loading the bundle. */
+  posterJpg: string | null;
+  error?: string;
+}
+
+export interface ExecutionRecording {
+  runId: string;
+  recordedAt: string;
+  mode: 'frames';
+  totalDurationMs: number;
+  sumTestDurationMs: number;
+  passed: number;
+  failed: number;
+  total: number;
+  tests: RecordedTest[];
+  /** Set when no frames could be captured (non-Chromium host) — timing is still valid. */
+  captureUnavailable?: boolean;
+  note?: string;
+}
+
+/** A test's playable frames: each `jpg` is base64, shown at offset `tMs`. */
+export interface FrameBundle {
+  durationMs: number;
+  frames: { tMs: number; jpg: string }[];
+}
+
+export interface RecordingRun {
+  id: string;
+  storyKey: string | null;
+  storyTitle: string | null;
+  source: string | null;
+  createdAt: string;
+  scriptCount: number;
+  hasRecording: boolean;
+  recordedAt: string | null;
+}
+
+export async function getRecordingRuns(): Promise<{ runs: RecordingRun[] }> {
+  const { data } = await api.get('/recordings/runs');
+  return data;
+}
+
+export async function getRecordingForRun(
+  testRunId: string,
+): Promise<{ exists: boolean; recording?: ExecutionRecording }> {
+  const { data } = await api.get(`/recordings/by-run/${testRunId}`);
+  return data;
+}
+
+// Fetch one test's frame bundle on demand (lazy — bundles can be large).
+export async function getRecordingFrames(
+  testRunId: string,
+  framesFile: string,
+): Promise<FrameBundle> {
+  const { data } = await api.get(`/recordings/frames/${testRunId}/${encodeURIComponent(framesFile)}`);
+  return data;
+}
+
+// Run the saved scripts with CDP screen recording on. Real browser execution can
+// take several minutes for a full suite, so allow a long timeout.
+// Pass `only` (test_case_ids / tc_numbers) to re-record just a subset — e.g. only
+// the failed tests — which merges into the existing recording.
+export async function recordExecutionForRun(
+  testRunId: string,
+  only?: string[],
+): Promise<{ ok: boolean; recording: ExecutionRecording }> {
+  const body = only && only.length ? { only } : {};
+  const { data } = await api.post(`/recordings/run/${testRunId}`, body, { timeout: 900_000 });
+  return data;
+}
+
+// Delete one test's recording from a run. `id` is the test's stable key
+// (testCaseId, tcNumber, or title). Returns the updated recording, or
+// exists:false when that was the last recording for the run.
+export async function deleteRecordingEntry(
+  testRunId: string,
+  id: string,
+): Promise<{ deleted: boolean; exists: boolean; recording: ExecutionRecording | null }> {
+  const { data } = await api.delete(`/recordings/${testRunId}`, { data: { id } });
   return data;
 }
 
@@ -614,6 +890,19 @@ export function subscribeToPipelineEvents(
    ───────────────────────────────────────────────────────────── */
 export async function getMenuConfig() {
   const { data } = await api.get('/users/menu-config');
+  return data;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Feature flags (per-tenant on/off switchboard)
+   ───────────────────────────────────────────────────────────── */
+export async function getFeatureFlags(): Promise<{ flags: Record<string, boolean> }> {
+  const { data } = await api.get('/users/feature-flags');
+  return data;
+}
+
+export async function saveFeatureFlags(flags: Record<string, boolean>): Promise<{ ok: boolean; flags: Record<string, boolean> }> {
+  const { data } = await api.put('/users/feature-flags', { flags });
   return data;
 }
 

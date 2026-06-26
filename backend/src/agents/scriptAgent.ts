@@ -52,7 +52,7 @@ interface AiScriptResponse {
   code: string;
 }
 
-function aiBatch(state: TestOpsState, batch: TestCase[]): AutomationScript[] {
+async function aiBatch(state: TestOpsState, batch: TestCase[]): Promise<AutomationScript[]> {
   const appName = state.appContext?.appName || 'Web Application';
   const targetUrl = state.appContext?.targetUrl || '';
   const baseUrlNote = targetUrl
@@ -96,7 +96,7 @@ Strict rules for the \`code\` field:
 - Wrap each scenario in a single \`test(...)\`. No describe blocks unless multiple related tests share setup.
 - Return one entry per input test case, in the same order; testCaseId MUST match.`;
 
-  const response = runClaudePrompt(prompt, { maxTokens: 16384 });
+  const response = await runClaudePrompt(prompt, { maxTokens: 16384 });
   const parsed = parseJsonFromResponse<AiScriptResponse[]>(response);
 
   if (!Array.isArray(parsed) || parsed.length === 0) {
@@ -124,7 +124,7 @@ Strict rules for the \`code\` field:
   });
 }
 
-export function scriptAgent(state: TestOpsState): TestOpsState {
+export async function scriptAgent(state: TestOpsState): Promise<TestOpsState> {
   const eligible = state.testCases.filter((tc) => tc.type !== 'data');
   if (eligible.length === 0) return { ...state, automationScripts: [] };
 
@@ -132,7 +132,7 @@ export function scriptAgent(state: TestOpsState): TestOpsState {
 
   for (let i = 0; i < eligible.length; i += BATCH_SIZE) {
     const batch = eligible.slice(i, i + BATCH_SIZE);
-    scripts.push(...aiBatch(state, batch));
+    scripts.push(...await aiBatch(state, batch));
   }
 
   return { ...state, automationScripts: scripts };

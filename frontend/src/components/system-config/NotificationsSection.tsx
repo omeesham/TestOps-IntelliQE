@@ -112,7 +112,7 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
   return (
     <div>
       <div className="mb-4">
-        <h3 className="text-sm font-semibold text-[#1E1B4B]">Notifications</h3>
+        <h3 className="text-sm font-semibold text-[#1E3A8A]">Notifications</h3>
         <p className="text-xs text-[#6B7280] mt-0.5">
           Configure notification channels to receive test execution results, alerts, and reports.
         </p>
@@ -139,9 +139,9 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
 
             {/* Trigger Events + Test — only shown when this notification channel is connected */}
             {item.status === 'connected' && (
-              <div className="mt-2 ml-2 p-4 bg-[#F5F3FF] border border-[#DDD6FE]/60 rounded-xl space-y-3">
+              <div className="mt-2 ml-2 p-4 bg-[#EEF4FF] border border-[#C5D6FF]/60 rounded-xl space-y-3">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-semibold text-[#1E1B4B]">Trigger Events</h4>
+                  <h4 className="text-xs font-semibold text-[#1E3A8A]">Trigger Events</h4>
                   <button
                     onClick={() => handleSendTest(item.id)}
                     disabled={testStatus[item.id] === 'sending'}
@@ -150,7 +150,7 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
                         ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                         : testStatus[item.id] === 'failed'
                         ? 'bg-red-50 text-red-600 border border-red-200'
-                        : 'bg-white text-[#7C3AED] border border-[#DDD6FE] hover:bg-[#F5F3FF] hover:shadow-sm'
+                        : 'bg-white text-[#2143A8] border border-[#C5D6FF] hover:bg-[#EEF4FF] hover:shadow-sm'
                     } disabled:opacity-50`}
                   >
                     {testStatus[item.id] === 'sending' ? (
@@ -174,9 +174,9 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
                         type="checkbox"
                         checked={triggerEvents[item.id]?.[evt.key] ?? false}
                         onChange={(e) => handleTriggerToggle(item.id, evt.key, e.target.checked)}
-                        className="w-4 h-4 text-[#7C3AED] rounded border-[#DDD6FE] focus:ring-[#7C3AED]/20"
+                        className="w-4 h-4 text-[#2143A8] rounded border-[#C5D6FF] focus:ring-[#3366FF]/20"
                       />
-                      <span className="text-xs text-[#1E1B4B] group-hover:text-[#7C3AED] transition-colors">
+                      <span className="text-xs text-[#1E3A8A] group-hover:text-[#2143A8] transition-colors">
                         {evt.label}
                       </span>
                     </label>

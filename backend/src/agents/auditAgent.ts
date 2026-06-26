@@ -1,7 +1,7 @@
 import type { TestOpsState } from './state.js';
 import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
 
-export function auditAgent(state: TestOpsState): TestOpsState {
+export async function auditAgent(state: TestOpsState): Promise<TestOpsState> {
   if (!state.parsedRequirements) return state;
 
   const { features, flows, edgeCases } = state.parsedRequirements;
@@ -22,7 +22,7 @@ Return ONLY valid JSON (no markdown):
 
 Focus on: XSS, SQL injection, CSRF, session management, input validation, boundary values, concurrent access, error recovery, accessibility.`;
 
-  const response = runClaudePrompt(prompt, { maxTokens: 2048 });
+  const response = await runClaudePrompt(prompt, { maxTokens: 2048 });
   const parsed = parseJsonFromResponse<{
     additionalEdgeCases: string[];
     securityConcerns: string[];

@@ -118,6 +118,19 @@ export interface AppContext {
   appName?: string;
   environment?: string;
   roles?: { roleName: string; username: string; password: string }[];
+  /**
+   * Mobile automation context — set ONLY for the Mobile Application path.
+   * When absent (web/API), every agent behaves exactly as before.
+   */
+  platform?: 'android' | 'ios';
+  appMetadata?: {
+    packageName?: string;
+    bundleId?: string;
+    mainActivity?: string;
+    versionName?: string;
+    permissions?: string[];
+    fileName?: string;
+  };
 }
 
 export interface GenerationOptions {

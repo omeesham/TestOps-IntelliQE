@@ -22,11 +22,15 @@
  */
 import type { TestOpsState, ParsedRequirements } from './state.js';
 import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
+import { mobileContextNote } from './mobile-context.js';
 
-export function requirementAgent(state: TestOpsState): TestOpsState {
+export async function requirementAgent(state: TestOpsState): Promise<TestOpsState> {
   const appInfo = state.appContext
     ? `\nApplication Under Test: ${state.appContext.appName || 'Unknown'}\nTarget URL: ${state.appContext.targetUrl || 'Not specified'}\nEnvironment: ${state.appContext.environment || 'staging'}`
     : '';
+
+  // Empty for web/API — appends native-mobile guidance only when platform is set.
+  const mobileNote = mobileContextNote(state.appContext);
 
   const exploredHint = state.exploredApp
     ? `\n\nNote: This requirements text was synthesized from a live crawl of the application. The following pages were observed during exploration: ${state.exploredApp.pages.map((p) => p.title || p.url).slice(0, 8).join(' | ')}. Detected features: ${state.exploredApp.detectedFeatures.join(', ')}.`
@@ -36,7 +40,7 @@ export function requirementAgent(state: TestOpsState): TestOpsState {
 
 REQUIREMENTS:
 ${state.requirements}
-${appInfo}${exploredHint}
+${appInfo}${exploredHint}${mobileNote}
 
 Return ONLY valid JSON (no markdown, no commentary, no explanation) matching this exact schema:
 
@@ -87,7 +91,7 @@ EXTRACTION RULES (read carefully):
 9. If the source text is sparse, INFER reasonable extensions based on the application domain — but mark inferences with " (inferred)" in the relevant field.
 10. NEVER return empty arrays for features / actors / flows — at minimum return one entry each based on what you can deduce.`;
 
-  const response = runClaudePrompt(prompt, { maxTokens: 8000 });
+  const response = await runClaudePrompt(prompt, { maxTokens: 8000 });
   const parsed = parseJsonFromResponse<ParsedRequirements>(response);
 
   // Defensive normalisation — Claude may omit some optional sections.

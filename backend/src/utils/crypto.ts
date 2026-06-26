@@ -137,6 +137,24 @@ export function decryptAtRest(encoded: string): string {
 }
 
 /**
+ * Peel repeated encryption layers. Some values were accidentally encrypted more
+ * than once — notably nested role passwords in Application Setup, which bypass
+ * the top-level normalize-then-encrypt path and so got re-wrapped each time the
+ * form was re-saved. `decryptStored` removes a single layer; this removes them
+ * all. Capped to avoid a pathological loop; plaintext (no prefix) returns as-is.
+ */
+export function decryptStoredDeep(value: string, maxLayers = 6): string {
+  let cur = value;
+  for (let i = 0; i < maxLayers; i++) {
+    if (!cur || (!cur.startsWith(REST_PREFIX) && !cur.startsWith(TRANSIT_PREFIX))) break;
+    const next = decryptStored(cur);
+    if (next === cur) break; // no progress — stop rather than spin
+    cur = next;
+  }
+  return cur;
+}
+
+/**
  * Decrypt any stored value — handles both legacy `__ENC__` (XOR) and
  * current `__AES__` (AES-GCM). Plaintext passes through.
  */

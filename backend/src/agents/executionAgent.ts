@@ -114,7 +114,7 @@ module.exports = defineConfig({
 ${baseUrlLine}    trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
+  projects: [{ name: 'edge', use: { channel: '${process.env.PLAYWRIGHT_CHANNEL || 'msedge'}' } }],
 });
 `;
   await fs.writeFile(configPath, configSrc, 'utf-8');

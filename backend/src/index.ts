@@ -27,6 +27,8 @@ import agentsRoutes from './routes/agents.routes.js';
 import chatRoutes from './routes/chat.routes.js';
 import jiraRoutes from './routes/jira.routes.js';
 import documentRoutes from './routes/document.routes.js';
+import mobileRoutes from './routes/mobile.routes.js';
+import testrailRoutes from './routes/testrail.routes.js';
 import gitRoutes from './routes/git.routes.js';
 import confluenceRoutes from './routes/confluence.routes.js';
 import sharepointRoutes from './routes/sharepoint.routes.js';
@@ -42,6 +44,7 @@ import automationScriptsRoutes from './routes/automation-scripts.routes.js';
 import artifactsRoutes from './routes/artifacts.routes.js';
 import userManagementRoutes from './routes/user-management.routes.js';
 import allureRoutes from './routes/allure.routes.js';
+import recordingsRoutes from './routes/recordings.routes.js';
 import tenantSettingsRoutes from './routes/tenant-settings.routes.js';
 import publicApiRoutes from './routes/public/public-api.routes.js';
 import { initDb } from './db.js';
@@ -239,6 +242,8 @@ app.use('/api/agents', authMiddleware, agentsRoutes);
 app.use('/api/chat', authMiddleware, chatRoutes);
 app.use('/api/jira', authMiddleware, jiraRoutes);
 app.use('/api/document', authMiddleware, documentRoutes);
+app.use('/api/mobile', authMiddleware, mobileRoutes);
+app.use('/api/testrail', authMiddleware, testrailRoutes);
 app.use('/api/git', authMiddleware, gitRoutes);
 app.use('/api/confluence', authMiddleware, confluenceRoutes);
 app.use('/api/sharepoint', authMiddleware, sharepointRoutes);
@@ -256,6 +261,9 @@ app.use('/api/automation-scripts', authMiddleware, automationScriptsRoutes);
 app.use('/api/artifacts', authMiddleware, artifactsRoutes);
 app.use('/api/users', authMiddleware, userManagementRoutes);
 app.use('/api/allure', allureRoutes);
+// Execution recordings — every route authenticates inside (tenantId is taken
+// from the authenticated user, never the URL, so there is no cross-tenant surface).
+app.use('/api/recordings', authMiddleware, recordingsRoutes);
 
 /* ─────────────────────────────────────────────────────────────
    Public business-capability API (HIPAA boundary)

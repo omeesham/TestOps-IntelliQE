@@ -34,11 +34,11 @@ const ROLES = [
   { value: 'data_analyst', label: 'Data Analyst', color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
 ];
 
-const inputCls = 'w-full px-4 py-3 bg-[#F5F3FF] border border-[#DDD6FE] rounded-xl text-[#1E1B4B] placeholder:text-gray-400 text-sm outline-none focus:ring-2 focus:ring-[#7C3AED]/30 focus:border-[#7C3AED] transition-all';
+const inputCls = 'w-full px-4 py-3 bg-[#EEF4FF] border border-[#C5D6FF] rounded-xl text-[#1E3A8A] placeholder:text-gray-400 text-sm outline-none focus:ring-2 focus:ring-[#3366FF]/30 focus:border-[#3366FF] transition-all';
 
 function getRoleBadge(role: string) {
   const r = ROLES.find(r => r.value === role);
-  return r ? `px-2.5 py-0.5 rounded-lg text-sm border ${r.color}` : 'px-2.5 py-0.5 rounded-lg text-sm bg-gray-100 text-gray-600';
+  return r ? `px-2 py-0.5 rounded-md text-[11px] font-medium border ${r.color}` : 'px-2 py-0.5 rounded-md text-[11px] font-medium border bg-gray-100 text-gray-600 border-gray-200';
 }
 
 function getRoleLabel(role: string) {
@@ -224,59 +224,70 @@ function UserManagementContent() {
 
   return (
     <div className="-m-6 p-4 space-y-3">
+      {/* Page header */}
+      <div className="flex items-center gap-3 mb-6">
+        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#3366FF] to-[#2645D6] flex items-center justify-center shadow-md shadow-violet-500/25">
+          <Users className="w-5 h-5 text-white" />
+        </div>
+        <div>
+          <h1 className="text-lg font-semibold text-[#1E3A8A]">User Management</h1>
+          <p className="text-sm text-[#6B7280]">Tenants, users and access</p>
+        </div>
+      </div>
+
       {/* Toolbar: New User (left) + Search (right) */}
       <div className="flex items-center gap-3">
         <button
           onClick={() => { setShowCreateModal(true); setError(''); setForm({ username: '', email: '', fullName: '', role: 'qa_engineer', password: '', confirmPassword: '', tenantId: '', isInactive: false }); }}
-          className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:from-[#6D28D9] hover:to-[#4F46E5] text-white rounded-lg text-sm font-semibold shadow-md shadow-purple-500/25 transition-all whitespace-nowrap"
+          className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-lg text-sm font-medium shadow-md shadow-violet-200 transition-all whitespace-nowrap"
         >
           <Plus className="w-4 h-4" /> New User
         </button>
         <div className="relative ml-auto w-72">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#6B7280]" />
           <input
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search by username, name, email, or tenant..."
-            className="w-full pl-10 pr-4 py-2 bg-white border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED]"
+            className="w-full pl-10 pr-4 py-2 bg-white/80 backdrop-blur-sm border border-[#C5D6FF] rounded-lg text-sm outline-none focus:ring-2 focus:ring-[#3366FF]/20 focus:border-[#3366FF]"
           />
         </div>
       </div>
 
       {/* Users Table */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-x-auto">
+      <div className="bg-white/80 backdrop-blur-sm rounded-2xl border border-[#DCE7FF] shadow-sm overflow-x-auto">
         {loading ? (
-          <div className="flex items-center justify-center py-16 text-gray-400">
-            <Loader2 className="w-5 h-5 animate-spin mr-2" /> Loading users...
+          <div className="flex items-center justify-center py-16 text-[#6B7280]">
+            <Loader2 className="w-5 h-5 animate-spin mr-2 text-[#2143A8]" /> Loading users...
           </div>
         ) : (
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-gray-50 border-b border-gray-100">
-                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Username</th>
-                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Full Name</th>
-                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Role</th>
-                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Status</th>
-                {isPlatform && <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Tenant</th>}
-                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Last Updated</th>
-                <th className="px-3 py-1.5 sticky right-0 bg-gray-50"></th>
+              <tr className="bg-[#EEF4FF] border-b border-[#DCE7FF]">
+                <th className="text-left px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-violet-700">Username</th>
+                <th className="text-left px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-violet-700">Full Name</th>
+                <th className="text-left px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-violet-700 whitespace-nowrap">Role</th>
+                <th className="text-left px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-violet-700 whitespace-nowrap">Status</th>
+                {isPlatform && <th className="text-left px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-violet-700">Tenant</th>}
+                <th className="text-left px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-violet-700 whitespace-nowrap">Last Updated</th>
+                <th className="px-3 py-1.5 sticky right-0 bg-[#EEF4FF]"></th>
               </tr>
             </thead>
             <tbody>
               {pagedUsers.map(u => (
-                <tr key={u.id} className="border-b border-gray-50 hover:bg-gray-50/50">
+                <tr key={u.id} className="border-b border-[#EEF4FF] hover:bg-[#EEF4FF]/60 transition-colors">
                   <td className="px-3 py-1.5 truncate">
-                    <button onClick={() => openEdit(u)} className="text-[#7C3AED] hover:underline hover:text-[#6D28D9] transition-colors">
+                    <button onClick={() => openEdit(u)} className="text-[#2143A8] hover:underline hover:text-[#2A55D6] transition-colors">
                       {u.username}
                     </button>
                   </td>
-                  <td className="px-3 py-1.5 text-gray-700 truncate">{u.full_name || '-'}</td>
+                  <td className="px-3 py-1.5 text-[#1E3A8A] truncate">{u.full_name || '-'}</td>
                   <td className="px-3 py-1.5">
                     <span className={getRoleBadge(u.role)}>{getRoleLabel(u.role)}</span>
                   </td>
                   <td className="px-3 py-1.5">
-                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-sm border ${
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium border ${
                       u.is_active
                         ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                         : 'bg-gray-100 text-gray-500 border-gray-200'
@@ -284,11 +295,11 @@ function UserManagementContent() {
                       {u.is_active ? 'Active' : 'Inactive'}
                     </span>
                   </td>
-                  {isPlatform && <td className="px-3 py-1.5 text-gray-700 truncate">{u.tenant_name}</td>}
-                  <td className="px-3 py-1.5 text-gray-700 whitespace-nowrap">
+                  {isPlatform && <td className="px-3 py-1.5 text-[#1E3A8A] truncate">{u.tenant_name}</td>}
+                  <td className="px-3 py-1.5 text-[#6B7280] whitespace-nowrap">
                     {new Date(u.updated_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
                   </td>
-                  <td className="px-3 py-1.5 text-center sticky right-0 bg-white">
+                  <td className="px-3 py-1.5 text-center sticky right-0 bg-white/80 backdrop-blur-sm">
                     <div className="flex items-center justify-center gap-1">
                       <button
                         onClick={() => handleToggleStatus(u)}
@@ -301,7 +312,7 @@ function UserManagementContent() {
                       </button>
                       <button
                         onClick={() => setConfirmDelete(u)}
-                        className="p-1.5 rounded-lg hover:bg-red-50 text-red-400 transition-colors"
+                        className="p-1.5 rounded-lg hover:bg-rose-50 text-rose-400 transition-colors"
                         title="Delete"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -312,8 +323,13 @@ function UserManagementContent() {
               ))}
               {filteredUsers.length === 0 && (
                 <tr>
-                  <td colSpan={isPlatform ? 7 : 6} className="px-3 py-12 text-center text-gray-400">
-                    {search ? 'No users match your search.' : 'No users found.'}
+                  <td colSpan={isPlatform ? 7 : 6} className="px-3 py-12 text-center">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <Users className="w-10 h-10 text-[#6B7280]" />
+                      <p className="text-sm font-semibold text-[#1E3A8A]">
+                        {search ? 'No users match your search.' : 'No users found.'}
+                      </p>
+                    </div>
                   </td>
                 </tr>
               )}
@@ -321,17 +337,17 @@ function UserManagementContent() {
           </table>
         )}
         {!loading && filteredUsers.length > 0 && (
-          <div className="flex items-center justify-between px-4 py-1.5 border-t border-gray-100 bg-gray-50/50 text-xs">
-            <div className="flex items-center gap-1.5 text-gray-600">
+          <div className="flex items-center justify-between px-4 py-1.5 border-t border-[#DCE7FF] bg-[#EEF4FF]/50 text-xs">
+            <div className="flex items-center gap-1.5 text-[#6B7280]">
               <span>Rows:</span>
               <select
                 value={pageSize}
                 onChange={e => setPageSize(Number(e.target.value))}
-                className="px-1.5 py-0.5 bg-white border border-gray-200 rounded text-xs outline-none focus:ring-1 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED]"
+                className="px-1.5 py-0.5 bg-white border border-[#C5D6FF] rounded text-xs outline-none focus:ring-1 focus:ring-[#3366FF]/20 focus:border-[#3366FF]"
               >
                 {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
               </select>
-              <span className="ml-2 text-gray-500">
+              <span className="ml-2 text-[#9CA3AF]">
                 {(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, filteredUsers.length)} of {filteredUsers.length}
               </span>
             </div>
@@ -339,17 +355,17 @@ function UserManagementContent() {
               <button
                 onClick={() => setPage(p => Math.max(1, p - 1))}
                 disabled={currentPage === 1}
-                className="px-2 py-0.5 rounded font-medium text-gray-600 hover:bg-white border border-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="px-2 py-0.5 rounded font-medium text-[#2143A8] hover:bg-[#EEF4FF] border border-[#C5D6FF] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 Prev
               </button>
-              <span className="px-2 text-gray-600">
-                Page <span className="font-semibold text-[#7C3AED]">{currentPage}</span> of {totalPages}
+              <span className="px-2 text-[#6B7280]">
+                Page <span className="font-semibold text-[#2143A8]">{currentPage}</span> of {totalPages}
               </span>
               <button
                 onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                 disabled={currentPage === totalPages}
-                className="px-2 py-0.5 rounded font-medium text-gray-600 hover:bg-white border border-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="px-2 py-0.5 rounded font-medium text-[#2143A8] hover:bg-[#EEF4FF] border border-[#C5D6FF] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 Next
               </button>
@@ -361,12 +377,12 @@ function UserManagementContent() {
       {/* Create / Edit Modal */}
       {(showCreateModal || editingUser) && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={closeModal}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-5 border-b border-gray-100">
-              <h3 className="text-lg font-bold text-gray-900">
+          <div className="bg-white/95 backdrop-blur-sm rounded-2xl border border-[#DCE7FF] shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-5 border-b border-[#DCE7FF]">
+              <h3 className="text-lg font-semibold text-[#1E3A8A]">
                 {editingUser ? `Edit User — ${editingUser.username}` : 'Create New User'}
               </h3>
-              <button onClick={closeModal} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400">
+              <button onClick={closeModal} className="p-1.5 rounded-lg hover:bg-[#EEF4FF] text-[#6B7280] hover:text-[#2143A8] transition-colors">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -377,11 +393,11 @@ function UserManagementContent() {
               <input type="password" name="fakepasswordremembered" autoComplete="current-password" style={{ display: 'none' }} />
 
               {error && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">{error}</div>
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-sm text-rose-700">{error}</div>
               )}
 
               <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5">Username {!editingUser && '*'}</label>
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-violet-700 mb-1.5">Username {!editingUser && '*'}</label>
                 <input
                   type="text"
                   name="user_name_iq"
@@ -396,18 +412,18 @@ function UserManagementContent() {
 
               {!editingUser && (
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1.5">Full Name</label>
+                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-violet-700 mb-1.5">Full Name</label>
                   <input type="text" name="full_name_iq" autoComplete="off" value={form.fullName} onChange={e => setForm({ ...form, fullName: e.target.value })} placeholder="Enter full name" className={inputCls} />
                 </div>
               )}
 
               <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5">Email</label>
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-violet-700 mb-1.5">Email</label>
                 <input type="text" name="email_iq" autoComplete="off" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="Enter email" className={inputCls} />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5">Role *</label>
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-violet-700 mb-1.5">Role *</label>
                 <div className="relative">
                   <select
                     value={form.role}
@@ -416,15 +432,15 @@ function UserManagementContent() {
                   >
                     {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
                   </select>
-                  <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#7C3AED] pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#2143A8] pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
                   </svg>
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                  Password {!editingUser && '*'}{editingUser && <span className="font-normal text-gray-400"> (leave blank to keep current)</span>}
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-violet-700 mb-1.5">
+                  Password {!editingUser && '*'}{editingUser && <span className="font-normal normal-case text-[#9CA3AF]"> (leave blank to keep current)</span>}
                 </label>
                 <div className="relative">
                   <input
@@ -437,14 +453,14 @@ function UserManagementContent() {
                     className={inputCls + ' pr-11'}
                   />
                   <button type="button" onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#6B7280] hover:text-[#2143A8]">
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5">Confirm Password</label>
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-violet-700 mb-1.5">Confirm Password</label>
                 <input
                   type={showPassword ? 'text' : 'password'}
                   name="confirm_pwd_iq"
@@ -462,16 +478,16 @@ function UserManagementContent() {
                     type="checkbox"
                     checked={form.isInactive}
                     onChange={e => setForm({ ...form, isInactive: e.target.checked })}
-                    className="w-4 h-4 rounded border-gray-300 text-[#7C3AED] focus:ring-[#7C3AED]/30"
+                    className="w-4 h-4 rounded border-[#C5D6FF] text-[#2143A8] focus:ring-[#3366FF]/30"
                   />
-                  <span className="text-sm text-gray-700">Mark as inactive</span>
-                  <span className="text-xs text-gray-400">(admin can reactivate later)</span>
+                  <span className="text-sm text-[#1E3A8A]">Mark as inactive</span>
+                  <span className="text-xs text-[#9CA3AF]">(admin can reactivate later)</span>
                 </label>
               )}
 
               {!editingUser && isPlatform && tenants.length > 0 && (
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1.5">Tenant</label>
+                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-violet-700 mb-1.5">Tenant</label>
                   <select value={form.tenantId} onChange={e => setForm({ ...form, tenantId: e.target.value })} className={inputCls}>
                     <option value="">Current tenant</option>
                     {tenants.map(t => <option key={t.id} value={t.id}>{t.name}{t.is_platform ? ' (Platform)' : ''}</option>)}
@@ -480,22 +496,22 @@ function UserManagementContent() {
               )}
             </form>
 
-            <div className="flex items-center justify-end gap-3 p-5 border-t border-gray-100">
+            <div className="flex items-center justify-end gap-3 p-5 border-t border-[#DCE7FF]">
               {editingUser && (
                 <button
                   onClick={() => { setConfirmDelete(editingUser); setEditingUser(null); }}
-                  className="mr-auto flex items-center gap-1.5 px-4 py-2.5 text-red-600 bg-red-50 border border-red-200 rounded-xl text-sm font-medium hover:bg-red-100 transition-colors"
+                  className="mr-auto flex items-center gap-1.5 px-4 py-2.5 text-rose-600 bg-rose-50 border border-rose-200 rounded-xl text-sm font-medium hover:bg-rose-100 transition-colors"
                 >
                   <Trash2 className="w-3.5 h-3.5" /> Delete
                 </button>
               )}
-              <button onClick={closeModal} className="px-4 py-2.5 text-gray-600 bg-gray-100 rounded-xl text-sm font-medium hover:bg-gray-200 transition-colors">
+              <button onClick={closeModal} className="px-4 py-2.5 text-[#2143A8] bg-white border border-[#C5D6FF] rounded-xl text-sm font-medium hover:bg-[#EEF4FF] transition-colors">
                 Cancel
               </button>
               <button
                 onClick={editingUser ? handleUpdate : handleCreate}
                 disabled={saving}
-                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:from-[#6D28D9] hover:to-[#4F46E5] disabled:from-[#C4B5FD] disabled:to-[#C7D2FE] text-white rounded-xl text-sm font-semibold transition-all shadow-lg shadow-purple-500/25"
+                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-50 text-white rounded-xl text-sm font-medium transition-all shadow-md shadow-violet-200"
               >
                 {saving && <Loader2 className="w-4 h-4 animate-spin" />}
                 {editingUser ? 'Save Changes' : 'Create User'}
@@ -508,24 +524,24 @@ function UserManagementContent() {
       {/* Delete Confirmation Modal */}
       {confirmDelete && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setConfirmDelete(null)}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
+          <div className="bg-white/95 backdrop-blur-sm rounded-2xl border border-[#DCE7FF] shadow-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
-                <Trash2 className="w-5 h-5 text-red-600" />
+              <div className="w-10 h-10 rounded-full bg-rose-100 flex items-center justify-center">
+                <Trash2 className="w-5 h-5 text-rose-600" />
               </div>
               <div>
-                <h3 className="font-bold text-gray-900">Delete User</h3>
-                <p className="text-sm text-gray-500">This cannot be undone.</p>
+                <h3 className="font-semibold text-[#1E3A8A]">Delete User</h3>
+                <p className="text-sm text-[#6B7280]">This cannot be undone.</p>
               </div>
             </div>
-            <p className="text-sm text-gray-700 mb-5">
-              Are you sure you want to delete <span className="font-semibold text-[#7C3AED]">{confirmDelete.username}</span>? All their data will be removed.
+            <p className="text-sm text-[#1E3A8A] mb-5">
+              Are you sure you want to delete <span className="font-semibold text-[#2143A8]">{confirmDelete.username}</span>? All their data will be removed.
             </p>
             <div className="flex items-center justify-end gap-3">
-              <button onClick={() => setConfirmDelete(null)} className="px-4 py-2 text-gray-600 bg-gray-100 rounded-xl text-sm font-medium hover:bg-gray-200">
+              <button onClick={() => setConfirmDelete(null)} className="px-4 py-2 text-[#2143A8] bg-white border border-[#C5D6FF] rounded-xl text-sm font-medium hover:bg-[#EEF4FF] transition-colors">
                 Cancel
               </button>
-              <button onClick={handleDelete} className="px-4 py-2 text-white bg-red-600 hover:bg-red-700 rounded-xl text-sm font-semibold transition-colors">
+              <button onClick={handleDelete} className="px-4 py-2 text-white bg-rose-600 hover:bg-rose-700 rounded-xl text-sm font-semibold transition-colors">
                 Delete
               </button>
             </div>
@@ -543,9 +559,9 @@ function StatCard({ label, value, accent }: { label: string; value: number; acce
     blue: 'text-blue-600',
   };
   return (
-    <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-      <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">{label}</p>
-      <p className={`text-2xl font-bold ${accent ? colors[accent] || 'text-gray-900' : 'text-gray-900'}`}>{value}</p>
+    <div className="bg-[#EEF4FF] border border-[#C5D6FF] rounded-lg p-4">
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-violet-700 mb-1">{label}</p>
+      <p className={`text-lg font-semibold ${accent ? colors[accent] || 'text-[#1E3A8A]' : 'text-[#1E3A8A]'}`}>{value}</p>
     </div>
   );
 }

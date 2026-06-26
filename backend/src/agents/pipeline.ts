@@ -84,23 +84,56 @@ export async function runPipeline(
   return { state, stages };
 }
 
+/**
+ * Progress callback for the generation pipeline. Stage keys are aligned with
+ * the frontend's pipeline panel keys (see ChatPage `pipelineStages`) so the
+ * route layer can broadcast them straight over SSE without translation.
+ */
+export type GenProgress = (
+  stageKey: 'requirements' | 'test-design',
+  status: 'running' | 'completed',
+  detail: string,
+) => void;
+
 export async function runGenerationOnly(
   requirements: string,
-  options?: { maxTestCases?: number; appContext?: AppContext },
+  options?: { maxTestCases?: number; appContext?: AppContext; onProgress?: GenProgress },
 ): Promise<TestOpsState> {
+  const onProgress: GenProgress = options?.onProgress ?? (() => {});
   let state = createInitialState(requirements, options?.appContext);
   if (options?.maxTestCases !== undefined) {
     state.generationOptions = { maxTestCases: options.maxTestCases };
   }
+
+  // ── Requirement Analysis stage ──
+  onProgress('requirements', 'running', 'Analyzing requirements…');
   // Path 4 — explore the live application first when the user provided
   // only a URL (no Jira story, no upload, no pasted requirements).
   if (shouldExploreFirst(state)) {
+    onProgress('requirements', 'running', 'Exploring the live application…');
     state = await exploreAgent(state);
   }
-  state = requirementAgent(state);
-  state = auditAgent(state);
-  state = plannerAgent(state);
-  state = generatorAgent(state);
-  state = scriptAgent(state);
+  state = await requirementAgent(state);
+  onProgress('requirements', 'running', 'Auditing coverage & edge cases…');
+  state = await auditAgent(state);
+  const featureCount = state.parsedRequirements?.features?.length || 0;
+  onProgress(
+    'requirements',
+    'completed',
+    featureCount > 0 ? `${featureCount} feature(s) identified` : 'Requirements analyzed',
+  );
+
+  // ── Test Design stage ──
+  onProgress('test-design', 'running', 'Planning test strategy…');
+  state = await plannerAgent(state);
+  onProgress('test-design', 'running', 'Generating test cases…');
+  state = await generatorAgent(state);
+  onProgress('test-design', 'completed', `${state.testCases.length} test cases generated`);
+
+  // NOTE: scriptAgent is intentionally NOT run here. This path backs the chat
+  // wizard's "Test Design" step, which only needs test cases — Playwright
+  // scripts are produced later by the separate Script Generation stage. Running
+  // scriptAgent inline added a 16k-token Claude call (~2-3 min) that pushed the
+  // request past the frontend's 2-min timeout, so the wizard never got results.
   return state;
 }

@@ -76,7 +76,7 @@ export default function DataSourcesSection({ configs, onRefresh }: Props) {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold text-[#1E1B4B] mb-1">Storage Providers</h3>
+          <h3 className="text-sm font-semibold text-[#1E3A8A] mb-1">Storage Providers</h3>
           <p className="text-xs text-[#6B7280]">
             Connect cloud storage for test artifacts (screenshots, traces, reports)
           </p>
@@ -85,7 +85,7 @@ export default function DataSourcesSection({ configs, onRefresh }: Props) {
           <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-emerald-50 border-emerald-200 text-emerald-600">
             {connectedCount} connected
           </span>
-          <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-[#F5F3FF] border-[#DDD6FE] text-[#7C3AED]">
+          <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border bg-[#EEF4FF] border-[#C5D6FF] text-[#2143A8]">
             {availableCount} available
           </span>
         </div>

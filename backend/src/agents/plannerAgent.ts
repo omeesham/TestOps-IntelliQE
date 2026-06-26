@@ -59,7 +59,7 @@ export interface ExtendedTestPlan {
   outOfScope?: string[];
 }
 
-export function plannerAgent(state: TestOpsState): TestOpsState {
+export async function plannerAgent(state: TestOpsState): Promise<TestOpsState> {
   if (!state.parsedRequirements) return state;
 
   const pr = state.parsedRequirements;
@@ -132,7 +132,7 @@ RULES:
 
   let parsed: Partial<ExtendedTestPlan>;
   try {
-    const response = runClaudePrompt(prompt, { maxTokens: 4000 });
+    const response = await runClaudePrompt(prompt, { maxTokens: 4000 });
     parsed = parseJsonFromResponse<ExtendedTestPlan>(response);
   } catch (err) {
     // eslint-disable-next-line no-console

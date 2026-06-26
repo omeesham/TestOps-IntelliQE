@@ -97,20 +97,44 @@ router.post('/test-ai-connection', async (req: Request, res: Response) => {
         npmGlobalBin,                    // Windows npm global default
       ].filter(Boolean) as string[];
 
-      let detected = false;
+      let resolved: string | null = null;
+      let version = '';
       for (const cmd of candidates) {
         try {
-          const version = execSync(`"${cmd}" --version`, { timeout: 10000, encoding: 'utf-8' }).trim();
-          res.json({ ok: true, message: `Claude CLI detected: ${version}`, resolvedPath: cmd });
-          detected = true;
+          version = execSync(`"${cmd}" --version`, { timeout: 10000, encoding: 'utf-8' }).trim();
+          resolved = cmd;
           break;
         } catch (_) { /* try next candidate */ }
       }
-      if (!detected) {
+      if (!resolved) {
         res.status(400).json({
-          error: `Claude CLI not found. Install it with: npm install -g @anthropic-ai/claude-code — then add the npm global bin to your PATH:\n  setx PATH "%PATH%;${path.dirname(npmGlobalBin)}"\nThen restart your terminal and run: claude login`,
+          error: `Claude CLI not found. Install it with: npm install -g @anthropic-ai/claude-code — then add the npm global bin to your PATH:\n  setx PATH "%PATH%;${path.dirname(npmGlobalBin)}"\nThen restart your terminal and run: claude auth login --claudeai`,
         });
+        return;
       }
+
+      // Detecting the binary is not enough — `claude -p` fails (and the pipeline
+      // silently falls back to template generation) when the CLI is logged out.
+      // Verify real authentication via `claude auth status`, which prints JSON
+      // { loggedIn, authMethod, ... } without consuming any tokens.
+      let loggedIn = false;
+      let authMethod = 'none';
+      try {
+        const statusRaw = execSync(`"${resolved}" auth status`, { timeout: 10000, encoding: 'utf-8' }).trim();
+        const status = JSON.parse(statusRaw);
+        loggedIn = status.loggedIn === true;
+        authMethod = status.authMethod || 'none';
+      } catch (_) { /* treat as logged out */ }
+
+      if (!loggedIn) {
+        res.status(400).json({
+          error: `Claude CLI detected (${version}) but NOT logged in — the pipeline would fall back to template generation. Authenticate once as the user that runs the backend:\n  claude auth login --claudeai\nThen click Test Connection again.`,
+          resolvedPath: resolved,
+        });
+        return;
+      }
+
+      res.json({ ok: true, message: `Claude CLI ready: ${version} (authenticated via ${authMethod})`, resolvedPath: resolved });
       return;
     }
 

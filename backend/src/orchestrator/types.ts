@@ -181,7 +181,11 @@ export type SSEEvent =
   | { type: 'page_stage_updated'; runId: string; pageId: string; stageId: string; status: string; timestamp: string; visibility?: SSEVisibility }
   | { type: 'cascade_progress'; runId: string; pageId: string; completedStage: string; nextStage: string | null; timestamp: string; visibility?: SSEVisibility }
   | { type: 'artifact_updated'; runId: string; artifactId: string; action: 'edited' | 'deleted'; timestamp: string; visibility?: SSEVisibility }
-  | { type: 'mode_switched'; runId: string; mode: 'auto' | 'manual'; timestamp: string; visibility?: SSEVisibility };
+  | { type: 'mode_switched'; runId: string; mode: 'auto' | 'manual'; timestamp: string; visibility?: SSEVisibility }
+  // ── Chat-wizard generation job events (POST /api/generate background run) ──
+  | { type: 'gen_stage'; runId: string; stage: 'requirements' | 'test-design'; status: 'running' | 'completed'; detail: string; timestamp: string; visibility?: SSEVisibility }
+  | { type: 'generation_complete'; runId: string; timestamp: string; visibility?: SSEVisibility }
+  | { type: 'generation_error'; runId: string; error: string; code?: string; timestamp: string; visibility?: SSEVisibility };
 
 export type ExecutionMode = 'full-auto' | 'approve-per-stage' | 'dry-run';
 

@@ -35,12 +35,20 @@ const LEGACY_PREFIX = 'intelliqe-demo-token-';
 
 export async function authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    // Prefer the Authorization header. Fall back to a `?token=` query param so
+    // EventSource/SSE clients — which cannot set request headers — can still
+    // authenticate (used by the pipeline-events stream).
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    let token = '';
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.slice(7);
+    } else if (typeof req.query.token === 'string' && req.query.token.trim()) {
+      token = req.query.token.trim();
+    }
+    if (!token) {
       res.status(401).json({ error: 'Missing or invalid authorization header' });
       return;
     }
-    const token = authHeader.slice(7);
 
     // ── Path A: JWT (current) ──────────────────────────────
     if (!token.startsWith(LEGACY_PREFIX)) {

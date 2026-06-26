@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Settings } from 'lucide-react';
 import ConfigTabNav, { type TabKey } from '@/components/system-config/ConfigTabNav';
 import GeneralSettingsSection from '@/components/system-config/GeneralSettingsSection';
 import ApplicationSetupSection from '@/components/system-config/ApplicationSetupSection';
@@ -80,9 +81,20 @@ export default function SystemConfigurationPage() {
 
   return (
     <div className="-m-6 p-4">
-      <div className="flex bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-6">
+        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#3366FF] to-[#2645D6] flex items-center justify-center shadow-md shadow-violet-500/25">
+          <Settings className="w-5 h-5 text-white" />
+        </div>
+        <div>
+          <h1 className="text-lg font-semibold text-[#1E3A8A]">System Configuration</h1>
+          <p className="text-sm text-[#6B7280]">Integrations and platform settings</p>
+        </div>
+      </div>
+
+      <div className="flex bg-white/80 backdrop-blur-sm rounded-2xl border border-[#DCE7FF] shadow-sm overflow-hidden">
         {/* Left: Vertical Tabs */}
-        <div className="p-3 border-r border-gray-100 bg-gray-50/40 w-56 flex-shrink-0">
+        <div className="p-3 border-r border-[#DCE7FF] bg-[#EEF4FF]/40 w-56 flex-shrink-0">
           <ConfigTabNav activeTab={activeTab} onTabChange={setActiveTab} />
         </div>
 
@@ -91,7 +103,7 @@ export default function SystemConfigurationPage() {
           {/* Subtle top-strip loader so users see progress without blocking the UI */}
           {loading && (
             <div className="absolute top-0 left-0 right-0 h-0.5 overflow-hidden">
-              <div className="h-full w-1/3 bg-gradient-to-r from-transparent via-[#7C3AED] to-transparent animate-[shimmer_1.2s_ease-in-out_infinite]"
+              <div className="h-full w-1/3 bg-gradient-to-r from-transparent via-[#3366FF] to-transparent animate-[shimmer_1.2s_ease-in-out_infinite]"
                    style={{ animation: 'shimmer 1.2s ease-in-out infinite' }} />
             </div>
           )}

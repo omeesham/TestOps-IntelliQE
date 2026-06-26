@@ -84,11 +84,11 @@ export default function VoiceAssistantSection() {
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           {voiceEnabled ? (
-            <Volume2 className="w-4 h-4 text-[#7C3AED]" />
+            <Volume2 className="w-4 h-4 text-[#2143A8]" />
           ) : (
             <VolumeX className="w-4 h-4 text-gray-400" />
           )}
-          <h3 className="text-sm font-semibold text-[#1E1B4B]">Tessa Voice Assistant</h3>
+          <h3 className="text-sm font-semibold text-[#1E3A8A]">Tessa Voice Assistant</h3>
         </div>
         <label className="relative inline-flex items-center cursor-pointer">
           <input
@@ -97,7 +97,7 @@ export default function VoiceAssistantSection() {
             onChange={(e) => handleVoiceToggle(e.target.checked)}
             className="sr-only peer"
           />
-          <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-[#7C3AED]/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#7C3AED]" />
+          <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-[#3366FF]/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#3366FF]" />
           <span className="ml-2 text-xs font-medium text-[#6B7280]">
             {voiceEnabled ? 'Enabled' : 'Disabled'}
           </span>
@@ -111,12 +111,12 @@ export default function VoiceAssistantSection() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Voice / Language selector */}
           <div className="md:col-span-2">
-            <label className="block text-sm font-medium text-[#1E1B4B] mb-1">Voice / Language</label>
+            <label className="block text-sm font-medium text-[#1E3A8A] mb-1">Voice / Language</label>
             <div className="flex gap-2">
               <select
                 value={currentVoice}
                 onChange={(e) => handleVoiceChange(e.target.value)}
-                className="flex-1 px-3 py-2.5 rounded-xl border border-[#DDD6FE] bg-[#F5F3FF] text-sm outline-none focus:ring-2 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED] transition-all"
+                className="flex-1 px-3 py-2.5 rounded-xl border border-[#C5D6FF] bg-[#EEF4FF] text-sm outline-none focus:ring-2 focus:ring-[#3366FF]/20 focus:border-[#3366FF] transition-all"
               >
                 {voices.length === 0 && <option value="Default">Loading voices...</option>}
                 {voices.map((v) => (
@@ -128,7 +128,7 @@ export default function VoiceAssistantSection() {
               <button
                 onClick={handleTestVoice}
                 disabled={testPlaying}
-                className="px-3 py-2.5 rounded-xl border border-[#DDD6FE] bg-[#F5F3FF] text-[#7C3AED] hover:bg-[#EDE9FE] transition-all disabled:opacity-50 flex items-center gap-1.5"
+                className="px-3 py-2.5 rounded-xl border border-[#C5D6FF] bg-[#EEF4FF] text-[#2143A8] hover:bg-[#DCE7FF] transition-all disabled:opacity-50 flex items-center gap-1.5"
                 title="Test voice"
               >
                 <Play className="w-4 h-4" />
@@ -142,7 +142,7 @@ export default function VoiceAssistantSection() {
 
           {/* Speech Rate */}
           <div>
-            <label className="block text-sm font-medium text-[#1E1B4B] mb-1">
+            <label className="block text-sm font-medium text-[#1E3A8A] mb-1">
               Speech Rate: {speechRate.toFixed(1)}x
             </label>
             <input
@@ -152,7 +152,7 @@ export default function VoiceAssistantSection() {
               step="0.1"
               value={speechRate}
               onChange={(e) => handleRateChange(parseFloat(e.target.value))}
-              className="w-full h-2 bg-[#EDE9FE] rounded-lg appearance-none cursor-pointer accent-[#7C3AED]"
+              className="w-full h-2 bg-[#DCE7FF] rounded-lg appearance-none cursor-pointer accent-[#3366FF]"
             />
             <div className="flex justify-between text-[10px] text-[#6B7280] mt-0.5">
               <span>Slow (0.5x)</span>
@@ -163,7 +163,7 @@ export default function VoiceAssistantSection() {
 
           {/* Pitch */}
           <div>
-            <label className="block text-sm font-medium text-[#1E1B4B] mb-1">
+            <label className="block text-sm font-medium text-[#1E3A8A] mb-1">
               Pitch: {speechPitch.toFixed(1)}
             </label>
             <input
@@ -173,7 +173,7 @@ export default function VoiceAssistantSection() {
               step="0.1"
               value={speechPitch}
               onChange={(e) => handlePitchChange(parseFloat(e.target.value))}
-              className="w-full h-2 bg-[#EDE9FE] rounded-lg appearance-none cursor-pointer accent-[#7C3AED]"
+              className="w-full h-2 bg-[#DCE7FF] rounded-lg appearance-none cursor-pointer accent-[#3366FF]"
             />
             <div className="flex justify-between text-[10px] text-[#6B7280] mt-0.5">
               <span>Low (0.5)</span>
@@ -184,10 +184,10 @@ export default function VoiceAssistantSection() {
         </div>
 
         {/* Active voice info badge */}
-        <div className="flex items-center gap-2 p-3 bg-[#F5F3FF] border border-[#DDD6FE]/60 rounded-lg">
-          <Volume2 className="w-4 h-4 text-[#7C3AED] flex-shrink-0" />
+        <div className="flex items-center gap-2 p-3 bg-[#EEF4FF] border border-[#C5D6FF]/60 rounded-lg">
+          <Volume2 className="w-4 h-4 text-[#2143A8] flex-shrink-0" />
           <p className="text-xs text-[#6B7280]">
-            Active voice: <span className="font-medium text-[#1E1B4B]">{currentVoice}</span>
+            Active voice: <span className="font-medium text-[#1E3A8A]">{currentVoice}</span>
             {' '}&middot; Tessa will speak all bot responses in the chat
           </p>
         </div>
