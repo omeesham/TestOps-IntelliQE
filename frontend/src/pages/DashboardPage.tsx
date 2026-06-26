@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { Loader2, ArrowRight } from 'lucide-react';
+import { Loader2, ArrowRight, LayoutDashboard, ClipboardList, CheckCircle2, Cpu, Activity } from 'lucide-react';
 import { getReportsSummary, listTestRuns, listPipelineRuns } from '@/services/api';
 
 /* ──────────────────────────────────────────────────────────────────
@@ -122,29 +122,40 @@ export default function DashboardPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-32">
-        <Loader2 className="w-4 h-4 text-[#155dfc] animate-spin" />
-        <span className="ml-2 text-xs text-[#9CA3AF]">Loading…</span>
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="w-8 h-8 text-[#2143A8] animate-spin" />
+        <span className="ml-3 text-sm text-[#6B7280]">Loading…</span>
       </div>
     );
   }
 
   return (
-    <div className="space-y-3 max-w-5xl">
-      {/* ── KPI strip — one row, dividers between, very compact ── */}
-      <section className="bg-white rounded-lg border border-[#E5E7EB] divide-x divide-[#F3F4F6] flex">
-        <Kpi label="Test Cases" value={fmt(totalCases)} />
-        <Kpi label="Pass Rate"  value={`${passRate}%`}
+    <div className="space-y-6 max-w-5xl">
+      {/* ── Page header ── */}
+      <div className="flex items-center gap-3 mb-6">
+        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#3366FF] to-[#2645D6] flex items-center justify-center shadow-md shadow-violet-500/25">
+          <LayoutDashboard className="w-5 h-5 text-white" />
+        </div>
+        <div>
+          <h1 className="text-lg font-semibold text-[#1E3A8A]">Dashboard</h1>
+          <p className="text-sm text-[#6B7280]">Test coverage and pipeline overview</p>
+        </div>
+      </div>
+
+      {/* ── KPI strip — metric tiles ── */}
+      <section className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Kpi icon={ClipboardList} label="Test Cases" value={fmt(totalCases)} />
+        <Kpi icon={CheckCircle2} label="Pass Rate"  value={`${passRate}%`}
              tone={passRate >= 90 ? 'pos' : passRate >= 70 ? 'warn' : passRate > 0 ? 'neg' : 'mute'} />
-        <Kpi label="Automation" value={`${automationCoverage}%`} />
-        <Kpi label="Active"     value={fmt(activePipelines)} />
+        <Kpi icon={Cpu} label="Automation" value={`${automationCoverage}%`} />
+        <Kpi icon={Activity} label="Active"     value={fmt(activePipelines)} />
       </section>
 
       {/* ── Recent Test Runs ── */}
-      <section className="bg-white rounded-lg border border-[#E5E7EB]">
-        <header className="flex items-center justify-between px-4 py-2.5 border-b border-[#F3F4F6]">
-          <h2 className="text-xs font-semibold text-[#1E1B4B] uppercase tracking-wider">Recent Runs</h2>
-          <Link to="/generated-tests" className="text-[11px] text-[#155dfc] hover:underline inline-flex items-center gap-1">
+      <section className="bg-white/80 backdrop-blur-sm rounded-2xl border border-[#DCE7FF] shadow-sm">
+        <header className="flex items-center justify-between px-4 py-3 border-b border-[#DCE7FF]">
+          <h2 className="text-[11px] font-semibold uppercase tracking-wider text-violet-700">Recent Runs</h2>
+          <Link to="/generated-tests" className="text-[11px] text-[#2143A8] hover:underline inline-flex items-center gap-1">
             View all <ArrowRight className="w-3 h-3" />
           </Link>
         </header>
@@ -166,16 +177,16 @@ export default function DashboardPage() {
                 const total = Number(r.test_case_count) || 0;
                 const scripted = Number(r.scripted_count) || 0;
                 return (
-                  <tr key={r.id} className="border-t border-[#F3F4F6]">
+                  <tr key={r.id} className="border-t border-[#DCE7FF]">
                     <td className="py-1.5 px-4 max-w-0">
-                      <div className="text-[#1E1B4B] truncate" title={r.story_title || r.feature || ''}>
+                      <div className="text-[#1E3A8A] truncate" title={r.story_title || r.feature || ''}>
                         {r.story_title || r.feature || '—'}
                       </div>
                     </td>
                     <td className="py-1.5 px-2 text-[#6B7280] truncate max-w-[120px]">
                       {r.module || <span className="text-[#D1D5DB]">—</span>}
                     </td>
-                    <td className="py-1.5 px-2 text-right text-[#1E1B4B] tabular-nums">{total}</td>
+                    <td className="py-1.5 px-2 text-right text-[#1E3A8A] tabular-nums">{total}</td>
                     <td className="py-1.5 px-2 text-right tabular-nums text-[#6B7280]">{scripted}</td>
                     <td className="py-1.5 px-4 text-right text-[#9CA3AF] tabular-nums">{rel(r.created_at)}</td>
                   </tr>
@@ -187,9 +198,9 @@ export default function DashboardPage() {
       </section>
 
       {/* ── Coverage Breakdown — Module / Submodule ── */}
-      <section className="bg-white rounded-lg border border-[#E5E7EB]">
-        <header className="flex items-center justify-between px-4 py-2.5 border-b border-[#F3F4F6]">
-          <h2 className="text-xs font-semibold text-[#1E1B4B] uppercase tracking-wider">Coverage</h2>
+      <section className="bg-white/80 backdrop-blur-sm rounded-2xl border border-[#DCE7FF] shadow-sm">
+        <header className="flex items-center justify-between px-4 py-3 border-b border-[#DCE7FF]">
+          <h2 className="text-[11px] font-semibold uppercase tracking-wider text-violet-700">Coverage</h2>
           <div className="flex items-center gap-0.5 text-[11px]">
             <Tab active={covTab === 'module'} onClick={() => setCovTab('module')}>
               Module <span className="text-[10px] text-[#9CA3AF] ml-1 tabular-nums">{moduleCov.length}</span>
@@ -227,8 +238,9 @@ export default function DashboardPage() {
    ────────────────────────────────────────────────────────────────── */
 
 function Kpi({
-  label, value, tone,
+  icon: Icon, label, value, tone,
 }: {
+  icon: React.ElementType;
   label: string;
   value: string;
   tone?: 'pos' | 'neg' | 'warn' | 'mute';
@@ -238,11 +250,16 @@ function Kpi({
     tone === 'neg'  ? 'text-red-600' :
     tone === 'warn' ? 'text-amber-600' :
     tone === 'mute' ? 'text-[#9CA3AF]' :
-                      'text-[#1E1B4B]';
+                      'text-[#1E3A8A]';
   return (
-    <div className="flex-1 px-4 py-3 min-w-0">
-      <div className="text-[10px] uppercase tracking-wider text-[#9CA3AF] font-medium">{label}</div>
-      <div className={`text-xl font-bold tabular-nums mt-0.5 ${valueColor}`}>{value}</div>
+    <div className="flex items-center gap-3 px-4 py-3 min-w-0 bg-[#EEF4FF] border border-[#C5D6FF] rounded-lg">
+      <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#3366FF] to-[#2645D6] flex items-center justify-center shadow-sm shadow-violet-500/25 flex-shrink-0">
+        <Icon className="w-4 h-4 text-white" />
+      </div>
+      <div className="min-w-0">
+        <div className={`text-lg font-semibold tabular-nums ${valueColor}`}>{value}</div>
+        <div className="text-[10px] uppercase tracking-wider text-[#6B7280] font-medium truncate">{label}</div>
+      </div>
     </div>
   );
 }
@@ -259,7 +276,7 @@ function Tab({
       onClick={onClick}
       className={
         'px-2.5 py-1 rounded font-medium transition-colors ' +
-        (active ? 'bg-[#EFF5FF] text-[#155dfc]' : 'text-[#6B7280] hover:text-[#1E1B4B]')
+        (active ? 'bg-[#EEF4FF] text-[#2143A8]' : 'text-[#6B7280] hover:text-[#1E3A8A]')
       }
     >
       {children}
@@ -269,22 +286,22 @@ function Tab({
 
 function Row({ cov, showParent }: { cov: CoverageGroup; showParent?: boolean }) {
   const pct = cov.scriptedPct;
-  const barColor = pct >= 80 ? '#16A34A' : pct >= 50 ? '#155dfc' : pct > 0 ? '#D97706' : '#E5E7EB';
+  const barColor = pct >= 80 ? '#16A34A' : pct >= 50 ? '#3366FF' : pct > 0 ? '#D97706' : '#E5E7EB';
   return (
     <div className="grid grid-cols-12 items-center gap-3 text-[11px]">
       <div className="col-span-4 min-w-0">
         {showParent && cov.parent && (
           <span className="text-[#9CA3AF] truncate mr-1" title={cov.parent}>{cov.parent} ·</span>
         )}
-        <span className="text-[#1E1B4B]" title={cov.primary}>{cov.primary}</span>
+        <span className="text-[#1E3A8A]" title={cov.primary}>{cov.primary}</span>
       </div>
       <div className="col-span-6">
-        <div className="h-1 bg-[#F3F4F6] rounded-full overflow-hidden">
-          <div className="h-full rounded-full" style={{ width: `${pct}%`, background: barColor }} />
+        <div className="h-1.5 bg-violet-100 rounded-full overflow-hidden">
+          <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: barColor }} />
         </div>
       </div>
       <div className="col-span-2 text-right tabular-nums text-[#9CA3AF]">
-        <span className="text-[#1E1B4B] font-medium">{pct}%</span>
+        <span className="text-[#1E3A8A] font-medium">{pct}%</span>
         <span className="ml-1.5">{cov.scriptedCases}/{cov.totalCases}</span>
       </div>
     </div>
@@ -296,7 +313,7 @@ function Empty({ text, linkTo, linkText }: { text: string; linkTo?: string; link
     <div className="text-center py-4 text-xs text-[#9CA3AF]">
       <div>{text}</div>
       {linkTo && linkText && (
-        <Link to={linkTo} className="inline-block mt-1 text-[#155dfc] hover:underline">
+        <Link to={linkTo} className="inline-block mt-1 text-[#2143A8] hover:underline">
           {linkText} →
         </Link>
       )}

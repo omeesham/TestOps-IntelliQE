@@ -1,37 +1,88 @@
 @import "tailwindcss";
 
 @theme {
-  /* Agentic AI Workspace — Blue / Teal palette */
-  --color-primary: #155dfc;
+  /* Agentic AI Workspace — Blue palette (brand accent #3366FF, hsl 225, 100%, 60%) */
+  --color-primary: #3366FF;
   --color-primary-foreground: #ffffff;
-  --color-secondary: #EFF5FF;
-  --color-secondary-foreground: #1E1B4B;
-  --color-background: #EFF5FF;
-  --color-foreground: #1E1B4B;
+  --color-secondary: #EEF4FF;
+  --color-secondary-foreground: #1E3A8A;
+  --color-background: #EEF4FF;
+  --color-foreground: #1E3A8A;
   --color-card: #ffffff;
-  --color-card-foreground: #1E1B4B;
-  --color-border: #C9DCFF;
-  --color-muted: #DEEAFF;
+  --color-card-foreground: #1E3A8A;
+  --color-border: #C5D6FF;
+  --color-muted: #DCE7FF;
   --color-muted-foreground: #6B7280;
-  --color-accent: #ECFEFF;
-  --color-accent-foreground: #164E63;
+  --color-accent: #3366FF;
+  --color-accent-foreground: #ffffff;
   --color-destructive: #EF4444;
   --color-destructive-foreground: #ffffff;
   --color-success: #10B981;
   --color-warning: #F59E0B;
 
   /* Extended agentic palette */
-  --color-agent-purple: #155dfc;
+  --color-agent-purple: #3366FF;
   --color-agent-blue: #3B82F6;
   --color-agent-teal: #06B6D4;
-  --color-agent-indigo: #155dfc;
-  /* Light sidebar (reference UX) */
-  --color-sidebar: #FFFFFF;
-  --color-sidebar-foreground: #475569;
-  --color-sidebar-active: #155dfc;
-  --color-sidebar-active-bg: #EFF5FF;
-  --color-sidebar-hover: #F8FAFC;
-  --color-sidebar-border: #E5E7EB;
+  --color-agent-indigo: #2645D6;
+  --color-sidebar: #1E3A8A;
+  --color-sidebar-foreground: #AEC4F5;
+  --color-sidebar-active: #3366FF;
+  --color-sidebar-hover: rgba(51, 102, 255, 0.15);
+
+  /* ── Brand blue ramps — override the violet/indigo/purple/fuchsia scales so
+     every Tailwind brand utility (bg-violet-600, from-indigo-600, text-violet-400,
+     shadow-violet-500, ring-violet-200, …) renders blue app-wide. Hue ~225,
+     anchored on the brand accent #3366FF. ── */
+  --color-violet-50:  #EEF4FF;
+  --color-violet-100: #DCE7FF;
+  --color-violet-200: #C5D6FF;
+  --color-violet-300: #97B4FF;
+  --color-violet-400: #6189FF;
+  --color-violet-500: #4070FF;
+  --color-violet-600: #3366FF;
+  --color-violet-700: #2A55D6;
+  --color-violet-800: #2143A8;
+  --color-violet-900: #1E3A8A;
+  --color-violet-950: #122456;
+
+  --color-purple-50:  #EEF4FF;
+  --color-purple-100: #DCE7FF;
+  --color-purple-200: #C5D6FF;
+  --color-purple-300: #97B4FF;
+  --color-purple-400: #6189FF;
+  --color-purple-500: #4070FF;
+  --color-purple-600: #3366FF;
+  --color-purple-700: #2A55D6;
+  --color-purple-800: #2143A8;
+  --color-purple-900: #1E3A8A;
+  --color-purple-950: #122456;
+
+  --color-fuchsia-50:  #EEF4FF;
+  --color-fuchsia-100: #DCE7FF;
+  --color-fuchsia-200: #C5D6FF;
+  --color-fuchsia-300: #97B4FF;
+  --color-fuchsia-400: #6189FF;
+  --color-fuchsia-500: #4070FF;
+  --color-fuchsia-600: #3366FF;
+  --color-fuchsia-700: #2A55D6;
+  --color-fuchsia-800: #2143A8;
+  --color-fuchsia-900: #1E3A8A;
+  --color-fuchsia-950: #122456;
+
+  /* Indigo → a slightly deeper blue so gradients (from-violet to-indigo) keep
+     depth and read as a clean blue. Hue ~226. */
+  --color-indigo-50:  #EDF1FE;
+  --color-indigo-100: #D9E2FC;
+  --color-indigo-200: #B4C6F7;
+  --color-indigo-300: #859FF1;
+  --color-indigo-400: #5878EC;
+  --color-indigo-500: #3354E6;
+  --color-indigo-600: #2645D6;
+  --color-indigo-700: #1F39B3;
+  --color-indigo-800: #182D90;
+  --color-indigo-900: #102166;
+  --color-indigo-950: #08143F;
 
   --radius: 12px;
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
@@ -48,9 +99,6 @@
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-family: var(--font-sans);
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    text-rendering: optimizeLegibility;
     margin: 0;
     height: 100%;
     overflow: hidden;
@@ -100,8 +148,8 @@
 }
 
 @keyframes pulseGlow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(21, 93, 252, 0.4); }
-  50% { box-shadow: 0 0 0 8px rgba(21, 93, 252, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(51, 102, 255, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(51, 102, 255, 0); }
 }
 .animate-pulseGlow {
   animation: pulseGlow 2s ease-in-out infinite;

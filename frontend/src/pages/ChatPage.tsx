@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { useFeatureFlags } from '@/contexts/FeatureFlagsContext';
 import {
   connectJira,
   getJiraStories,
@@ -22,16 +23,17 @@ import {
   getConfluencePage,
   getSharePointDocuments,
   getSharePointDocument,
+  extractMobileAppMetadata,
 } from '@/services/api';
 import { normalizeError } from '@/utils/apiError';
 import {
-  Send, Bot, Loader2, CheckCircle, Monitor, Plug,
+  Send, Bot, Loader2, CheckCircle, Monitor, Plug, Smartphone,
   Globe, Layers, Shield, FileText, Upload, Type, Link2,
   ArrowRight, RotateCcw, ChevronDown, Eye, EyeOff, Check, X,
   Plus, Trash2, Download, Clipboard, Cpu, Code, Search, Zap,
   BarChart3, Activity, Workflow, Box, Pencil, Save, ChevronLeft, ChevronRight,
   Play, Heart, GitBranch, Terminal, AlertTriangle, Wrench, ExternalLink, Copy, Package,
-  SkipForward, XCircle, Volume2, VolumeX, Settings, Clock,
+  SkipForward, XCircle, Volume2, VolumeX, Settings, Clock, Sparkles,
 } from 'lucide-react';
 import { initTTS, speak, speakAsync, waitForSpeech, waitForVoices, stopSpeaking, isTTSEnabled, toggleTTS } from '@/utils/tts';
 
@@ -52,6 +54,8 @@ type Step =
   | 'upload-doc'
   | 'paste-text'
   | 'explore-form'
+  | 'mobile-select'
+  | 'mobile-upload'
   | 'api-form'
   | 'column-select'
   | 'generating'
@@ -65,7 +69,19 @@ type Step =
   | 'report'
   | 'publish';
 
-type Category = 'application' | 'api';
+type Category = 'application' | 'api' | 'mobile';
+type MobilePlatform = 'android' | 'ios';
+interface MobileAppMeta {
+  platform: MobilePlatform;
+  fileName: string;
+  appName?: string;
+  packageName?: string;
+  bundleId?: string;
+  mainActivity?: string;
+  versionName?: string;
+  permissions?: string[];
+  warning?: string;
+}
 type ReqSource = 'jira' | 'confluence' | 'sharepoint' | 'upload' | 'text' | 'explore';
 
 interface FormField {
@@ -89,6 +105,7 @@ interface AgentStep {
    ═══════════════════════════════════════════════════════════════ */
 const CATEGORIES: { id: Category; title: string; icon: React.ElementType; desc: string; comingSoon?: boolean }[] = [
   { id: 'application', title: 'Web Application Automation', icon: Monitor, desc: 'Validate functional workflows, E2E testing and cross-browser behavior.' },
+  { id: 'mobile',      title: 'Mobile Application Automation', icon: Smartphone, desc: 'Upload an Android APK or iOS IPA — generate mobile test cases & Appium scripts.', comingSoon: true },
   { id: 'api',         title: 'API Automation',     icon: Plug,        desc: 'Test REST services, endpoints, and system integrations.', comingSoon: true },
 ];
 
@@ -174,6 +191,7 @@ function formatStageDuration(ms?: number): string {
    ═══════════════════════════════════════════════════════════════ */
 export default function ChatPage() {
   const { user } = useAuth();
+  const { isEnabled } = useFeatureFlags();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   /* --- state --- */
@@ -198,6 +216,24 @@ export default function ChatPage() {
   const [exploreAppName, setExploreAppName] = useState('');
   const [exploreUsername, setExploreUsername] = useState('');
   const [explorePassword, setExplorePassword] = useState('');
+
+  // Applications configured under System Configuration → Application Setup.
+  // We auto-fill the Explore form from these so the user never has to retype the
+  // URL / username / password. The real password is resolved server-side via
+  // `exploreAppId` (it's never exposed to the browser), so when a saved app is
+  // selected we send its id and let the backend back-fill the credential.
+  const [exploreApps, setExploreApps] = useState<{ integrationId: string; configData: any }[]>([]);
+  const [exploreAppId, setExploreAppId] = useState<string | null>(null);
+  const [exploreHasSavedPassword, setExploreHasSavedPassword] = useState(false);
+  const [exploreLoadingApps, setExploreLoadingApps] = useState(false);
+
+  // Mobile Application Automation state — the uploaded APK/IPA's parsed metadata
+  // drives mobile-aware generation; the actual binary is never kept client-side.
+  const [mobilePlatform, setMobilePlatform] = useState<MobilePlatform | null>(null);
+  const [mobileMeta, setMobileMeta] = useState<MobileAppMeta | null>(null);
+  const [mobileUploading, setMobileUploading] = useState(false);
+  const [mobileError, setMobileError] = useState('');
+  const mobileFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Column select + results management
   const [selectedColumns, setSelectedColumns] = useState<string[]>(ALL_COLUMNS.filter(c => c.default).map(c => c.key));
@@ -302,6 +338,8 @@ export default function ChatPage() {
       if (s.step)                   setStep(s.step);
       if (s.category)               setCategory(s.category);
       if (s.source)                 setSource(s.source);
+      if (s.mobilePlatform)         setMobilePlatform(s.mobilePlatform);
+      if (s.mobileMeta)             setMobileMeta(s.mobileMeta);
       if (s.pendingRequirements)    setPendingRequirements(s.pendingRequirements);
       if (s.storyMeta)              setStoryMeta(s.storyMeta);
       if (s.selectedColumns)        setSelectedColumns(s.selectedColumns);
@@ -313,17 +351,7 @@ export default function ChatPage() {
       if (s.healingLog?.length)     setHealingLog(s.healingLog);
       if (s.healingAttempt)         setHealingAttempt(s.healingAttempt);
       if (s.savedTestRunId)         setSavedTestRunId(s.savedTestRunId);
-      if (s.pipelineStages) {
-        // Reconcile by KEY against the current stage list — a session saved when the
-        // stage set differed must not misalign the index-paired pipeline render.
-        // Unknown saved keys are dropped; new stages default to pending.
-        const saved = new Map<string, PipelineStageState>(
-          (s.pipelineStages as PipelineStageState[]).map((x) => [x.key, x]),
-        );
-        setPipelineStages(PIPELINE_STAGES.map((def) =>
-          saved.get(def.key) ?? { key: def.key, status: 'pending' as const, detail: 'Pending' },
-        ));
-      }
+      if (s.pipelineStages)         setPipelineStages(s.pipelineStages);
       setSessionRestored(true);
       // Auto-hide after 4 seconds
       setTimeout(() => setSessionRestored(false), 4000);
@@ -341,6 +369,8 @@ export default function ChatPage() {
         step,
         category,
         source,
+        mobilePlatform,
+        mobileMeta,
         pendingRequirements,
         storyMeta,
         selectedColumns,
@@ -356,7 +386,8 @@ export default function ChatPage() {
       }));
     } catch { /* ignore quota errors */ }
   }, [
-    messages, step, category, source, pendingRequirements, storyMeta,
+    messages, step, category, source, mobilePlatform, mobileMeta,
+    pendingRequirements, storyMeta,
     selectedColumns, results, generatedScripts, executionResults,
     executionSummary, reportData, healingLog, healingAttempt,
     savedTestRunId, pipelineStages, SESSION_KEY,
@@ -376,8 +407,8 @@ export default function ChatPage() {
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const push = (sender: 'tessa' | 'user', text: string) => {
     setMessages(prev => [...prev, { id: uid(), sender, text }]);
-    // Auto-speak Tessa's messages
-    if (sender === 'tessa') {
+    // Auto-speak Tessa's messages — only when the Voice Assistant feature is on.
+    if (sender === 'tessa' && isEnabled('chat.voice')) {
       speak(text);
     }
   };
@@ -386,11 +417,20 @@ export default function ChatPage() {
     scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, step, agentSteps]);
 
-  // Role-based category filtering — data_analyst sees nothing in chat for now
+  // Role-based category filtering — data_analyst sees nothing in chat for now.
+  // Feature-flag gate (additive): hide automation types toggled off for the tenant.
   const role = user?.role || 'admin';
+  const CATEGORY_FLAG: Record<string, string> = {
+    application: 'chat.webAutomation',
+    mobile: 'chat.mobileAutomation',
+    api: 'chat.apiAutomation',
+  };
   const visibleCategories = CATEGORIES.filter((c) => {
     if (role === 'data_analyst') return false;
-    return c.id === 'application' || c.id === 'api';
+    if (!(c.id === 'application' || c.id === 'api' || c.id === 'mobile')) return false;
+    const flag = CATEGORY_FLAG[c.id];
+    if (flag && !isEnabled(flag)) return false;
+    return true;
   });
 
   // welcome — runs once, waits for voices so Zira is used from the start
@@ -422,6 +462,13 @@ export default function ChatPage() {
     if (c.id === 'api') {
       push('tessa', 'Please provide the API details below.');
       setStep('api-form');
+    } else if (c.id === 'mobile') {
+      // Reset any prior mobile selection so a fresh flow starts clean.
+      setMobilePlatform(null);
+      setMobileMeta(null);
+      setMobileError('');
+      push('tessa', 'Which mobile platform are we automating?');
+      setStep('mobile-select');
     } else {
       push('tessa', 'How would you like to provide the requirements?');
       setStep('source-select');
@@ -440,8 +487,17 @@ export default function ChatPage() {
       push('tessa', 'Paste or type your requirements below.');
       setStep('paste-text');
     } else if (s === 'explore') {
-      push('tessa', "No problem — give me the application URL (and credentials if it's behind a login) and I'll explore it to figure out what to test.");
+      // Reset any prior prefill, then auto-fill from Application Setup.
+      setExploreAppId(null);
+      setExploreApps([]);
+      setExploreHasSavedPassword(false);
+      setExploreUrl('');
+      setExploreAppName('');
+      setExploreUsername('');
+      setExplorePassword('');
+      push('tessa', 'Select the application you want to test — these come from your Application Setup.');
       setStep('explore-form');
+      await prefillExploreFromConfig();
     } else {
       const label = s === 'jira' ? 'JIRA' : s === 'confluence' ? 'Confluence' : 'SharePoint';
       // Check if already connected via System Configuration
@@ -458,9 +514,8 @@ export default function ChatPage() {
               setStories(list);
               push('tessa', `Found ${list.length} stories/tasks. Select one to generate test cases.`);
               setStep('content-select');
-            } catch (err: any) {
-              const errMsg = err?.response?.data?.error || err?.response?.data?.message || err?.message || 'Unknown error';
-              push('tessa', `${label} is connected but I could not fetch stories: ${errMsg}. Please verify your credentials in System Configuration.`);
+            } catch {
+              push('tessa', `${label} is connected but I could not fetch stories. Please verify your credentials in System Configuration.`);
             }
           } else if (s === 'confluence') {
             // Real Confluence fetch — list pages from the connected wiki.
@@ -643,6 +698,54 @@ export default function ChatPage() {
     setStep('column-select');
   };
 
+  /* --- explore prefill from Application Setup ---
+     Pull the saved applications (System Configuration → Application Setup) and
+     auto-fill the explore form so the user never retypes the URL / username /
+     password. URL, app name and username are non-sensitive and shown directly;
+     the password stays encrypted server-side and is resolved at generation time
+     via exploreAppId, so here we only flag whether a saved password exists. */
+  const applyExploreApp = (cfg: { integrationId: string; configData: any }) => {
+    const d = cfg.configData || {};
+    setExploreAppId(cfg.integrationId);
+    setExploreUrl(d.baseUrl || '');
+    setExploreAppName(d.appName || '');
+    const firstRole = Array.isArray(d.roles) ? d.roles.find((r: any) => r?.username) : null;
+    setExploreUsername(firstRole?.username || '');
+    // Never prefill the password field with stored ciphertext — the backend
+    // uses the saved credential automatically when the field is left blank.
+    setExplorePassword('');
+    setExploreHasSavedPassword(Boolean(firstRole?.password));
+  };
+
+  const prefillExploreFromConfig = async () => {
+    setExploreLoadingApps(true);
+    try {
+      const result = await getConfigurations();
+      const configs = result.configs || [];
+      const apps = configs.filter(
+        (c: any) =>
+          typeof c.integrationId === 'string' &&
+          c.integrationId.startsWith('app-') &&
+          c.configData?.baseUrl,
+      );
+      setExploreApps(apps);
+      if (apps.length > 0) {
+        applyExploreApp(apps[0]);
+        const name = apps[0].configData?.appName || apps[0].integrationId.replace(/^app-/, '');
+        push(
+          'tessa',
+          apps.length > 1
+            ? `You have ${apps.length} applications configured. Select one by name below, then click Start Exploration.`
+            : `Found "${name}" in your Application Setup. Click Start Exploration to begin — I'll use its saved URL and credentials.`,
+        );
+      }
+    } catch {
+      // Non-fatal — the user can still type the details manually.
+    } finally {
+      setExploreLoadingApps(false);
+    }
+  };
+
   /* --- explore submit ---
      The user has given us only a URL (optionally with credentials). We stash
      an "EXPLORE_MODE" marker into pendingRequirements so runGeneration knows
@@ -650,15 +753,60 @@ export default function ChatPage() {
      sent — runGeneration unpacks it back into structured options. */
   const handleExploreSubmit = () => {
     if (!exploreUrl.trim()) return;
-    const summary = exploreUsername
-      ? `Explore ${exploreUrl} as ${exploreUsername}`
-      : `Explore ${exploreUrl} (anonymous)`;
+    // Show only the chosen application's name — the URL/credentials are pulled
+    // from Application Setup behind the scenes.
+    const summary = `Explore ${exploreAppName || exploreUrl}`;
     push('user', summary);
     // The literal placeholder is what we'll show in the column-select UI;
     // the real backend call uses exploreMode + roles, not this text.
     setPendingRequirements(`__EXPLORE__:${exploreUrl}`);
     push('tessa', "Got it. I'll crawl the application, infer the features, then generate the test cases. Pick the columns you want and I'll start.");
     setStep('column-select');
+  };
+
+  /* --- mobile: platform choice + APK/IPA upload ---
+     The uploaded build is parsed server-side for metadata (package/bundle id,
+     version, permissions). Requirements still come from the existing sources
+     (JIRA / upload / paste); the metadata is folded into generation so the AI
+     produces native-mobile test cases and Appium scripts. */
+  const pickMobilePlatform = (p: MobilePlatform) => {
+    setMobilePlatform(p);
+    push('user', p === 'android' ? 'Android' : 'iOS');
+    push('tessa', p === 'android'
+      ? "Great — upload your Android .apk build and I'll read its details."
+      : "Great — upload your iOS .ipa build and I'll read its details.");
+    setStep('mobile-upload');
+  };
+
+  const openMobileFilePicker = () => {
+    setMobileError('');
+    mobileFileInputRef.current?.click();
+  };
+
+  const handleMobileFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setMobileError('');
+    setMobileUploading(true);
+    push('user', `Uploading: ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`);
+    try {
+      const meta = await extractMobileAppMetadata(file);
+      setMobileMeta(meta);
+      if (meta.platform) setMobilePlatform(meta.platform);
+      const idLine = meta.platform === 'ios'
+        ? (meta.bundleId ? `Bundle id ${meta.bundleId}` : 'bundle id not detected')
+        : (meta.packageName ? `package ${meta.packageName}` : 'package not detected');
+      const verLine = meta.versionName ? `, v${meta.versionName}` : '';
+      push('tessa', `Got "${meta.appName || meta.fileName}" (${idLine}${verLine}).${meta.warning ? ` Note: ${meta.warning}` : ''}\n\nNow choose where the requirements should come from and I'll generate mobile test cases.`);
+      setStep('source-select');
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || 'Upload failed';
+      setMobileError(msg);
+      push('tessa', `I couldn't read that build: ${msg}`);
+    } finally {
+      setMobileUploading(false);
+    }
   };
 
   /* --- API form submit --- */
@@ -755,6 +903,9 @@ export default function ChatPage() {
       // the marker string as actual requirements.
       const isExplore = source === 'explore' || requirements.startsWith('__EXPLORE__:');
       if (isExplore) {
+        // Send the username with whatever password the user typed. If the field
+        // was left blank but the app came from Application Setup (exploreAppId),
+        // the backend back-fills the saved password — it's never sent from here.
         const roles = exploreUsername
           ? [{ roleName: 'user', username: exploreUsername, password: explorePassword }]
           : undefined;
@@ -763,6 +914,24 @@ export default function ChatPage() {
           targetUrl: exploreUrl,
           appName: exploreAppName || undefined,
           roles,
+          appId: exploreAppId || undefined,
+        });
+        runId = started?.runId || '';
+      } else if (category === 'mobile') {
+        // Mobile path: requirements come from the chosen source; the uploaded
+        // app's metadata + platform steer native-mobile test generation.
+        const started = await startGeneration(requirements, subCategory || undefined, {
+          platform: mobilePlatform || undefined,
+          appMetadata: mobileMeta
+            ? {
+                packageName: mobileMeta.packageName,
+                bundleId: mobileMeta.bundleId,
+                mainActivity: mobileMeta.mainActivity,
+                versionName: mobileMeta.versionName,
+                permissions: mobileMeta.permissions,
+                fileName: mobileMeta.fileName,
+              }
+            : undefined,
         });
         runId = started?.runId || '';
       } else {
@@ -853,6 +1022,19 @@ export default function ChatPage() {
         source: source || undefined,
         columns: selectedColumns,
         testCases: results.testCases,
+        // Mark mobile runs so script generation emits Appium and execution
+        // dispatches to the (gated) mobile runner.
+        platform: category === 'mobile' ? (mobilePlatform || undefined) : undefined,
+        appMetadata: category === 'mobile' && mobileMeta
+          ? {
+              packageName: mobileMeta.packageName,
+              bundleId: mobileMeta.bundleId,
+              mainActivity: mobileMeta.mainActivity,
+              versionName: mobileMeta.versionName,
+              permissions: mobileMeta.permissions,
+              fileName: mobileMeta.fileName,
+            }
+          : undefined,
       });
       setSavedTestRunId(res.testRunId);
       push('tessa', `${results.testCases.length} test cases saved successfully! You can now export them or proceed to automation script generation.`);
@@ -994,6 +1176,26 @@ export default function ChatPage() {
 
     if (execRes?.runId) setCurrentRunId(execRes.runId);
 
+    // Mobile (gated): the backend reports it did NOT execute on-device. Surface
+    // that honestly — never map empty results into a misleading "0 passed".
+    if (execRes?.summary && execRes.summary.executed === false) {
+      const reason = execRes.summary.reason || 'Mobile tests were not executed on this host (no device/Appium).';
+      const details: any[] = Array.isArray(execRes.executionDetails) ? execRes.executionDetails : [];
+      const rows = (generatedScripts.length ? generatedScripts : details).map((s: any, i: number) => ({
+        testCaseId: s.testCaseId || details[i]?.testCaseId || `m-${i}`,
+        testName: String(s.fileName || details[i]?.scenario || 'Mobile test').replace(/\.(e2e|spec)\.ts$/, ''),
+        status: 'not_run' as const,
+        duration: '',
+        error: reason,
+      }));
+      setExecutionResults(rows);
+      setExecutionSummary({ total: rows.length, passed: 0, failed: 0, duration: '0.00s' });
+      updatePipeline('execution', 'skipped', 'Not executed (no device)');
+      push('tessa', `📱 ${reason} Your Appium scripts are generated and ready — connect a device/emulator (and set APPIUM_SERVER_URL on the server) to run them. You can still generate a report of the suite.`);
+      setStep('execution-results');
+      return;
+    }
+
     // ─────────────────────────────────────────────────────────────
     // Map backend's REAL execution details onto our local result rows.
     // No artificial delays. No fabricated durations. No index-based
@@ -1042,15 +1244,6 @@ export default function ChatPage() {
 
     if (failed > 0) {
       push('tessa', `Execution complete: ${passed} passed, ${failed} failed out of ${finalResults.length} tests. You can auto-heal failing tests or skip to report.`);
-    } else if (passed === 0) {
-      // Nothing passed AND nothing failed → no test actually ran (all not_run).
-      // NEVER claim "all passed" here — that masked broken/non-runnable scripts.
-      push('tessa', `⚠️ No tests actually executed — ${notRun} script(s) produced no result. ${execRes?.failureReason || 'The generated scripts may not be runnable; review them in Automation Scripts and regenerate if needed.'}`);
-      updatePipeline('execution', 'skipped', `0/${finalResults.length} executed`);
-      setStep('execution-results');
-      return;
-    } else if (notRun > 0) {
-      push('tessa', `${passed} of ${finalResults.length} tests passed; ${notRun} did not run. Review the report, or regenerate the scripts that didn't run.`);
     } else {
       push('tessa', `All ${passed} tests passed! Proceed to generate the execution report.`);
     }
@@ -1206,18 +1399,7 @@ export default function ChatPage() {
     if (savedTestRunId) {
       setReportGenStatus('generating');
       try {
-        // Pass the wizard's final per-test results so the downloadable Allure
-        // report is built from the SAME data shown above — guaranteeing the
-        // report's pass/fail matches the Test Execution Report (no stale snapshot).
-        const allure = await generateAllureReport(
-          savedTestRunId,
-          executionResults.map(r => ({
-            testCaseId: r.testCaseId,
-            status: r.status,
-            durationMs: Math.round((parseFloat(r.duration || '0') || 0) * 1000),
-            error: r.error,
-          })),
-        );
+        const allure = await generateAllureReport(savedTestRunId);
         if (allure?.reportUrl) {
           setReportDownloadUrl(allure.reportUrl.replace(/\/index\.html$/, '/download'));
           setReportGenStatus('ready');
@@ -1438,7 +1620,7 @@ export default function ChatPage() {
   /* ═══════════════════════════════════════════════════════════════
      RENDER HELPERS
      ═══════════════════════════════════════════════════════════════ */
-  const inputCls = 'w-full px-3.5 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-800 placeholder:text-gray-400 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 transition-all';
+  const inputCls = 'w-full px-3.5 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-800 placeholder:text-gray-400 outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400 transition-all';
 
   const renderFormField = (f: FormField) => {
     const val = formValues[f.key] || '';
@@ -1459,7 +1641,7 @@ export default function ChatPage() {
               className={inputCls + (isPass ? ' pr-9' : '')}
             />
             {isPass && (
-              <button type="button" onClick={() => setShowPasswords(p => ({ ...p, [f.key]: !p[f.key] }))} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#155dfc]">
+              <button type="button" onClick={() => setShowPasswords(p => ({ ...p, [f.key]: !p[f.key] }))} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-violet-500">
                 {show ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
               </button>
             )}
@@ -1476,62 +1658,80 @@ export default function ChatPage() {
     /* ── WELCOME: Category Cards ── */
     if (step === 'welcome') {
       return (
-        <div className="grid grid-cols-2 gap-3 max-w-lg ml-11">
-          {visibleCategories.map((c) => {
-            const Icon = c.icon;
-            const isComingSoon = c.comingSoon === true;
-            return (
-              <button
-                key={c.id}
-                onClick={() => pickCategory(c)}
-                disabled={isComingSoon}
-                aria-disabled={isComingSoon}
-                className={
-                  isComingSoon
-                    ? 'relative text-left p-4 bg-white border border-gray-100 rounded-xl opacity-60 cursor-not-allowed'
-                    : 'group relative text-left p-4 bg-white border border-gray-100 rounded-xl hover:border-blue-300 hover:shadow-md hover:shadow-blue-500/5 transition-all'
-                }
-              >
-                {isComingSoon && (
-                  <span className="absolute top-2 right-2 px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full text-[10px] font-semibold uppercase tracking-wide">
-                    Coming Soon
-                  </span>
-                )}
-                <div
+        <div className="ml-11 max-w-lg">
+          <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-violet-700 mb-3">
+            <Sparkles className="w-3.5 h-3.5" /> Choose what to test
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            {visibleCategories.map((c) => {
+              const Icon = c.icon;
+              const isComingSoon = c.comingSoon === true;
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => pickCategory(c)}
+                  disabled={isComingSoon}
+                  aria-disabled={isComingSoon}
                   className={
-                    'w-9 h-9 rounded-lg flex items-center justify-center mb-3 ' +
-                    (isComingSoon
-                      ? 'bg-gradient-to-br from-gray-300 to-gray-400'
-                      : 'bg-gradient-to-br from-blue-500 to-blue-600')
+                    isComingSoon
+                      ? 'relative text-left p-4 bg-white border border-gray-100 rounded-2xl opacity-60 cursor-not-allowed'
+                      : 'group relative text-left p-4 bg-white border border-[#DCE7FF] rounded-2xl hover:border-violet-300 hover:shadow-lg hover:shadow-violet-500/10 hover:-translate-y-0.5 transition-all duration-200 overflow-hidden'
                   }
                 >
-                  <Icon className="w-4.5 h-4.5 text-white" />
-                </div>
-                <p
-                  className={
-                    'text-sm font-semibold ' +
-                    (isComingSoon ? 'text-gray-500' : 'text-gray-800 group-hover:text-[#155dfc]')
-                  }
-                >
-                  {c.title}
-                </p>
-                <p className="text-[11px] text-gray-400 mt-0.5">{c.desc}</p>
-              </button>
-            );
-          })}
+                  {!isComingSoon && (
+                    <span className="pointer-events-none absolute inset-0 bg-gradient-to-br from-violet-50/0 to-violet-50/0 group-hover:from-violet-50/70 group-hover:to-indigo-50/40 transition-colors" />
+                  )}
+                  {isComingSoon && (
+                    <span className="absolute top-2 right-2 px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full text-[10px] font-semibold uppercase tracking-wide">
+                      Coming Soon
+                    </span>
+                  )}
+                  <div
+                    className={
+                      'relative w-10 h-10 rounded-xl flex items-center justify-center mb-3 transition-transform duration-200 ' +
+                      (isComingSoon
+                        ? 'bg-gradient-to-br from-gray-300 to-gray-400 blur-[1.5px]'
+                        : 'bg-gradient-to-br from-violet-500 to-indigo-600 shadow-md shadow-violet-500/25 group-hover:scale-105')
+                    }
+                  >
+                    <Icon className="w-5 h-5 text-white" />
+                  </div>
+                  <p
+                    className={
+                      'relative text-sm font-semibold ' +
+                      (isComingSoon ? 'text-gray-500 blur-[1.5px]' : 'text-gray-800 group-hover:text-violet-700')
+                    }
+                  >
+                    {c.title}
+                  </p>
+                  <p className={'relative text-[11px] text-gray-400 mt-0.5' + (isComingSoon ? ' blur-[1.5px]' : '')}>{c.desc}</p>
+                  {!isComingSoon && (
+                    <ArrowRight className="relative w-4 h-4 text-violet-700 mt-2 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-200" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
       );
     }
 
     /* ── SOURCE SELECT ── */
     if (step === 'source-select') {
+      // For mobile runs, the "Explore App (URL only)" source crawls a live web
+      // URL — not applicable — so it's hidden; all other sources are reused.
+      const sources = REQ_SOURCES.filter((s) => {
+        // Explore is web-only and separately toggleable.
+        if (s.id === 'explore') return category !== 'mobile' && isEnabled('chat.explore');
+        return true;
+      });
       return (
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-w-lg ml-11">
-          {REQ_SOURCES.map(s => {
+          {sources.map(s => {
             const Icon = s.icon;
             return (
-              <button key={s.id} onClick={() => pickSource(s.id)} className="group text-left p-3.5 bg-white border border-gray-100 rounded-xl hover:border-blue-300 hover:shadow-md transition-all">
-                <Icon className="w-5 h-5 text-blue-500 mb-2" />
+              <button key={s.id} onClick={() => pickSource(s.id)} className="group text-left p-3.5 bg-white border border-gray-100 rounded-xl hover:border-violet-300 hover:shadow-md transition-all">
+                <Icon className="w-5 h-5 text-violet-500 mb-2" />
                 <p className="text-sm font-medium text-gray-800">{s.title}</p>
                 <p className="text-[11px] text-gray-400">{s.desc}</p>
               </button>
@@ -1541,19 +1741,96 @@ export default function ChatPage() {
       );
     }
 
+    /* ── MOBILE: PLATFORM SELECT ── */
+    if (step === 'mobile-select') {
+      const platforms: { id: MobilePlatform; title: string; desc: string }[] = [
+        { id: 'android', title: 'Android', desc: 'Upload an .apk build' },
+        { id: 'ios', title: 'iOS', desc: 'Upload an .ipa build' },
+      ];
+      return (
+        <div className="grid grid-cols-2 gap-2.5 max-w-sm ml-11">
+          {platforms.map(p => (
+            <button
+              key={p.id}
+              onClick={() => pickMobilePlatform(p.id)}
+              className="group text-left p-4 bg-white border border-gray-100 rounded-xl hover:border-violet-300 hover:shadow-md transition-all"
+            >
+              <Smartphone className="w-5 h-5 text-violet-500 mb-2" />
+              <p className="text-sm font-medium text-gray-800">{p.title}</p>
+              <p className="text-[11px] text-gray-400">{p.desc}</p>
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    /* ── MOBILE: APK / IPA UPLOAD ── */
+    if (step === 'mobile-upload') {
+      const accept = mobilePlatform === 'ios' ? '.ipa' : '.apk';
+      const label = mobilePlatform === 'ios' ? 'iOS .ipa' : 'Android .apk';
+      return (
+        <div className="max-w-md ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm">
+          <input
+            ref={mobileFileInputRef}
+            type="file"
+            accept={accept}
+            className="hidden"
+            onChange={handleMobileFileSelected}
+          />
+          <div
+            className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+              mobileUploading ? 'border-violet-300 bg-violet-50/50 cursor-wait' : 'border-gray-200 hover:border-violet-300 cursor-pointer'
+            }`}
+            onClick={mobileUploading ? undefined : openMobileFilePicker}
+            onDragOver={(e) => { e.preventDefault(); }}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (mobileUploading) return;
+              const f = e.dataTransfer.files?.[0];
+              if (f && mobileFileInputRef.current) {
+                const dt = new DataTransfer();
+                dt.items.add(f);
+                mobileFileInputRef.current.files = dt.files;
+                mobileFileInputRef.current.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+            }}
+          >
+            {mobileUploading ? (
+              <>
+                <Loader2 className="w-8 h-8 text-violet-500 mx-auto mb-3 animate-spin" />
+                <p className="text-sm font-medium text-gray-700">Reading your {label} build…</p>
+                <p className="text-xs text-gray-400 mt-1">Large builds can take a moment to upload.</p>
+              </>
+            ) : (
+              <>
+                <Smartphone className="w-8 h-8 text-violet-700 mx-auto mb-3" />
+                <p className="text-sm font-medium text-gray-700">Drop your {label} here or click to browse</p>
+                <p className="text-xs text-gray-400 mt-1">{accept} — up to 300 MB</p>
+              </>
+            )}
+          </div>
+          {mobileError && (
+            <div className="mt-3 text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+              {mobileError}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     /* ── CONNECT FORM — redirects to System Configuration ── */
     if (step === 'connect-form' && source) {
       const label = source === 'jira' ? 'JIRA' : source === 'confluence' ? 'Confluence' : 'SharePoint';
       return (
         <div className="max-w-md ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm text-center">
-          <Link2 className="w-8 h-8 text-blue-400 mx-auto mb-3" />
+          <Link2 className="w-8 h-8 text-violet-700 mx-auto mb-3" />
           <p className="text-sm font-semibold text-gray-800 mb-1">{label} Not Configured</p>
           <p className="text-xs text-gray-500 mb-4">
             Set up your {label} connection in System Configuration to continue.
           </p>
           <button
             onClick={() => window.location.href = '/system-configuration'}
-            className="px-5 py-2 bg-[#155dfc] text-white text-sm font-medium rounded-lg hover:bg-[#124fd6] transition-all inline-flex items-center gap-2"
+            className="px-5 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-sm font-medium rounded-lg hover:from-violet-500 hover:to-indigo-500 transition-all inline-flex items-center gap-2"
           >
             <Settings className="w-4 h-4" />
             Go to System Configuration
@@ -1583,7 +1860,7 @@ export default function ChatPage() {
               );
             })}
           </select>
-          <button onClick={handleStorySelect} disabled={!selectedStory} className="mt-3 w-full py-2.5 bg-[#155dfc] hover:bg-[#124fd6] disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2">
+          <button onClick={handleStorySelect} disabled={!selectedStory} className="mt-3 w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2">
             <ArrowRight className="w-4 h-4" />Proceed
           </button>
         </div>
@@ -1605,8 +1882,8 @@ export default function ChatPage() {
           <div
             className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
               uploadInProgress
-                ? 'border-blue-300 bg-blue-50/50 cursor-wait'
-                : 'border-gray-200 hover:border-blue-300 cursor-pointer'
+                ? 'border-violet-300 bg-violet-50/50 cursor-wait'
+                : 'border-gray-200 hover:border-violet-300 cursor-pointer'
             }`}
             onClick={uploadInProgress ? undefined : openFilePicker}
             onDragOver={(e) => { e.preventDefault(); }}
@@ -1625,13 +1902,13 @@ export default function ChatPage() {
           >
             {uploadInProgress ? (
               <>
-                <Loader2 className="w-8 h-8 text-blue-500 mx-auto mb-3 animate-spin" />
+                <Loader2 className="w-8 h-8 text-violet-500 mx-auto mb-3 animate-spin" />
                 <p className="text-sm font-medium text-gray-700">Extracting text from your document…</p>
                 <p className="text-xs text-gray-400 mt-1">This usually takes a few seconds.</p>
               </>
             ) : (
               <>
-                <Upload className="w-8 h-8 text-blue-400 mx-auto mb-3" />
+                <Upload className="w-8 h-8 text-violet-700 mx-auto mb-3" />
                 <p className="text-sm font-medium text-gray-700">Drop your file here or click to browse</p>
                 <p className="text-xs text-gray-400 mt-1">PDF, DOCX, TXT, or MD — up to 15 MB</p>
               </>
@@ -1651,7 +1928,7 @@ export default function ChatPage() {
       return (
         <div className="max-w-md ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm">
           <textarea value={pasteText} onChange={e => setPasteText(e.target.value)} placeholder="Paste your requirements, user stories, or acceptance criteria here..." rows={6} className={inputCls + ' resize-none'} />
-          <button onClick={handleTextSubmit} disabled={!pasteText.trim()} className="mt-3 w-full py-2.5 bg-[#155dfc] hover:bg-[#124fd6] disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2">
+          <button onClick={handleTextSubmit} disabled={!pasteText.trim()} className="mt-3 w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2">
             <Send className="w-4 h-4" />Submit Requirements
           </button>
         </div>
@@ -1663,72 +1940,76 @@ export default function ChatPage() {
        will crawl the URL (logging in with the supplied creds if any) and
        synthesise requirements before generating test cases. */
     if (step === 'explore-form') {
+      const selectedApp = exploreApps.find((a) => a.integrationId === exploreAppId);
+      const selectedName = selectedApp?.configData?.appName || selectedApp?.integrationId?.replace(/^app-/, '') || '';
       return (
-        <div className="max-w-lg ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm space-y-3">
+        <div className="max-w-md ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm space-y-3">
           <div className="flex items-center gap-2 mb-1">
-            <Search className="w-4 h-4 text-blue-500" />
+            <Search className="w-4 h-4 text-violet-500" />
             <span className="text-sm font-semibold text-gray-800">Explore Application</span>
           </div>
-          <p className="text-xs text-gray-500 -mt-1">I'll launch a headless browser, crawl your app's main pages, and infer the features that need test coverage. Credentials are used only for the crawl and are not stored.</p>
+          <p className="text-xs text-gray-500 -mt-1">Pick an application from your Application Setup. I'll explore it using its saved URL and credentials, then generate test cases, scripts, and reports.</p>
 
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Application URL <span className="text-rose-500">*</span></label>
-            <input
-              value={exploreUrl}
-              onChange={(e) => setExploreUrl(e.target.value)}
-              placeholder="https://app.example.com"
-              className={inputCls}
-            />
-          </div>
+          {exploreLoadingApps && (
+            <div className="flex items-center gap-2 text-xs text-gray-500">
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-500" />
+              Loading your applications…
+            </div>
+          )}
 
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Application name (optional)</label>
-            <input
-              value={exploreAppName}
-              onChange={(e) => setExploreAppName(e.target.value)}
-              placeholder="e.g. Acme Banking Portal"
-              className={inputCls}
-            />
-          </div>
+          {/* No saved apps — point the user to Application Setup */}
+          {!exploreLoadingApps && exploreApps.length === 0 && (
+            <div className="flex items-start gap-2 text-[11px] text-gray-500 bg-violet-50/50 border border-violet-100 rounded-lg px-3 py-2">
+              <Settings className="w-3.5 h-3.5 text-violet-500 mt-0.5 flex-shrink-0" />
+              <span>
+                No applications are configured yet. Add one in{' '}
+                <button
+                  type="button"
+                  onClick={() => (window.location.href = '/system-configuration')}
+                  className="text-violet-600 font-medium underline underline-offset-2 hover:text-violet-700"
+                >
+                  System Configuration → Application Setup
+                </button>{' '}
+                with its URL and credentials, then come back here.
+              </span>
+            </div>
+          )}
 
-          <div className="pt-1 border-t border-gray-100">
-            <p className="text-[11px] uppercase tracking-wide text-gray-400 mb-2">Optional — required only if the app is behind a login</p>
-            <div className="grid grid-cols-2 gap-2">
+          {/* Application name picker — the only thing the user sees/selects */}
+          {!exploreLoadingApps && exploreApps.length > 0 && (
+            <>
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Username / Email</label>
-                <input
-                  value={exploreUsername}
-                  onChange={(e) => setExploreUsername(e.target.value)}
-                  placeholder="alice@example.com"
-                  className={inputCls}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Password</label>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Application</label>
                 <div className="relative">
-                  <input
-                    type={showPasswords['explore'] ? 'text' : 'password'}
-                    value={explorePassword}
-                    onChange={(e) => setExplorePassword(e.target.value)}
-                    placeholder="••••••••"
-                    className={inputCls + ' pr-9'}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPasswords((p) => ({ ...p, explore: !p.explore }))}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  <select
+                    value={exploreAppId || ''}
+                    onChange={(e) => {
+                      const cfg = exploreApps.find((a) => a.integrationId === e.target.value);
+                      if (cfg) applyExploreApp(cfg);
+                    }}
+                    className={inputCls + ' appearance-none pr-9'}
                   >
-                    {showPasswords['explore'] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
+                    {exploreApps.map((a) => (
+                      <option key={a.integrationId} value={a.integrationId}>
+                        {a.configData?.appName || a.integrationId.replace(/^app-/, '')}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 </div>
               </div>
-            </div>
-          </div>
+
+              <p className="text-[11px] text-violet-500 flex items-center gap-1">
+                <CheckCircle className="w-3 h-3" />
+                {selectedName ? `"${selectedName}" — using saved URL & credentials from Application Setup` : 'Using saved URL & credentials from Application Setup'}
+              </p>
+            </>
+          )}
 
           <button
             onClick={handleExploreSubmit}
-            disabled={!exploreUrl.trim()}
-            className="mt-2 w-full py-2.5 bg-[#155dfc] hover:bg-[#124fd6] disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+            disabled={!exploreAppId}
+            className="mt-2 w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
           >
             <Search className="w-4 h-4" />Start Exploration
           </button>
@@ -1741,13 +2022,13 @@ export default function ChatPage() {
       return (
         <div className="max-w-lg ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm space-y-4">
           <div className="flex items-center gap-2 mb-1">
-            <Plug className="w-4 h-4 text-blue-500" />
+            <Plug className="w-4 h-4 text-violet-500" />
             <span className="text-sm font-semibold text-gray-800">API Configuration</span>
           </div>
 
           {/* URL + Method */}
           <div className="flex gap-2">
-            <select value={apiMethod} onChange={e => setApiMethod(e.target.value)} className="px-3 py-2.5 bg-blue-50 border border-blue-200 rounded-lg text-sm font-medium text-blue-700 outline-none w-28">
+            <select value={apiMethod} onChange={e => setApiMethod(e.target.value)} className="px-3 py-2.5 bg-violet-50 border border-violet-200 rounded-lg text-sm font-medium text-violet-700 outline-none w-28">
               {['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map(m => <option key={m}>{m}</option>)}
             </select>
             <input value={apiUrl} onChange={e => setApiUrl(e.target.value)} placeholder="https://api.example.com/v1/resource" className={inputCls + ' flex-1'} />
@@ -1757,7 +2038,7 @@ export default function ChatPage() {
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-xs font-medium text-gray-600">Headers</label>
-              <button onClick={() => setApiHeaders(h => [...h, { key: '', value: '' }])} className="text-xs text-blue-500 hover:text-[#155dfc] flex items-center gap-0.5"><Plus className="w-3 h-3" />Add</button>
+              <button onClick={() => setApiHeaders(h => [...h, { key: '', value: '' }])} className="text-xs text-violet-500 hover:text-violet-700 flex items-center gap-0.5"><Plus className="w-3 h-3" />Add</button>
             </div>
             {apiHeaders.map((h, i) => (
               <div key={i} className="flex gap-2 mb-1.5">
@@ -1796,7 +2077,7 @@ export default function ChatPage() {
             <textarea value={apiSampleResp} onChange={e => setApiSampleResp(e.target.value)} placeholder='{ "status": "ok", "data": [...] }' rows={3} className={inputCls + ' resize-none font-mono text-xs'} />
           </div>
 
-          <button onClick={handleApiSubmit} disabled={!apiUrl.trim()} className="w-full py-2.5 bg-[#155dfc] hover:bg-[#124fd6] disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2">
+          <button onClick={handleApiSubmit} disabled={!apiUrl.trim()} className="w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2">
             <Zap className="w-4 h-4" />Generate API Tests
           </button>
         </div>
@@ -1808,20 +2089,20 @@ export default function ChatPage() {
       return (
         <div className="max-w-md ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm">
           <div className="flex items-center gap-2 mb-4">
-            <Layers className="w-4 h-4 text-blue-500" />
+            <Layers className="w-4 h-4 text-violet-500" />
             <span className="text-sm font-semibold text-gray-800">Select Test Case Columns</span>
           </div>
           <p className="text-xs text-gray-500 mb-3">Choose which columns to include in your generated test cases.</p>
           <div className="space-y-1">
             {ALL_COLUMNS.map(col => (
-              <label key={col.key} className="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-blue-50/50 cursor-pointer transition-colors">
+              <label key={col.key} className="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-violet-50/50 cursor-pointer transition-colors">
                 <input
                   type="checkbox"
                   checked={selectedColumns.includes(col.key)}
                   onChange={() => setSelectedColumns(prev =>
                     prev.includes(col.key) ? prev.filter(k => k !== col.key) : [...prev, col.key]
                   )}
-                  className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  className="w-4 h-4 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
                 />
                 <span className="text-sm text-gray-700">{col.label}</span>
                 {col.default && <span className="text-[10px] text-gray-400 ml-auto">(default)</span>}
@@ -1831,7 +2112,7 @@ export default function ChatPage() {
           <button
             onClick={() => { setStep('generating'); runGeneration(pendingRequirements); }}
             disabled={selectedColumns.length === 0}
-            className="mt-4 w-full py-2.5 bg-[#155dfc] hover:bg-[#124fd6] disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+            className="mt-4 w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
           >
             <Zap className="w-4 h-4" />Generate Test Cases
           </button>
@@ -1844,7 +2125,7 @@ export default function ChatPage() {
       const loadingText = step === 'script-generating' ? 'Generating scripts...' : 'Generating test cases...';
       return (
         <div className="max-w-md ml-11 flex items-center gap-2.5 px-4 py-3 bg-white border border-gray-100 rounded-xl shadow-sm">
-          <Loader2 className="w-4 h-4 text-blue-500 animate-spin flex-shrink-0" />
+          <Loader2 className="w-4 h-4 text-violet-500 animate-spin flex-shrink-0" />
           <span className="text-sm text-gray-600">{loadingText}</span>
         </div>
       );
@@ -1861,7 +2142,7 @@ export default function ChatPage() {
         t === 'positive' ? 'bg-emerald-50 text-emerald-700' :
         t === 'negative' ? 'bg-rose-50 text-rose-700' :
         t === 'edge' ? 'bg-orange-50 text-orange-700' :
-        t === 'e2e' ? 'bg-blue-50 text-blue-700' :
+        t === 'e2e' ? 'bg-violet-50 text-violet-700' :
         t === 'api' ? 'bg-sky-50 text-sky-700' :
         'bg-gray-50 text-gray-600';
       const colVisible = (key: string) => selectedColumns.includes(key);
@@ -1873,13 +2154,13 @@ export default function ChatPage() {
           <div className="bg-white border border-gray-100 rounded-xl px-4 py-3 shadow-sm flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-3">
               <span className="text-sm font-semibold text-gray-800">
-                <FileText className="w-4 h-4 inline -mt-0.5 mr-1 text-blue-500" />
+                <FileText className="w-4 h-4 inline -mt-0.5 mr-1 text-violet-500" />
                 Test Cases ({totalTcs})
               </span>
               <select
                 value={tcPageSize}
                 onChange={e => { setTcPageSize(Number(e.target.value)); setTcPage(1); }}
-                className="text-xs border border-gray-200 rounded-md px-2 py-1 text-gray-600 bg-white outline-none focus:border-blue-400"
+                className="text-xs border border-gray-200 rounded-md px-2 py-1 text-gray-600 bg-white outline-none focus:border-violet-400"
               >
                 {PAGE_SIZES.map(s => <option key={s} value={s}>{s} per page</option>)}
               </select>
@@ -1893,7 +2174,7 @@ export default function ChatPage() {
               <button
                 onClick={handleSaveTestCases}
                 disabled={isSaving || totalTcs === 0}
-                className="px-4 py-1.5 bg-[#155dfc] hover:bg-[#124fd6] disabled:opacity-40 text-white text-xs font-medium rounded-lg transition-all flex items-center gap-1.5"
+                className="px-4 py-1.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-xs font-medium rounded-lg transition-all flex items-center gap-1.5"
               >
                 {isSaving ? <><Loader2 className="w-3 h-3 animate-spin" />Saving...</> : <><Save className="w-3 h-3" />Save Test Cases</>}
               </button>
@@ -1906,7 +2187,7 @@ export default function ChatPage() {
               type="checkbox"
               checked={allPageSelected}
               onChange={toggleSelectAll}
-              className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              className="w-3.5 h-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
             />
             <span className="text-xs text-gray-500">Select all on this page</span>
             {totalPages > 1 && <span className="text-[10px] text-gray-400 ml-auto">Showing {(tcPage - 1) * tcPageSize + 1}–{Math.min(tcPage * tcPageSize, totalTcs)} of {totalTcs}</span>}
@@ -1918,23 +2199,23 @@ export default function ChatPage() {
               const isEditing = editingTcId === tc.id;
               const draft = isEditing ? editDraft : tc;
               return (
-                <div key={tc.id} className={`bg-white border ${selectedTcIds.has(tc.id) ? 'border-blue-300 bg-blue-50/30' : 'border-gray-100'} rounded-xl p-4 shadow-sm transition-colors`}>
+                <div key={tc.id} className={`bg-white border ${selectedTcIds.has(tc.id) ? 'border-violet-300 bg-violet-50/30' : 'border-gray-100'} rounded-xl p-4 shadow-sm transition-colors`}>
                   {/* Row header: checkbox + TC# + badges + actions */}
                   <div className="flex items-center gap-2 mb-2 flex-wrap">
                     <input
                       type="checkbox"
                       checked={selectedTcIds.has(tc.id)}
                       onChange={() => toggleTcSelect(tc.id)}
-                      className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      className="w-3.5 h-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
                     />
                     {colVisible('tcNumber') && (
-                      <span className="text-xs font-mono font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{tc.id}</span>
+                      <span className="text-xs font-mono font-bold text-violet-600 bg-violet-50 px-2 py-0.5 rounded">{tc.id}</span>
                     )}
                     {colVisible('priority') && !isEditing && (
                       <span className={`text-[10px] px-2 py-0.5 font-semibold rounded border ${priorityStyle(tc.priority)}`}>{tc.priority}</span>
                     )}
                     {colVisible('priority') && isEditing && (
-                      <select value={draft.priority} onChange={e => setEditDraft((d: any) => ({ ...d, priority: e.target.value }))} className="text-[10px] px-1.5 py-0.5 border border-blue-300 rounded bg-white text-gray-700 outline-none">
+                      <select value={draft.priority} onChange={e => setEditDraft((d: any) => ({ ...d, priority: e.target.value }))} className="text-[10px] px-1.5 py-0.5 border border-violet-300 rounded bg-white text-gray-700 outline-none">
                         {['P0', 'P1', 'P2', 'P3'].map(p => <option key={p}>{p}</option>)}
                       </select>
                     )}
@@ -1942,7 +2223,7 @@ export default function ChatPage() {
                       <span className={`text-[10px] px-2 py-0.5 font-medium rounded ${typeStyle(tc.type)}`}>{tc.type}</span>
                     )}
                     {colVisible('type') && isEditing && (
-                      <select value={draft.type} onChange={e => setEditDraft((d: any) => ({ ...d, type: e.target.value }))} className="text-[10px] px-1.5 py-0.5 border border-blue-300 rounded bg-white text-gray-700 outline-none">
+                      <select value={draft.type} onChange={e => setEditDraft((d: any) => ({ ...d, type: e.target.value }))} className="text-[10px] px-1.5 py-0.5 border border-violet-300 rounded bg-white text-gray-700 outline-none">
                         {['positive', 'negative', 'edge', 'e2e', 'api', 'security', 'performance'].map(t => <option key={t}>{t}</option>)}
                       </select>
                     )}
@@ -1960,7 +2241,7 @@ export default function ChatPage() {
                         </>
                       ) : (
                         <>
-                          <button onClick={() => startEdit(tc)} className="p-1 rounded hover:bg-blue-50 text-gray-400 hover:text-[#155dfc] transition-colors" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => startEdit(tc)} className="p-1 rounded hover:bg-violet-50 text-gray-400 hover:text-violet-600 transition-colors" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
                           <button onClick={() => deleteSingleTc(tc.id)} className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
                         </>
                       )}
@@ -1973,7 +2254,7 @@ export default function ChatPage() {
                       <input
                         value={draft.scenario}
                         onChange={e => setEditDraft((d: any) => ({ ...d, scenario: e.target.value }))}
-                        className="w-full text-[13px] font-semibold text-gray-800 mb-2 px-2 py-1.5 border border-blue-300 rounded-lg outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+                        className="w-full text-[13px] font-semibold text-gray-800 mb-2 px-2 py-1.5 border border-violet-300 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 bg-white"
                       />
                     ) : (
                       <p className="text-[13px] font-semibold text-gray-800 mb-2">{tc.scenario}</p>
@@ -1991,14 +2272,14 @@ export default function ChatPage() {
                               value={(draft.steps || []).join('\n')}
                               onChange={e => setEditDraft((d: any) => ({ ...d, steps: e.target.value.split('\n') }))}
                               rows={Math.max(3, (draft.steps || []).length)}
-                              className="w-full text-xs text-gray-600 px-2 py-1.5 border border-blue-300 rounded-lg outline-none focus:ring-1 focus:ring-blue-400 resize-none bg-white font-normal"
+                              className="w-full text-xs text-gray-600 px-2 py-1.5 border border-violet-300 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 resize-none bg-white font-normal"
                               placeholder="One step per line"
                             />
                           ) : (
                             <ol className="space-y-0.5">
                               {(tc.steps || []).map((s: string, j: number) => (
                                 <li key={j} className="text-xs text-gray-600 leading-relaxed">
-                                  <span className="text-blue-500 font-semibold mr-1">{j + 1}.</span>{s}
+                                  <span className="text-violet-500 font-semibold mr-1">{j + 1}.</span>{s}
                                 </li>
                               ))}
                             </ol>
@@ -2013,7 +2294,7 @@ export default function ChatPage() {
                               value={draft.expectedResult}
                               onChange={e => setEditDraft((d: any) => ({ ...d, expectedResult: e.target.value }))}
                               rows={3}
-                              className="w-full text-xs text-gray-600 px-2 py-1.5 border border-blue-300 rounded-lg outline-none focus:ring-1 focus:ring-blue-400 resize-none bg-white font-normal"
+                              className="w-full text-xs text-gray-600 px-2 py-1.5 border border-violet-300 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 resize-none bg-white font-normal"
                             />
                           ) : (
                             <p className="text-xs text-gray-600 leading-relaxed">{tc.expectedResult}</p>
@@ -2033,7 +2314,7 @@ export default function ChatPage() {
                             <input
                               value={draft.feature}
                               onChange={e => setEditDraft((d: any) => ({ ...d, feature: e.target.value }))}
-                              className="w-full text-xs px-2 py-1 border border-blue-300 rounded-lg outline-none bg-white"
+                              className="w-full text-xs px-2 py-1 border border-violet-300 rounded-lg outline-none bg-white"
                             />
                           ) : (
                             <p className="text-xs text-gray-500">{tc.feature}</p>
@@ -2047,7 +2328,7 @@ export default function ChatPage() {
                             <input
                               value={draft.precondition}
                               onChange={e => setEditDraft((d: any) => ({ ...d, precondition: e.target.value }))}
-                              className="w-full text-xs px-2 py-1 border border-blue-300 rounded-lg outline-none bg-white"
+                              className="w-full text-xs px-2 py-1 border border-violet-300 rounded-lg outline-none bg-white"
                             />
                           ) : (
                             <p className="text-xs text-gray-500">{tc.precondition}</p>
@@ -2067,7 +2348,7 @@ export default function ChatPage() {
               <button
                 disabled={tcPage <= 1}
                 onClick={() => setTcPage(p => p - 1)}
-                className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:border-blue-300 hover:text-[#155dfc] disabled:opacity-30 disabled:hover:border-gray-200 disabled:hover:text-gray-500 transition-colors"
+                className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:border-violet-300 hover:text-violet-600 disabled:opacity-30 disabled:hover:border-gray-200 disabled:hover:text-gray-500 transition-colors"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
@@ -2075,7 +2356,7 @@ export default function ChatPage() {
               <button
                 disabled={tcPage >= totalPages}
                 onClick={() => setTcPage(p => p + 1)}
-                className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:border-blue-300 hover:text-[#155dfc] disabled:opacity-30 disabled:hover:border-gray-200 disabled:hover:text-gray-500 transition-colors"
+                className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:border-violet-300 hover:text-violet-600 disabled:opacity-30 disabled:hover:border-gray-200 disabled:hover:text-gray-500 transition-colors"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>
@@ -2087,11 +2368,11 @@ export default function ChatPage() {
             <button
               onClick={handleSaveTestCases}
               disabled={isSaving || totalTcs === 0}
-              className="px-5 py-2.5 bg-[#155dfc] hover:bg-[#124fd6] disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center gap-2"
+              className="px-5 py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center gap-2"
             >
               {isSaving ? <><Loader2 className="w-4 h-4 animate-spin" />Saving...</> : <><Save className="w-4 h-4" />Save Test Cases</>}
             </button>
-            <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-blue-300 hover:text-[#155dfc] transition-all">
+            <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-violet-300 hover:text-violet-600 transition-all">
               <RotateCcw className="w-3.5 h-3.5" />Start New
             </button>
           </div>
@@ -2119,7 +2400,7 @@ export default function ChatPage() {
           {/* Export Section */}
           <div className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm">
             <div className="flex items-center gap-2 mb-3">
-              <Download className="w-4 h-4 text-blue-500" />
+              <Download className="w-4 h-4 text-violet-500" />
               <span className="text-sm font-semibold text-gray-800">Export Test Cases</span>
             </div>
             <div className="grid grid-cols-3 gap-2">
@@ -2132,35 +2413,35 @@ export default function ChatPage() {
                   key={exp.format}
                   onClick={() => handleExport(exp.format)}
                   disabled={isExporting}
-                  className="group p-3 border border-gray-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50 transition-all text-center"
+                  className="group p-3 border border-gray-200 rounded-lg hover:border-violet-300 hover:bg-violet-50 disabled:opacity-50 transition-all text-center"
                 >
-                  <exp.icon className="w-4 h-4 mx-auto mb-1 text-gray-400 group-hover:text-[#155dfc] transition-colors" />
+                  <exp.icon className="w-4 h-4 mx-auto mb-1 text-gray-400 group-hover:text-violet-500 transition-colors" />
                   <p className="text-xs font-medium text-gray-700">{exp.label}</p>
                 </button>
               ))}
             </div>
             {isExporting && (
-              <p className="text-xs text-blue-500 mt-2 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" />Exporting...</p>
+              <p className="text-xs text-violet-500 mt-2 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" />Exporting...</p>
             )}
           </div>
 
           {/* Proceed to Script Generation */}
           <div className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm">
             <div className="flex items-center gap-2 mb-2">
-              <Code className="w-4 h-4 text-blue-500" />
+              <Code className="w-4 h-4 text-indigo-500" />
               <span className="text-sm font-semibold text-gray-800">Automation Scripts</span>
             </div>
             <p className="text-xs text-gray-500 mb-3">Generate automation scripts for your saved test cases.</p>
             <button
               onClick={handleScriptGeneration}
-              className="w-full py-2.5 bg-gradient-to-r from-blue-600 to-blue-600 hover:from-blue-500 hover:to-blue-500 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+              className="w-full py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
             >
               <Code className="w-4 h-4" />Generate Automation Scripts
             </button>
           </div>
 
           {/* Start New */}
-          <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-blue-300 hover:text-[#155dfc] transition-all">
+          <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-violet-300 hover:text-violet-600 transition-all">
             <RotateCcw className="w-3.5 h-3.5" />Start New Test
           </button>
         </div>
@@ -2175,9 +2456,9 @@ export default function ChatPage() {
             {/* Header */}
             <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Code className="w-4 h-4 text-blue-500" />
+                <Code className="w-4 h-4 text-violet-500" />
                 <span className="text-sm font-semibold text-gray-800">Generated Scripts</span>
-                <span className="text-xs px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full">{generatedScripts.length} scripts</span>
+                <span className="text-xs px-2 py-0.5 bg-violet-50 text-violet-600 rounded-full">{generatedScripts.length} scripts</span>
               </div>
             </div>
             {/* Script list */}
@@ -2189,7 +2470,7 @@ export default function ChatPage() {
                     <p className="text-xs font-mono text-gray-700 truncate">{s.fileName}</p>
                     <p className="text-[10px] text-gray-400">{s.testCaseId}</p>
                   </div>
-                  <span className="text-[10px] px-1.5 py-0.5 bg-[#155dfc]/5 text-[#155dfc] rounded border border-[#155dfc]/10 font-mono">.spec.ts</span>
+                  <span className="text-[10px] px-1.5 py-0.5 bg-[#3366FF]/5 text-[#2143A8] rounded border border-[#3366FF]/10 font-mono">.spec.ts</span>
                 </div>
               ))}
             </div>
@@ -2214,14 +2495,14 @@ export default function ChatPage() {
           <div className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <Terminal className="w-4 h-4 text-blue-500 animate-pulse" />
+                <Terminal className="w-4 h-4 text-violet-500 animate-pulse" />
                 <span className="text-sm font-semibold text-gray-800">Test Execution</span>
               </div>
               <span className="text-xs text-gray-400">{completedCount}/{executionResults.length} completed</span>
             </div>
             {/* Progress bar */}
             <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden mb-4">
-              <div className="h-full bg-gradient-to-r from-blue-500 to-blue-500 rounded-full transition-all duration-500" style={{ width: `${percent}%` }} />
+              <div className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 rounded-full transition-all duration-500" style={{ width: `${percent}%` }} />
             </div>
             {/* Test list */}
             <div className="space-y-2 max-h-[350px] overflow-y-auto">
@@ -2229,17 +2510,17 @@ export default function ChatPage() {
                 <div key={i} className={`flex items-start gap-3 p-2.5 rounded-lg border ${
                   r.status === 'passed' ? 'bg-emerald-50/80 border-emerald-200/60' :
                   r.status === 'failed' ? 'bg-red-50/80 border-red-200/60' :
-                  r.status === 'running' ? 'bg-blue-50/80 border-blue-200/60' :
+                  r.status === 'running' ? 'bg-violet-50/80 border-violet-200/60' :
                   'bg-gray-50/80 border-gray-200/60'
                 }`}>
                   <div className="flex-shrink-0 mt-0.5">
                     {r.status === 'passed' ? <CheckCircle className="w-4 h-4 text-emerald-500" /> :
                      r.status === 'failed' ? <XCircle className="w-4 h-4 text-red-500" /> :
-                     r.status === 'running' ? <Loader2 className="w-4 h-4 text-blue-500 animate-spin" /> :
+                     r.status === 'running' ? <Loader2 className="w-4 h-4 text-violet-500 animate-spin" /> :
                      <span className="block w-4 h-4 rounded-full border-2 border-gray-300" />}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className={`text-xs font-medium ${r.status === 'running' ? 'text-blue-700' : 'text-gray-800'}`}>{r.testName}.spec.ts</p>
+                    <p className={`text-xs font-medium ${r.status === 'running' ? 'text-violet-700' : 'text-gray-800'}`}>{r.testName}.spec.ts</p>
                     {r.status === 'failed' && r.error && (
                       <p className="text-[11px] text-red-500 mt-0.5 truncate">{r.error}</p>
                     )}
@@ -2307,7 +2588,7 @@ export default function ChatPage() {
             )}
             <button
               onClick={handleProceedToReport}
-              className={`${executionSummary.failed > 0 && healingAttempt < 2 ? 'flex-1' : 'w-full'} py-2.5 bg-[#155dfc] hover:bg-[#124fd6] text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2`}
+              className={`${executionSummary.failed > 0 && healingAttempt < 2 ? 'flex-1' : 'w-full'} py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2`}
             >
               <BarChart3 className="w-4 h-4" />{executionSummary.failed > 0 && healingAttempt < 2 ? 'Skip to Report' : 'Generate Report'}
             </button>
@@ -2363,14 +2644,14 @@ export default function ChatPage() {
         <div className="max-w-2xl ml-11 space-y-3">
           <div className="bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden">
             {/* Header */}
-            <div className="px-5 py-4 bg-gradient-to-r from-blue-50 to-blue-50 border-b border-blue-100">
+            <div className="px-5 py-4 bg-gradient-to-r from-violet-50 to-indigo-50 border-b border-violet-100">
               <div className="flex items-center gap-2 mb-2">
-                <BarChart3 className="w-4.5 h-4.5 text-blue-600" />
-                <span className="text-sm font-semibold text-[#1E1B4B]">Test Execution Report</span>
+                <BarChart3 className="w-4.5 h-4.5 text-violet-600" />
+                <span className="text-sm font-semibold text-[#1E3A8A]">Test Execution Report</span>
               </div>
               {/* Pass rate bar */}
               <div className="flex items-center gap-3">
-                <div className="flex-1 h-3 bg-white rounded-full overflow-hidden border border-blue-100">
+                <div className="flex-1 h-3 bg-white rounded-full overflow-hidden border border-violet-100">
                   <div className={`h-full rounded-full transition-all duration-1000 ${reportData.passRate >= 90 ? 'bg-emerald-500' : reportData.passRate >= 70 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${reportData.passRate}%` }} />
                 </div>
                 <span className={`text-lg font-bold ${reportData.passRate >= 90 ? 'text-emerald-600' : reportData.passRate >= 70 ? 'text-amber-600' : 'text-red-600'}`}>{reportData.passRate}%</span>
@@ -2454,11 +2735,11 @@ export default function ChatPage() {
           )}
           <button
             onClick={() => setStep('publish')}
-            className="w-full py-2.5 bg-[#155dfc] hover:bg-[#124fd6] text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+            className="w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
           >
             <GitBranch className="w-4 h-4" />Create Pull Request
           </button>
-          <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-blue-300 hover:text-[#155dfc] transition-all">
+          <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-violet-300 hover:text-violet-600 transition-all">
             <RotateCcw className="w-3.5 h-3.5" />Start New Test
           </button>
         </div>
@@ -2484,8 +2765,8 @@ export default function ChatPage() {
               <div className="space-y-2 mt-3">
                 {[
                   { icon: CheckCircle, text: `${generatedScripts.length} test scripts added`, color: 'text-emerald-600' },
-                  { icon: GitBranch, text: `Branch: ${gitBranch}`, color: 'text-blue-600' },
-                  { icon: Workflow, text: 'PR ready for review', color: 'text-blue-600' },
+                  { icon: GitBranch, text: `Branch: ${gitBranch}`, color: 'text-violet-600' },
+                  { icon: Workflow, text: 'PR ready for review', color: 'text-indigo-600' },
                 ].map((item, i) => (
                   <div key={i} className="flex items-center gap-2">
                     <item.icon className={`w-3.5 h-3.5 ${item.color}`} />
@@ -2498,7 +2779,7 @@ export default function ChatPage() {
                   href={publishedPrUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 hover:text-[#155dfc] break-all"
+                  className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-violet-700 hover:text-violet-800 break-all"
                 >
                   <ExternalLink className="w-3.5 h-3.5 flex-shrink-0" />
                   <span>{publishedPrUrl}</span>
@@ -2509,7 +2790,7 @@ export default function ChatPage() {
             /* Form state */
             <div className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm">
               <div className="flex items-center gap-2 mb-4">
-                <GitBranch className="w-4 h-4 text-blue-500" />
+                <GitBranch className="w-4 h-4 text-violet-500" />
                 <span className="text-sm font-semibold text-gray-800">Create Pull Request</span>
               </div>
               <div className="space-y-3">
@@ -2542,14 +2823,14 @@ export default function ChatPage() {
               <button
                 onClick={handlePublishToGit}
                 disabled={!gitRepoUrl.trim() || isPublishing}
-                className="mt-4 w-full py-2.5 bg-[#155dfc] hover:bg-[#124fd6] disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+                className="mt-4 w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
               >
                 {isPublishing ? <Loader2 className="w-4 h-4 animate-spin" /> : <ExternalLink className="w-4 h-4" />}
                 {isPublishing ? 'Creating PR...' : 'Create PR'}
               </button>
             </div>
           )}
-          <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-blue-300 hover:text-[#155dfc] transition-all">
+          <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-violet-300 hover:text-violet-600 transition-all">
             <RotateCcw className="w-3.5 h-3.5" />Start New Test
           </button>
         </div>
@@ -2562,15 +2843,28 @@ export default function ChatPage() {
   /* ═══════════════════════════════════════════════════════════════
      PIPELINE SIDEBAR RENDERER
      ═══════════════════════════════════════════════════════════════ */
-  const renderPipelineSidebar = () => (
-    <aside className="w-72 flex-shrink-0 border-l border-[#C9DCFF]/60 bg-white/90 backdrop-blur-sm overflow-y-auto">
+  const renderPipelineSidebar = () => {
+    const completedStages = pipelineStages.filter((s) => s.status === 'completed').length;
+    const totalStages = pipelineStages.length;
+    const stagePct = totalStages ? Math.round((completedStages / totalStages) * 100) : 0;
+    return (
+    <aside className="w-72 flex-shrink-0 border-l border-[#E1E9FB] bg-white/80 backdrop-blur-md overflow-y-auto">
       <div className="p-5">
-        {/* Title */}
-        <div className="flex items-center gap-2 mb-6">
-          <div className="w-7 h-7 rounded-lg bg-[#155dfc] flex items-center justify-center">
-            <Workflow className="w-3.5 h-3.5 text-white" />
+        {/* Title + overall progress */}
+        <div className="mb-6">
+          <div className="flex items-center gap-2.5 mb-3">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#3366FF] to-[#2645D6] flex items-center justify-center shadow-md shadow-violet-500/25">
+              <Workflow className="w-4 h-4 text-white" />
+            </div>
+            <div className="leading-tight">
+              <h3 className="text-sm font-semibold text-[#1E3A8A]">AI Pipeline</h3>
+              <p className="text-[10px] text-gray-400">{completedStages} of {totalStages} stages complete</p>
+            </div>
+            <span className="ml-auto text-xs font-semibold text-violet-600 tabular-nums">{stagePct}%</span>
           </div>
-          <h3 className="text-sm font-semibold text-[#1E1B4B]">AI Pipeline Progress</h3>
+          <div className="h-1.5 rounded-full bg-violet-100 overflow-hidden">
+            <div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-indigo-500 transition-all duration-500" style={{ width: `${stagePct}%` }} />
+          </div>
         </div>
 
         {/* Stages */}
@@ -2590,7 +2884,7 @@ export default function ChatPage() {
                       : stage.status === 'skipped'
                         ? '#9CA3AF'
                         : stage.status === 'running'
-                          ? 'linear-gradient(to bottom, #155dfc, #E5E7EB)'
+                          ? 'linear-gradient(to bottom, #3366FF, #E5E7EB)'
                           : '#E5E7EB',
                   }} />
                 )}
@@ -2602,7 +2896,7 @@ export default function ChatPage() {
                       <Check className="w-4 h-4 text-white" />
                     </div>
                   ) : stage.status === 'running' ? (
-                    <div className="w-8 h-8 rounded-full bg-[#155dfc] flex items-center justify-center shadow-md shadow-blue-300 animate-pulse">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#3366FF] to-[#2645D6] flex items-center justify-center shadow-md shadow-violet-300 ring-4 ring-violet-200/60">
                       <Loader2 className="w-4 h-4 text-white animate-spin" />
                     </div>
                   ) : stage.status === 'skipped' ? (
@@ -2620,14 +2914,14 @@ export default function ChatPage() {
                 <div className="flex-1 min-w-0 pt-1">
                   <div className="flex items-center gap-1.5">
                     <Icon className={`w-3.5 h-3.5 ${
-                      stage.status === 'completed' ? 'text-[#1E1B4B]' :
-                      stage.status === 'running' ? 'text-[#155dfc]' :
+                      stage.status === 'completed' ? 'text-[#1E3A8A]' :
+                      stage.status === 'running' ? 'text-[#2143A8]' :
                       stage.status === 'skipped' ? 'text-gray-400' :
                       'text-[#D1D5DB]'
                     }`} />
                     <p className={`text-sm font-medium ${
-                      stage.status === 'completed' ? 'text-[#1E1B4B]' :
-                      stage.status === 'running' ? 'text-[#155dfc]' :
+                      stage.status === 'completed' ? 'text-[#1E3A8A]' :
+                      stage.status === 'running' ? 'text-[#2143A8]' :
                       stage.status === 'skipped' ? 'text-gray-400 line-through' :
                       'text-[#9CA3AF]'
                     }`}>
@@ -2640,8 +2934,8 @@ export default function ChatPage() {
                     ) : null}
                   </div>
                   <p className={`text-[11px] mt-0.5 ${
-                    stage.status === 'completed' ? 'text-[#1E1B4B]' :
-                    stage.status === 'running' ? 'text-[#155dfc]' :
+                    stage.status === 'completed' ? 'text-[#1E3A8A]' :
+                    stage.status === 'running' ? 'text-[#2143A8]' :
                     stage.status === 'skipped' ? 'text-gray-400' :
                     'text-[#9CA3AF]'
                   }`}>
@@ -2654,40 +2948,59 @@ export default function ChatPage() {
         </div>
       </div>
     </aside>
-  );
+    );
+  };
 
   /* ═══════════════════════════════════════════════════════════════
      MAIN RENDER
      ═══════════════════════════════════════════════════════════════ */
   return (
-    <div className="h-full flex flex-col bg-[#FAFAFE]">
+    <div className="h-full flex flex-col bg-gradient-to-b from-[#F7FAFF] via-[#EEF4FF] to-[#DDE8FF]">
       {/* Two-Column Layout: Chat + Pipeline Sidebar */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left: Chat Area */}
         <div className="relative flex-1 flex flex-col overflow-hidden min-w-0">
-          {/* Floating controls (chat area only) */}
-          <div className="absolute top-3 right-4 z-10 flex items-center gap-2">
-            <button
-              onClick={handleVoiceToggle}
-              title={voiceEnabled ? 'Mute Tessa voice' : 'Enable Tessa voice'}
-              className={`p-1.5 rounded-lg border transition-all ${
-                voiceEnabled
-                  ? 'text-[#155dfc] bg-white border-blue-200 hover:bg-blue-50'
-                  : 'text-gray-400 bg-white border-gray-200 hover:text-gray-600 hover:bg-gray-50'
-              }`}
-            >
-              {voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-            </button>
-            {step !== 'welcome' && (
+          {/* Chat header — assistant identity + controls */}
+          <header className="relative z-20 flex-shrink-0 flex items-center justify-between gap-3 px-6 py-3 border-b border-[#DCE7FF] bg-white/70 backdrop-blur-md">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="relative flex-shrink-0">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center shadow-md shadow-violet-500/25">
+                  <Bot className="w-[18px] h-[18px] text-white" />
+                </div>
+                <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-500 ring-2 ring-white" />
+              </div>
+              <div className="min-w-0 leading-tight">
+                <p className="text-sm font-semibold text-[#1E3A8A]">Tessa</p>
+                <p className="text-[11px] text-gray-400">AI QA TestOps Assistant · <span className="text-emerald-500 font-medium">Online</span></p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {isEnabled('chat.voice') && (
               <button
-                onClick={requestReset}
-                title="New chat"
-                className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:text-[#155dfc] hover:border-blue-200 transition-colors"
+                onClick={handleVoiceToggle}
+                title={voiceEnabled ? 'Mute Tessa voice' : 'Enable Tessa voice'}
+                className={`p-2 rounded-lg border transition-all ${
+                  voiceEnabled
+                    ? 'text-violet-600 bg-violet-50 border-violet-200 hover:bg-violet-100'
+                    : 'text-gray-400 bg-white border-gray-200 hover:text-gray-600 hover:bg-gray-50'
+                }`}
               >
-                <RotateCcw className="w-3.5 h-3.5" />New
+                {voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
               </button>
-            )}
-          </div>
+              )}
+              {step !== 'welcome' && (
+                <button
+                  onClick={requestReset}
+                  title="New chat"
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:text-violet-600 hover:border-violet-300 hover:bg-violet-50 transition-colors"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />New chat
+                </button>
+              )}
+            </div>
+          </header>
+          {/* Soft decorative glow behind the conversation */}
+          <div aria-hidden className="pointer-events-none absolute -top-24 left-1/2 -translate-x-1/2 w-[520px] h-[320px] rounded-full bg-violet-400/10 blur-3xl" />
 
           {/* Discard current flow confirmation */}
           {showResetConfirm && (
@@ -2719,14 +3032,14 @@ export default function ChatPage() {
               </div>
             </div>
           )}
-          <div className="flex-1 overflow-y-auto px-6 py-5">
+          <div className="relative z-10 flex-1 overflow-y-auto px-6 py-6">
             <div className={`mx-auto space-y-4 ${step === 'results' ? 'max-w-4xl' : 'max-w-2xl'}`}>
               {/* Session restored banner */}
               {sessionRestored && (
-                <div className="flex items-center gap-2.5 px-4 py-2.5 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-700 animate-fadeIn">
+                <div className="flex items-center gap-2.5 px-4 py-2.5 bg-violet-50 border border-violet-200 rounded-xl text-sm text-violet-700 animate-fadeIn">
                   <RotateCcw className="w-3.5 h-3.5 flex-shrink-0" />
                   <span>Your previous session has been restored. Continue from where you left off.</span>
-                  <button onClick={() => setSessionRestored(false)} className="ml-auto text-blue-400 hover:text-[#155dfc]">
+                  <button onClick={() => setSessionRestored(false)} className="ml-auto text-violet-700 hover:text-violet-600">
                     <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
@@ -2735,14 +3048,14 @@ export default function ChatPage() {
               {messages.map(msg => (
                 <div key={msg.id} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'} animate-fadeIn`}>
                   {msg.sender === 'tessa' && (
-                    <div className="w-7 h-7 rounded-full bg-[#155dfc] flex items-center justify-center mr-2 flex-shrink-0 mt-0.5">
-                      <Bot className="w-3.5 h-3.5 text-white" />
+                    <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center mr-3 flex-shrink-0 mt-0.5 shadow-sm shadow-violet-500/25">
+                      <Bot className="w-4 h-4 text-white" />
                     </div>
                   )}
-                  <div className={`max-w-[75%] px-4 py-2.5 text-sm leading-relaxed ${
+                  <div className={`max-w-[78%] px-4 py-2.5 text-sm leading-relaxed whitespace-pre-line ${
                     msg.sender === 'user'
-                      ? 'bg-[#155dfc] text-white rounded-2xl rounded-br-md shadow-sm'
-                      : 'bg-white border border-gray-100 text-gray-700 rounded-2xl rounded-bl-md shadow-sm'
+                      ? 'bg-gradient-to-br from-violet-600 to-indigo-600 text-white rounded-2xl rounded-br-md shadow-md shadow-violet-500/20'
+                      : 'bg-white/95 border border-[#EAEFFC] text-gray-700 rounded-2xl rounded-bl-md shadow-sm shadow-violet-900/[0.04]'
                   }`}>
                     {msg.text}
                   </div>
@@ -2762,8 +3075,8 @@ export default function ChatPage() {
           {(category || subCategory || source) && !['results', 'saved', 'script-generating', 'script-review', 'executing', 'execution-results', 'healing', 'report', 'publish'].includes(step) && (
             <div className="flex-shrink-0 px-6 py-2 border-t border-gray-100 bg-white/60 backdrop-blur-sm">
               <div className="max-w-2xl mx-auto flex items-center gap-1.5 text-[11px] text-gray-400">
-                {category && <span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full">{CATEGORIES.find(c => c.id === category)?.title}</span>}
-                {subCategory && <><ChevronDown className="w-3 h-3 rotate-[-90deg]" /><span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full">{subCategory}</span></>}
+                {category && <span className="px-2 py-0.5 bg-violet-50 text-violet-600 rounded-full">{CATEGORIES.find(c => c.id === category)?.title}</span>}
+                {subCategory && <><ChevronDown className="w-3 h-3 rotate-[-90deg]" /><span className="px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-full">{subCategory}</span></>}
                 {source && <><ChevronDown className="w-3 h-3 rotate-[-90deg]" /><span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full">{REQ_SOURCES.find(s => s.id === source)?.title}</span></>}
               </div>
             </div>

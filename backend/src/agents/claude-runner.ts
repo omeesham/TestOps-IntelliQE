@@ -1,5 +1,6 @@
 /**
 <<<<<<< HEAD
+<<<<<<< HEAD
  * Claude runner — generates AI responses via the Anthropic API (official SDK).
  *
  * ┌──────────────────────────────────────────────────────────────────────────┐
@@ -17,6 +18,18 @@
  * │ as a generate-route preflight. It can also be passed per call.            │
  * └──────────────────────────────────────────────────────────────────────────┘
  */
+=======
+ * Claude CLI runner — invokes Claude Code to generate AI responses.
+ *
+ * Auth strategy (in priority order):
+ *   1. ANTHROPIC_API_KEY set → Anthropic SDK (durable, headless, portable).
+ *   2. Otherwise → locally-authenticated `claude` CLI (subscription login).
+ *      The CLI path is fully async so the Node.js event loop is never blocked.
+ */
+import { execSync, spawn } from 'child_process';
+import { homedir } from 'os';
+import { join } from 'path';
+>>>>>>> adedfc4 (ux changes)
 =======
  * Claude CLI runner — invokes Claude Code to generate AI responses.
  *
@@ -159,6 +172,7 @@ async function runViaAnthropicApi(prompt: string, options?: RunClaudeOptions): P
 
 /**
 <<<<<<< HEAD
+<<<<<<< HEAD
  * Preflight used by callers before starting a pipeline. With the CLI removed,
  * "authenticated" means an Anthropic API key is present in the environment —
  * hydrated from LLM Configuration at startup / on config save / per request.
@@ -166,6 +180,8 @@ async function runViaAnthropicApi(prompt: string, options?: RunClaudeOptions): P
  * Name kept for backward compatibility with existing call sites
  * (generate.routes, automation-scripts.routes, healing.service).
 =======
+=======
+>>>>>>> adedfc4 (ux changes)
  * Run a prompt through the Claude CLI and return the response text.
  * Uses `claude --print` (non-interactive print mode) with the prompt piped
  * via stdin. Fully async so the Node.js event loop is never blocked.

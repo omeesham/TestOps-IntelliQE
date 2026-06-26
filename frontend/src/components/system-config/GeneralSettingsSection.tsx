@@ -23,7 +23,7 @@ interface FormData {
 }
 
 const INPUT_CLASS =
-  'w-full px-3 py-2.5 rounded-xl border border-[#C9DCFF] bg-[#EFF5FF] text-sm outline-none focus:ring-2 focus:ring-[#155dfc]/20 focus:border-[#155dfc] transition-all';
+  'w-full px-3 py-2.5 rounded-xl border border-[#C5D6FF] bg-[#EEF4FF] text-sm outline-none focus:ring-2 focus:ring-[#3366FF]/20 focus:border-[#3366FF] transition-all';
 
 export default function GeneralSettingsSection({ configs }: Props) {
   const [formData, setFormData] = useState<FormData>({
@@ -71,9 +71,9 @@ export default function GeneralSettingsSection({ configs }: Props) {
   };
 
   return (
-    <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-[#C9DCFF]/60 p-6 space-y-6">
+    <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-[#C5D6FF]/60 p-6 space-y-6">
       <div>
-        <h3 className="text-sm font-semibold text-[#1E1B4B] mb-1">General Settings</h3>
+        <h3 className="text-sm font-semibold text-[#1E3A8A] mb-1">General Settings</h3>
         <p className="text-xs text-[#6B7280]">Configure default execution parameters for your test pipeline</p>
       </div>
 
@@ -86,7 +86,7 @@ export default function GeneralSettingsSection({ configs }: Props) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Default Environment */}
         <div>
-          <label className="block text-sm font-medium text-[#1E1B4B] mb-1">Default Environment</label>
+          <label className="block text-sm font-medium text-[#1E3A8A] mb-1">Default Environment</label>
           <select
             value={formData.defaultEnvironment}
             onChange={(e) => setFormData((prev) => ({ ...prev, defaultEnvironment: e.target.value }))}
@@ -101,7 +101,7 @@ export default function GeneralSettingsSection({ configs }: Props) {
 
         {/* Default Browser */}
         <div>
-          <label className="block text-sm font-medium text-[#1E1B4B] mb-1">Default Browser</label>
+          <label className="block text-sm font-medium text-[#1E3A8A] mb-1">Default Browser</label>
           <select
             value={formData.defaultBrowser}
             onChange={(e) => setFormData((prev) => ({ ...prev, defaultBrowser: e.target.value }))}
@@ -115,7 +115,7 @@ export default function GeneralSettingsSection({ configs }: Props) {
 
         {/* Max Parallel Workers */}
         <div>
-          <label className="block text-sm font-medium text-[#1E1B4B] mb-1">Max Parallel Workers</label>
+          <label className="block text-sm font-medium text-[#1E3A8A] mb-1">Max Parallel Workers</label>
           <input
             type="number"
             min={1}
@@ -130,7 +130,7 @@ export default function GeneralSettingsSection({ configs }: Props) {
 
         {/* Test Timeout */}
         <div>
-          <label className="block text-sm font-medium text-[#1E1B4B] mb-1">Test Timeout (ms)</label>
+          <label className="block text-sm font-medium text-[#1E3A8A] mb-1">Test Timeout (ms)</label>
           <input
             type="number"
             min={1000}
@@ -154,7 +154,7 @@ export default function GeneralSettingsSection({ configs }: Props) {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="px-6 py-2.5 bg-[#155dfc] text-white rounded-lg text-sm font-medium hover:bg-[#124fd6] shadow-md shadow-blue-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          className="px-6 py-2.5 bg-gradient-to-r from-[#3366FF] to-[#2645D6] text-white rounded-lg text-sm font-medium hover:from-[#2A55D6] hover:to-[#2645D6] shadow-md shadow-purple-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
         >
           {saving && <Loader2 className="w-4 h-4 animate-spin" />}
           {saving ? 'Saving...' : 'Save Settings'}

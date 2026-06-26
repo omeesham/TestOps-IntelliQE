@@ -90,7 +90,7 @@ export default function RequirementSourcesSection({ configs, onRefresh }: Props)
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="text-sm font-semibold text-[#1E1B4B] mb-1">Requirement Sources</h3>
+        <h3 className="text-sm font-semibold text-[#1E3A8A] mb-1">Requirement Sources</h3>
         <p className="text-xs text-[#6B7280]">
           Connect project management and documentation tools to import requirements
         </p>

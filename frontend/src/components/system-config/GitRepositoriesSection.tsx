@@ -64,7 +64,7 @@ export default function GitRepositoriesSection({ configs, onRefresh }: Props) {
   return (
     <div>
       <div className="mb-4">
-        <h3 className="text-sm font-semibold text-[#1E1B4B]">Git Repositories</h3>
+        <h3 className="text-sm font-semibold text-[#1E3A8A]">Git Repositories</h3>
         <p className="text-xs text-[#6B7280] mt-0.5">
           Connect version control platforms to trigger test generation on PRs and push test scripts.
         </p>
