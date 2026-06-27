@@ -12,6 +12,7 @@ import {
   decryptConfigData,
   encryptConfigData,
 } from '../utils/crypto.js';
+import { invalidateAiConfigCache, hydrateAnthropicEnv } from '../services/llm-config.service.js';
 
 const router = Router();
 
@@ -107,6 +108,14 @@ router.put('/:integrationId', async (req: Request, res: Response) => {
     );
 
     console.log(`Configuration connected: tenant=${user.tenantId}, integration=${integrationId}, by=${user.username}`);
+
+    // When an LLM provider key changes, refresh the resolver cache + env so the
+    // new Anthropic key takes effect immediately (no backend restart needed).
+    if (typeof integrationId === 'string' && integrationId.startsWith('llm-')) {
+      invalidateAiConfigCache();
+      void hydrateAnthropicEnv(user.tenantId);
+    }
+
     // Return masked config — never expose real credentials in response
     res.json({ ok: true, config: { ...config, configData: maskConfigData(mergedData) } });
   } catch (err: any) {
@@ -131,6 +140,12 @@ router.delete('/:integrationId', async (req: Request, res: Response) => {
     }
 
     console.log(`Configuration disconnected: tenant=${user.tenantId}, integration=${integrationId}`);
+
+    if (typeof integrationId === 'string' && integrationId.startsWith('llm-')) {
+      invalidateAiConfigCache();
+      void hydrateAnthropicEnv(user.tenantId);
+    }
+
     res.json({ ok: true });
   } catch (err: any) {
     console.error('Disconnect configuration error:', err.message);

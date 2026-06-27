@@ -1,81 +1,67 @@
 /**
- * Claude CLI runner — invokes Claude Code to generate AI responses.
- * Falls back to a basic prompt-based approach if CLI is not available.
+ * Claude runner — generates AI responses via the Anthropic API (official SDK).
  *
- * NOTE: Originally used execSync which, on Windows, could orphan child
- * claude.exe processes on timeout (Node can't reliably kill grandchildren
- * without a tree kill). This version keeps the same synchronous API but
- * wraps the call in a manual timeout that issues `taskkill /F /T /PID` on
- * Windows (or `kill -9 -pid` on POSIX) so the whole process tree dies and
- * no orphans can accumulate overnight.
+ * ┌──────────────────────────────────────────────────────────────────────────┐
+ * │ CLI INTEGRATION DISABLED (2026-06-27).                                    │
+ * │ The platform now standardises on API keys configured in the UI            │
+ * │ (System Configuration → LLM Configuration). API keys are durable,         │
+ * │ headless, portable, and never expire — unlike an interactive              │
+ * │ `claude auth login` session, which was the recurring "AI engine not       │
+ * │ connected" failure. The legacy `claude` CLI fallback is preserved as a    │
+ * │ commented-out block at the END of this file for historical reference      │
+ * │ only. Do NOT re-enable it.                                                 │
+ * │                                                                            │
+ * │ The active API key is resolved from the DB by llm-config.service.ts and   │
+ * │ hydrated into process.env.ANTHROPIC_API_KEY at startup / on config save / │
+ * │ as a generate-route preflight. It can also be passed per call.            │
+ * └──────────────────────────────────────────────────────────────────────────┘
  */
-import { execSync, spawn } from 'child_process';
-import { homedir } from 'os';
-import { join } from 'path';
 import Anthropic from '@anthropic-ai/sdk';
+// ── CLI fallback imports (disabled — see the commented block at end of file) ──
+// import { execSync, spawn } from 'child_process';
+// import { homedir } from 'os';
+// import { join } from 'path';
 
-let resolvedCliPath: string | null = null;
-const IS_WINDOWS = process.platform === 'win32';
-
-function findClaudeCli(): string | null {
-  if (resolvedCliPath) return resolvedCliPath;
-
-  const candidates = [
-    'claude',
-    join(homedir(), 'AppData', 'Roaming', 'npm', 'claude.cmd'),
-    join(homedir(), '.npm-global', 'bin', 'claude'),
-    '/usr/local/bin/claude',
-  ];
-
-  for (const cmd of candidates) {
-    try {
-      execSync(`"${cmd}" --version`, { timeout: 5000, encoding: 'utf-8', stdio: 'pipe' });
-      resolvedCliPath = cmd;
-      return cmd;
-    } catch { /* try next */ }
-  }
-  return null;
+export interface RunClaudeOptions {
+  maxTokens?: number;
+  model?: string;
+  /**
+   * Explicit Anthropic API key. Falls back to process.env.ANTHROPIC_API_KEY,
+   * which is hydrated from the LLM Configuration page at startup / on save.
+   */
+  apiKey?: string;
+  /** Optional custom API base URL (the LLM Configuration "endpoint" field). */
+  baseUrl?: string;
 }
 
-/**
- * Run a prompt through Claude and return the response text.
- *
- * Auth strategy, in priority order:
- *   1. ANTHROPIC_API_KEY set → call the Anthropic API directly via the official
- *      SDK. This is the durable, portable path: API keys don't expire like an
- *      interactive `claude auth login` session, they work headlessly, and
- *      anyone who clones the repo can run the pipeline by setting their own key.
- *      PREFERRED.
- *   2. Otherwise → shell out to the locally-authenticated `claude` CLI
- *      (subscription login). Kept as a fallback so existing CLI setups keep
- *      working — but its login token expires periodically, which is the failure
- *      the API-key path above is meant to eliminate.
- *
- * Returns a Promise now (the SDK is async). All call sites `await` it.
- */
-export async function runClaudePrompt(
-  prompt: string,
-  options?: { maxTokens?: number; model?: string },
-): Promise<string> {
-  // Empty string is intentionally treated as "not set" so a placeholder
-  // `ANTHROPIC_API_KEY=` line in .env falls through to the CLI fallback.
-  if (process.env.ANTHROPIC_API_KEY) {
-    return runViaAnthropicApi(prompt, options);
-  }
-  return runViaClaudeCli(prompt, options);
-}
-
-/** Default model for the API path; override with ANTHROPIC_MODEL (e.g. claude-sonnet-4-6 for lower cost). */
+/** Default model when neither the call site nor LLM Configuration specifies one. */
 const DEFAULT_API_MODEL = 'claude-opus-4-8';
 
-let anthropicClient: Anthropic | null = null;
-function getAnthropicClient(): Anthropic {
-  if (!anthropicClient) {
-    // Reads ANTHROPIC_API_KEY from the environment. Generous timeout + retries
-    // so a long 16k-token generation can't trip the SDK's default request bound.
-    anthropicClient = new Anthropic({ maxRetries: 2, timeout: 290_000 });
+/**
+ * Run a prompt through Claude (Anthropic API) and return the response text.
+ * Returns a Promise — all call sites `await` it.
+ */
+export async function runClaudePrompt(prompt: string, options?: RunClaudeOptions): Promise<string> {
+  return runViaAnthropicApi(prompt, options);
+}
+
+// Cache one SDK client per (apiKey, baseURL) pair so we don't rebuild it per call.
+const clientCache = new Map<string, Anthropic>();
+function getAnthropicClient(apiKey: string, baseURL?: string): Anthropic {
+  const cacheKey = `${apiKey}::${baseURL || ''}`;
+  let client = clientCache.get(cacheKey);
+  if (!client) {
+    // Generous timeout + retries so a long 16k-token generation can't trip the
+    // SDK's default request bound.
+    client = new Anthropic({
+      apiKey,
+      baseURL: baseURL || undefined,
+      maxRetries: 2,
+      timeout: 290_000,
+    });
+    clientCache.set(cacheKey, client);
   }
-  return anthropicClient;
+  return client;
 }
 
 /**
@@ -83,13 +69,23 @@ function getAnthropicClient(): Anthropic {
  * final message so that large `max_tokens` (the generator/script agents use
  * 16384) can't hit the SDK's non-streaming HTTP timeout.
  */
-async function runViaAnthropicApi(
-  prompt: string,
-  options?: { maxTokens?: number; model?: string },
-): Promise<string> {
-  const client = getAnthropicClient();
-  const model = process.env.ANTHROPIC_MODEL || options?.model || DEFAULT_API_MODEL;
+async function runViaAnthropicApi(prompt: string, options?: RunClaudeOptions): Promise<string> {
+  const apiKey = options?.apiKey || process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    // Worded so generate.routes' mapGenError() classifies it as "not authenticated".
+    throw new Error(
+      'Anthropic API not authenticated — no API key configured. ' +
+        'Add your Anthropic Claude API key in System Configuration → LLM Configuration.',
+    );
+  }
+
+  const baseURL = options?.baseUrl || process.env.ANTHROPIC_BASE_URL || undefined;
+  // Precedence: the call site's explicit model wins (cheap stages deliberately
+  // pin a fast model like sonnet); otherwise the model configured in LLM
+  // Configuration (hydrated to ANTHROPIC_MODEL); otherwise the default.
+  const model = options?.model || process.env.ANTHROPIC_MODEL || DEFAULT_API_MODEL;
   const maxTokens = options?.maxTokens ?? 4096;
+  const client = getAnthropicClient(apiKey, baseURL);
 
   try {
     const stream = client.messages.stream({
@@ -110,7 +106,10 @@ async function runViaAnthropicApi(
     // Re-throw with messages the route's mapGenError() can classify into calm,
     // user-facing text (it keys on "not authenticated" / "rate limit" / "timeout").
     if (err instanceof Anthropic.AuthenticationError || err?.status === 401) {
-      throw new Error('Anthropic API not authenticated — ANTHROPIC_API_KEY is missing or invalid.');
+      throw new Error(
+        'Anthropic API not authenticated — the configured API key is missing or invalid. ' +
+          'Check System Configuration → LLM Configuration.',
+      );
     }
     if (err instanceof Anthropic.PermissionDeniedError || err?.status === 403) {
       throw new Error('Anthropic API not authenticated — this API key lacks access to the requested model.');
@@ -123,113 +122,35 @@ async function runViaAnthropicApi(
 }
 
 /**
- * Run a prompt through the Claude CLI and return the response text.
- * Uses `claude -p` (print mode — non-interactive, returns text).
+ * Preflight used by callers before starting a pipeline. With the CLI removed,
+ * "authenticated" means an Anthropic API key is present in the environment —
+ * hydrated from LLM Configuration at startup / on config save / per request.
  *
- * ASYNC (child_process.spawn) so it does NOT block the Node event loop. This is
- * what lets independent calls — e.g. script-generation batches — run in PARALLEL,
- * and keeps the backend responsive (SSE, other requests) during long generations
- * instead of freezing it. The prompt is fed via stdin (no shell-escaping issues).
- *
- * Model defaults to a FAST one (sonnet) because the CLI otherwise picks the slow
- * Opus default; override per-call or via CLAUDE_CLI_MODEL (e.g. 'opus' for max
- * quality, 'haiku' for max speed). Timeout via CLAUDE_CLI_TIMEOUT_MS (default
- * 15 min); on timeout the whole process tree is killed so no orphans linger.
- */
-function runViaClaudeCli(prompt: string, options?: { maxTokens?: number; model?: string }): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const cli = findClaudeCli();
-    if (!cli) { reject(new Error('Claude CLI not found')); return; }
-
-    const model = options?.model || process.env.CLAUDE_CLI_MODEL || 'sonnet';
-    const args = ['-p', '--model', model];
-    const cliTimeoutMs = Number(process.env.CLAUDE_CLI_TIMEOUT_MS) || 900_000; // 15 min
-
-    const child = spawn(cli, args, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: IS_WINDOWS,   // .cmd shim needs a shell on Windows
-      windowsHide: true,
-    });
-
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const finish = (fn: () => void) => { if (settled) return; settled = true; clearTimeout(timer); fn(); };
-
-    timer = setTimeout(() => finish(() => {
-      if (child.pid) treeKill(child.pid);
-      reject(new Error(`Claude CLI timed out after ${Math.round(cliTimeoutMs / 60000)} minutes`));
-    }), cliTimeoutMs);
-
-    child.stdout.on('data', (d) => { stdout += d.toString(); });
-    child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('error', (err) => finish(() => reject(err)));
-    child.on('close', (code) => finish(() => {
-      if (code !== 0) reject(new Error(`Claude CLI exited with code ${code}: ${stderr.slice(0, 500)}`));
-      else resolve(stdout.trim());
-    }));
-
-    // Feed the prompt via stdin. Swallow EPIPE if the child exits before we finish writing.
-    child.stdin.on('error', () => { /* ignore */ });
-    child.stdin.write(prompt);
-    child.stdin.end();
-  });
-}
-
-/**
- * Kill a process tree. On Windows, `taskkill /F /T /PID` kills the pid and
- * all its descendants — critical because Claude CLI spawns helper processes
- * that Node's own process.kill cannot reach.
- */
-function treeKill(pid: number): void {
-  if (IS_WINDOWS) {
-    try { execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore', timeout: 5000 }); } catch { /* already dead */ }
-  } else {
-    try { process.kill(-pid, 'SIGKILL'); } catch { /* already dead */ }
-  }
-}
-
-/**
- * Check if Claude CLI is available.
- */
-export function isClaudeCliAvailable(): boolean {
-  return findClaudeCli() !== null;
-}
-
-/**
- * Check if Claude is actually usable — i.e. the CLI is present AND authenticated.
- *
- * `isClaudeCliAvailable()` only proves the binary exists; `claude -p` still fails
- * with "Not logged in" until the user runs `claude auth login`. The generation
- * agents have no offline fallback, so callers should preflight with THIS before
- * starting a pipeline to fail fast with an actionable message instead of a deep
- * JSON-parse error. An ANTHROPIC_API_KEY in the environment also satisfies auth.
+ * Name kept for backward compatibility with existing call sites
+ * (generate.routes, automation-scripts.routes, healing.service).
  */
 export function isClaudeCliAuthenticated(): boolean {
-  if (process.env.ANTHROPIC_API_KEY) return true;
-  const cli = findClaudeCli();
-  if (!cli) return false;
-  try {
-    const out = execSync(`"${cli}" auth status`, { timeout: 10000, encoding: 'utf-8', stdio: 'pipe' });
-    return JSON.parse(out.trim()).loggedIn === true;
-  } catch {
-    return false;
-  }
+  return !!process.env.ANTHROPIC_API_KEY;
+}
+
+/**
+ * @deprecated The Claude CLI integration is disabled — always returns false.
+ * Kept only so any stray import keeps compiling.
+ */
+export function isClaudeCliAvailable(): boolean {
+  return false;
 }
 
 /**
  * Parse JSON from Claude's response.
  *
- * Claude CLI in `-p` mode often returns JSON followed by trailing prose
- * ("Here are the results..." etc.) or wraps the payload in ```json fences.
- * A plain JSON.parse() on the whole response breaks on the first stray
- * character outside the structure — which is what caused every agent to
- * silently fall back to keyword/template generation.
+ * Claude sometimes returns JSON followed by trailing prose or wraps the payload
+ * in ```json fences. A plain JSON.parse() on the whole response breaks on the
+ * first stray character outside the structure.
  *
- * Strategy: strip fences first, then if direct parse fails, walk the
- * string and extract the first balanced { ... } or [ ... ] payload,
- * respecting string/escape boundaries.
+ * Strategy: strip fences first, then if direct parse fails, walk the string and
+ * extract the first balanced { ... } or [ ... ] payload, respecting
+ * string/escape boundaries.
  */
 export function parseJsonFromResponse<T>(response: string): T {
   let cleaned = response.trim();
@@ -247,10 +168,47 @@ export function parseJsonFromResponse<T>(response: string): T {
   return JSON.parse(extracted) as T;
 }
 
+export interface RunClaudeJsonOptions extends RunClaudeOptions {
+  /** How many times to call Claude before giving up (default 2). */
+  attempts?: number;
+}
+
+/**
+ * Run a prompt and parse a JSON object/array from the response, retrying on
+ * parse failures (truncated output, stray prose, empty reply). LLM responses are
+ * non-deterministic, so a fresh sample usually parses where the previous one did
+ * not — this is what makes the generation pipeline reliable instead of failing a
+ * whole run on one flaky reply. Auth / rate-limit / permission errors are NOT
+ * retried (they won't fix themselves) and propagate immediately.
+ */
+export async function runClaudeJson<T>(prompt: string, options?: RunClaudeJsonOptions): Promise<T> {
+  const attempts = Math.max(1, options?.attempts ?? 2);
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      // On a retry, reinforce the "JSON only, complete" instruction — the prior
+      // reply likely carried prose or was cut off mid-structure.
+      const p = attempt === 1
+        ? prompt
+        : `${prompt}\n\nIMPORTANT: Return ONLY the JSON value — no prose, no markdown fences, no commentary — and make sure it is COMPLETE and valid.`;
+      const response = await runClaudePrompt(p, options);
+      return parseJsonFromResponse<T>(response);
+    } catch (err) {
+      lastErr = err;
+      const msg = ((err as Error)?.message || '').toLowerCase();
+      if (msg.includes('not authenticated') || msg.includes('rate limit') || msg.includes('lacks access')) {
+        throw err;
+      }
+      // Parse failure / empty / truncated → loop and try once more.
+    }
+  }
+  throw lastErr;
+}
+
 /**
  * Walk the string and return the first balanced JSON object or array.
- * Respects string literals and escape sequences so that braces/brackets
- * inside strings don't disturb the depth counter.
+ * Respects string literals and escape sequences so that braces/brackets inside
+ * strings don't disturb the depth counter.
  */
 function extractFirstJson(text: string): string | null {
   const opens = ['{', '['];
@@ -279,3 +237,79 @@ function extractFirstJson(text: string): string | null {
   }
   return null;
 }
+
+/* ============================================================================
+ * DISABLED — legacy Claude CLI fallback (commented out 2026-06-27).
+ *
+ * Standardising on API keys (LLM Configuration) replaced this path. The CLI
+ * login token expired periodically, causing the recurring "AI engine not
+ * connected" failures. Kept verbatim for reference only — do NOT re-enable.
+ *
+ * import { execSync, spawn } from 'child_process';
+ * import { homedir } from 'os';
+ * import { join } from 'path';
+ *
+ * let resolvedCliPath: string | null = null;
+ * const IS_WINDOWS = process.platform === 'win32';
+ *
+ * function findClaudeCli(): string | null {
+ *   if (resolvedCliPath) return resolvedCliPath;
+ *   const candidates = [
+ *     'claude',
+ *     join(homedir(), 'AppData', 'Roaming', 'npm', 'claude.cmd'),
+ *     join(homedir(), '.npm-global', 'bin', 'claude'),
+ *     '/usr/local/bin/claude',
+ *   ];
+ *   for (const cmd of candidates) {
+ *     try {
+ *       execSync(`"${cmd}" --version`, { timeout: 5000, encoding: 'utf-8', stdio: 'pipe' });
+ *       resolvedCliPath = cmd;
+ *       return cmd;
+ *     } catch { /* try next *\/ }
+ *   }
+ *   return null;
+ * }
+ *
+ * function runViaClaudeCli(prompt: string, options?: { maxTokens?: number; model?: string }): Promise<string> {
+ *   return new Promise<string>((resolve, reject) => {
+ *     const cli = findClaudeCli();
+ *     if (!cli) { reject(new Error('Claude CLI not found')); return; }
+ *     const model = options?.model || process.env.CLAUDE_CLI_MODEL || 'sonnet';
+ *     const args = ['-p', '--model', model];
+ *     const cliTimeoutMs = Number(process.env.CLAUDE_CLI_TIMEOUT_MS) || 900_000;
+ *     const child = spawn(cli, args, { stdio: ['pipe', 'pipe', 'pipe'], shell: IS_WINDOWS, windowsHide: true });
+ *     let stdout = ''; let stderr = ''; let settled = false;
+ *     let timer: ReturnType<typeof setTimeout>;
+ *     const finish = (fn: () => void) => { if (settled) return; settled = true; clearTimeout(timer); fn(); };
+ *     timer = setTimeout(() => finish(() => {
+ *       if (child.pid) treeKill(child.pid);
+ *       reject(new Error(`Claude CLI timed out after ${Math.round(cliTimeoutMs / 60000)} minutes`));
+ *     }), cliTimeoutMs);
+ *     child.stdout.on('data', (d) => { stdout += d.toString(); });
+ *     child.stderr.on('data', (d) => { stderr += d.toString(); });
+ *     child.on('error', (err) => finish(() => reject(err)));
+ *     child.on('close', (code) => finish(() => {
+ *       if (code !== 0) reject(new Error(`Claude CLI exited with code ${code}: ${stderr.slice(0, 500)}`));
+ *       else resolve(stdout.trim());
+ *     }));
+ *     child.stdin.on('error', () => { /* ignore EPIPE *\/ });
+ *     child.stdin.write(prompt);
+ *     child.stdin.end();
+ *   });
+ * }
+ *
+ * function treeKill(pid: number): void {
+ *   if (IS_WINDOWS) {
+ *     try { execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore', timeout: 5000 }); } catch { /* already dead *\/ }
+ *   } else {
+ *     try { process.kill(-pid, 'SIGKILL'); } catch { /* already dead *\/ }
+ *   }
+ * }
+ *
+ * // Old isClaudeCliAuthenticated() also accepted a logged-in CLI:
+ * //   if (process.env.ANTHROPIC_API_KEY) return true;
+ * //   const cli = findClaudeCli();
+ * //   if (!cli) return false;
+ * //   try { return JSON.parse(execSync(`"${cli}" auth status`, ...).trim()).loggedIn === true; }
+ * //   catch { return false; }
+ * ========================================================================== */

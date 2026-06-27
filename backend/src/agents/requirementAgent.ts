@@ -21,7 +21,7 @@
  * the agent must mark assumptions instead of inventing facts.
  */
 import type { TestOpsState, ParsedRequirements } from './state.js';
-import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
+import { runClaudeJson } from './claude-runner.js';
 
 export async function requirementAgent(state: TestOpsState): Promise<TestOpsState> {
   const appInfo = state.appContext
@@ -87,8 +87,13 @@ EXTRACTION RULES (read carefully):
 9. If the source text is sparse, INFER reasonable extensions based on the application domain — but mark inferences with " (inferred)" in the relevant field.
 10. NEVER return empty arrays for features / actors / flows — at minimum return one entry each based on what you can deduce.`;
 
-  const response = await runClaudePrompt(prompt, { maxTokens: 8000, model: 'claude-sonnet-4-6' });
-  const parsed = parseJsonFromResponse<ParsedRequirements>(response);
+  // Retry on a flaky/truncated reply — this is the first, essential stage; a
+  // single non-JSON response must not sink the whole generation.
+  const parsed = await runClaudeJson<ParsedRequirements>(prompt, {
+    maxTokens: 8000,
+    model: 'claude-sonnet-4-6',
+    attempts: 2,
+  });
 
   // Defensive normalisation — Claude may omit some optional sections.
   const parsedRequirements: ParsedRequirements = {

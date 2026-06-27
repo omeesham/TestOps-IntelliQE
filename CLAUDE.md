@@ -25,7 +25,7 @@ npm run preview  # Preview production build
 ### Prerequisites
 - Azure SQL Database (Basic 5 DTU in prod). Local dev uses SQL Server in Docker (`docker-compose.yml`) on localhost:1433 — database `JBSTestOpsAI`, schema `JBSTestOpsAI`. Set `DB_BOOTSTRAP=true` locally to auto-create the database.
 - Backend must be running before frontend (frontend proxies `/api` → `http://localhost:3001`)
-- **AI auth:** set `ANTHROPIC_API_KEY` in `backend/.env` (see `backend/.env.example`). The generation pipeline then calls the Anthropic API directly via the official SDK — durable, headless, and portable (every developer who clones the repo sets their own key). If the key is unset, `claude-runner.ts` falls back to a locally signed-in `claude` CLI whose login **expires periodically** — the recurring "AI engine not connected" failure. Optional `ANTHROPIC_MODEL` overrides the default `claude-opus-4-8`.
+- **AI auth:** the Anthropic API key is configured in the app UI (**System Configuration → LLM Configuration**) and stored AES-encrypted in `client_configurations` (row `llm-<provider>-<env>`). `services/llm-config.service.ts` resolves + decrypts it and hydrates `process.env.ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL` at startup, on config save, and as a generate-route preflight; the pipeline then calls the Anthropic API directly via the official SDK. Setting `ANTHROPIC_API_KEY` in `backend/.env` is an optional override (e.g. CI). The legacy `claude` **CLI fallback is disabled** (commented out in `claude-runner.ts`, 2026-06-27) — it expired periodically and caused the recurring "AI engine not connected" failure.
 - Worker requires env vars: `ANTHROPIC_API_KEY`, `WORKER_SECRET`, `BACKEND_URL`
 
 ## Architecture Overview
@@ -55,7 +55,7 @@ Frontend (React SPA) → Backend (Express API, port 3001) → Azure SQL Database
   6. `auditAgent.ts` → quality review
   - `pipeline.ts` — orchestrates the full pipeline with healing loop
   - `state.ts` — `TestOpsState` interface shared across agents
-  - `claude-runner.ts` — `runClaudePrompt` (async) runs a prompt through Claude: the **Anthropic API via the official `@anthropic-ai/sdk`** when `ANTHROPIC_API_KEY` is set (preferred — durable/portable), else the `claude` CLI as a fallback. All agents `await` it. Also exposes `isClaudeCliAuthenticated` (true when the key is set OR CLI is logged in) and `parseJsonFromResponse`.
+  - `claude-runner.ts` — `runClaudePrompt` (async) runs a prompt through the **Anthropic API via the official `@anthropic-ai/sdk`** (API-key only; the `claude` CLI path is commented out/disabled). `runClaudeJson<T>` wraps it with parse-failure retries so a flaky/truncated reply doesn't sink a run. All agents `await` these. Also exposes `isClaudeCliAuthenticated` (now simply: an `ANTHROPIC_API_KEY` is present in the env, hydrated from LLM Configuration) and `parseJsonFromResponse`.
 - **`orchestrator/`** — Advanced pipeline management:
   - `orchestrator.ts` — loads pipeline definition, processes stage completion, routes next stage
   - `dependency-engine.ts` — page readiness checks, cascade planning

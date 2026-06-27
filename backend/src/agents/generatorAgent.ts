@@ -29,7 +29,7 @@
  *   3. Titles must be unique and follow the "Verify …" convention.
  */
 import type { TestOpsState, TestCase, TestStep } from './state.js';
-import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
+import { runClaudePrompt, runClaudeJson, parseJsonFromResponse } from './claude-runner.js';
 import type { ExtendedTestPlan } from './plannerAgent.js';
 
 let counter = 0;
@@ -219,9 +219,13 @@ export async function generatorAgent(state: TestOpsState): Promise<TestOpsState>
   const pr = state.parsedRequirements;
   const plan = state.extendedTestPlan as ExtendedTestPlan | undefined;
 
-  // First pass.
-  const firstResponse = await runClaudePrompt(buildPrompt(state), { maxTokens: 16384, model: 'claude-sonnet-4-6' });
-  const firstParsed = parseJsonFromResponse<RawTestCase[]>(firstResponse);
+  // First pass. Retry on a flaky/truncated reply so one bad sample doesn't sink
+  // the run (this is the stage that actually produces the test cases).
+  const firstParsed = await runClaudeJson<RawTestCase[]>(buildPrompt(state), {
+    maxTokens: 16384,
+    model: 'claude-sonnet-4-6',
+    attempts: 2,
+  });
 
   if (!Array.isArray(firstParsed) || firstParsed.length === 0) {
     throw new Error('Claude returned no test cases in first pass');

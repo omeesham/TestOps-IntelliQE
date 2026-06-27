@@ -26,6 +26,7 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import pool from '../db.js';
 import { runClaudePrompt, isClaudeCliAuthenticated, parseJsonFromResponse } from '../agents/claude-runner.js';
+import { hydrateAnthropicEnv } from './llm-config.service.js';
 import { buildHealingPrompt, type HealingFix } from '../agents/healing-prompt.js';
 import { PlaywrightRunError, classifyPlaywrightFailureExternal, storedAllureResultsDir } from './playwright-runner.service.js';
 
@@ -241,6 +242,8 @@ export async function healRunScripts(
   }
 
   const targetUrl = await resolveTargetUrl(tenantId);
+  // Ensure the Anthropic key from LLM Configuration is loaded before the gate.
+  await hydrateAnthropicEnv(tenantId);
   const canUseAi = isClaudeCliAuthenticated();
 
   // ── 1. AI-fix each failing script (in parallel — the set is small). ──

@@ -97,62 +97,20 @@ router.post('/worker/:action', async (req: Request, res: Response) => {
 // POST /test-ai-connection — validates the AI API key by making a minimal request
 router.post('/test-ai-connection', async (req: Request, res: Response) => {
   try {
-    const { provider, authMethod, cliPath, integrationId } = req.body;
+    const { provider, authMethod, integrationId } = req.body;
     let { apiKey, model, baseUrl } = req.body;
     const norm = String(provider || '').toLowerCase();
 
-    // Claude CLI auth — test by running `claude --version`
+    // ── CLI AUTH DISABLED (2026-06-27) ──
+    // The platform standardised on API keys (LLM Configuration). The legacy
+    // `claude` CLI auth path (execSync `claude --version` / `claude auth status`)
+    // has been removed — it expired periodically and caused the recurring
+    // "AI engine not connected" failures. Reject CLI-auth test requests with an
+    // actionable message instead of probing for the binary.
     if (authMethod === 'claude-cli') {
-      const { execSync } = await import('child_process');
-      const os = await import('os');
-      const path = await import('path');
-
-      // Build candidate paths: user-specified, bare command, and common npm global locations
-      const npmGlobalBin = path.join(os.homedir(), 'AppData', 'Roaming', 'npm', 'claude.cmd');
-      const candidates = [
-        cliPath,                         // user-specified path
-        'claude',                        // bare command (if in PATH)
-        npmGlobalBin,                    // Windows npm global default
-      ].filter(Boolean) as string[];
-
-      let resolved: string | null = null;
-      let version = '';
-      for (const cmd of candidates) {
-        try {
-          version = execSync(`"${cmd}" --version`, { timeout: 10000, encoding: 'utf-8' }).trim();
-          resolved = cmd;
-          break;
-        } catch (_) { /* try next candidate */ }
-      }
-      if (!resolved) {
-        res.status(400).json({
-          error: `Claude CLI not found. Install it with: npm install -g @anthropic-ai/claude-code — then add the npm global bin to your PATH:\n  setx PATH "%PATH%;${path.dirname(npmGlobalBin)}"\nThen restart your terminal and run: claude auth login --claudeai`,
-        });
-        return;
-      }
-
-      // Detecting the binary is not enough — `claude -p` fails (and the pipeline
-      // silently falls back to template generation) when the CLI is logged out.
-      // Verify real authentication via `claude auth status`, which prints JSON
-      // { loggedIn, authMethod, ... } without consuming any tokens.
-      let loggedIn = false;
-      let authMethod = 'none';
-      try {
-        const statusRaw = execSync(`"${resolved}" auth status`, { timeout: 10000, encoding: 'utf-8' }).trim();
-        const status = JSON.parse(statusRaw);
-        loggedIn = status.loggedIn === true;
-        authMethod = status.authMethod || 'none';
-      } catch (_) { /* treat as logged out */ }
-
-      if (!loggedIn) {
-        res.status(400).json({
-          error: `Claude CLI detected (${version}) but NOT logged in — the pipeline would fall back to template generation. Authenticate once as the user that runs the backend:\n  claude auth login --claudeai\nThen click Test Connection again.`,
-          resolvedPath: resolved,
-        });
-        return;
-      }
-
-      res.json({ ok: true, message: `Claude CLI ready: ${version} (authenticated via ${authMethod})`, resolvedPath: resolved });
+      res.status(400).json({
+        error: 'Claude CLI authentication is disabled. Configure an Anthropic API key in System Configuration → LLM Configuration and test that instead.',
+      });
       return;
     }
 

@@ -3,6 +3,7 @@ import pool from '../db.js';
 import { runClaudePrompt, isClaudeCliAuthenticated, parseJsonFromResponse } from '../agents/claude-runner.js';
 import { executeRunScripts, PlaywrightRunError } from '../services/playwright-runner.service.js';
 import { healRunScripts } from '../services/healing.service.js';
+import { hydrateAnthropicEnv } from '../services/llm-config.service.js';
 
 const router = Router();
 const SCHEMA = process.env.DB_SCHEMA || 'JBSTestOpsAI';
@@ -189,7 +190,9 @@ router.post('/generate/:testRunId', async (req: Request, res: Response) => {
     const targetUrl = appContext?.baseUrl || appContext?.targetUrl || 'https://example.com';
     const appName = appContext?.name || run.story_title || 'Application';
 
-    // Generate scripts using Claude CLI or fallback
+    // Generate scripts via the Anthropic API (key from LLM Configuration), with a
+    // template fallback if the AI is unavailable or returns nothing usable.
+    await hydrateAnthropicEnv(tenantId);
     const scripts: Array<{ testCaseId: string; tcNumber: string; title: string; fileName: string; code: string }> = [];
 
     if (isClaudeCliAuthenticated()) {
