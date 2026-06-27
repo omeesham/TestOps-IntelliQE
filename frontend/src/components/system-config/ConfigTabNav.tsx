@@ -1,6 +1,6 @@
 import {
   Settings, AppWindow, FileText, Database,
-  GitBranch, Bell, Brain, Volume2,
+  GitBranch, Bell, Brain, Volume2, Sparkles,
 } from 'lucide-react';
 
 export type TabKey =
@@ -10,6 +10,7 @@ export type TabKey =
   | 'data-sources'
   | 'git-repos'
   | 'notifications'
+  | 'llm-config'
   | 'ai-healing'
   | 'voice';
 
@@ -26,6 +27,7 @@ const TABS: Tab[] = [
   { key: 'data-sources',  label: 'Data Sources',           icon: Database  },
   { key: 'git-repos',     label: 'Git Repositories',       icon: GitBranch },
   { key: 'notifications', label: 'Notifications',          icon: Bell      },
+  { key: 'llm-config',    label: 'LLM Configuration',      icon: Sparkles  },
   { key: 'ai-healing',    label: 'AI & Healer Agent',      icon: Brain     },
   { key: 'voice',         label: 'Voice Assistant',        icon: Volume2   },
 ];

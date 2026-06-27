@@ -9,6 +9,7 @@ import GitRepositoriesSection from '@/components/system-config/GitRepositoriesSe
 import NotificationsSection from '@/components/system-config/NotificationsSection';
 import AISelfHealingSection from '@/components/system-config/AISelfHealingSection';
 import VoiceAssistantSection from '@/components/system-config/VoiceAssistantSection';
+import LLMConfigurationSection from '@/components/system-config/LLMConfigurationSection';
 import { getConfigurations } from '@/services/api';
 import ErrorAlert from '@/components/feedback/ErrorAlert';
 import { normalizeError, type NormalizedError } from '@/utils/apiError';
@@ -70,6 +71,8 @@ export default function SystemConfigurationPage() {
         return <GitRepositoriesSection configs={configs} onRefresh={fetchConfigs} />;
       case 'notifications':
         return <NotificationsSection configs={configs} onRefresh={fetchConfigs} />;
+      case 'llm-config':
+        return <LLMConfigurationSection configs={configs} onRefresh={fetchConfigs} />;
       case 'ai-healing':
         return <AISelfHealingSection configs={configs} />;
       case 'voice':

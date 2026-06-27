@@ -589,6 +589,19 @@ export async function getAllureReportStatus(runId?: string) {
   return data;
 }
 
+/* Custom branded HTML report — symmetric with the Allure functions above. */
+export async function generateHtmlReport(runId?: string) {
+  const { data } = await api.post('/html-report/generate', { runId }, { timeout: 120_000 });
+  return data;
+}
+
+export async function getHtmlReportStatus(runId?: string) {
+  const params: Record<string, string> = {};
+  if (runId) params.runId = runId;
+  const { data } = await api.get('/html-report/status', { params });
+  return data;
+}
+
 /* ─────────────────────────────────────────────────────────────
    Execution Recordings (CDP screen capture of test runs + timing)
    ───────────────────────────────────────────────────────────── */
@@ -758,6 +771,60 @@ export async function connectIntegration(integrationId: string, configData: Reco
 export async function disconnectIntegration(integrationId: string) {
   const { data } = await api.delete(`/configurations/${integrationId}`);
   return data;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   LLM provider configuration — connection test + model discovery
+   ───────────────────────────────────────────────────────────── */
+export type LLMConnectionStatus =
+  | 'connected' | 'invalid-key' | 'failed' | 'timeout' | 'not-configured';
+
+export interface LLMTestResult {
+  ok: boolean;
+  status: LLMConnectionStatus;
+  message?: string;
+  error?: string;
+}
+
+/** Validate a provider's credentials live. Never throws — returns a typed result. */
+export async function testLLMConnection(payload: {
+  provider: string;
+  apiKey?: string;
+  model?: string;
+  baseUrl?: string;
+  orgId?: string;
+  projectId?: string;
+}): Promise<LLMTestResult> {
+  try {
+    const { data } = await api.post('/pipeline-admin/test-ai-connection', {
+      authMethod: 'api-key',
+      ...payload,
+    });
+    return { ok: !!data.ok, status: data.status || 'connected', message: data.message };
+  } catch (err: any) {
+    const body = err?.response?.data || {};
+    return {
+      ok: false,
+      status: body.status || 'failed',
+      error: body.error || err?.message || 'Connection failed',
+    };
+  }
+}
+
+/** Retrieve a provider's available models (live after a successful connection,
+ *  curated fallback otherwise). */
+export async function listLLMModels(payload: {
+  provider: string;
+  apiKey?: string;
+  baseUrl?: string;
+  integrationId?: string;
+}): Promise<{ models: string[]; source: 'live' | 'fallback' }> {
+  try {
+    const { data } = await api.post('/pipeline-admin/list-models', payload);
+    return { models: data.models || [], source: data.source || 'fallback' };
+  } catch {
+    return { models: [], source: 'fallback' };
+  }
 }
 
 export async function testNotificationIntegration(integrationId: string) {

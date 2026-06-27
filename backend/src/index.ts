@@ -42,6 +42,7 @@ import automationScriptsRoutes from './routes/automation-scripts.routes.js';
 import artifactsRoutes from './routes/artifacts.routes.js';
 import userManagementRoutes from './routes/user-management.routes.js';
 import allureRoutes from './routes/allure.routes.js';
+import htmlReportRoutes from './routes/html-report.routes.js';
 import tenantSettingsRoutes from './routes/tenant-settings.routes.js';
 import publicApiRoutes from './routes/public/public-api.routes.js';
 import { initDb } from './db.js';
@@ -382,6 +383,7 @@ app.use('/api/automation-scripts', authMiddleware, automationScriptsRoutes);
 app.use('/api/artifacts', authMiddleware, artifactsRoutes);
 app.use('/api/users', authMiddleware, userManagementRoutes);
 app.use('/api/allure', allureRoutes);
+app.use('/api/html-report', htmlReportRoutes);
 
 /* ─────────────────────────────────────────────────────────────
    Public business-capability API (HIPAA boundary)

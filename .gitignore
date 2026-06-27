@@ -78,3 +78,6 @@ Thumbs.db
 .cache/
 tmp/
 temp/
+
+backend/html-reports/
+**/html-reports/
