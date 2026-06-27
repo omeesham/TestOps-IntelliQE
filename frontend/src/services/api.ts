@@ -65,6 +65,11 @@ export async function loginUser(username: string, password: string) {
   return data;
 }
 
+export async function ssoCallback(code: string, redirectUri: string) {
+  const { data } = await api.post('/auth/sso/callback', { code, redirectUri });
+  return data;
+}
+
 export async function signupUser(
   username: string,
   password: string,
