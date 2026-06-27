@@ -79,7 +79,8 @@ router.get('/next-task', async (req: Request, res: Response) => {
       stageConfig,
     });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error('next-task error:', err?.message);
+    res.status(500).json({ error: 'Failed to fetch next task' });
   }
 });
 
@@ -153,7 +154,7 @@ Execute this pipeline stage and return results as JSON.`;
     res.json({ ok: true, classification });
   } catch (err: any) {
     console.error('complete-task error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Failed to complete task' });
   }
 });
 

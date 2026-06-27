@@ -6,7 +6,7 @@ import { encryptSensitiveFields } from '@/utils/crypto';
 interface DbConfig {
   integrationId: string;
   status: string;
-  configData: Record<string, any>;
+  configData: Record<string, unknown>;
   connectedBy: string | null;
   connectedAt: string | null;
   lastSyncAt: string | null;
@@ -30,6 +30,13 @@ interface AppFormData {
   roles: Role[];
 }
 
+interface AppConfigData {
+  appName?: string;
+  baseUrl?: string;
+  environment?: string;
+  roles?: Role[];
+}
+
 const INPUT_CLASS =
   'w-full px-3 py-2.5 rounded-xl border border-[#C9DCFF] bg-[#EFF5FF] text-sm outline-none focus:ring-2 focus:ring-[#155dfc]/20 focus:border-[#155dfc] transition-all';
 
@@ -47,6 +54,20 @@ const EMPTY_FORM: AppFormData = {
   environment: 'staging',
   roles: [],
 };
+
+/**
+ * Extract a display message from a thrown value, mirroring the legacy
+ * `err?.response?.data?.error || err?.message || fallback` precedence.
+ */
+function errorMessage(err: unknown, fallback: string): string {
+  if (err && typeof err === 'object') {
+    const e = err as { response?: { data?: { error?: unknown } }; message?: unknown };
+    const serverError = e.response?.data?.error;
+    if (typeof serverError === 'string' && serverError) return serverError;
+    if (typeof e.message === 'string' && e.message) return e.message;
+  }
+  return fallback;
+}
 
 export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
@@ -67,12 +88,12 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
     setIsNewApp(false);
     setError(null);
     setVisiblePasswords(new Set());
-    const d = cfg.configData || {};
+    const d: AppConfigData = cfg.configData || {};
     setFormData({
       appName: d.appName || '',
       baseUrl: d.baseUrl || '',
       environment: d.environment || 'staging',
-      roles: Array.isArray(d.roles) ? d.roles.map((r: any) => ({ ...r })) : [],
+      roles: Array.isArray(d.roles) ? d.roles.map((r) => ({ ...r })) : [],
     });
   };
 
@@ -118,7 +139,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
   const togglePasswordVisibility = (index: number) => {
     setVisiblePasswords((prev) => {
       const next = new Set(prev);
-      next.has(index) ? next.delete(index) : next.add(index);
+      if (next.has(index)) next.delete(index); else next.add(index);
       return next;
     });
   };
@@ -156,8 +177,8 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
       setSelectedAppId(integrationId);
       setIsNewApp(false);
       onRefresh();
-    } catch (err: any) {
-      setError(err?.response?.data?.error || err?.message || 'Failed to save application');
+    } catch (err) {
+      setError(errorMessage(err, 'Failed to save application'));
     } finally {
       setSaving(false);
     }
@@ -173,8 +194,8 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
         setFormData({ ...EMPTY_FORM });
       }
       onRefresh();
-    } catch (err: any) {
-      setError(err?.response?.data?.error || err?.message || 'Failed to delete application');
+    } catch (err) {
+      setError(errorMessage(err, 'Failed to delete application'));
     }
   };
 
@@ -214,7 +235,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
             </div>
           ) : (
             appConfigs.map((cfg) => {
-              const d = cfg.configData || {};
+              const d: AppConfigData = cfg.configData || {};
               const isSelected = cfg.integrationId === selectedAppId;
               return (
                 <div

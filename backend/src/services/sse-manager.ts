@@ -41,6 +41,15 @@ export function broadcastSSE(runId: string, event: SSEEvent): void {
       // Connection closed
     }
   }
+
+  // On the terminal event, close the streams and release the run's connections
+  // so they don't linger open waiting for the client to disconnect.
+  if ((event as any).type === 'pipeline_complete') {
+    for (const conn of conns) {
+      try { conn.res.end(); } catch { /* already closed */ }
+    }
+    connections.delete(runId);
+  }
 }
 
 export function broadcastToAll(event: SSEEvent): void {

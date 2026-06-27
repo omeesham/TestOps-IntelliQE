@@ -7,6 +7,47 @@ import { getUsageStats, isWorkerConnected, getLastHeartbeat, setPendingWorkerCom
 const SCHEMA = '"JBSTestOpsAI"';
 const router = Router();
 
+// Pipeline administration is part of System Configuration, which is restricted
+// to admin and QA-engineer roles. Block any other authenticated role from
+// reading/writing pipeline config or controlling the worker.
+router.use((req: Request, res: Response, next) => {
+  const role = (req as any).user?.role;
+  const isPlatform = (req as any).user?.isPlatform;
+  if (isPlatform || role === 'admin' || role === 'qa_engineer') { next(); return; }
+  res.status(403).json({ error: 'Forbidden' });
+});
+
+/** Reject values that could break out of a shell command (cmd.exe / POSIX metacharacters).
+ *  Backslash and colon are allowed so Windows paths like C:\\tools\\claude.cmd still work. */
+function isShellSafe(value: string): boolean {
+  return !/[&|;<>^"'`$(){}\n\r]/.test(value);
+}
+
+/** Guard against SSRF: only allow http(s) to public hosts; block loopback,
+ *  private, and link-local/metadata addresses. */
+function assertPublicHttpUrl(raw: string): URL {
+  let url: URL;
+  try { url = new URL(raw); } catch { throw new Error('Invalid base URL'); }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error('Base URL must use http or https');
+  }
+  const host = url.hostname.toLowerCase();
+  const blocked =
+    host === 'localhost' ||
+    host === '0.0.0.0' ||
+    host === '::1' ||
+    host.endsWith('.localhost') ||
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^169\.254\./.test(host) ||              // link-local / cloud metadata
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+    /^(fc|fd)[0-9a-f]{2}:/.test(host) ||      // IPv6 unique-local
+    /^fe80:/.test(host);                       // IPv6 link-local
+  if (blocked) throw new Error('Base URL host is not allowed');
+  return url;
+}
+
 // GET /pipeline-definition
 router.get('/pipeline-definition', async (req: Request, res: Response) => {
   try {
@@ -82,6 +123,17 @@ router.post('/worker/:action', async (req: Request, res: Response) => {
 router.post('/test-ai-connection', async (req: Request, res: Response) => {
   try {
     const { provider, authMethod, apiKey, model, baseUrl, cliPath } = req.body;
+
+    // Reject a user-supplied CLI path that could break out of the shell command.
+    if (cliPath && (typeof cliPath !== 'string' || !isShellSafe(cliPath))) {
+      res.status(400).json({ error: 'Invalid CLI path' });
+      return;
+    }
+    // Reject a base URL that points at internal/private hosts (SSRF guard).
+    if (baseUrl) {
+      try { assertPublicHttpUrl(String(baseUrl)); }
+      catch (e: any) { res.status(400).json({ error: e.message }); return; }
+    }
 
     // Claude CLI auth — test by running `claude --version`
     if (authMethod === 'claude-cli') {

@@ -42,7 +42,14 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     let token = '';
     if (authHeader && authHeader.startsWith('Bearer ')) {
       token = authHeader.slice(7);
-    } else if (typeof req.query.token === 'string' && req.query.token.trim()) {
+    } else if (
+      typeof req.query.token === 'string' &&
+      req.query.token.trim() &&
+      // Only honour the query-param token for SSE/EventSource requests, which
+      // cannot set an Authorization header. Restricting it here avoids leaking
+      // tokens via logs/proxies/referrer on ordinary API calls.
+      (req.headers.accept || '').includes('text/event-stream')
+    ) {
       token = req.query.token.trim();
     }
     if (!token) {

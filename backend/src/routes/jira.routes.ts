@@ -147,6 +147,8 @@ router.get('/stories', async (req: Request, res: Response) => {
 router.get('/debug', async (req: Request, res: Response) => {
   try {
     const user = req.user!;
+    // Diagnostic endpoint — restrict to admins/platform; never expose credential material.
+    if (!user.isPlatform && user.role !== 'admin') { res.status(403).json({ error: 'Forbidden' }); return; }
     const creds = await getCredsForTenant(user.tenantId);
     if (!creds) { res.status(400).json({ error: 'No JIRA credentials stored for this tenant.' }); return; }
 
@@ -155,7 +157,6 @@ router.get('/debug', async (req: Request, res: Response) => {
     const diag: Record<string, any> = {
       baseUrl: creds.baseUrl,
       projectKey: creds.projectKey || null,
-      authHeaderPrefix: creds.authHeader?.slice(0, 10) + '...',
     };
 
     // Test 1: /myself

@@ -1,5 +1,5 @@
 import { Outlet, useLocation } from 'react-router-dom';
-import { useRef } from 'react';
+import { useState } from 'react';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import ChatPage from '@/pages/ChatPage';
@@ -9,10 +9,13 @@ export default function Layout() {
   const isChat = location.pathname === '/chat';
 
   // Lazy-mount ChatPage: only instantiate after the user first visits /chat,
-  // then keep it alive across navigation so in-progress flows survive.
-  const chatMountedRef = useRef(false);
-  if (isChat) chatMountedRef.current = true;
-  const chatMounted = chatMountedRef.current;
+  // then keep it alive across navigation so in-progress flows survive. Lazy
+  // init covers a direct load of /chat; the effect handles later navigation.
+  // Sticky derived state: once /chat is visited it stays true. Setting state
+  // during render (guarded) is React's recommended pattern here — no effect,
+  // no ref-during-render.
+  const [chatMounted, setChatMounted] = useState(isChat);
+  if (isChat && !chatMounted) setChatMounted(true);
 
   return (
     <div className="flex h-full overflow-hidden bg-[#EFF5FF]">

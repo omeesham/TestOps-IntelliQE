@@ -4,12 +4,13 @@ import { getNotifications } from './integrationCatalog';
 import IntegrationCard from './IntegrationCard';
 import ConnectModal from './ConnectModal';
 import { connectIntegration, disconnectIntegration, testNotificationIntegration } from '@/services/api';
+import { normalizeError } from '@/utils/apiError';
 import type { CatalogItem } from './integrationCatalog';
 
 interface DbConfig {
   integrationId: string;
   status: string;
-  configData: Record<string, any>;
+  configData: Record<string, unknown>;
   connectedBy: string | null;
   connectedAt: string | null;
   lastSyncAt: string | null;
@@ -52,7 +53,7 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
     const initial: Record<string, Record<string, boolean>> = {};
     configs.forEach((cfg) => {
       if (cfg.status === 'connected' && cfg.configData?.triggerEvents) {
-        initial[cfg.integrationId] = cfg.configData.triggerEvents;
+        initial[cfg.integrationId] = cfg.configData.triggerEvents as Record<string, boolean>;
       }
     });
     return initial;
@@ -77,8 +78,8 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
       await connectIntegration(modalIntegration.id, formData);
       setModalIntegration(null);
       onRefresh();
-    } catch (err: any) {
-      setError(err?.response?.data?.error || err.message || 'Connection failed');
+    } catch (err) {
+      setError(normalizeError(err).message || 'Connection failed');
     } finally {
       setSaving(false);
     }
@@ -94,7 +95,7 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
         return next;
       });
       onRefresh();
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to disconnect:', err);
     }
   };

@@ -8,7 +8,7 @@ const ANTHROPIC_VERSION = '2023-06-01';
 const MODEL_MAP: Record<string, string> = {
   haiku: 'claude-haiku-4-5-20251001',
   sonnet: 'claude-sonnet-4-6',
-  opus: 'claude-opus-4-7',
+  opus: 'claude-opus-4-8',
 };
 
 export interface SdkExecutionResult {
@@ -20,13 +20,27 @@ export interface SdkExecutionResult {
   error?: string;
 }
 
-const COST_PER_M_INPUT: Record<string, number> = { haiku: 0.25, sonnet: 3, opus: 15 };
-const COST_PER_M_OUTPUT: Record<string, number> = { haiku: 1.25, sonnet: 15, opus: 75 };
+type ModelFamily = 'haiku' | 'sonnet' | 'opus';
+
+const COST_PER_M_INPUT: Record<ModelFamily, number> = { haiku: 0.25, sonnet: 3, opus: 15 };
+const COST_PER_M_OUTPUT: Record<ModelFamily, number> = { haiku: 1.25, sonnet: 15, opus: 75 };
+
+/**
+ * Derive the pricing family from either a short alias ('opus') or a fully
+ * resolved model id ('claude-opus-4-8'). Pricing is keyed by family, so the
+ * lookup must work off the resolved id too — otherwise per-version ids skip the
+ * rate table, fall back to the sonnet default, and skew the budget caps.
+ */
+function modelFamily(model: string): ModelFamily {
+  const id = model.toLowerCase();
+  if (id.includes('haiku')) return 'haiku';
+  if (id.includes('opus')) return 'opus';
+  return 'sonnet';
+}
 
 function computeCost(model: string, inputTokens: number, outputTokens: number): number {
-  const inputRate = COST_PER_M_INPUT[model] ?? COST_PER_M_INPUT['sonnet']!;
-  const outputRate = COST_PER_M_OUTPUT[model] ?? COST_PER_M_OUTPUT['sonnet']!;
-  return (inputTokens * inputRate + outputTokens * outputRate) / 1_000_000;
+  const family = modelFamily(model);
+  return (inputTokens * COST_PER_M_INPUT[family] + outputTokens * COST_PER_M_OUTPUT[family]) / 1_000_000;
 }
 
 export async function callAnthropicAPI(
@@ -70,7 +84,7 @@ export async function callAnthropicAPI(
     const output = textBlocks.join('\n');
     const inputTokens = data.usage?.input_tokens || 0;
     const outputTokens = data.usage?.output_tokens || 0;
-    return { success: true, output, inputTokens, outputTokens, costUsd: computeCost(model, inputTokens, outputTokens) };
+    return { success: true, output, inputTokens, outputTokens, costUsd: computeCost(modelId, inputTokens, outputTokens) };
   } catch (err: any) {
     clearTimeout(timer);
     return { success: false, output: '', inputTokens: 0, outputTokens: 0, costUsd: 0, error: err.name === 'AbortError' ? `Timeout after ${timeoutMs}ms` : err.message };

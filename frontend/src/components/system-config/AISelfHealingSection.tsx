@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { Brain, Eye, EyeOff, CheckCircle, Loader2, Shield, Cpu, Zap, AlertTriangle, Key, Cloud, Lock } from 'lucide-react';
 import { connectIntegration } from '@/services/api';
+import { normalizeError } from '@/utils/apiError';
 
 interface DbConfig {
   integrationId: string;
   status: string;
-  configData: Record<string, any>;
+  configData: Record<string, unknown>;
   connectedBy: string | null;
   connectedAt: string | null;
   lastSyncAt: string | null;
@@ -160,7 +161,7 @@ export default function AISelfHealingSection({ configs }: Props) {
   const existing = configs.find((c) => c.integrationId === INTEGRATION_ID);
 
   const [form, setForm] = useState<FormState>(() => {
-    if (existing?.configData) return { ...getDefaults(), ...existing.configData };
+    if (existing?.configData) return { ...getDefaults(), ...(existing.configData as Partial<FormState>) };
     return getDefaults();
   });
 
@@ -171,7 +172,7 @@ export default function AISelfHealingSection({ configs }: Props) {
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string; resolvedPath?: string } | null>(null);
 
   useEffect(() => {
-    if (existing?.configData) setForm({ ...getDefaults(), ...existing.configData });
+    if (existing?.configData) setForm({ ...getDefaults(), ...(existing.configData as Partial<FormState>) });
   }, [existing?.configData]);
 
   const toggleSecret = (key: string) => setVisibleSecrets(prev => ({ ...prev, [key]: !prev[key] }));
@@ -232,8 +233,8 @@ export default function AISelfHealingSection({ configs }: Props) {
       } else {
         setTestResult({ ok: false, message: data.error || 'Connection test failed.' });
       }
-    } catch (err: any) {
-      setTestResult({ ok: false, message: err.message || 'Network error' });
+    } catch (err) {
+      setTestResult({ ok: false, message: normalizeError(err).message || 'Network error' });
     } finally {
       setTesting(false);
     }
@@ -246,7 +247,7 @@ export default function AISelfHealingSection({ configs }: Props) {
       await connectIntegration(INTEGRATION_ID, { ...form });
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to save AI config:', err);
     } finally {
       setSaving(false);

@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { isAxiosError } from 'axios';
 import { encryptField, encryptSensitiveFields } from '@/utils/crypto';
 
 const api = axios.create({
@@ -235,7 +235,7 @@ export interface GenerationResult {
   status: 'running' | 'done' | 'error' | 'unknown';
   stage?: string;
   detail?: string;
-  result?: any;
+  result?: unknown;
   error?: string;
   code?: string;
 }
@@ -245,8 +245,8 @@ export async function getGenerationResult(runId: string): Promise<GenerationResu
   try {
     const { data } = await api.get(`/generate/result/${runId}`);
     return data;
-  } catch (err: any) {
-    const data = err?.response?.data;
+  } catch (err) {
+    const data = isAxiosError(err) ? err.response?.data : undefined;
     if (data && typeof data === 'object') return data as GenerationResult;
     throw err;
   }
@@ -273,7 +273,7 @@ export async function saveTestCases(payload: {
   storyTitle?: string;
   source?: string;
   columns: string[];
-  testCases: any[];
+  testCases: Record<string, unknown>[];
 }) {
   const { data } = await api.post('/test-cases/save', payload);
   return data;
@@ -317,13 +317,13 @@ export async function listTestCaseFacets(): Promise<{
 export async function updateTestCase(
   testRunId: string,
   caseId: string,
-  fields: Record<string, any>,
+  fields: Record<string, unknown>,
 ) {
   const { data } = await api.put(`/test-cases/${testRunId}/cases/${caseId}`, fields);
   return data;
 }
 
-export async function addTestCase(testRunId: string, tc: Record<string, any>) {
+export async function addTestCase(testRunId: string, tc: Record<string, unknown>) {
   const { data } = await api.post(`/test-cases/${testRunId}/cases`, tc);
   return data;
 }
@@ -348,7 +348,12 @@ export async function getTestData(testRunId: string) {
 
 export async function saveTestData(
   testRunId: string,
-  payload: { datasets?: any[]; fieldData?: any[]; mappings?: any[]; validations?: any[] },
+  payload: {
+    datasets?: Record<string, unknown>[];
+    fieldData?: Record<string, unknown>[];
+    mappings?: Record<string, unknown>[];
+    validations?: Record<string, unknown>[];
+  },
 ) {
   const { data } = await api.post(`/test-cases/${testRunId}/test-data`, payload);
   return data;
@@ -445,7 +450,7 @@ export async function generateAllureReport(runId?: string) {
 }
 
 export async function getAllureReportStatus(runId?: string) {
-  const params: Record<string, any> = {};
+  const params: Record<string, string> = {};
   if (runId) params.runId = runId;
   const { data } = await api.get('/allure/status', { params });
   return data;
@@ -517,7 +522,7 @@ export async function getConfigurationsByCategory(category: string) {
   return data;
 }
 
-export async function connectIntegration(integrationId: string, configData: Record<string, any>) {
+export async function connectIntegration(integrationId: string, configData: Record<string, unknown>) {
   const encryptedData = encryptSensitiveFields(configData);
   const { data } = await api.put(`/configurations/${integrationId}`, encryptedData);
   return data;
@@ -541,6 +546,29 @@ export async function getAgentStatus() {
   return data;
 }
 
+/** One pipeline run as surfaced by the agent queue endpoint. */
+export interface AgentQueueItem {
+  id: string;
+  feature: string;
+  module: string;
+  stage: string;
+  status: string;
+  priority: string;
+  intent?: string;
+  targetUrl?: string;
+  cost?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+export interface AgentQueueResponse {
+  queue: AgentQueueItem[];
+  config?: { maxRetries?: number; autoHealOnFailure?: boolean };
+}
+export async function getAgentQueue(): Promise<AgentQueueResponse> {
+  const { data } = await api.get('/agents/queue');
+  return data;
+}
+
 export async function createPipelineRun(payload: {
   feature: string;
   module: string;
@@ -557,7 +585,7 @@ export async function createPipelineRun(payload: {
 }
 
 export async function listPipelineRuns(status?: string) {
-  const params: Record<string, any> = {};
+  const params: Record<string, string> = {};
   if (status) params.status = status;
   const { data } = await api.get('/pipeline/list', { params });
   return data;
@@ -594,7 +622,7 @@ export async function switchPipelineMode(id: string, mode: 'full-auto' | 'approv
 }
 
 export async function listPipelinePages(module?: string) {
-  const params: Record<string, any> = {};
+  const params: Record<string, string> = {};
   if (module) params.module = module;
   const { data } = await api.get('/pipeline-pages', { params });
   return data;
@@ -638,22 +666,48 @@ export async function getPipelineUsage() {
 /* ─────────────────────────────────────────────────────────────
    SSE — real-time pipeline events
    ───────────────────────────────────────────────────────────── */
+/**
+ * Subscribe to a pipeline run's SSE stream.
+ *
+ * EventSource auto-reconnects on transient errors, which is what we want for
+ * brief network blips. But on a *permanent* failure (run gone, auth rejected,
+ * server down) it would otherwise reconnect forever in a tight loop. We bound
+ * that: after `maxConsecutiveErrors` errors without a successful message in
+ * between, we close the stream and notify the optional `onError` callback so
+ * the caller can fall back to polling instead of leaking a socket. Any
+ * successful message resets the counter, so a flaky-but-recovering connection
+ * keeps reconnecting normally.
+ */
 export function subscribeToPipelineEvents(
   runId: string,
-  onEvent: (event: any) => void,
+  onEvent: (event: unknown) => void,
+  onError?: (err: Event) => void,
+  maxConsecutiveErrors = 5,
 ): EventSource {
   const token = sessionStorage.getItem('intelliqe_token') || '';
   const es = new EventSource(`/api/pipeline-events/${runId}?token=${encodeURIComponent(token)}`);
 
+  let consecutiveErrors = 0;
+
   es.onmessage = (e) => {
+    // A delivered message means the stream is healthy again.
+    consecutiveErrors = 0;
     try {
       onEvent(JSON.parse(e.data));
     } catch {
       // keepalive — ignore
     }
   };
-  es.onerror = () => {
-    // EventSource auto-reconnects
+  es.onerror = (err) => {
+    consecutiveErrors += 1;
+    // While we're under the cap and the browser is still trying to reconnect,
+    // let it keep retrying transient errors.
+    if (consecutiveErrors < maxConsecutiveErrors && es.readyState !== EventSource.CLOSED) {
+      return;
+    }
+    // Permanent failure (or the cap was hit): stop reconnecting and surface it.
+    es.close();
+    onError?.(err);
   };
   return es;
 }
@@ -695,7 +749,7 @@ export async function updateTenantUser(
   userId: string,
   payload: { fullName?: string; email?: string; role?: string; password?: string; isActive?: boolean },
 ) {
-  const body: any = { ...payload };
+  const body: Record<string, unknown> = { ...payload };
   if (payload.password) body.password = encryptField(payload.password);
   const { data } = await api.put(`/users/${userId}`, body);
   return data;

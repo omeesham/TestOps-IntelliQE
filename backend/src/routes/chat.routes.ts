@@ -5,10 +5,23 @@ import {
   saveMessage,
   getConversationsByTenant,
   getMessagesByConversation,
+  getConversationOwner,
 } from '../services/chat.service.js';
 import { sanitizeChatContent } from '../utils/crypto.js';
 
 const router = Router();
+
+/** Confirm the conversation exists and belongs to the caller's tenant.
+ *  Responds 404 and returns false otherwise (doesn't leak existence). */
+async function canAccessConversation(req: Request, res: Response, conversationId: string): Promise<boolean> {
+  const user = req.user!;
+  const owner = await getConversationOwner(conversationId);
+  if (!owner || (!user.isPlatform && owner.tenant_id !== user.tenantId)) {
+    res.status(404).json({ error: 'Conversation not found' });
+    return false;
+  }
+  return true;
+}
 
 // POST /api/chat/conversations — Create a new conversation
 router.post('/conversations', async (req: Request, res: Response) => {
@@ -36,6 +49,7 @@ router.post('/messages', async (req: Request, res: Response) => {
       res.status(400).json({ error: 'conversationId, role, and content are required' });
       return;
     }
+    if (!(await canAccessConversation(req, res, conversationId))) return;
     // Strip any credentials/tokens/keys from message content
     const sanitizedContent = sanitizeChatContent(content);
     const message = await saveMessage({ conversationId, role, content: sanitizedContent, metadata });
@@ -61,6 +75,7 @@ router.get('/conversations', async (req: Request, res: Response) => {
 // GET /api/chat/conversations/:id/messages — Get messages for a conversation
 router.get('/conversations/:id/messages', async (req: Request, res: Response) => {
   try {
+    if (!(await canAccessConversation(req, res, req.params.id as string))) return;
     const messages = await getMessagesByConversation(req.params.id as string);
     res.json(messages);
   } catch (err) {

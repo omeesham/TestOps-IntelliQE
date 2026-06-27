@@ -31,7 +31,7 @@ function timeSince(dateStr: string | null): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-export default function IntegrationCard({ id, name, category, description, comingSoon, status, connectedBy, lastSyncAt, onConnect, onDisconnect }: Props) {
+export default function IntegrationCard({ id, name, category, description, status, connectedBy, lastSyncAt, onConnect, onDisconnect }: Props) {
   const b = badge[status] || badge.available;
   const logo = LOGOS[id];
 

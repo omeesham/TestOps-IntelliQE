@@ -37,29 +37,43 @@ interface PwSpec {
 
 interface SpecResult {
   scenario: string;
+  /** Spec file the result came from — the unique key for matching back to a
+   *  test case. Human titles can collide; file names (after dedup) cannot. */
+  file?: string;
   passed: boolean;
   /** Wall-clock duration of the test attempt, in milliseconds. */
   durationMs?: number;
   errorMessage?: string;
 }
 
-function collectSpecs(suite: PwSuite, out: PwSpec[]): void {
-  if (Array.isArray(suite.specs)) out.push(...suite.specs);
-  if (Array.isArray(suite.suites)) for (const child of suite.suites) collectSpecs(child, out);
+/** Carry the owning suite's `file` down to each spec — Playwright records the
+ *  source file on the suite, not always on the spec. */
+function collectSpecs(suite: PwSuite, out: { spec: PwSpec; file?: string }[], inheritedFile?: string): void {
+  const file = suite.file ?? inheritedFile;
+  if (Array.isArray(suite.specs)) for (const spec of suite.specs) out.push({ spec, file: spec.file ?? file });
+  if (Array.isArray(suite.suites)) for (const child of suite.suites) collectSpecs(child, out, file);
+}
+
+/** Normalise a spec file path to its bare basename so it matches the file
+ *  names we wrote into the temp tests dir, regardless of path separators. */
+function baseName(file: string | undefined): string | undefined {
+  if (!file) return undefined;
+  const parts = file.split(/[\\/]/);
+  return parts[parts.length - 1] || undefined;
 }
 
 function summarizeSpecs(summary: PwSummary): SpecResult[] {
-  const allSpecs: PwSpec[] = [];
+  const allSpecs: { spec: PwSpec; file?: string }[] = [];
   for (const top of summary.suites || []) collectSpecs(top, allSpecs);
   const results: SpecResult[] = [];
-  for (const spec of allSpecs) {
+  for (const { spec, file } of allSpecs) {
     const firstResult = spec.tests?.[0]?.results?.[0];
     const status = firstResult?.status ?? 'failed';
     const passed = status === 'passed' || status === 'expected';
     const errorMessage = passed ? undefined : firstResult?.error?.message;
     // Duration comes back in milliseconds from Playwright's JSON reporter.
     const durationMs = typeof firstResult?.duration === 'number' ? firstResult.duration : undefined;
-    results.push({ scenario: spec.title || '', passed, durationMs, errorMessage });
+    results.push({ scenario: spec.title || '', file: baseName(file), passed, durationMs, errorMessage });
   }
   return results;
 }
@@ -78,13 +92,16 @@ function summarizeSpecs(summary: PwSummary): SpecResult[] {
 async function runPlaywrightInMemory(
   scripts: { fileName: string; code: string; testCaseId: string }[],
   targetUrl: string | undefined,
-): Promise<{ specResults: SpecResult[]; summary: PwSummary | null }> {
+): Promise<{ specResults: SpecResult[]; summary: PwSummary | null; fileToTestCaseId: Map<string, string> }> {
   const workspace = path.join(os.tmpdir(), `jbs-pw-sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const testsDir = path.join(workspace, 'tests');
   const resultsDir = path.join(workspace, 'allure-results');
   await fs.mkdir(testsDir, { recursive: true });
   await fs.mkdir(resultsDir, { recursive: true });
 
+  // Track which written file backs which test case so results can be matched
+  // by the unique spec file rather than the (possibly duplicated) title.
+  const fileToTestCaseId = new Map<string, string>();
   const seen = new Set<string>();
   for (const s of scripts) {
     let base = sanitizeFileName(s.fileName || s.testCaseId);
@@ -95,6 +112,7 @@ async function runPlaywrightInMemory(
       candidate = base.replace(/\.spec\.ts$/, `-${++suffix}.spec.ts`);
     }
     seen.add(candidate);
+    fileToTestCaseId.set(candidate, s.testCaseId);
     await fs.writeFile(path.join(testsDir, candidate), s.code, 'utf-8');
   }
 
@@ -155,7 +173,7 @@ ${baseUrlLine}    trace: 'retain-on-failure',
     throw new Error(tail || 'Playwright produced no summary');
   }
 
-  return { specResults: summarizeSpecs(summary), summary };
+  return { specResults: summarizeSpecs(summary), summary, fileToTestCaseId };
 }
 
 /**
@@ -191,10 +209,16 @@ export async function executionAgent(state: TestOpsState): Promise<TestOpsState>
   }
 
   try {
-    const { specResults } = await runPlaywrightInMemory(scripts, targetUrl);
+    const { specResults, fileToTestCaseId } = await runPlaywrightInMemory(scripts, targetUrl);
 
-    const resultByScenario = new Map<string, SpecResult>();
-    for (const r of specResults) resultByScenario.set(r.scenario, r);
+    // Key results by the unique testCaseId derived from the spec file. Human
+    // titles (tc.scenario) can collide across cases, so keying by title let a
+    // later spec silently overwrite an earlier pass/fail.
+    const resultByTestCaseId = new Map<string, SpecResult>();
+    for (const r of specResults) {
+      const testCaseId = r.file ? fileToTestCaseId.get(r.file) : undefined;
+      if (testCaseId) resultByTestCaseId.set(testCaseId, r);
+    }
 
     let passed = 0;
     let failed = 0;
@@ -203,7 +227,7 @@ export async function executionAgent(state: TestOpsState): Promise<TestOpsState>
     // any inference or fabrication.
     const details: NonNullable<TestOpsState['executionResults']>['details'] = [];
     const updated: TestCase[] = state.testCases.map((tc) => {
-      const match = resultByScenario.get(tc.scenario);
+      const match = resultByTestCaseId.get(tc.id);
       if (!match) {
         // Test case had no matching Playwright spec — script generation
         // skipped it (e.g., API-only test). Mark honestly as not_run.
@@ -235,16 +259,19 @@ export async function executionAgent(state: TestOpsState): Promise<TestOpsState>
       return { ...tc, status: 'failed' as const };
     });
 
+    // Do NOT collapse a multi-failure run into one spec's error — picking the
+    // first failing spec's message misrepresents the others. The accurate
+    // per-test errors live in `details`; the run level only summarises counts.
     return {
       ...state,
       testCases: updated,
       executionResults: {
         passed,
         failed,
-        failReason: specResults.find((r) => !r.passed)?.errorMessage,
+        failReason: failed > 0 ? `${failed} test(s) failed — see per-test details` : undefined,
         details,
       },
-      failureReason: failed > 0 ? (specResults.find((r) => !r.passed)?.errorMessage || 'Some tests failed') : null,
+      failureReason: failed > 0 ? `${failed} of ${passed + failed} test(s) failed` : null,
     };
   } catch (err) {
     const message = (err as Error).message || 'Playwright execution failed';

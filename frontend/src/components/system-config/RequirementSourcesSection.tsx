@@ -4,13 +4,13 @@ import type { CatalogItem } from './integrationCatalog';
 import IntegrationCard from './IntegrationCard';
 import ConnectModal from './ConnectModal';
 import { connectIntegration, disconnectIntegration, connectJira } from '@/services/api';
-import { encryptField } from '@/utils/crypto';
+import { normalizeError } from '@/utils/apiError';
 import { useAuth } from '@/contexts/AuthContext';
 
 interface DbConfig {
   integrationId: string;
   status: string;
-  configData: Record<string, any>;
+  configData: Record<string, unknown>;
   connectedBy: string | null;
   connectedAt: string | null;
   lastSyncAt: string | null;
@@ -52,7 +52,7 @@ export default function RequirementSourcesSection({ configs, onRefresh }: Props)
     try {
       await disconnectIntegration(integrationId);
       onRefresh();
-    } catch (err: any) {
+    } catch (err) {
       console.error('Disconnect error:', err);
     }
   };
@@ -80,8 +80,8 @@ export default function RequirementSourcesSection({ configs, onRefresh }: Props)
       }
       setConnectModal(null);
       onRefresh();
-    } catch (err: any) {
-      setError(err?.response?.data?.error || err?.message || 'Failed to connect');
+    } catch (err) {
+      setError(normalizeError(err).message || 'Failed to connect');
     } finally {
       setSaving(false);
     }

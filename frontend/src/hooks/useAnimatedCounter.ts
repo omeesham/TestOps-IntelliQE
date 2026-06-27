@@ -14,8 +14,9 @@ export function useAnimatedCounter(
 
   useEffect(() => {
     if (target === 0) {
-      setCurrent(0);
-      return;
+      // Reset via rAF rather than a synchronous setState in the effect body.
+      rafRef.current = requestAnimationFrame(() => setCurrent(0));
+      return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
     }
 
     const start = performance.now();

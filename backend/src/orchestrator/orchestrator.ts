@@ -8,7 +8,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const SCHEMA = '"JBSTestOpsAI"';
 
+// Short TTL on the cached global definition. We can't invalidate the in-memory
+// cache of *other* backend/worker instances when one of them saves, so a bounded
+// TTL caps how long a stale copy can be served after an edit (multi-instance
+// drift). Same-instance saves still refresh the cache immediately via
+// invalidatePipelineDefinitionCache().
+const DEFINITION_CACHE_TTL_MS = 30_000;
 let cachedDefinition: PipelineDefinition | null = null;
+let cachedDefinitionAt = 0;
 let eventCallback: ((runId: string, event: SSEEvent) => void) | null = null;
 
 export function setEventCallback(cb: (runId: string, event: SSEEvent) => void): void {
@@ -19,11 +26,20 @@ function emitEvent(runId: string, event: SSEEvent): void {
   if (eventCallback) eventCallback(runId, event);
 }
 
+/** Drop (or replace) the cached global definition so the next read reloads it. */
+export function invalidatePipelineDefinitionCache(next?: PipelineDefinition): void {
+  cachedDefinition = next ?? null;
+  cachedDefinitionAt = next ? Date.now() : 0;
+}
+
 export function loadPipelineDefinition(): PipelineDefinition {
-  if (cachedDefinition) return cachedDefinition;
+  if (cachedDefinition && Date.now() - cachedDefinitionAt < DEFINITION_CACHE_TTL_MS) {
+    return cachedDefinition;
+  }
   const configPath = path.resolve(__dirname, '../../config/pipeline-definition.json');
   const raw = fs.readFileSync(configPath, 'utf-8');
   cachedDefinition = JSON.parse(raw) as PipelineDefinition;
+  cachedDefinitionAt = Date.now();
   return cachedDefinition;
 }
 
@@ -60,7 +76,9 @@ export async function savePipelineDefinition(
   } else {
     const configPath = path.resolve(__dirname, '../../config/pipeline-definition.json');
     fs.writeFileSync(configPath, JSON.stringify(definition, null, 2));
-    cachedDefinition = definition;
+    // Refresh this instance's cache immediately; other instances pick up the
+    // change within DEFINITION_CACHE_TTL_MS via the TTL.
+    invalidatePipelineDefinitionCache(definition);
   }
 }
 
@@ -134,8 +152,10 @@ export async function processStageCompletion(
     return { nextStage: null, action: finalStatus === 'completed' ? 'complete' : 'fixme' };
   }
 
-  // Check approval mode
-  const executionMode = run.execution_mode_live || resultData.executionMode;
+  // Check approval mode. Prefer the explicit per-task override carried in the
+  // result; only fall back to the run-level value when the task didn't specify
+  // one, so a per-task mode is never masked by the stored DB value.
+  const executionMode = resultData.executionMode ?? run.execution_mode_live;
   if (executionMode === 'approve-per-stage') {
     await pool.query(
       `UPDATE ${SCHEMA}.qa_pipeline_runs SET status = 'awaiting_approval', stage = $2 WHERE id = $1`,

@@ -75,6 +75,13 @@ async function loadConfig(): Promise<PipelineDefinition['defaults']> {
 }
 
 async function pollForTask(): Promise<TaskResponse | null> {
+  // No tenant scoping is sent deliberately. `claimNextTask(tenantId?)` treats
+  // the tenant filter as optional, so omitting it makes this a single platform
+  // worker that serves every tenant's queue. Per-tenant isolation is preserved
+  // downstream: the /next-task endpoint resolves and returns the owning
+  // tenant's own Anthropic API key per task, so a shared worker never mixes
+  // tenant credentials. To run dedicated per-tenant workers instead, append
+  // `?tenant_id=<id>` here and the same query will scope the claim.
   try {
     const res = await fetch(`${BACKEND_URL}/api/pipeline-worker/next-task`, { headers });
     if (!res.ok) return null;
@@ -199,30 +206,33 @@ async function workerLoop(): Promise<void> {
   const heartbeatTimer = setInterval(() => sendHeartbeat(currentTaskId), cfg.workerHeartbeatIntervalMs);
   await sendHeartbeat();
 
-  while (running) {
-    try {
-      const task = await pollForTask();
-      if (!task) { await sleep(cfg.workerPollIntervalMs); continue; }
+  try {
+    while (running) {
+      try {
+        const task = await pollForTask();
+        if (!task) { await sleep(cfg.workerPollIntervalMs); continue; }
 
-      currentTaskId = task.taskId;
-      console.log(`[Worker] Picked up task ${task.taskId} for stage "${task.stageId}" (run: ${task.runId})`);
+        currentTaskId = task.taskId;
+        console.log(`[Worker] Picked up task ${task.taskId} for stage "${task.stageId}" (run: ${task.runId})`);
 
-      const result = await executeTask(task);
+        const result = await executeTask(task);
 
-      if (task.context?.dryRun) result.result = { ...result.result, dryRun: true };
-      if (task.context?.executionMode) result.result = { ...result.result, executionMode: task.context.executionMode };
+        if (task.context?.dryRun) result.result = { ...result.result, dryRun: true };
+        if (task.context?.executionMode) result.result = { ...result.result, executionMode: task.context.executionMode };
 
-      console.log(`[Worker] Task ${task.taskId}: ${result.success ? 'SUCCESS' : 'FAIL'}`);
-      await completeTask(task.taskId, result.success, result.result, result.artifacts, result.cost);
-      currentTaskId = undefined;
-    } catch (err) {
-      console.error(`[Worker] Loop error:`, (err as Error).message);
-      await sleep(cfg.workerPollIntervalMs);
+        console.log(`[Worker] Task ${task.taskId}: ${result.success ? 'SUCCESS' : 'FAIL'}`);
+        await completeTask(task.taskId, result.success, result.result, result.artifacts, result.cost);
+        currentTaskId = undefined;
+      } catch (err) {
+        console.error(`[Worker] Loop error:`, (err as Error).message);
+        await sleep(cfg.workerPollIntervalMs);
+      }
     }
+  } finally {
+    // Always stop the heartbeat, even if the loop exits unexpectedly.
+    clearInterval(heartbeatTimer);
+    console.log('[Worker] Shutting down');
   }
-
-  clearInterval(heartbeatTimer);
-  console.log('[Worker] Shutting down');
 }
 
 function sleep(ms: number): Promise<void> { return new Promise(resolve => setTimeout(resolve, ms)); }

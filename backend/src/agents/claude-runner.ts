@@ -199,16 +199,58 @@ export function isClaudeCliAvailable(): boolean {
  * starting a pipeline to fail fast with an actionable message instead of a deep
  * JSON-parse error. An ANTHROPIC_API_KEY in the environment also satisfies auth.
  */
+/**
+ * Short-lived memo of the CLI auth probe. The probe shells out to
+ * `claude auth status` (a synchronous ~10s `execSync`), so calling it on every
+ * preflight blocks the event loop inside an otherwise-async pipeline. We cache
+ * the result for a short TTL — auth state changes rarely, and a stale "true"
+ * just lets the real agent call surface the auth error itself.
+ */
+let cliAuthCache: { value: boolean; expiresAt: number } | null = null;
+const CLI_AUTH_TTL_MS = 60_000;
+
+/**
+ * Parse the CLI's `auth status` output defensively. The CLI does not guarantee
+ * JSON output (older/newer versions print human-readable text), so a bare
+ * `JSON.parse(...).loggedIn` would throw and be misread as "not authenticated".
+ * We try JSON first, then fall back to a textual "logged in" heuristic, and
+ * treat anything unparseable as not-authenticated.
+ */
+function parseAuthStatus(out: string): boolean {
+  const trimmed = out.trim();
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object' && 'loggedIn' in parsed) {
+      return (parsed as { loggedIn?: unknown }).loggedIn === true;
+    }
+  } catch {
+    /* not JSON — fall through to text heuristic */
+  }
+  const lower = trimmed.toLowerCase();
+  if (/\b(not logged in|logged out|unauthenticated|not authenticated)\b/.test(lower)) return false;
+  return /\b(logged in|authenticated)\b/.test(lower);
+}
+
 export function isClaudeCliAuthenticated(): boolean {
   if (process.env.ANTHROPIC_API_KEY) return true;
+
+  if (cliAuthCache && cliAuthCache.expiresAt > Date.now()) return cliAuthCache.value;
+
   const cli = findClaudeCli();
-  if (!cli) return false;
-  try {
-    const out = execSync(`"${cli}" auth status`, { timeout: 10000, encoding: 'utf-8', stdio: 'pipe' });
-    return JSON.parse(out.trim()).loggedIn === true;
-  } catch {
+  if (!cli) {
+    cliAuthCache = { value: false, expiresAt: Date.now() + CLI_AUTH_TTL_MS };
     return false;
   }
+
+  let value = false;
+  try {
+    const out = execSync(`"${cli}" auth status`, { timeout: 10000, encoding: 'utf-8', stdio: 'pipe' });
+    value = parseAuthStatus(out);
+  } catch {
+    value = false;
+  }
+  cliAuthCache = { value, expiresAt: Date.now() + CLI_AUTH_TTL_MS };
+  return value;
 }
 
 /**

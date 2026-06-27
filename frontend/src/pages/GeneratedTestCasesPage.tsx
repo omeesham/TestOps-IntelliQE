@@ -2,13 +2,12 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
-  Trash2, Edit3, Plus, Eye, Download, FileText, X, Check, Clock,
-  Tag, User, Calendar, Hash, AlertTriangle, CheckCircle2, Circle,
-  MoreHorizontal, Copy, ExternalLink, Filter,
+  Trash2, Edit3, Plus, Eye, Download, FileText, X, Clock,
+  Hash, AlertTriangle, CheckCircle2, Circle, Filter,
 } from 'lucide-react';
 import {
   listTestRuns, getTestRun, updateTestCase, addTestCase, deleteTestCase, deleteTestRun, exportTestCases,
-  generateScriptsForRun, downloadArtifactZip, listTestCaseFacets,
+  generateScriptsForRun, listTestCaseFacets,
 } from '@/services/api';
 
 const TAG_VOCAB = ['POSITIVE', 'NEGATIVE', 'E2E', 'UI', 'API', 'SMOKE', 'REGRESSION'] as const;
@@ -16,6 +15,7 @@ type TagName = typeof TAG_VOCAB[number];
 import { Code2, Loader2, Database, BarChart3 } from 'lucide-react';
 import TestDataTab from '@/components/test-data/TestDataTab';
 import ReportsTab from '@/components/test-data/ReportsTab';
+import { normalizeError } from '@/utils/apiError';
 
 /* ── Types ── */
 interface TestRun {
@@ -31,6 +31,10 @@ interface TestCase {
   module?: string | null; submodule?: string | null; tags?: string[];
 }
 interface Pagination { page: number; limit: number; total: number; totalPages: number; }
+interface EditDraft {
+  title: string; steps: string[]; expected: string; priority: string;
+  type: string; feature: string; precondition: string; status: string;
+}
 
 /* ── Colors ── */
 const PRIORITY_COLORS: Record<string, string> = {
@@ -48,15 +52,6 @@ const TYPE_COLORS: Record<string, string> = {
   regression: 'bg-blue-50 text-blue-700',
   security: 'bg-rose-50 text-rose-700',
 };
-const STATUS_CONFIG: Record<string, { bg: string; icon: any; label: string }> = {
-  generated: { bg: 'bg-gray-100 text-gray-600', icon: Clock, label: 'Generated' },
-  reviewed:  { bg: 'bg-emerald-100 text-emerald-700', icon: CheckCircle2, label: 'Reviewed' },
-  approved:  { bg: 'bg-emerald-100 text-emerald-700', icon: CheckCircle2, label: 'Reviewed' },
-  scripted:  { bg: 'bg-blue-100 text-blue-700', icon: FileText, label: 'Scripted' },
-  executed:  { bg: 'bg-blue-100 text-blue-700', icon: Check, label: 'Executed' },
-  failed:    { bg: 'bg-red-100 text-red-700', icon: AlertTriangle, label: 'Failed' },
-};
-
 export default function GeneratedTestCasesPage() {
   const navigate = useNavigate();
 
@@ -67,7 +62,7 @@ export default function GeneratedTestCasesPage() {
   const [loading, setLoading] = useState(false);
   const [moduleFilter, setModuleFilter] = useState('');
   const [submoduleFilter, setSubmoduleFilter] = useState('');
-  const [tagFilters, setTagFilters] = useState<Set<TagName>>(new Set());
+  const [tagFilters] = useState<Set<TagName>>(new Set());
   const [facets, setFacets] = useState<{ modules: string[]; submodules: { module: string; name: string }[]; tags: string[] }>({ modules: [], submodules: [], tags: [] });
   const [detailTagFilters, setDetailTagFilters] = useState<Set<TagName>>(new Set());
 
@@ -91,7 +86,7 @@ export default function GeneratedTestCasesPage() {
     return () => document.removeEventListener('mousedown', handler);
   }, [expandedTcId]);
   const [editingTc, setEditingTc] = useState<TestCase | null>(null);
-  const [editDraft, setEditDraft] = useState<any>(null);
+  const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [addDraft, setAddDraft] = useState({ title: '', steps: [''], expected: '', priority: 'P1', type: 'positive', feature: '', precondition: '' });
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -133,8 +128,10 @@ export default function GeneratedTestCasesPage() {
     }
   }, [search, moduleFilter, submoduleFilter, tagFilters]);
 
+  // Runs on mount and whenever a filter changes — no separate mount-only effect
+  // (that caused a duplicate initial fetch).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchRuns(1, pagination.limit); }, [search, moduleFilter, submoduleFilter, tagFilters]);
-  useEffect(() => { fetchRuns(1, 10); }, []);
   useEffect(() => {
     listTestCaseFacets().then(setFacets).catch((e) => console.error('Failed to load facets:', e));
   }, []);
@@ -208,9 +205,10 @@ export default function GeneratedTestCasesPage() {
         // Navigate to automation scripts page filtered by this run
         navigate(`/automation-scripts?runId=${selectedRun.id}`);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Generate scripts failed:', err);
-      alert(err?.response?.data?.error || 'Failed to generate scripts. Make sure test cases are reviewed first.');
+      const normalized = normalizeError(err);
+      alert(normalized.message || 'Failed to generate scripts. Make sure test cases are reviewed first.');
     } finally {
       setGeneratingScripts(false);
     }
@@ -468,7 +466,7 @@ export default function GeneratedTestCasesPage() {
                     <input value={step} onChange={e => { const s = [...addDraft.steps]; s[idx] = e.target.value; setAddDraft({ ...addDraft, steps: s }); }}
                       className="flex-1 px-3 py-1.5 text-sm border border-gray-200 rounded-lg" placeholder={`Step ${idx + 1}`} />
                     {addDraft.steps.length > 1 && (
-                      <button onClick={() => setAddDraft({ ...addDraft, steps: addDraft.steps.filter((_: any, i: number) => i !== idx) })} className="text-red-400 hover:text-red-600"><X className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => setAddDraft({ ...addDraft, steps: addDraft.steps.filter((_: string, i: number) => i !== idx) })} className="text-red-400 hover:text-red-600"><X className="w-3.5 h-3.5" /></button>
                     )}
                   </div>
                 ))}
@@ -552,7 +550,6 @@ export default function GeneratedTestCasesPage() {
               <tbody>
                 {paginatedTcs.map(tc => {
                   const isReviewed = tc.status === 'reviewed' || tc.status === 'approved';
-                  const statusCfg = STATUS_CONFIG[tc.status] || STATUS_CONFIG.generated;
                   return (
                     <tr key={tc.id} className={`border-b border-gray-50 hover:bg-gray-50/50 ${isReviewed ? 'bg-emerald-50/30' : ''}`}>
                       <td className="px-3 py-1.5">
@@ -605,7 +602,7 @@ export default function GeneratedTestCasesPage() {
                                 <input value={step} onChange={e => { const s = [...editDraft.steps]; s[idx] = e.target.value; setEditDraft({ ...editDraft, steps: s }); }}
                                   className="flex-1 px-2 py-1 text-xs border border-gray-200 rounded-lg" />
                                 {editDraft.steps.length > 1 && (
-                                  <button onClick={() => setEditDraft({ ...editDraft, steps: editDraft.steps.filter((_: any, i: number) => i !== idx) })} className="text-red-400"><X className="w-3 h-3" /></button>
+                                  <button onClick={() => setEditDraft({ ...editDraft, steps: editDraft.steps.filter((_: string, i: number) => i !== idx) })} className="text-red-400"><X className="w-3 h-3" /></button>
                                 )}
                               </div>
                             ))}

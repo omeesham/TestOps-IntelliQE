@@ -24,9 +24,14 @@ router.get('/', async (req: Request, res: Response) => {
     const user = req.user!;
     let tenantId = user.tenantId;
 
-    // Platform admin can view any tenant's configs
+    // Platform admin can view any tenant's configs (validate the override is a UUID).
     if (user.isPlatform && req.query.tenantId) {
-      tenantId = req.query.tenantId as string;
+      const requested = String(req.query.tenantId);
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requested)) {
+        res.status(400).json({ error: 'Invalid tenantId' });
+        return;
+      }
+      tenantId = requested;
     }
 
     const category = req.query.category as string | undefined;

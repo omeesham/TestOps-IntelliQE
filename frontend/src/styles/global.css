@@ -1,0 +1,284 @@
+/* =====================================================================
+   IntelliQE — Global Stylesheet (single source of truth for CSS)
+   ---------------------------------------------------------------------
+   Framework : Tailwind CSS v4 (CSS-first config — no tailwind.config.js)
+   Imported  : once, in src/main.tsx  ->  import './styles/global.css'
+   Brand     : Blue (#155dfc) / Teal accent, light "agentic workspace" UI
+
+   Sections
+     1. Tailwind import
+     2. @theme  — design tokens (colors, typography, radius, shadows)
+     3. Base    — reset, document, typography, focus, selection, scrollbars
+     4. Components — reusable .iqe-* classes (buttons, inputs, cards, badges)
+     5. Keyframes & animation utilities
+     6. Utilities
+   ===================================================================== */
+
+/* ── 1. Tailwind ──────────────────────────────────────────────────── */
+@import "tailwindcss";
+
+/* ── 2. Design tokens ─────────────────────────────────────────────────
+   Every token here is also exposed by Tailwind as a utility, e.g.
+   --color-primary -> bg-primary / text-primary / border-primary.
+   ------------------------------------------------------------------- */
+@theme {
+  /* Brand blue scale (600 = primary) */
+  --color-brand-50:  #EFF5FF;
+  --color-brand-100: #DEEAFF;
+  --color-brand-200: #C9DCFF;
+  --color-brand-300: #A8C4FB;
+  --color-brand-400: #6F9BF7;
+  --color-brand-500: #3B82F6;
+  --color-brand-600: #155DFC;   /* primary  */
+  --color-brand-700: #124FD6;   /* hover    */
+  --color-brand-800: #0E3FA8;
+  --color-brand-900: #0A2F7D;
+
+  /* Semantic roles */
+  --color-primary: #155DFC;
+  --color-primary-hover: #124FD6;
+  --color-primary-active: #0E3FA8;
+  --color-primary-disabled: #A8C4FB;
+  --color-primary-foreground: #FFFFFF;
+
+  --color-secondary: #EFF5FF;
+  --color-secondary-foreground: #1E1B4B;
+
+  --color-background: #EFF5FF;
+  --color-foreground: #1E1B4B;
+
+  --color-card: #FFFFFF;
+  --color-card-foreground: #1E1B4B;
+
+  --color-border: #C9DCFF;
+  --color-input: #EFF5FF;
+  --color-ring: #155DFC;
+
+  --color-muted: #DEEAFF;
+  --color-muted-foreground: #6B7280;
+  --color-accent: #ECFEFF;
+  --color-accent-foreground: #164E63;
+
+  --color-destructive: #EF4444;
+  --color-destructive-hover: #DC2626;
+  --color-destructive-foreground: #FFFFFF;
+  --color-success: #10B981;
+  --color-warning: #F59E0B;
+
+  /* Neutral text ramp */
+  --color-text-strong: #1E1B4B;
+  --color-text: #475569;
+  --color-text-muted: #6B7280;
+  --color-text-subtle: #9CA3AF;
+
+  /* Extended palette (charts / agent pipeline accents) */
+  --color-agent-purple: #155DFC;
+  --color-agent-blue: #3B82F6;
+  --color-agent-teal: #06B6D4;
+  --color-agent-indigo: #155DFC;
+
+  /* Sidebar (light theme) */
+  --color-sidebar: #FFFFFF;
+  --color-sidebar-foreground: #475569;
+  --color-sidebar-active: #155DFC;
+  --color-sidebar-active-bg: #EFF5FF;
+  --color-sidebar-hover: #F8FAFC;
+  --color-sidebar-border: #E5E7EB;
+
+  /* Corner radius (component default) */
+  --radius: 12px;
+
+  /* Typography */
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Elevation (additive — exposes shadow-card / shadow-brand utilities) */
+  --shadow-card: 0 1px 2px 0 rgba(16, 24, 40, 0.05);
+  --shadow-brand: 0 10px 15px -3px rgba(21, 93, 252, 0.25);
+}
+
+/* ── 3. Base layer ────────────────────────────────────────────────── */
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+    border-color: var(--color-border);
+  }
+
+  html {
+    height: 100%;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;                 /* app shell owns its own scroll regions */
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  #root {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  /* Headings inherit the strong navy foreground by default */
+  h1, h2, h3, h4, h5, h6 {
+    color: var(--color-text-strong);
+    font-weight: 700;
+  }
+
+  code, pre, kbd, samp {
+    font-family: var(--font-mono);
+  }
+
+  /* Consistent keyboard focus ring across the app */
+  :focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-ring) 30%, transparent);
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--color-primary) 20%, transparent);
+    color: var(--color-text-strong);
+  }
+}
+
+/* ── 4. Components layer ──────────────────────────────────────────────
+   Opt-in, framework-agnostic classes mirroring the app's inline patterns.
+   The shared <Button> React component remains the primary API; these are
+   handy for plain markup and keep styling centralized.
+   ------------------------------------------------------------------- */
+@layer components {
+  .iqe-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.625rem 1rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    font-size: 0.875rem;
+    font-weight: 600;
+    line-height: 1.25rem;
+    cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  }
+  .iqe-btn:disabled { cursor: not-allowed; }
+  .iqe-btn-sm { padding: 0.5rem 0.75rem; font-size: 0.75rem; }
+  .iqe-btn-lg { padding: 0.875rem 1.25rem; }
+
+  .iqe-btn-primary { background: var(--color-primary); color: #fff; box-shadow: var(--shadow-brand); }
+  .iqe-btn-primary:hover:not(:disabled) { background: var(--color-primary-hover); }
+  .iqe-btn-primary:disabled { background: var(--color-primary-disabled); box-shadow: none; }
+
+  .iqe-btn-secondary { background: #fff; color: var(--color-foreground); border-color: var(--color-border); }
+  .iqe-btn-secondary:hover:not(:disabled) { background: var(--color-secondary); border-color: var(--color-brand-300); }
+
+  .iqe-btn-ghost { background: transparent; color: var(--color-muted-foreground); }
+  .iqe-btn-ghost:hover:not(:disabled) { background: var(--color-secondary); color: var(--color-primary); }
+
+  .iqe-btn-danger { background: var(--color-destructive); color: #fff; }
+  .iqe-btn-danger:hover:not(:disabled) { background: var(--color-destructive-hover); }
+
+  .iqe-input {
+    width: 100%;
+    padding: 0.625rem 0.875rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    background: var(--color-input);
+    color: var(--color-foreground);
+    font-size: 0.875rem;
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .iqe-input::placeholder { color: var(--color-text-subtle); }
+  .iqe-input:focus {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-ring) 20%, transparent);
+  }
+
+  .iqe-card {
+    background: var(--color-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-card);
+  }
+
+  .iqe-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.125rem 0.625rem;
+    border-radius: 9999px;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    line-height: 1rem;
+  }
+  .iqe-badge-brand   { background: color-mix(in srgb, var(--color-primary) 10%, transparent); color: var(--color-primary); }
+  .iqe-badge-success { background: #ECFDF5; color: #047857; }
+  .iqe-badge-warning { background: #FFFBEB; color: #B45309; }
+  .iqe-badge-danger  { background: #FEF2F2; color: #B91C1C; }
+
+  .iqe-link { color: var(--color-primary); font-weight: 500; transition: color 0.15s ease; }
+  .iqe-link:hover { color: var(--color-primary-hover); text-decoration: underline; }
+}
+
+/* ── 5. Keyframes & animation utilities ───────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fadeIn { animation: fadeIn 0.3s ease-out; }
+
+@keyframes slideInRight {
+  from { transform: translateX(100%); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+.animate-slideInRight { animation: slideInRight 0.3s ease-out; }
+
+@keyframes slideInUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+.animate-slideInUp { animation: slideInUp 0.4s ease-out; }
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.animate-shimmer { animation: shimmer 1.5s ease-in-out infinite; background-size: 200% 100%; }
+
+@keyframes gaugeStroke {
+  from { stroke-dashoffset: var(--gauge-circumference); }
+  to   { stroke-dashoffset: var(--gauge-target); }
+}
+
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(21, 93, 252, 0.4); }
+  50%      { box-shadow: 0 0 0 8px rgba(21, 93, 252, 0); }
+}
+.animate-pulseGlow { animation: pulseGlow 2s ease-in-out infinite; }
+
+@keyframes countUp {
+  from { opacity: 0.5; }
+  to   { opacity: 1; }
+}
+
+/* ── 6. Utilities ─────────────────────────────────────────────────── */
+/* Hide scrollbars while keeping scroll (used by sidebar & scroll panes) */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+
+/* Thin, branded scrollbar for opt-in scroll regions */
+.scrollbar-thin { scrollbar-width: thin; scrollbar-color: var(--color-brand-200) transparent; }
+.scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: var(--color-brand-200); border-radius: 9999px; }
+.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }

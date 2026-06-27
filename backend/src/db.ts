@@ -18,6 +18,7 @@
  * persists across every container redeploy.
  */
 import sql from 'mssql';
+import bcrypt from 'bcrypt';
 
 // All objects live in the database's default `dbo` schema. The codebase still
 // writes table references as "JBSTestOpsAI".x (the old Postgres schema) in many
@@ -242,6 +243,41 @@ async function query<T = any>(
     ? result.rowsAffected.reduce((a, b) => a + b, 0)
     : 0;
   return { rows, rowCount: rows.length || affected };
+}
+
+/**
+ * Run `fn` inside a single SQL Server transaction. `fn` receives a pg-compatible
+ * `Db` handle (same `query(text, $n-params) → { rows, rowCount }` shim, same
+ * dialect translation) that routes through the transaction. Commits on success,
+ * rolls back on any thrown error, then rethrows. Use for multi-statement writes
+ * that must all-or-nothing (e.g. deleting a parent row and its children).
+ */
+export async function withTransaction<T>(fn: (tx: Db) => Promise<T>): Promise<T> {
+  const cp = await getPool();
+  const transaction = new sql.Transaction(cp);
+  await transaction.begin();
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const txQuery = async <R = any>(text: string, params: unknown[] = []): Promise<QueryResult<R>> => {
+    const request = new sql.Request(transaction);
+    params.forEach((v, i) => bindParam(request, `p${i + 1}`, v));
+    const result = await request.query<R>(translateSql(text));
+    const recordset = (result.recordset as unknown as Record<string, unknown>[]) || [];
+    const rows = recordset.map((r) => mapRow<R>(r));
+    const affected = Array.isArray(result.rowsAffected)
+      ? result.rowsAffected.reduce((a, b) => a + b, 0)
+      : 0;
+    return { rows, rowCount: rows.length || affected };
+  };
+
+  try {
+    const out = await fn({ query: txQuery });
+    await transaction.commit();
+    return out;
+  } catch (err) {
+    await transaction.rollback().catch(() => { /* rollback best-effort */ });
+    throw err;
+  }
 }
 
 // The exported `pool` keeps the same shape the codebase expects from `pg`.
@@ -682,14 +718,36 @@ export async function initDb(): Promise<void> {
       IF NOT EXISTS (SELECT 1 FROM ${SCHEMA}.tenants WHERE slug = 'jbs')
         INSERT INTO ${SCHEMA}.tenants (name, slug, is_platform)
         VALUES ('Jade Business Solutions', 'jbs', 1)`);
-    await exec(`
-      IF NOT EXISTS (SELECT 1 FROM ${SCHEMA}.users WHERE username = 'jbsadmin')
+    // Seed default users with bcrypt-hashed passwords (overridable via env).
+    const adminHash = await bcrypt.hash(process.env.SEED_ADMIN_PASSWORD || 'Omeesha@19', 10);
+    const qaHash = await bcrypt.hash(process.env.SEED_QA_PASSWORD || 'Login@2026', 10);
+    await query(
+      `IF NOT EXISTS (SELECT 1 FROM ${SCHEMA}.users WHERE username = 'jbsadmin')
         INSERT INTO ${SCHEMA}.users (tenant_id, username, password_hash, full_name, role)
-        VALUES ((SELECT id FROM ${SCHEMA}.tenants WHERE slug = 'jbs'), 'jbsadmin', 'Omeesha@19', 'JBS Admin', 'admin')`);
-    await exec(`
-      IF NOT EXISTS (SELECT 1 FROM ${SCHEMA}.users WHERE username = 'qaengineer')
+        VALUES ((SELECT id FROM ${SCHEMA}.tenants WHERE slug = 'jbs'), 'jbsadmin', $1, 'JBS Admin', 'admin')`,
+      [adminHash],
+    );
+    await query(
+      `IF NOT EXISTS (SELECT 1 FROM ${SCHEMA}.users WHERE username = 'qaengineer')
         INSERT INTO ${SCHEMA}.users (tenant_id, username, password_hash, full_name, role)
-        VALUES ((SELECT id FROM ${SCHEMA}.tenants WHERE slug = 'jbs'), 'qaengineer', 'Login@2026', 'QA Engineer', 'qa_engineer')`);
+        VALUES ((SELECT id FROM ${SCHEMA}.tenants WHERE slug = 'jbs'), 'qaengineer', $1, 'QA Engineer', 'qa_engineer')`,
+      [qaHash],
+    );
+
+    // One-time migration: upgrade any legacy plaintext password_hash values to
+    // bcrypt in place. The plaintext value becomes bcrypt(itself), so each
+    // user's existing password keeps working while plaintext storage is removed.
+    // (Filtering in JS avoids a "$2" literal in SQL, which the $n param shim
+    // would otherwise rewrite.)
+    const { rows: allUsers } = await query(`SELECT id, password_hash FROM ${SCHEMA}.users`);
+    const legacyUsers = allUsers.filter((u: any) => !/^\$2[aby]\$/.test(String(u.password_hash)));
+    for (const u of legacyUsers) {
+      const hashed = await bcrypt.hash(String(u.password_hash), 10);
+      await query(`UPDATE ${SCHEMA}.users SET password_hash = $1 WHERE id = $2`, [hashed, u.id]);
+    }
+    if (legacyUsers.length > 0) {
+      console.log(`Migrated ${legacyUsers.length} plaintext password(s) to bcrypt`);
+    }
 
     // ─── 13. Seed: QA agent types ───
     const agentSeeds: Array<[string, string, string, string, string, string, string, number]> = [

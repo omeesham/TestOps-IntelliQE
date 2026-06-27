@@ -14,6 +14,13 @@ import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
  */
 
 const BATCH_SIZE = 10;
+/**
+ * Upper bound on the number of Claude calls a single scripting run will make.
+ * Each batch is a ~16k-token call (tens of seconds), so an unbounded test set
+ * could stack dozens of calls and blow request/worker timeouts. Cases beyond
+ * MAX_BATCHES * BATCH_SIZE are scripted from the deterministic template instead.
+ */
+const MAX_BATCHES = 12;
 
 function safeFileName(scenario: string): string {
   const slug = scenario
@@ -124,16 +131,57 @@ Strict rules for the \`code\` field:
   });
 }
 
+/**
+ * Ensure every generated spec has a unique file name. `safeFileName` slugs the
+ * scenario, so two distinct cases with similar titles (or both falling back to
+ * "test.spec.ts") would otherwise collide and silently overwrite one another
+ * when written to disk. On collision we suffix -2, -3, … before `.spec.ts`.
+ */
+function dedupeFileNames(scripts: AutomationScript[]): AutomationScript[] {
+  const seen = new Set<string>();
+  return scripts.map((s) => {
+    const ext = s.fileName.endsWith('.spec.ts') ? '.spec.ts' : '';
+    const base = ext ? s.fileName.slice(0, -ext.length) : s.fileName;
+    let candidate = s.fileName;
+    let suffix = 1;
+    while (seen.has(candidate)) {
+      candidate = `${base}-${++suffix}${ext}`;
+    }
+    seen.add(candidate);
+    return candidate === s.fileName ? s : { ...s, fileName: candidate };
+  });
+}
+
 export async function scriptAgent(state: TestOpsState): Promise<TestOpsState> {
   const eligible = state.testCases.filter((tc) => tc.type !== 'data');
   if (eligible.length === 0) return { ...state, automationScripts: [] };
 
+  // Cap the number of AI batches so a huge test set can't stack dozens of
+  // 16k-token Claude calls and exceed request/worker timeouts. Cases beyond
+  // the cap are scripted from the deterministic template (cheap, instant).
+  const maxAiCases = MAX_BATCHES * BATCH_SIZE;
+  const aiCases = eligible.slice(0, maxAiCases);
+  const overflowCases = eligible.slice(maxAiCases);
+
+  if (overflowCases.length > 0) {
+    console.warn(
+      `[scriptAgent] ${eligible.length} eligible test cases exceed the AI scripting cap `
+      + `(${maxAiCases}); the remaining ${overflowCases.length} will use template scripts to stay within timeout budget.`,
+    );
+  }
+
   const scripts: AutomationScript[] = [];
 
-  for (let i = 0; i < eligible.length; i += BATCH_SIZE) {
-    const batch = eligible.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < aiCases.length; i += BATCH_SIZE) {
+    const batch = aiCases.slice(i, i + BATCH_SIZE);
     scripts.push(...await aiBatch(state, batch));
   }
 
-  return { ...state, automationScripts: scripts };
+  // Overflow cases get a fast, deterministic template script rather than another
+  // Claude call.
+  for (const tc of overflowCases) {
+    scripts.push(templateScript(tc));
+  }
+
+  return { ...state, automationScripts: dedupeFileNames(scripts) };
 }

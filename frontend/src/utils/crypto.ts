@@ -29,11 +29,12 @@ const SENSITIVE_KEYS = new Set([
   'DATABRICKS_TOKEN', 'databricks_token',
 ]);
 
-export function encryptSensitiveFields<T extends Record<string, any>>(obj: T): T {
+export function encryptSensitiveFields<T extends Record<string, unknown>>(obj: T): T {
   const result = { ...obj };
   for (const key of Object.keys(result)) {
-    if (SENSITIVE_KEYS.has(key) && typeof result[key] === 'string') {
-      (result as any)[key] = encryptField(result[key]);
+    const value = result[key];
+    if (SENSITIVE_KEYS.has(key) && typeof value === 'string') {
+      (result as Record<string, unknown>)[key] = encryptField(value);
     }
   }
   return result;

@@ -132,6 +132,19 @@ export async function getArtifactsByPageId(pool: Pool, pageId: string): Promise<
   return rows;
 }
 
+/** Resolve the owning tenant of an artifact via its run or page. Null if not found. */
+export async function getArtifactTenant(pool: Pool, artifactId: string): Promise<string | null> {
+  const { rows } = await pool.query<{ tenant_id: string | null }>(
+    `SELECT COALESCE(r.tenant_id, p.tenant_id) AS tenant_id
+     FROM ${S}.qa_artifacts a
+     LEFT JOIN ${S}.qa_pipeline_runs r ON r.id = a.run_id
+     LEFT JOIN ${S}.qa_pages p ON p.id = a.page_id
+     WHERE a.id = $1`,
+    [artifactId],
+  );
+  return rows[0]?.tenant_id ?? null;
+}
+
 export async function updateArtifactVersioned(
   pool: Pool, artifactId: string, content: string, editedBy: string,
 ): Promise<Artifact> {
@@ -173,7 +186,32 @@ export async function createWorkerTask(
   return task;
 }
 
+/**
+ * Recover stuck tasks: any task left in 'claimed' longer than `staleMs` (a
+ * worker crashed, or `complete-task` exhausted its retries and the task never
+ * reached 'completed'/'failed') is reset to 'pending' so it can be re-claimed.
+ * Idempotent — only flips rows that are currently 'claimed' and past the
+ * timeout, and clears `claimed_at` so the staleness window restarts cleanly on
+ * the next claim. Returns the number of tasks requeued.
+ */
+export async function requeueStuckTasks(pool: Pool, staleMs = 10 * 60_000): Promise<number> {
+  const { rowCount } = await pool.query(
+    `UPDATE ${S}.qa_worker_tasks
+       SET status = 'pending', claimed_at = NULL
+     WHERE status = 'claimed'
+       AND claimed_at IS NOT NULL
+       AND claimed_at < DATEADD(millisecond, -$1, SYSUTCDATETIME())`,
+    [staleMs],
+  );
+  return rowCount ?? 0;
+}
+
 export async function claimNextTask(pool: Pool, tenantId?: string): Promise<WorkerTask | null> {
+  // Before claiming, sweep tasks stuck in 'claimed' (crashed worker or a
+  // complete-task that exhausted its retries) back to 'pending' so a run is
+  // never blocked forever by an unrecoverable task. Idempotent.
+  await requeueStuckTasks(pool);
+
   // SQL Server equivalent of "FOR UPDATE SKIP LOCKED": a CTE over TOP(1) rows
   // with READPAST (skip rows locked by other workers) + UPDLOCK + ROWLOCK,
   // updated in place. OUTPUT returns the claimed row atomically.

@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { FileSearch, Map, Code, Heart, ShieldCheck, Wrench, Loader2 } from 'lucide-react';
-import { mockQueue } from '@/data/mockData';
-import { getAgentStatus } from '@/services/api';
+import { getAgentStatus, getAgentQueue, type AgentQueueItem } from '@/services/api';
 import type { AgentInfo } from '@/types';
 
 const iconMap: Record<string, React.ElementType> = { FileSearch, Map, Code, Heart, ShieldCheck, Wrench };
@@ -37,7 +36,7 @@ function AgentCard({ agent }: { agent: AgentInfo }) {
         <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-transform group-hover:scale-110 ${isActive ? 'bg-gradient-to-br from-[#155dfc]/10 to-[#06B6D4]/10 text-[#155dfc]' : 'bg-[#DEEAFF] text-[#93B4FB]'}`}>
           <Icon className="w-5 h-5" />
         </div>
-        <span className={`text-[10px] px-2.5 py-1 rounded-full font-semibold uppercase tracking-wide border ${statusColors[agent.status]}`}>
+        <span className={`text-[10px] px-2.5 py-1 rounded-full font-semibold uppercase tracking-wide border ${statusColors[agent.status] || statusColors.idle}`}>
           {agent.status}
         </span>
       </div>
@@ -58,13 +57,18 @@ function AgentCard({ agent }: { agent: AgentInfo }) {
 
 export default function AgentMonitorPage() {
   const [agentsData, setAgentsData] = useState<AgentInfo[]>([]);
+  const [queue, setQueue] = useState<AgentQueueItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    getAgentStatus()
-      .then((data) => setAgentsData(data.agents || []))
-      .catch(console.error)
-      .finally(() => setLoading(false));
+    Promise.all([
+      getAgentStatus()
+        .then((data) => setAgentsData(data.agents || []))
+        .catch(console.error),
+      getAgentQueue()
+        .then((data) => setQueue(Array.isArray(data.queue) ? data.queue : []))
+        .catch(console.error),
+    ]).finally(() => setLoading(false));
   }, []);
 
   if (loading) {
@@ -76,7 +80,6 @@ export default function AgentMonitorPage() {
     );
   }
 
-  const active = agentsData.filter((a) => a.status === 'active' || a.status === 'running').length;
   const sortedAgents = [...agentsData].sort((a, b) => a.pipelineOrder - b.pipelineOrder);
 
   return (
@@ -125,46 +128,50 @@ export default function AgentMonitorPage() {
         </div>
       </div>
 
-      {/* Queue */}
+      {/* Queue — real pipeline runs from /agents/queue */}
       <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-[#C9DCFF]/60 overflow-hidden">
         <div className="p-4 border-b border-[#C9DCFF]/60 flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-[#1E1B4B]">Agent Queue (agent-queue.json)</h3>
-          <span className="text-xs text-[#93B4FB] bg-[#155dfc]/5 px-2 py-1 rounded-full">{mockQueue.length} items</span>
+          <h3 className="text-sm font-semibold text-[#1E1B4B]">Pipeline Run Queue</h3>
+          <span className="text-xs text-[#93B4FB] bg-[#155dfc]/5 px-2 py-1 rounded-full">{queue.length} items</span>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-[#EFF5FF]">
-                <th className="text-left py-3 px-4 font-medium text-[#6B7280] text-xs uppercase tracking-wide">ID</th>
-                <th className="text-left py-3 px-4 font-medium text-[#6B7280] text-xs uppercase tracking-wide">Feature</th>
-                <th className="text-left py-3 px-4 font-medium text-[#6B7280] text-xs uppercase tracking-wide">Module</th>
-                <th className="text-left py-3 px-4 font-medium text-[#6B7280] text-xs uppercase tracking-wide">Stage</th>
-                <th className="text-left py-3 px-4 font-medium text-[#6B7280] text-xs uppercase tracking-wide">Priority</th>
-                <th className="text-left py-3 px-4 font-medium text-[#6B7280] text-xs uppercase tracking-wide">Locked By</th>
-                <th className="text-left py-3 px-4 font-medium text-[#6B7280] text-xs uppercase tracking-wide">Tests</th>
-                <th className="text-left py-3 px-4 font-medium text-[#6B7280] text-xs uppercase tracking-wide">Steps</th>
-              </tr>
-            </thead>
-            <tbody>
-              {mockQueue.map((q) => (
-                <tr key={q.id} className="border-t border-[#DEEAFF] hover:bg-[#EFF5FF]/50 transition-colors">
-                  <td className="py-3 px-4 font-mono text-xs text-[#6B7280]">{q.id}</td>
-                  <td className="py-3 px-4 font-medium text-[#1E1B4B]">{q.feature}</td>
-                  <td className="py-3 px-4"><span className="px-2 py-0.5 bg-[#DEEAFF] text-[#155dfc] rounded text-xs font-medium">{q.module}</span></td>
-                  <td className="py-3 px-4">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${stageColors[q.stage] || 'bg-[#DEEAFF]'}`}>
-                      {q.stage.replace(/_/g, ' ')}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4"><span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${q.priority === 'P0' ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600'}`}>{q.priority}</span></td>
-                  <td className="py-3 px-4 text-xs">{q.lockedBy ? <span className="text-[#155dfc] font-medium">{q.lockedBy}</span> : <span className="text-[#93B4FB]">—</span>}</td>
-                  <td className="py-3 px-4 text-xs text-[#6B7280]">{q.totalTcCount > 0 ? `${q.automatableCount}/${q.totalTcCount}` : '—'}</td>
-                  <td className="py-3 px-4 text-xs text-[#6B7280]">{q.history.length}</td>
+        {queue.length === 0 ? (
+          <div className="py-10 px-4 text-center text-sm text-[#6B7280]">
+            No pipeline runs in the queue right now.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-[#EFF5FF]">
+                  <th className="text-left py-3 px-4 font-medium text-[#6B7280] text-xs uppercase tracking-wide">ID</th>
+                  <th className="text-left py-3 px-4 font-medium text-[#6B7280] text-xs uppercase tracking-wide">Feature</th>
+                  <th className="text-left py-3 px-4 font-medium text-[#6B7280] text-xs uppercase tracking-wide">Module</th>
+                  <th className="text-left py-3 px-4 font-medium text-[#6B7280] text-xs uppercase tracking-wide">Stage</th>
+                  <th className="text-left py-3 px-4 font-medium text-[#6B7280] text-xs uppercase tracking-wide">Priority</th>
+                  <th className="text-left py-3 px-4 font-medium text-[#6B7280] text-xs uppercase tracking-wide">Status</th>
+                  <th className="text-left py-3 px-4 font-medium text-[#6B7280] text-xs uppercase tracking-wide">Cost</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {queue.map((q) => (
+                  <tr key={q.id} className="border-t border-[#DEEAFF] hover:bg-[#EFF5FF]/50 transition-colors">
+                    <td className="py-3 px-4 font-mono text-xs text-[#6B7280]">{q.id.slice(0, 8)}</td>
+                    <td className="py-3 px-4 font-medium text-[#1E1B4B]">{q.feature || '—'}</td>
+                    <td className="py-3 px-4">{q.module ? <span className="px-2 py-0.5 bg-[#DEEAFF] text-[#155dfc] rounded text-xs font-medium">{q.module}</span> : <span className="text-[#93B4FB] text-xs">—</span>}</td>
+                    <td className="py-3 px-4">
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${stageColors[q.stage] || 'bg-[#DEEAFF]'}`}>
+                        {q.stage ? q.stage.replace(/_/g, ' ') : '—'}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4"><span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${q.priority === 'P0' ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600'}`}>{q.priority || 'P1'}</span></td>
+                    <td className="py-3 px-4"><span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColors[q.status] || statusColors.idle}`}>{q.status || 'idle'}</span></td>
+                    <td className="py-3 px-4 text-xs text-[#6B7280]">{typeof q.cost === 'number' ? `$${q.cost.toFixed(4)}` : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

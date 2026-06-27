@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { CheckCircle, Loader2 } from 'lucide-react';
-import { connectIntegration, getConfigurations } from '@/services/api';
+import { connectIntegration } from '@/services/api';
+import { normalizeError } from '@/utils/apiError';
 
 interface DbConfig {
   integrationId: string;
   status: string;
-  configData: Record<string, any>;
+  configData: Record<string, unknown>;
   connectedBy: string | null;
   connectedAt: string | null;
   lastSyncAt: string | null;
@@ -40,7 +41,10 @@ export default function GeneralSettingsSection({ configs }: Props) {
   useEffect(() => {
     const existing = configs.find((c) => c.integrationId === 'general-settings');
     if (existing?.configData) {
-      const d = existing.configData;
+      const d = existing.configData as {
+        defaultEnvironment?: string; defaultBrowser?: string;
+        maxParallelWorkers?: number; testTimeoutMs?: number;
+      };
       setFormData({
         defaultEnvironment: d.defaultEnvironment || 'staging',
         defaultBrowser: d.defaultBrowser || 'chromium',
@@ -63,8 +67,8 @@ export default function GeneralSettingsSection({ configs }: Props) {
       });
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 3000);
-    } catch (err: any) {
-      setError(err?.response?.data?.error || err?.message || 'Failed to save settings');
+    } catch (err) {
+      setError(normalizeError(err).message || 'Failed to save settings');
     } finally {
       setSaving(false);
     }

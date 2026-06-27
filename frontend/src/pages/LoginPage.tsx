@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { signupUser } from '@/services/api';
-import { Eye, EyeOff, AlertCircle, Zap, UserPlus, ChevronDown } from 'lucide-react';
+import { Eye, EyeOff, AlertCircle, Zap, UserPlus } from 'lucide-react';
 import { normalizeError } from '@/utils/apiError';
 import Button from '@/components/ui/Button';
 

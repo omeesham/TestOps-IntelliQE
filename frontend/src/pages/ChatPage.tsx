@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   connectJira,
@@ -12,8 +12,6 @@ import {
   executeTests,
   saveTestCases,
   exportTestCases,
-  createChatConversation,
-  saveChatMessage,
   getConfigurations,
   subscribeToPipelineEvents,
   extractDocumentText,
@@ -26,14 +24,14 @@ import {
 import { normalizeError } from '@/utils/apiError';
 import {
   Send, Bot, Loader2, CheckCircle, Monitor, Plug,
-  Globe, Layers, Shield, FileText, Upload, Type, Link2,
+  Globe, Layers, FileText, Upload, Type, Link2,
   ArrowRight, RotateCcw, ChevronDown, Eye, EyeOff, Check, X,
-  Plus, Trash2, Download, Clipboard, Cpu, Code, Search, Zap,
-  BarChart3, Activity, Workflow, Box, Pencil, Save, ChevronLeft, ChevronRight,
-  Play, Heart, GitBranch, Terminal, AlertTriangle, Wrench, ExternalLink, Copy, Package,
+  Plus, Trash2, Download, Clipboard, Code, Search, Zap,
+  BarChart3, Workflow, Pencil, Save, ChevronLeft, ChevronRight,
+  Play, Heart, GitBranch, Terminal, AlertTriangle, Wrench, ExternalLink,
   SkipForward, XCircle, Volume2, VolumeX, Settings,
 } from 'lucide-react';
-import { initTTS, speak, speakAsync, waitForSpeech, waitForVoices, stopSpeaking, isTTSEnabled, toggleTTS } from '@/utils/tts';
+import { initTTS, speak, waitForSpeech, waitForVoices, stopSpeaking, isTTSEnabled, toggleTTS } from '@/utils/tts';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES
@@ -84,6 +82,148 @@ interface AgentStep {
   detail: string;
 }
 
+/* ── Backend payload shapes ──
+   Minimal interfaces matching only the fields this page actually reads.
+   Optional everywhere because the AI pipeline / integrations may omit them. */
+
+/** A single step inside a backend test case (IEEE-829-ish shape). */
+interface RawTestStep {
+  step?: number;
+  action?: string;
+  expected?: string;
+}
+
+/** A test case as returned by the generation pipeline (legacy aliases included). */
+interface RawTestCase {
+  id?: string;
+  traceabilityId?: string;
+  module?: string;
+  submodule?: string;
+  feature?: string;
+  title?: string;
+  scenario?: string;
+  name?: string;
+  description?: string;
+  precondition?: string;
+  testData?: Record<string, unknown>;
+  testSteps?: RawTestStep[];
+  steps?: string[];
+  expectedResult?: string;
+  expected?: string;
+  type?: string;
+  category?: string;
+  priority?: string;
+  severity?: string;
+  tags?: string[];
+  status?: string;
+}
+
+/** Normalised test case held in component state and rendered by the table. */
+interface UITestCase {
+  id: string;
+  traceabilityId: string;
+  module: string;
+  submodule: string;
+  feature: string;
+  title: string;
+  scenario: string;
+  description: string;
+  precondition: string;
+  testData: Record<string, unknown>;
+  testSteps: RawTestStep[];
+  steps: string[];
+  expectedResult: string;
+  type: string;
+  priority: string;
+  severity: string;
+  tags: string[];
+  status: string;
+}
+
+/** Result of a completed generation run. */
+interface GenerationResultPayload {
+  testCases?: RawTestCase[];
+  summary?: { features?: string[] };
+}
+
+/** A terminal job state from the generation result endpoint / SSE.
+ *  `result` is `unknown` because the poll/SSE endpoint returns an open payload;
+ *  it is narrowed to GenerationResultPayload before use. */
+interface GenerationJob {
+  status: string;
+  result?: unknown;
+  error?: string;
+  stage?: string;
+  detail?: string;
+}
+
+/** SSE event shape emitted by the pipeline stream. */
+interface PipelineEvent {
+  type?: string;
+  stage?: string;
+  status?: string;
+  detail?: string;
+  error?: string;
+}
+
+/** A story / document item surfaced in the content-select dropdown. */
+interface StoryItem {
+  key: string;
+  summary?: string;
+  title?: string;
+  description?: string;
+}
+
+/** A raw automation script row from the script-generation endpoint. */
+interface RawScript {
+  test_case_id?: string;
+  testCaseId?: string;
+  file_name?: string;
+  fileName?: string;
+  tc_number?: string;
+  code?: string;
+}
+
+/** A generated script held in component state. */
+interface GeneratedScript {
+  testCaseId: string;
+  fileName: string;
+  code: string;
+}
+
+/** One backend execution / healing detail row. */
+interface ExecutionDetail {
+  testCaseId: string;
+  status?: string;
+  durationMs?: number;
+  error?: string;
+  healFix?: string;
+}
+
+/** Response from the execute / heal endpoints. */
+interface ExecutionResponse {
+  runId?: string;
+  executionDetails?: ExecutionDetail[];
+  failureReason?: string;
+}
+
+/** A System Configuration integration record. */
+interface IntegrationConfig {
+  integrationId?: string;
+  category?: string;
+  status?: string;
+  configData?: Record<string, string>;
+}
+
+/** Reads a human-friendly message off an unknown thrown value (axios or Error). */
+function errMessage(err: unknown, fallback: string): string {
+  if (err && typeof err === 'object') {
+    const e = err as { response?: { data?: { error?: string; message?: string } }; message?: string };
+    return e.response?.data?.error || e.response?.data?.message || e.message || fallback;
+  }
+  return fallback;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    CONSTANTS
    ═══════════════════════════════════════════════════════════════ */
@@ -110,11 +250,6 @@ const AGENTS: { name: string; detail: string }[] = [
   { name: 'Test Case Generator', detail: 'Generating detailed test cases' },
 ];
 
-const SCRIPT_AGENTS: { name: string; detail: string }[] = [
-  { name: 'Script Writer', detail: 'Producing automation scripts' },
-  { name: 'Execution Engine', detail: 'Running tests across environments' },
-  { name: 'Self-Healing Agent', detail: 'Auto-fixing flaky selectors & assertions' },
-];
 
 
 const ALL_COLUMNS = [
@@ -168,12 +303,12 @@ export default function ChatPage() {
   const [subCategory, setSubCategory] = useState<string | null>(null);
   const [source, setSource] = useState<ReqSource | null>(null);
   const [formValues, setFormValues] = useState<Record<string, string>>({});
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [connectError, setConnectError] = useState('');
-  const [stories, setStories] = useState<any[]>([]);
+  const [, setIsConnecting] = useState(false);
+  const [, setConnectError] = useState('');
+  const [stories, setStories] = useState<StoryItem[]>([]);
   const [selectedStory, setSelectedStory] = useState<string>('');
   const [pasteText, setPasteText] = useState('');
-  const [results, setResults] = useState<any>(null);
+  const [results, setResults] = useState<{ testCases: UITestCase[] } | null>(null);
   const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
 
   // Explore-mode state — populated when the user picks the "Explore App" source.
@@ -191,7 +326,7 @@ export default function ChatPage() {
   const [tcPageSize, setTcPageSize] = useState(10);
   const [selectedTcIds, setSelectedTcIds] = useState<Set<string>>(new Set());
   const [editingTcId, setEditingTcId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<any>(null);
+  const [editDraft, setEditDraft] = useState<UITestCase | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [savedTestRunId, setSavedTestRunId] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
@@ -208,8 +343,8 @@ export default function ChatPage() {
   };
 
   // Script generation results
-  const [generatedScripts, setGeneratedScripts] = useState<{ testCaseId: string; fileName: string; code: string }[]>([]);
-  const [selectedScriptIdx, setSelectedScriptIdx] = useState(0);
+  const [generatedScripts, setGeneratedScripts] = useState<GeneratedScript[]>([]);
+  const [, setSelectedScriptIdx] = useState(0);
 
   // Execution state
   // 'not_run' is a real, distinct outcome — the backend tells us a test
@@ -235,7 +370,7 @@ export default function ChatPage() {
 
   // Pipeline run tracking
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
-  const [pipelineMode, setPipelineMode] = useState<'sync' | 'async'>('sync');
+  const [, setPipelineMode] = useState<'sync' | 'async'>('sync');
 
   // Session restore banner
   const [sessionRestored, setSessionRestored] = useState(false);
@@ -264,8 +399,16 @@ export default function ChatPage() {
   /* ─── Session persistence — save critical state to sessionStorage ─── */
   const SESSION_KEY = `qurify_chat_${user?.username || 'guest'}`;
 
-  // Restore session on mount (tab switch / back-navigation)
+  // Tracks whether the session has already been restored, so gating the
+  // restore on `user` (below) doesn't cause it to run twice if `user` changes.
+  const sessionRestoredRef = useRef(false);
+
+  // Restore session once the user has resolved (so SESSION_KEY points at the
+  // correct per-user bucket — not the transient 'guest' key during hydration).
   useEffect(() => {
+    if (!user) return;
+    if (sessionRestoredRef.current) return;
+    sessionRestoredRef.current = true;
     try {
       const saved = sessionStorage.getItem(SESSION_KEY);
       if (!saved) return;
@@ -290,11 +433,13 @@ export default function ChatPage() {
       // Auto-hide after 4 seconds
       setTimeout(() => setSessionRestored(false), 4000);
     } catch { /* ignore parse errors */ }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [user, SESSION_KEY]);
 
   // Persist state on every meaningful change
   useEffect(() => {
+    // Wait for the user to resolve so we never write into the transient
+    // 'guest' bucket before SESSION_KEY settles on the real per-user key.
+    if (!user) return;
     // Don't save welcome state — only save if user has started a flow
     if (step === 'welcome' && messages.length === 0) return;
     try {
@@ -318,7 +463,7 @@ export default function ChatPage() {
       }));
     } catch { /* ignore quota errors */ }
   }, [
-    messages, step, category, source, pendingRequirements, storyMeta,
+    user, messages, step, category, source, pendingRequirements, storyMeta,
     selectedColumns, results, generatedScripts, executionResults,
     executionSummary, reportData, healingLog, healingAttempt,
     savedTestRunId, pipelineStages, SESSION_KEY,
@@ -355,10 +500,15 @@ export default function ChatPage() {
     return c.id === 'application' || c.id === 'api';
   });
 
-  // welcome — runs once, waits for voices so Zira is used from the start
+  // welcome — greets exactly once, but only after the user has resolved so the
+  // greeting uses the real username (not the "there" fallback). If `user` loads
+  // async after mount, this re-runs when it becomes available; the ref-guard
+  // prevents a duplicate greeting once we've spoken.
   const welcomed = useRef(false);
   useEffect(() => {
     if (welcomed.current) return;
+    // Wait until auth has resolved a user before greeting.
+    if (!user) return;
     welcomed.current = true;
 
     // Skip welcome if a previous session was restored (it already has messages)
@@ -366,9 +516,10 @@ export default function ChatPage() {
     if (hasSavedSession) return;
 
     waitForVoices().then(() => {
-      push('tessa', `Hello ${user?.username || 'there'}! I'm Tessa, your IntelliQE TestOps Assistant.\n\nI can help you design, generate, and execute intelligent test validations across your platform.\n\nWhat would you like to test today?`);
+      push('tessa', `Hello ${user.username || 'there'}! I'm Tessa, your IntelliQE TestOps Assistant.\n\nI can help you design, generate, and execute intelligent test validations across your platform.\n\nWhat would you like to test today?`);
     });
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, SESSION_KEY]);
 
   /* --- flow handlers --- */
   const pickCategory = (c: typeof CATEGORIES[number]) => {
@@ -409,19 +560,19 @@ export default function ChatPage() {
       // Check if already connected via System Configuration
       try {
         const result = await getConfigurations();
-        const configs = result.configs || [];
-        const matched = configs.find((c: any) => c.integrationId === s && c.status === 'connected');
+        const configs: IntegrationConfig[] = Array.isArray(result.configs) ? result.configs : [];
+        const matched = configs.find((c) => c.integrationId === s && c.status === 'connected');
         if (matched) {
           if (s === 'jira') {
             push('tessa', `${label} is connected. Fetching your stories...`);
             try {
               const storiesArr = await getJiraStories(user?.username || 'admin');
-              const list = Array.isArray(storiesArr) ? storiesArr : (storiesArr?.stories || storiesArr?.issues || []);
+              const list: StoryItem[] = Array.isArray(storiesArr) ? storiesArr : (storiesArr?.stories || storiesArr?.issues || []);
               setStories(list);
               push('tessa', `Found ${list.length} stories/tasks. Select one to generate test cases.`);
               setStep('content-select');
-            } catch (err: any) {
-              const errMsg = err?.response?.data?.error || err?.response?.data?.message || err?.message || 'Unknown error';
+            } catch (err) {
+              const errMsg = errMessage(err, 'Unknown error');
               push('tessa', `${label} is connected but I could not fetch stories: ${errMsg}. Please verify your credentials in System Configuration.`);
             }
           } else if (s === 'confluence') {
@@ -431,7 +582,7 @@ export default function ChatPage() {
               const pages = await getConfluencePages();
               // Normalise into the shared `stories` shape so the existing
               // content-select UI can render the list without changes.
-              const list = pages.map((p) => ({
+              const list = (Array.isArray(pages) ? pages : []).map((p) => ({
                 key: p.id,
                 summary: p.spaceName ? `${p.title} — ${p.spaceName}` : p.title,
                 title: p.title,
@@ -440,8 +591,8 @@ export default function ChatPage() {
               setStories(list);
               push('tessa', `Found ${list.length} page(s). Pick one and I'll pull its content.`);
               setStep('content-select');
-            } catch (err: any) {
-              const msg = err?.response?.data?.error || err?.message || 'Could not fetch Confluence pages';
+            } catch (err) {
+              const msg = errMessage(err, 'Could not fetch Confluence pages');
               push('tessa', `Confluence error: ${msg}`);
             }
           } else if (s === 'sharepoint') {
@@ -449,7 +600,7 @@ export default function ChatPage() {
             push('tessa', `${label} is connected. Listing documents...`);
             try {
               const docs = await getSharePointDocuments();
-              const list = docs.map((d) => ({
+              const list = (Array.isArray(docs) ? docs : []).map((d) => ({
                 key: d.id,
                 summary: d.size ? `${d.name} (${(d.size / 1024).toFixed(1)} KB)` : d.name,
                 title: d.name,
@@ -458,14 +609,14 @@ export default function ChatPage() {
               setStories(list);
               push('tessa', `Found ${list.length} document(s). Select one to extract requirements.`);
               setStep('content-select');
-            } catch (err: any) {
-              const msg = err?.response?.data?.error || err?.message || 'Could not list SharePoint documents';
+            } catch (err) {
+              const msg = errMessage(err, 'Could not list SharePoint documents');
               push('tessa', `SharePoint error: ${msg}`);
             }
           }
           return;
         }
-      } catch {}
+      } catch { /* not connected — fall through to the redirect below */ }
       // Not connected — redirect to System Configuration
       push('tessa', `${label} is not configured yet. Please go to System Configuration to set up this connection first.`);
     }
@@ -473,6 +624,7 @@ export default function ChatPage() {
 
 
   /* --- connection (kept for backward compat — inline connect forms are now handled via System Configuration) --- */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleConnect = async () => {
 
     setIsConnecting(true);
@@ -485,15 +637,15 @@ export default function ChatPage() {
         const jiraName = connectRes?.displayName || 'JIRA';
         const storiesArr = await getJiraStories(user?.username || 'admin');
         // Backend returns StorySummary[] directly: [{key, summary}, ...]
-        const list = Array.isArray(storiesArr) ? storiesArr : (storiesArr?.stories || storiesArr?.issues || []);
+        const list: StoryItem[] = Array.isArray(storiesArr) ? storiesArr : (storiesArr?.stories || storiesArr?.issues || []);
         setStories(list);
         push('tessa', `Connected successfully! Logged in as "${jiraName}". Found ${list.length} stories/tasks. Select one to generate test cases.`);
         setStep('content-select');
       } else if (source === 'confluence' || source === 'sharepoint') {
         push('tessa', `${source === 'confluence' ? 'Confluence' : 'SharePoint'} document fetching is not yet integrated. Please use JIRA, upload a document, or paste requirements directly.`);
       }
-    } catch (err: any) {
-      setConnectError(err?.response?.data?.error || err?.message || 'Connection failed. Check credentials and try again.');
+    } catch (err) {
+      setConnectError(errMessage(err, 'Connection failed. Check credentials and try again.'));
     } finally {
       setIsConnecting(false);
     }
@@ -539,8 +691,8 @@ export default function ChatPage() {
         push('tessa', `Extracted ${meta.join(', ')} from ${doc.name}.`);
         requirements = [doc.name, doc.text].filter(Boolean).join('\n\n');
       }
-    } catch (err: any) {
-      const msg = err?.response?.data?.error || err?.message || 'Could not fetch details';
+    } catch (err) {
+      const msg = errMessage(err, 'Could not fetch details');
       push('tessa', `Couldn't load that item: ${msg}. Please pick a different one or use another source.`);
       return;
     }
@@ -587,8 +739,8 @@ export default function ChatPage() {
       const warn = result.warning ? ` (Note: ${result.warning})` : '';
       push('tessa', `Got it — extracted ${stats} from ${file.name}.${warn} Pick the columns you want and I'll generate the test cases.`);
       setStep('column-select');
-    } catch (err: any) {
-      const msg = err?.response?.data?.error || err?.message || 'Upload failed';
+    } catch (err) {
+      const msg = errMessage(err, 'Upload failed');
       setUploadError(msg);
       push('tessa', `I couldn't read that file: ${msg}`);
     } finally {
@@ -639,6 +791,12 @@ export default function ChatPage() {
      events and finish when the job reports done/error — with a poll fallback so
      a missed event can't hang the UI. No long-held request → no client timeout,
      and errors are shown as friendly messages, never raw text. */
+  // Holds the teardown for the in-flight generation stream/poll so it can be
+  // closed when a new run starts or the component unmounts (prevents leaked
+  // EventSource/interval and setState-after-unmount).
+  const genCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => { genCleanupRef.current?.(); }, []);
+
   const runGeneration = async (requirements: string) => {
     const steps: AgentStep[] = AGENTS.map(a => ({ name: a.name, status: 'pending' as const, detail: a.detail }));
     setAgentSteps(steps);
@@ -649,10 +807,10 @@ export default function ChatPage() {
 
     /* Apply a successful result: map backend test cases (IEEE-829 shape, with
        legacy aliases preserved) into the wizard and advance to results. */
-    const applyGenerationResult = (res: any) => {
-      let testCases: any[] = [];
+    const applyGenerationResult = (res: GenerationResultPayload) => {
+      let testCases: UITestCase[] = [];
       if (res?.testCases?.length) {
-        testCases = res.testCases.map((tc: any, i: number) => ({
+        testCases = res.testCases.map((tc: RawTestCase, i: number) => ({
           id: tc.id || `TC-${String(i + 1).padStart(3, '0')}`,
           traceabilityId: tc.traceabilityId || '',
           module: tc.module || '',
@@ -668,7 +826,7 @@ export default function ChatPage() {
           steps: Array.isArray(tc.steps) && tc.steps.length
             ? tc.steps
             : Array.isArray(tc.testSteps)
-              ? tc.testSteps.map((s: any, idx: number) =>
+              ? tc.testSteps.map((s: RawTestStep, idx: number) =>
                   `${s.step ?? idx + 1}. ${s.action}${s.expected ? ` → Expected: ${s.expected}` : ''}`)
               : [],
           expectedResult: tc.expectedResult || tc.expected || '',
@@ -731,7 +889,7 @@ export default function ChatPage() {
         const started = await startGeneration(requirements, subCategory || undefined);
         runId = started?.runId || '';
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('Start generation failed:', err);
       failGeneration(normalizeError(err).message);
       return;
@@ -754,22 +912,28 @@ export default function ChatPage() {
       if (pollTimer !== null) { clearInterval(pollTimer); pollTimer = null; }
     };
 
-    const onTerminal = (job: { status: string; result?: any; error?: string }) => {
+    // Tear down any previous in-flight run, then register this one's cleanup so
+    // it's closed on unmount or when the next generation starts.
+    genCleanupRef.current?.();
+    genCleanupRef.current = cleanup;
+
+    const onTerminal = (job: GenerationJob) => {
       if (handled) return;
       handled = true;
       cleanup();
       if (job.status === 'done' && job.result) {
-        applyGenerationResult(job.result);
+        applyGenerationResult(job.result as GenerationResultPayload);
       } else {
         failGeneration(job.error || 'Generation did not complete. Please try again.');
       }
     };
 
-    es = subscribeToPipelineEvents(runId, (event: any) => {
+    es = subscribeToPipelineEvents(runId, (raw: unknown) => {
+      const event = raw as PipelineEvent;
       if (!event || typeof event !== 'object') return;
       if (event.type === 'gen_stage') {
         const status = event.status === 'completed' ? 'completed' : 'running';
-        updatePipeline(event.stage, status, event.detail || '');
+        updatePipeline(event.stage || '', status, event.detail || '');
         if (event.stage === 'requirements') {
           setAgentSteps(prev => prev.map((s, i) => i === 0 ? { ...s, status } : s));
         } else if (event.stage === 'test-design') {
@@ -814,7 +978,8 @@ export default function ChatPage() {
         storyTitle: storyMeta.title,
         source: source || undefined,
         columns: selectedColumns,
-        testCases: results.testCases,
+        // UITestCase is a concrete shape; the API accepts an open record list.
+        testCases: results.testCases as unknown as Record<string, unknown>[],
       });
       setSavedTestRunId(res.testRunId);
       push('tessa', `${results.testCases.length} test cases saved successfully! You can now export them or proceed to automation script generation.`);
@@ -835,7 +1000,19 @@ export default function ChatPage() {
       const response = await exportTestCases(savedTestRunId, format);
       const disposition = response.headers['content-disposition'] || '';
       const match = disposition.match(/filename="?([^"]+)"?/);
-      const filename = match?.[1] || `testcases.${format === 'excel' ? 'csv' : 'csv'}`;
+      // Fallback filename when the server omits Content-Disposition. The export
+      // endpoint emits CSV for every format (csv/jira/testrail/excel), so the
+      // extension is csv across the board — but encode the format into the base
+      // name so jira/testrail downloads aren't all indistinguishable "testcases".
+      const extByFormat: Record<string, string> = {
+        csv: 'csv',
+        excel: 'csv',
+        jira: 'csv',
+        testrail: 'csv',
+      };
+      const ext = extByFormat[format] || 'csv';
+      const base = format && format !== 'csv' ? `testcases-${format}` : 'testcases';
+      const filename = match?.[1] || `${base}.${ext}`;
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
@@ -877,17 +1054,17 @@ export default function ChatPage() {
       return;
     }
 
-    let scripts: any[] = [];
+    let scripts: GeneratedScript[] = [];
     let scriptErr: string | null = null;
     try {
       const scriptRes = await generateScriptsForRun(savedTestRunId);
-      const rows = Array.isArray(scriptRes?.scripts) ? scriptRes.scripts : [];
-      scripts = rows.map((s: any) => ({
-        testCaseId: s.test_case_id || s.testCaseId,
+      const rows: RawScript[] = Array.isArray(scriptRes?.scripts) ? scriptRes.scripts : [];
+      scripts = rows.map((s: RawScript) => ({
+        testCaseId: s.test_case_id || s.testCaseId || '',
         fileName: s.file_name || s.fileName || `${s.tc_number || s.test_case_id || 'test'}.spec.ts`,
         code: s.code || '',
-      })).filter((s: any) => s.code);
-    } catch (err: any) {
+      })).filter((s: GeneratedScript) => s.code);
+    } catch (err) {
       console.error('Script generation API failed:', err);
       const ne = normalizeError(err);
       scriptErr = ne.hint ? `${ne.message} — ${ne.hint}` : ne.message;
@@ -933,14 +1110,14 @@ export default function ChatPage() {
 
     // Execute the ACTUAL generated scripts for this saved run via Playwright —
     // not a re-run of the generation pipeline. Requires the run to be saved.
-    let execRes: any = null;
+    let execRes: ExecutionResponse | null = null;
     let execErr: string | null = null;
     if (!savedTestRunId) {
       execErr = 'Save the test cases and generate scripts before executing.';
     } else {
       try {
         execRes = await executeScriptsForRun(savedTestRunId);
-      } catch (err: any) {
+      } catch (err) {
         console.error('Execute tests failed:', err);
         const ne = normalizeError(err);
         execErr = ne.hint ? `${ne.message} — ${ne.hint}` : ne.message;
@@ -962,18 +1139,16 @@ export default function ChatPage() {
     // fake pass/fail inference. If the backend says a test was not
     // run, we show "not_run" — we do NOT pretend it passed.
     // ─────────────────────────────────────────────────────────────
-    const backendDetails: any[] = Array.isArray(execRes?.executionDetails) ? execRes.executionDetails : [];
-    const detailByTcId = new Map<string, any>(backendDetails.map((d) => [d.testCaseId, d]));
+    const backendDetails: ExecutionDetail[] = Array.isArray(execRes?.executionDetails) ? execRes.executionDetails : [];
+    const detailByTcId = new Map<string, ExecutionDetail>(backendDetails.map((d) => [d.testCaseId, d]));
 
     let passed = 0;
     let failed = 0;
-    let notRun = 0;
     const finalResults = initialResults.map((row) => {
       const d = detailByTcId.get(row.testCaseId);
       if (!d) {
         // Backend produced no details for this script. Either Playwright
         // crashed entirely or the script wasn't picked up. Mark honestly.
-        notRun++;
         return { ...row, status: 'not_run' as const, duration: '', error: execRes?.failureReason || 'No execution result returned by backend' };
       }
       // Format the real duration from milliseconds → "1.2s" — only when present.
@@ -989,7 +1164,6 @@ export default function ChatPage() {
         return { ...row, status: 'failed' as const, duration, error: d.error || 'Test failed (no error message returned)' };
       }
       // 'skipped' or 'not_run' from backend
-      notRun++;
       return { ...row, status: 'not_run' as const, duration, error: undefined };
     });
     setExecutionResults(finalResults);
@@ -1032,7 +1206,7 @@ export default function ChatPage() {
     // healingAgent attempts AI-powered selector/wait fixes and then
     // runs the suite again. Whatever it returns is what we surface —
     // no fabricated "all healed pass" lies.
-    let healRes: any = null;
+    let healRes: ExecutionResponse | null = null;
     try {
       healRes = await executeTests(
         `Heal failing tests: ${failedTests.map(t => `${t.testCaseId}: ${t.error}`).join('; ')}`,
@@ -1042,8 +1216,8 @@ export default function ChatPage() {
     }
 
     // Map backend results so we can look up healed status by test-case id.
-    const healDetails: any[] = Array.isArray(healRes?.executionDetails) ? healRes.executionDetails : [];
-    const healByTcId = new Map<string, any>(healDetails.map((d) => [d.testCaseId, d]));
+    const healDetails: ExecutionDetail[] = Array.isArray(healRes?.executionDetails) ? healRes.executionDetails : [];
+    const healByTcId = new Map<string, ExecutionDetail>(healDetails.map((d) => [d.testCaseId, d]));
 
     for (const failedTest of failedTests) {
       const d = healByTcId.get(failedTest.testCaseId);
@@ -1201,7 +1375,7 @@ export default function ChatPage() {
         const configs = result.configs || [];
         // Find the first connected git-repo integration (github, gitlab, bitbucket)
         const gitConfig = configs.find(
-          (c: any) => c.category === 'git-repo' && c.status === 'connected'
+          (c: IntegrationConfig) => c.category === 'git-repo' && c.status === 'connected'
         );
         if (gitConfig?.configData) {
           const repoUrl = gitConfig.configData.repo_url || gitConfig.configData.org_url || '';
@@ -1211,8 +1385,7 @@ export default function ChatPage() {
         }
       } catch { /* ignore — user can still fill manually */ }
     })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step]);
+  }, [step, publishResult, gitRepoUrl]);
 
   /* --- Create Pull Request (real) ---
      Calls POST /api/git/publish which opens a branch + commits the
@@ -1242,8 +1415,8 @@ export default function ChatPage() {
         'tessa',
         `Done — opened ${result.provider === 'gitlab' ? 'MR' : 'PR'} #${result.prNumber} on ${result.provider} with ${result.fileCount} file(s). View it at ${result.prUrl}`,
       );
-    } catch (err: any) {
-      const msg = err?.response?.data?.error || err?.message || 'Git publish failed';
+    } catch (err) {
+      const msg = errMessage(err, 'Git publish failed');
       setPublishResult('error');
       push('tessa', `Couldn't publish to git: ${msg}. Your scripts are still available below for manual download.`);
     } finally {
@@ -1252,26 +1425,26 @@ export default function ChatPage() {
   };
 
   /* --- TC editing helpers --- */
-  const startEdit = (tc: any) => {
+  const startEdit = (tc: UITestCase) => {
     setEditingTcId(tc.id);
     setEditDraft({ ...tc });
   };
   const cancelEdit = () => { setEditingTcId(null); setEditDraft(null); };
   const saveEdit = () => {
     if (!editDraft || !results) return;
-    setResults((prev: any) => ({
+    setResults((prev) => prev ? {
       ...prev,
-      testCases: prev.testCases.map((tc: any) => tc.id === editDraft.id ? { ...editDraft } : tc),
-    }));
+      testCases: prev.testCases.map((tc) => tc.id === editDraft.id ? { ...editDraft } : tc),
+    } : prev);
     setEditingTcId(null);
     setEditDraft(null);
   };
   const deleteTcs = () => {
     if (!results || selectedTcIds.size === 0) return;
-    setResults((prev: any) => ({
+    setResults((prev) => prev ? {
       ...prev,
-      testCases: prev.testCases.filter((tc: any) => !selectedTcIds.has(tc.id)),
-    }));
+      testCases: prev.testCases.filter((tc) => !selectedTcIds.has(tc.id)),
+    } : prev);
     setSelectedTcIds(new Set());
   };
   const toggleTcSelect = (id: string) => {
@@ -1283,7 +1456,7 @@ export default function ChatPage() {
   };
   const toggleSelectAll = () => {
     if (!results) return;
-    const pageIds = pagedTcs.map((tc: any) => tc.id);
+    const pageIds = pagedTcs.map((tc) => tc.id);
     const allSelected = pageIds.every((id: string) => selectedTcIds.has(id));
     setSelectedTcIds(prev => {
       const next = new Set(prev);
@@ -1297,13 +1470,19 @@ export default function ChatPage() {
   const totalPages = Math.max(1, Math.ceil(totalTcs / tcPageSize));
   const pagedTcs = results?.testCases?.slice((tcPage - 1) * tcPageSize, tcPage * tcPageSize) || [];
 
+  // After deletions (or page-size changes) the current page can point past the
+  // last page, leaving an empty view with no way back. Snap it back in range.
+  useEffect(() => {
+    if (tcPage > totalPages) setTcPage(totalPages);
+  }, [tcPage, totalPages]);
+
   /* --- delete single TC --- */
   const deleteSingleTc = (id: string) => {
     if (!results) return;
-    setResults((prev: any) => ({
+    setResults((prev) => prev ? {
       ...prev,
-      testCases: prev.testCases.filter((tc: any) => tc.id !== id),
-    }));
+      testCases: prev.testCases.filter((tc) => tc.id !== id),
+    } : prev);
     setSelectedTcIds(prev => { const next = new Set(prev); next.delete(id); return next; });
     if (editingTcId === id) { setEditingTcId(null); setEditDraft(null); }
   };
@@ -1369,6 +1548,7 @@ export default function ChatPage() {
      ═══════════════════════════════════════════════════════════════ */
   const inputCls = 'w-full px-3.5 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-800 placeholder:text-gray-400 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 transition-all';
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const renderFormField = (f: FormField) => {
     const val = formValues[f.key] || '';
     const isPass = f.type === 'password';
@@ -1794,7 +1974,7 @@ export default function ChatPage() {
         t === 'api' ? 'bg-sky-50 text-sky-700' :
         'bg-gray-50 text-gray-600';
       const colVisible = (key: string) => selectedColumns.includes(key);
-      const allPageSelected = pagedTcs.length > 0 && pagedTcs.every((tc: any) => selectedTcIds.has(tc.id));
+      const allPageSelected = pagedTcs.length > 0 && pagedTcs.every((tc) => selectedTcIds.has(tc.id));
 
       return (
         <div className="ml-11 space-y-3 max-w-[920px]">
@@ -1843,9 +2023,9 @@ export default function ChatPage() {
 
           {/* ── TC Cards ── */}
           <div className="space-y-2">
-            {pagedTcs.map((tc: any) => {
+            {pagedTcs.map((tc) => {
               const isEditing = editingTcId === tc.id;
-              const draft = isEditing ? editDraft : tc;
+              const draft: UITestCase = isEditing && editDraft ? editDraft : tc;
               return (
                 <div key={tc.id} className={`bg-white border ${selectedTcIds.has(tc.id) ? 'border-blue-300 bg-blue-50/30' : 'border-gray-100'} rounded-xl p-4 shadow-sm transition-colors`}>
                   {/* Row header: checkbox + TC# + badges + actions */}
@@ -1863,7 +2043,7 @@ export default function ChatPage() {
                       <span className={`text-[10px] px-2 py-0.5 font-semibold rounded border ${priorityStyle(tc.priority)}`}>{tc.priority}</span>
                     )}
                     {colVisible('priority') && isEditing && (
-                      <select value={draft.priority} onChange={e => setEditDraft((d: any) => ({ ...d, priority: e.target.value }))} className="text-[10px] px-1.5 py-0.5 border border-blue-300 rounded bg-white text-gray-700 outline-none">
+                      <select value={draft.priority} onChange={e => setEditDraft((d) => d ? { ...d, priority: e.target.value } : d)} className="text-[10px] px-1.5 py-0.5 border border-blue-300 rounded bg-white text-gray-700 outline-none">
                         {['P0', 'P1', 'P2', 'P3'].map(p => <option key={p}>{p}</option>)}
                       </select>
                     )}
@@ -1871,7 +2051,7 @@ export default function ChatPage() {
                       <span className={`text-[10px] px-2 py-0.5 font-medium rounded ${typeStyle(tc.type)}`}>{tc.type}</span>
                     )}
                     {colVisible('type') && isEditing && (
-                      <select value={draft.type} onChange={e => setEditDraft((d: any) => ({ ...d, type: e.target.value }))} className="text-[10px] px-1.5 py-0.5 border border-blue-300 rounded bg-white text-gray-700 outline-none">
+                      <select value={draft.type} onChange={e => setEditDraft((d) => d ? { ...d, type: e.target.value } : d)} className="text-[10px] px-1.5 py-0.5 border border-blue-300 rounded bg-white text-gray-700 outline-none">
                         {['positive', 'negative', 'edge', 'e2e', 'api', 'security', 'performance'].map(t => <option key={t}>{t}</option>)}
                       </select>
                     )}
@@ -1901,7 +2081,7 @@ export default function ChatPage() {
                     isEditing ? (
                       <input
                         value={draft.scenario}
-                        onChange={e => setEditDraft((d: any) => ({ ...d, scenario: e.target.value }))}
+                        onChange={e => setEditDraft((d) => d ? { ...d, scenario: e.target.value } : d)}
                         className="w-full text-[13px] font-semibold text-gray-800 mb-2 px-2 py-1.5 border border-blue-300 rounded-lg outline-none focus:ring-1 focus:ring-blue-400 bg-white"
                       />
                     ) : (
@@ -1918,7 +2098,7 @@ export default function ChatPage() {
                           {isEditing ? (
                             <textarea
                               value={(draft.steps || []).join('\n')}
-                              onChange={e => setEditDraft((d: any) => ({ ...d, steps: e.target.value.split('\n') }))}
+                              onChange={e => setEditDraft((d) => d ? { ...d, steps: e.target.value.split('\n') } : d)}
                               rows={Math.max(3, (draft.steps || []).length)}
                               className="w-full text-xs text-gray-600 px-2 py-1.5 border border-blue-300 rounded-lg outline-none focus:ring-1 focus:ring-blue-400 resize-none bg-white font-normal"
                               placeholder="One step per line"
@@ -1940,7 +2120,7 @@ export default function ChatPage() {
                           {isEditing ? (
                             <textarea
                               value={draft.expectedResult}
-                              onChange={e => setEditDraft((d: any) => ({ ...d, expectedResult: e.target.value }))}
+                              onChange={e => setEditDraft((d) => d ? { ...d, expectedResult: e.target.value } : d)}
                               rows={3}
                               className="w-full text-xs text-gray-600 px-2 py-1.5 border border-blue-300 rounded-lg outline-none focus:ring-1 focus:ring-blue-400 resize-none bg-white font-normal"
                             />
@@ -1961,7 +2141,7 @@ export default function ChatPage() {
                           {isEditing ? (
                             <input
                               value={draft.feature}
-                              onChange={e => setEditDraft((d: any) => ({ ...d, feature: e.target.value }))}
+                              onChange={e => setEditDraft((d) => d ? { ...d, feature: e.target.value } : d)}
                               className="w-full text-xs px-2 py-1 border border-blue-300 rounded-lg outline-none bg-white"
                             />
                           ) : (
@@ -1975,7 +2155,7 @@ export default function ChatPage() {
                           {isEditing ? (
                             <input
                               value={draft.precondition}
-                              onChange={e => setEditDraft((d: any) => ({ ...d, precondition: e.target.value }))}
+                              onChange={e => setEditDraft((d) => d ? { ...d, precondition: e.target.value } : d)}
                               className="w-full text-xs px-2 py-1 border border-blue-300 rounded-lg outline-none bg-white"
                             />
                           ) : (

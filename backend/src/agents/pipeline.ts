@@ -33,13 +33,25 @@ export interface PipelineResult {
   stages: { name: PipelineStage; duration: number; status: 'completed' | 'failed' }[];
 }
 
+type StageRecord = { name: PipelineStage; duration: number; status: 'completed' | 'failed' };
+
 async function runStage<T>(
   name: PipelineStage,
   fn: () => T | Promise<T>,
-): Promise<{ result: T; stage: { name: PipelineStage; duration: number; status: 'completed' | 'failed' } }> {
+  stages: StageRecord[],
+): Promise<T> {
   const start = Date.now();
-  const result = await fn();
-  return { result, stage: { name, duration: Date.now() - start, status: 'completed' } };
+  try {
+    const result = await fn();
+    stages.push({ name, duration: Date.now() - start, status: 'completed' });
+    return result;
+  } catch (err) {
+    // Record the stage as failed (matching the existing stage-result shape)
+    // before rethrowing, so an agent throw is attributed to a specific stage
+    // instead of rejecting the whole pipeline with no recorded failure.
+    stages.push({ name, duration: Date.now() - start, status: 'failed' });
+    throw err;
+  }
 }
 
 export async function runPipeline(
@@ -52,31 +64,18 @@ export async function runPipeline(
   // Path 4 — exploration fallback. If we only have a URL, crawl the AUT
   // first to synthesise requirements before the analyst agent runs.
   if (shouldExploreFirst(state)) {
-    const s0 = await runStage('requirement', () => exploreAgent(state));
-    state = s0.result; stages.push({ ...s0.stage, name: 'requirement' });
+    state = await runStage('requirement', () => exploreAgent(state), stages);
   }
 
-  const s1 = await runStage('requirement', () => requirementAgent(state));
-  state = s1.result; stages.push(s1.stage);
-
-  const s2 = await runStage('audit', () => auditAgent(state));
-  state = s2.result; stages.push(s2.stage);
-
-  const s3 = await runStage('planning', () => plannerAgent(state));
-  state = s3.result; stages.push(s3.stage);
-
-  const s4 = await runStage('generation', () => generatorAgent(state));
-  state = s4.result; stages.push(s4.stage);
-
-  const s5 = await runStage('scripting', () => scriptAgent(state));
-  state = s5.result; stages.push(s5.stage);
-
-  const s6 = await runStage('execution', () => executionAgent(state));
-  state = s6.result; stages.push(s6.stage);
+  state = await runStage('requirement', () => requirementAgent(state), stages);
+  state = await runStage('audit', () => auditAgent(state), stages);
+  state = await runStage('planning', () => plannerAgent(state), stages);
+  state = await runStage('generation', () => generatorAgent(state), stages);
+  state = await runStage('scripting', () => scriptAgent(state), stages);
+  state = await runStage('execution', () => executionAgent(state), stages);
 
   if (state.failureReason && state.executionResults && state.executionResults.failed > 0) {
-    const s7 = await runStage('healing', () => healingAgent(state));
-    state = s7.result; stages.push(s7.stage);
+    state = await runStage('healing', () => healingAgent(state), stages);
   }
 
   stages.push({ name: 'completed', duration: 0, status: 'completed' });

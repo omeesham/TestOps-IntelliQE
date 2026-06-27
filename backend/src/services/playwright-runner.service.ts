@@ -388,6 +388,7 @@ export async function executeRunScripts(
   }
 
   const workspace = path.join(os.tmpdir(), `jbs-pwexec-${runId}-${Date.now()}`);
+  try {
   const testsDir = path.join(workspace, 'tests');
   await fs.mkdir(testsDir, { recursive: true });
 
@@ -501,4 +502,11 @@ module.exports = defineConfig({
   } catch { /* ignore */ }
 
   return { details, passed, failed };
+  } finally {
+    // The per-run workspace under os.tmpdir() is fully consumed by now (results
+    // read into `details` and persisted to storedAllureResultsDir). Remove it so
+    // tmp doesn't fill up over time. Best-effort — never let cleanup mask the
+    // real result or error.
+    await fs.rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
 }

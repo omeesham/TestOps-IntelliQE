@@ -48,6 +48,7 @@ import { initDb } from './db.js';
 import pool from './db.js';
 import { decryptField } from './utils/crypto.js';
 import { signToken } from './utils/jwt.js';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { authMiddleware } from './middleware/auth.middleware.js';
 import { requestContext } from './middleware/request-context.middleware.js';
 import { auditMutations } from './middleware/audit.middleware.js';
@@ -124,12 +125,29 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), version: '1.0.0' });
 });
 
-/** Decode the payload claims of a JWT/ID-token without verifying its signature. */
-function decodeJwtClaims(idToken: string): Record<string, any> {
-  const payload = idToken.split('.')[1];
-  if (!payload) return {};
-  const json = Buffer.from(payload.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
-  return JSON.parse(json);
+// One remote JWKS per tenant — jose caches the fetched keys internally.
+const entraJwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
+function getEntraJwks(tenant: string) {
+  let jwks = entraJwksCache.get(tenant);
+  if (!jwks) {
+    jwks = createRemoteJWKSet(new URL(`https://login.microsoftonline.com/${tenant}/discovery/v2.0/keys`));
+    entraJwksCache.set(tenant, jwks);
+  }
+  return jwks;
+}
+
+/**
+ * Verify an Entra ID token: checks the JWS signature against the tenant JWKS,
+ * the audience (our client id), and the issuer. Requires AZURE_TENANT_ID to be
+ * the directory (tenant) GUID — Entra's `iss` is .../{tenantGuid}/v2.0.
+ * Throws if the token is forged, expired, or for the wrong app/tenant.
+ */
+async function verifyEntraIdToken(idToken: string, tenant: string, clientId: string): Promise<Record<string, any>> {
+  const { payload } = await jwtVerify(idToken, getEntraJwks(tenant), {
+    audience: clientId,
+    issuer: `https://login.microsoftonline.com/${tenant}/v2.0`,
+  });
+  return payload as Record<string, any>;
 }
 
 app.post('/api/auth/login', authLimiter, async (req, res) => {
@@ -155,9 +173,12 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
       return;
     }
 
+    // All stored passwords are bcrypt hashes (legacy plaintext values are
+    // migrated to bcrypt at startup in db.ts), so compare via bcrypt only.
     const stored = rows[0].password_hash as string;
-    const isBcrypt = typeof stored === 'string' && /^\$2[aby]\$/.test(stored);
-    const match = isBcrypt ? await bcrypt.compare(password, stored) : stored === password;
+    const match = typeof stored === 'string' && /^\$2[aby]\$/.test(stored)
+      ? await bcrypt.compare(password, stored)
+      : false;
     if (!match) {
       res.status(401).json({ success: false, error: 'Invalid credentials' });
       return;
@@ -292,10 +313,16 @@ app.post('/api/auth/sso/callback', authLimiter, async (req, res) => {
       return;
     }
 
-    // Decode ID-token claims. The token came directly from Entra's token
-    // endpoint over TLS, so the auth-code flow guarantees its integrity.
-    // (Hardening follow-up: verify the JWS signature against the tenant JWKS.)
-    const claims = decodeJwtClaims(tokens.id_token);
+    // Verify the ID token's signature (tenant JWKS), audience, and issuer
+    // before trusting any claims.
+    let claims: Record<string, any>;
+    try {
+      claims = await verifyEntraIdToken(tokens.id_token, tenant, clientId);
+    } catch (e: any) {
+      logger.warn('SSO ID token verification failed', { err: e?.message });
+      res.status(401).json({ success: false, error: 'SSO token verification failed' });
+      return;
+    }
     const email: string | undefined =
       claims.preferred_username || claims.email || claims.upn;
 

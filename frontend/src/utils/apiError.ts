@@ -15,6 +15,16 @@ import type { AxiosError } from 'axios';
 
 export type ErrorSeverity = 'error' | 'warning' | 'info';
 
+/** Shape of the structured error body returned by the backend (all fields optional). */
+interface ServerErrorBody {
+  code?: unknown;
+  error?: unknown;
+  message?: unknown;
+  hint?: unknown;
+  requestId?: unknown;
+  details?: unknown;
+}
+
 export interface NormalizedError {
   code: string;
   title: string;
@@ -75,7 +85,7 @@ export function normalizeError(err: unknown): NormalizedError {
   }
 
   // Axios-style error
-  const ax = err as AxiosError<any> | undefined;
+  const ax = err as AxiosError<ServerErrorBody> | undefined;
   if (ax && typeof ax === 'object' && 'isAxiosError' in ax && ax.isAxiosError) {
     // Network / transport failure (no response received)
     if (!ax.response) {
@@ -91,7 +101,7 @@ export function normalizeError(err: unknown): NormalizedError {
 
     // Response was received — server-side error
     const status = ax.response.status;
-    const data = ax.response.data || {};
+    const data: ServerErrorBody = ax.response.data || {};
     const serverCode: string | undefined = typeof data.code === 'string' ? data.code : undefined;
     const serverMessage: string | undefined =
       typeof data.error === 'string' ? data.error :

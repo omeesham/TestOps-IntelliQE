@@ -61,6 +61,16 @@ export async function getConversationsByTenant(tenantId: string, isPlatform: boo
   return rows;
 }
 
+/** Returns the owning tenant of a conversation, or null if it doesn't exist.
+ *  Used to enforce tenant isolation before reading/writing messages. */
+export async function getConversationOwner(conversationId: string): Promise<{ tenant_id: string } | null> {
+  const { rows } = await pool.query(
+    `SELECT tenant_id FROM conversations WHERE id = $1`,
+    [conversationId]
+  );
+  return rows[0] || null;
+}
+
 export async function getMessagesByConversation(conversationId: string) {
   const { rows } = await pool.query(
     `SELECT id, role, content, metadata, created_at

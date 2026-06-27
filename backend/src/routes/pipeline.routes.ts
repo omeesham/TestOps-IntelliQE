@@ -12,6 +12,16 @@ import { broadcastSSE } from '../services/sse-manager.js';
 
 const router = Router();
 
+/** Tenant ownership guard: platform users see all runs; everyone else is
+ *  restricted to their own tenant. Responds 404 (not 403) so a run's existence
+ *  isn't disclosed across tenants. Returns true when access is allowed. */
+function ownsRun(req: Request, run: any, res: Response): boolean {
+  const u = (req as any).user;
+  if (u?.isPlatform || run?.tenant_id === u?.tenantId) return true;
+  res.status(404).json({ error: 'Run not found' });
+  return false;
+}
+
 // Helper: build stage prompt
 function buildStagePrompt(stageDef: any, run: any, intent: string, targetUrl?: string): string {
   return `Stage: ${stageDef.name} (${stageDef.id})
@@ -129,6 +139,7 @@ router.get('/:id', async (req: Request, res: Response) => {
   try {
     const run = await getPipelineRun(pool, req.params.id as string);
     if (!run) { res.status(404).json({ error: 'Run not found' }); return; }
+    if (!ownsRun(req, run, res)) return;
     const [stages, artifacts] = await Promise.all([
       getStageResults(pool, run.id),
       getArtifacts(pool, run.id),
@@ -142,6 +153,9 @@ router.get('/:id', async (req: Request, res: Response) => {
 // POST /:id/cancel
 router.post('/:id/cancel', async (req: Request, res: Response) => {
   try {
+    const existing = await getPipelineRun(pool, req.params.id as string);
+    if (!existing) { res.status(404).json({ error: 'Run not found' }); return; }
+    if (!ownsRun(req, existing, res)) return;
     const run = await updatePipelineRun(pool, req.params.id as string, { status: 'cancelled' });
     if (!run) { res.status(404).json({ error: 'Run not found' }); return; }
     broadcastSSE(run.id, { type: 'pipeline_complete', runId: run.id, status: 'cancelled', totalCost: Number(run.cost), timestamp: new Date().toISOString() });
@@ -156,6 +170,7 @@ router.post('/:id/approve', async (req: Request, res: Response) => {
   try {
     const run = await getPipelineRun(pool, req.params.id as string);
     if (!run) { res.status(404).json({ error: 'Run not found' }); return; }
+    if (!ownsRun(req, run, res)) return;
     if (run.status !== 'awaiting_approval') { res.status(400).json({ error: 'Run is not awaiting approval' }); return; }
 
     const definition = await loadPipelineDefinitionForClient(pool, run.tenant_id);
@@ -181,6 +196,9 @@ router.post('/:id/approve', async (req: Request, res: Response) => {
 // POST /:id/reject
 router.post('/:id/reject', async (req: Request, res: Response) => {
   try {
+    const existing = await getPipelineRun(pool, req.params.id as string);
+    if (!existing) { res.status(404).json({ error: 'Run not found' }); return; }
+    if (!ownsRun(req, existing, res)) return;
     const run = await updatePipelineRun(pool, req.params.id as string, { status: 'cancelled' });
     if (!run) { res.status(404).json({ error: 'Run not found' }); return; }
     broadcastSSE(run.id, { type: 'pipeline_complete', runId: run.id, status: 'cancelled', totalCost: Number(run.cost), timestamp: new Date().toISOString() });
@@ -196,6 +214,7 @@ router.post('/:id/steer', async (req: Request, res: Response) => {
     const { message } = req.body;
     const run = await getPipelineRun(pool, req.params.id as string);
     if (!run) { res.status(404).json({ error: 'Run not found' }); return; }
+    if (!ownsRun(req, run, res)) return;
     broadcastSSE(run.id, { type: 'agent_progress', runId: run.id, stage: run.stage, message: `User guidance: ${message}`, timestamp: new Date().toISOString() });
     res.json({ steered: true });
   } catch (err: any) {
@@ -207,6 +226,9 @@ router.post('/:id/steer', async (req: Request, res: Response) => {
 router.patch('/:id/mode', async (req: Request, res: Response) => {
   try {
     const { mode } = req.body;
+    const existing = await getPipelineRun(pool, req.params.id as string);
+    if (!existing) { res.status(404).json({ error: 'Run not found' }); return; }
+    if (!ownsRun(req, existing, res)) return;
     const run = await updatePipelineRun(pool, req.params.id as string, { execution_mode_live: mode });
     if (!run) { res.status(404).json({ error: 'Run not found' }); return; }
     broadcastSSE(run.id, { type: 'mode_switched', runId: run.id, mode, timestamp: new Date().toISOString() });

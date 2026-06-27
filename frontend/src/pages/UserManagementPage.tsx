@@ -2,11 +2,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import {
-  Plus, X, Loader2, Eye, EyeOff, Trash2, UserCheck, UserX, Users, Shield, Search,
+  Plus, X, Loader2, Eye, EyeOff, Trash2, UserCheck, UserX, Search,
 } from 'lucide-react';
 import {
   listTenantUsers, listTenants, createTenantUser, updateTenantUser, deleteTenantUser, setTenantUserStatus,
 } from '@/services/api';
+import { normalizeError } from '@/utils/apiError';
 
 interface TenantUser {
   id: string;
@@ -112,13 +113,6 @@ function UserManagementContent() {
 
   useEffect(() => { setPage(1); }, [search, pageSize]);
 
-  // Stats
-  const totalUsers = users.length;
-  const activeUsers = users.filter(u => u.is_active).length;
-  const adminCount = users.filter(u => u.role === 'admin').length;
-  const qaCount = users.filter(u => u.role === 'qa_engineer').length;
-  const analystCount = users.filter(u => u.role === 'data_analyst').length;
-
   const handleCreate = async () => {
     setError('');
     if (!form.username || !form.password || !form.role) {
@@ -142,8 +136,8 @@ function UserManagementContent() {
       setShowCreateModal(false);
       setForm({ username: '', email: '', fullName: '', role: 'qa_engineer', password: '', confirmPassword: '', tenantId: '', isInactive: false });
       fetchUsers();
-    } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to create user.');
+    } catch (err) {
+      setError(normalizeError(err).message || 'Failed to create user.');
     } finally {
       setSaving(false);
     }
@@ -173,8 +167,8 @@ function UserManagementContent() {
       });
       setEditingUser(null);
       fetchUsers();
-    } catch (err: any) {
-      setError(err?.response?.data?.error || 'Failed to update user.');
+    } catch (err) {
+      setError(normalizeError(err).message || 'Failed to update user.');
     } finally {
       setSaving(false);
     }
@@ -184,8 +178,8 @@ function UserManagementContent() {
     try {
       await setTenantUserStatus(u.id, !u.is_active);
       fetchUsers();
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Failed to update status.');
+    } catch (err) {
+      alert(normalizeError(err).message || 'Failed to update status.');
     }
   };
 
@@ -195,8 +189,8 @@ function UserManagementContent() {
       await deleteTenantUser(confirmDelete.id);
       setConfirmDelete(null);
       fetchUsers();
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Failed to delete user.');
+    } catch (err) {
+      alert(normalizeError(err).message || 'Failed to delete user.');
     }
   };
 
@@ -536,16 +530,3 @@ function UserManagementContent() {
   );
 }
 
-function StatCard({ label, value, accent }: { label: string; value: number; accent?: string }) {
-  const colors: Record<string, string> = {
-    emerald: 'text-emerald-600',
-    red: 'text-red-600',
-    blue: 'text-blue-600',
-  };
-  return (
-    <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-      <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">{label}</p>
-      <p className={`text-2xl font-bold ${accent ? colors[accent] || 'text-gray-900' : 'text-gray-900'}`}>{value}</p>
-    </div>
-  );
-}

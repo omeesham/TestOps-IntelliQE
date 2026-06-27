@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import pool from '../db.js';
+import pool, { withTransaction } from '../db.js';
 
 const router = Router();
 
@@ -302,8 +302,12 @@ router.delete('/:testRunId', async (req: Request, res: Response) => {
     const runRes = await pool.query(`SELECT id FROM test_runs WHERE id = $1 AND tenant_id = $2`, [testRunId, user.tenantId]);
     if (runRes.rows.length === 0) { res.status(404).json({ error: 'Test run not found' }); return; }
 
-    await pool.query(`DELETE FROM test_cases WHERE test_run_id = $1`, [testRunId]);
-    await pool.query(`DELETE FROM test_runs WHERE id = $1`, [testRunId]);
+    // Delete children then parent in a single transaction so a partial failure
+    // can't orphan test_cases against a deleted run (or vice versa).
+    await withTransaction(async (tx) => {
+      await tx.query(`DELETE FROM test_cases WHERE test_run_id = $1`, [testRunId]);
+      await tx.query(`DELETE FROM test_runs WHERE id = $1`, [testRunId]);
+    });
 
     res.json({ ok: true });
   } catch (err: any) {
@@ -357,8 +361,16 @@ router.get('/:testRunId', async (req: Request, res: Response) => {
    ─────────────────────────────────────────── */
 router.get('/:testRunId/export', async (req: Request, res: Response) => {
   try {
+    const user = req.user!;
     const { testRunId } = req.params;
     const format = (req.query.format as string || 'csv').toLowerCase();
+
+    // Verify the test run belongs to this tenant before exporting (platform admin sees all).
+    const runFilter = user.isPlatform ? '' : ' AND tenant_id = $2';
+    const runParams: any[] = [testRunId];
+    if (!user.isPlatform) runParams.push(user.tenantId);
+    const runRes = await pool.query(`SELECT id FROM test_runs WHERE id = $1${runFilter}`, runParams);
+    if (runRes.rows.length === 0) { res.status(404).json({ error: 'Test run not found' }); return; }
 
     const casesRes = await pool.query(
       `SELECT * FROM test_cases WHERE test_run_id = $1 ORDER BY sort_order`,

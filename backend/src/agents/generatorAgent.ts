@@ -32,8 +32,14 @@ import type { TestOpsState, TestCase, TestStep } from './state.js';
 import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
 import type { ExtendedTestPlan } from './plannerAgent.js';
 
-let counter = 0;
-function nextId() { return `TC-${String(++counter).padStart(3, '0')}`; }
+/** A per-generation TC-### id allocator. Module-level state would be shared
+ *  across concurrent pipeline runs and corrupt ids when runs overlap, so each
+ *  generatorAgent invocation creates its own. */
+type IdAllocator = () => string;
+function createIdAllocator(): IdAllocator {
+  let counter = 0;
+  return () => `TC-${String(++counter).padStart(3, '0')}`;
+}
 
 /** Shape Claude is asked to return — kept loose so we can normalise later. */
 type RawTestCase = {
@@ -61,7 +67,7 @@ const VALID_TYPES: TestCase['type'][] = [
 const VALID_PRIORITIES: TestCase['priority'][] = ['P0', 'P1', 'P2', 'P3'];
 const VALID_SEVERITIES: NonNullable<TestCase['severity']>[] = ['Critical', 'Major', 'Moderate', 'Minor'];
 
-function coerceTestCase(raw: RawTestCase): TestCase {
+function coerceTestCase(raw: RawTestCase, nextId: IdAllocator): TestCase {
   const title = (raw.title || raw.scenario || 'Untitled test case').trim();
   const testSteps: TestStep[] = Array.isArray(raw.testSteps) && raw.testSteps.length > 0
     ? raw.testSteps.map((s, i) => ({
@@ -214,7 +220,9 @@ GENERATE NOW. Return the JSON array directly.`;
 
 export async function generatorAgent(state: TestOpsState): Promise<TestOpsState> {
   if (!state.parsedRequirements) return state;
-  counter = 0;
+
+  // Per-run id allocator — isolated from any other concurrent generation.
+  const nextId = createIdAllocator();
 
   const pr = state.parsedRequirements;
   const plan = state.extendedTestPlan as ExtendedTestPlan | undefined;
@@ -227,27 +235,31 @@ export async function generatorAgent(state: TestOpsState): Promise<TestOpsState>
     throw new Error('Claude returned no test cases in first pass');
   }
 
-  let testCases = firstParsed.map(coerceTestCase);
+  let testCases = firstParsed.map((raw) => coerceTestCase(raw, nextId));
 
   // Retry pass — sparse coverage. Drive the floor from the plan if we have one.
   const plannedTotal = plan
     ? plan.uiTests + plan.apiTests + plan.dataTests + plan.e2eTests + plan.securityTests + plan.accessibilityTests + plan.performanceTests
     : pr.features.length * Math.max(pr.flows.length, 3) + pr.edgeCases.length;
 
-  let minimumExpected = Math.max(
+  const minimumExpected = Math.max(
     pr.features.length * 3,            // never accept fewer than 3 per feature
     Math.round(plannedTotal * 0.7),    // 70 % of plan, to allow LLM rounding
   );
 
   // When the caller asked for a specific count (the chat wizard always does),
-  // treat it as the floor. Otherwise a small request like "3 cases" still drags
-  // in a second full 16k-token generation pass and blows the request timeout.
+  // it is a HARD CEILING on the OUTPUT — never a reduction of the coverage
+  // floor. We only skip the retry when we already hold enough cases to fill
+  // the ceiling (so a small "3 cases" request doesn't drag in a second full
+  // 16k-token pass and blow the request timeout), but we never lower the
+  // retry trigger below intended coverage when the request is large.
   const requestedMax = state.generationOptions?.maxTestCases;
-  if (requestedMax && requestedMax > 0) {
-    minimumExpected = Math.min(minimumExpected, requestedMax);
-  }
+  const hasCeiling = typeof requestedMax === 'number' && requestedMax > 0;
 
-  if (testCases.length < minimumExpected) {
+  const needsRetry = testCases.length < minimumExpected
+    && (!hasCeiling || testCases.length < requestedMax);
+
+  if (needsRetry) {
     const existingTitles = testCases.map((tc) => tc.title);
     const needed = minimumExpected - testCases.length;
 
@@ -261,13 +273,19 @@ You returned only ${testCases.length} test cases. With ${pr.features.length} fea
       if (Array.isArray(retryParsed) && retryParsed.length > 0) {
         const existingSet = new Set(existingTitles.map((s) => s.toLowerCase().trim()));
         const newCases = retryParsed
-          .map(coerceTestCase)
+          .map((raw) => coerceTestCase(raw, nextId))
           .filter((tc) => !existingSet.has(tc.title.toLowerCase().trim()));
         testCases = [...testCases, ...newCases];
       }
     } catch {
       // Retry failed — proceed with whatever we have rather than block the pipeline
     }
+  }
+
+  // Apply the requested ceiling to the OUTPUT only — coverage logic above was
+  // free to generate beyond it; here we keep the highest-value leading slice.
+  if (hasCeiling && testCases.length > requestedMax) {
+    testCases = testCases.slice(0, requestedMax);
   }
 
   return { ...state, testCases };

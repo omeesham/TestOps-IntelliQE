@@ -19,21 +19,24 @@ export default function TestDataTab({ runId }: TestDataTabProps) {
 
   useEffect(() => {
     let mounted = true;
-    setLoading(true);
-    getTestData(runId)
-      .then((data) => {
-        if (!mounted) return;
-        setDatasets(data.datasets || []);
-        setFieldData(data.fieldData || []);
-        setMappings(data.mappings || []);
-        setValidations(data.validations || []);
-        setError(null);
-      })
-      .catch((err) => {
-        if (!mounted) return;
-        setError(err?.response?.status === 404 ? 'No test data found for this run.' : 'Failed to load test data.');
-      })
-      .finally(() => { if (mounted) setLoading(false); });
+    const load = () => {
+      setLoading(true);
+      getTestData(runId)
+        .then((data) => {
+          if (!mounted) return;
+          setDatasets(data.datasets || []);
+          setFieldData(data.fieldData || []);
+          setMappings(data.mappings || []);
+          setValidations(data.validations || []);
+          setError(null);
+        })
+        .catch((err) => {
+          if (!mounted) return;
+          setError(err?.response?.status === 404 ? 'No test data found for this run.' : 'Failed to load test data.');
+        })
+        .finally(() => { if (mounted) setLoading(false); });
+    };
+    load();
     return () => { mounted = false; };
   }, [runId]);
 

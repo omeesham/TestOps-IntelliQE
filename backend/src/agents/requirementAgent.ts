@@ -88,7 +88,14 @@ EXTRACTION RULES (read carefully):
 10. NEVER return empty arrays for features / actors / flows — at minimum return one entry each based on what you can deduce.`;
 
   const response = await runClaudePrompt(prompt, { maxTokens: 8000 });
-  const parsed = parseJsonFromResponse<ParsedRequirements>(response);
+  // A malformed/unparseable response must not abort the whole pipeline — fall
+  // back to an empty object and let the normalisation below supply safe defaults.
+  let parsed: Partial<ParsedRequirements> = {};
+  try {
+    parsed = parseJsonFromResponse<ParsedRequirements>(response);
+  } catch (e) {
+    console.warn('[requirementAgent] Could not parse model response; using minimal defaults:', (e as Error).message);
+  }
 
   // Defensive normalisation — Claude may omit some optional sections.
   const parsedRequirements: ParsedRequirements = {

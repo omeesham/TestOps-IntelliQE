@@ -4,11 +4,12 @@ import type { CatalogItem } from './integrationCatalog';
 import IntegrationCard from './IntegrationCard';
 import ConnectModal from './ConnectModal';
 import { connectIntegration, disconnectIntegration } from '@/services/api';
+import { normalizeError } from '@/utils/apiError';
 
 interface DbConfig {
   integrationId: string;
   status: string;
-  configData: Record<string, any>;
+  configData: Record<string, unknown>;
   connectedBy: string | null;
   connectedAt: string | null;
   lastSyncAt: string | null;
@@ -52,7 +53,7 @@ export default function DataSourcesSection({ configs, onRefresh }: Props) {
     try {
       await disconnectIntegration(integrationId);
       onRefresh();
-    } catch (err: any) {
+    } catch (err) {
       console.error('Disconnect error:', err);
     }
   };
@@ -65,8 +66,8 @@ export default function DataSourcesSection({ configs, onRefresh }: Props) {
       await connectIntegration(connectModal.id, formData);
       setConnectModal(null);
       onRefresh();
-    } catch (err: any) {
-      setError(err?.response?.data?.error || err?.message || 'Failed to connect');
+    } catch (err) {
+      setError(normalizeError(err).message || 'Failed to connect');
     } finally {
       setSaving(false);
     }

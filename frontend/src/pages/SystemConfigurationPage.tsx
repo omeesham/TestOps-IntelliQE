@@ -15,7 +15,7 @@ import { normalizeError, type NormalizedError } from '@/utils/apiError';
 interface DbConfig {
   integrationId: string;
   status: string;
-  configData: Record<string, any>;
+  configData: Record<string, unknown>;
   connectedBy: string | null;
   connectedAt: string | null;
   lastSyncAt: string | null;

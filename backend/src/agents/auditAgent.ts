@@ -23,11 +23,19 @@ Return ONLY valid JSON (no markdown):
 Focus on: XSS, SQL injection, CSRF, session management, input validation, boundary values, concurrent access, error recovery, accessibility.`;
 
   const response = await runClaudePrompt(prompt, { maxTokens: 2048 });
-  const parsed = parseJsonFromResponse<{
+  // Audit is non-critical enrichment — if the response can't be parsed, skip it
+  // and return the state unchanged rather than failing the pipeline.
+  let parsed: Partial<{
     additionalEdgeCases: string[];
     securityConcerns: string[];
     additionalDataRules: string[];
-  }>(response);
+  }>;
+  try {
+    parsed = parseJsonFromResponse(response);
+  } catch (e) {
+    console.warn('[auditAgent] Could not parse model response; skipping audit enrichment:', (e as Error).message);
+    return state;
+  }
 
   const allEdgeCases = [
     ...edgeCases,

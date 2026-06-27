@@ -108,7 +108,6 @@ export default function DashboardPage() {
   }, []);
 
   const totalCases = summary?.totalTestCases ?? runs.reduce((s, r) => s + (Number(r.test_case_count) || 0), 0);
-  const totalRuns = summary?.totalTestRuns ?? runs.length;
   const totalScripted = useMemo(() => runs.reduce((s, r) => s + (Number(r.scripted_count) || 0), 0), [runs]);
   const automationCoverage = totalCases > 0 ? Math.round((totalScripted / totalCases) * 100) : 0;
   const executedCases = (summary?.statusDistribution || [])

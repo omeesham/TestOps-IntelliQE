@@ -5,10 +5,17 @@ import {
   createPage, getPage, listPages, getPageTree, updatePage, deletePage,
   getPageStageStatuses, upsertPageStageStatus, getArtifactsByPageId,
   updateArtifactVersioned, softDeleteArtifact, createArtifactDirect,
+  getPipelineRun, getArtifactTenant,
 } from '../services/pipeline-queries.js';
 import { broadcastSSE } from '../services/sse-manager.js';
 
 const router = Router();
+
+/** Allow access only when the resource's tenant matches the caller's (platform users bypass). */
+function tenantAllows(req: Request, tenantId: string | null | undefined): boolean {
+  const u = (req as any).user;
+  return !!(u?.isPlatform || (tenantId && tenantId === u?.tenantId));
+}
 
 // List pages
 router.get('/', async (req: Request, res: Response) => {
@@ -50,7 +57,7 @@ router.get('/tree', async (req: Request, res: Response) => {
 router.get('/:id', async (req: Request, res: Response) => {
   try {
     const page = await getPage(pool, req.params.id as string);
-    if (!page) { res.status(404).json({ error: 'Page not found' }); return; }
+    if (!page || !tenantAllows(req, (page as any).tenant_id)) { res.status(404).json({ error: 'Page not found' }); return; }
     const [stages, artifacts] = await Promise.all([
       getPageStageStatuses(pool, page.id),
       getArtifactsByPageId(pool, page.id),
@@ -62,6 +69,8 @@ router.get('/:id', async (req: Request, res: Response) => {
 // Update page
 router.put('/:id', async (req: Request, res: Response) => {
   try {
+    const existing = await getPage(pool, req.params.id as string);
+    if (!existing || !tenantAllows(req, (existing as any).tenant_id)) { res.status(404).json({ error: 'Page not found' }); return; }
     const updated = await updatePage(pool, req.params.id as string, req.body);
     if (!updated) { res.status(404).json({ error: 'Page not found' }); return; }
     res.json(updated);
@@ -71,6 +80,8 @@ router.put('/:id', async (req: Request, res: Response) => {
 // Delete page
 router.delete('/:id', async (req: Request, res: Response) => {
   try {
+    const existing = await getPage(pool, req.params.id as string);
+    if (!existing || !tenantAllows(req, (existing as any).tenant_id)) { res.status(404).json({ error: 'Page not found' }); return; }
     const deleted = await deletePage(pool, req.params.id as string);
     if (!deleted) { res.status(404).json({ error: 'Page not found' }); return; }
     res.json({ deleted: true });
@@ -80,6 +91,8 @@ router.delete('/:id', async (req: Request, res: Response) => {
 // Stage statuses
 router.get('/:id/stages', async (req: Request, res: Response) => {
   try {
+    const page = await getPage(pool, req.params.id as string);
+    if (!page || !tenantAllows(req, (page as any).tenant_id)) { res.status(404).json({ error: 'Page not found' }); return; }
     const stages = await getPageStageStatuses(pool, req.params.id as string);
     res.json(stages);
   } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -93,6 +106,8 @@ router.post('/artifacts', async (req: Request, res: Response) => {
       res.status(400).json({ error: 'runId, name, type, and content are required' });
       return;
     }
+    const run = await getPipelineRun(pool, runId);
+    if (!run || !tenantAllows(req, (run as any).tenant_id)) { res.status(404).json({ error: 'Run not found' }); return; }
     const artifact = await createArtifactDirect(pool, runId, name, type, content, pageId);
     res.status(201).json(artifact);
   } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -103,6 +118,8 @@ router.put('/artifacts/:id', async (req: Request, res: Response) => {
   try {
     const { content, editedBy } = req.body;
     if (!content || !editedBy) { res.status(400).json({ error: 'content and editedBy required' }); return; }
+    const artifactTenant = await getArtifactTenant(pool, req.params.id as string);
+    if (!tenantAllows(req, artifactTenant)) { res.status(404).json({ error: 'Artifact not found' }); return; }
     const newVersion = await updateArtifactVersioned(pool, req.params.id as string, content, editedBy);
     res.json(newVersion);
   } catch (err: any) { res.status(404).json({ error: err.message }); }
@@ -111,6 +128,8 @@ router.put('/artifacts/:id', async (req: Request, res: Response) => {
 // Delete artifact
 router.delete('/artifacts/:id', async (req: Request, res: Response) => {
   try {
+    const artifactTenant = await getArtifactTenant(pool, req.params.id as string);
+    if (!tenantAllows(req, artifactTenant)) { res.status(404).json({ error: 'Artifact not found' }); return; }
     const deleted = await softDeleteArtifact(pool, req.params.id as string, req.body.deletedBy || 'unknown');
     if (!deleted) { res.status(404).json({ error: 'Artifact not found' }); return; }
     res.json({ deleted: true });

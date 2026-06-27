@@ -9,9 +9,10 @@
  *   toast.success('Saved');
  *   toast.fromError(err);   // accepts NormalizedError or anything normalize() handles
  */
-import { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
 import { normalizeError, type NormalizedError } from '@/utils/apiError';
+import { ToastContext, type ToastApi } from './useToast';
 
 type ToastKind = 'success' | 'error' | 'warning' | 'info';
 
@@ -22,16 +23,6 @@ interface ToastEntry {
   message?: string;
   code?: string;
 }
-
-interface ToastApi {
-  success: (title: string, message?: string) => void;
-  error:   (title: string, message?: string) => void;
-  warning: (title: string, message?: string) => void;
-  info:    (title: string, message?: string) => void;
-  fromError: (err: unknown) => void;
-}
-
-const ToastContext = createContext<ToastApi | null>(null);
 
 const TONE: Record<ToastKind, { bg: string; border: string; text: string; iconColor: string; Icon: React.ElementType }> = {
   success: { bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-800', iconColor: 'text-emerald-500', Icon: CheckCircle2 },
@@ -44,15 +35,14 @@ const TTL_MS: Record<ToastKind, number> = { success: 4_000, info: 5_000, warning
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
-  let nextId = 1;
+  const nextId = useRef(0);
 
   const push = useCallback((kind: ToastKind, title: string, message?: string, code?: string) => {
-    const id = ++nextId + Date.now();
+    const id = (nextId.current += 1);
     setToasts((prev) => [...prev.slice(-4), { id, kind, title, message, code }]);
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, TTL_MS[kind]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const dismiss = useCallback((id: number) => {
@@ -112,10 +102,4 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       </div>
     </ToastContext.Provider>
   );
-}
-
-export function useToast(): ToastApi {
-  const ctx = useContext(ToastContext);
-  if (!ctx) throw new Error('useToast must be used inside ToastProvider');
-  return ctx;
 }

@@ -23,7 +23,7 @@ let _voiceLocked = false;   // once Zira is found, don't re-select on voiceschan
 let _enabled = true;        // ON by default
 let _rate = 0.95;
 let _pitch = 1.0;
-let _volume = 1.0;
+const _volume = 1.0;
 let _initialized = false;
 
 /** Load voices and pick the best match — Zira is locked once selected */

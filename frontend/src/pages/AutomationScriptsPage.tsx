@@ -3,11 +3,10 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
   Trash2, Edit3, Eye, Download, FileText, X, Check, Code2, Copy,
-  AlertTriangle, Play, Save, ChevronDown, ChevronUp, Clock, Tag,
-  ExternalLink, Maximize2, Minimize2,
+  AlertTriangle, Save, Tag, Maximize2, Minimize2,
 } from 'lucide-react';
 import {
-  listAutomationScripts, getAutomationScript, updateAutomationScript,
+  listAutomationScripts, updateAutomationScript,
   deleteAutomationScript, getScriptsByRun,
 } from '@/services/api';
 
@@ -84,8 +83,10 @@ export default function AutomationScriptsPage() {
     }
   }, [search, runIdFilter]);
 
+  // Runs on mount and whenever the search/run filter changes (no separate
+  // mount-only effect — that caused a duplicate initial fetch).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchScripts(1, pagination.limit); }, [search, runIdFilter]);
-  useEffect(() => { fetchScripts(1, 10); }, []);
 
   /* ── Handlers ── */
   const openScript = (script: Script) => {
@@ -104,7 +105,7 @@ export default function AutomationScriptsPage() {
     if (!selectedScript) return;
     setSaving(true);
     try {
-      const res = await updateAutomationScript(selectedScript.id, { code: editCode, status: 'modified' });
+      await updateAutomationScript(selectedScript.id, { code: editCode, status: 'modified' });
       setSelectedScript({ ...selectedScript, code: editCode, version: (selectedScript.version || 1) + 1, status: 'modified' });
       setScripts(prev => prev.map(s => s.id === selectedScript.id ? { ...s, code: editCode, status: 'modified', version: (s.version || 1) + 1 } : s));
       setIsEditing(false);
