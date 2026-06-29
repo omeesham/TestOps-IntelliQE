@@ -11,6 +11,6 @@
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["tests", "config", "utils"],
+  "include": ["tests", "pages", "components", "flows", "api", "selectors", "fixtures", "data", "config", "utils", "types.ts"],
   "exclude": ["node_modules", "reports", "test-results", "playwright-report"]
 }

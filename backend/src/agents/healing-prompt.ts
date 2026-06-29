@@ -133,7 +133,8 @@ HARD RULES (a "fix" that violates any of these is REJECTED)
 ═══════════════════════════════════════════════════════════
 - PRESERVE INTENT: the healed test must still genuinely verify the Expected result. Never replace a real assertion with a trivially-true one (no expect(true).toBeTruthy(), no expect(1).toBe(1)), never delete the verification, never use test.skip()/test.fixme(), never comment out the assertion to make it "pass".
 - SELF-CONTAINED: the spec must run in isolation. Import only from '@playwright/test'. Do NOT import from sibling generated files.
-- MINIMAL CHANGE: fix the real root cause and keep the same overall scenario and structure (keep the Page Object Model if the original used one).
+- PRESERVE THE PAGE OBJECT MODEL: the healed spec MUST keep its Page Object class(es) — locators stay declared as 'readonly' Locator fields, interactions stay in intent-named methods, and the test body must NOT introduce raw page.* calls or inline selectors. If the failing spec was not already POM-structured, refactor it INTO a self-contained Page Object class as part of the fix.
+- MINIMAL CHANGE: fix the real root cause and keep the same overall scenario and structure.
 - COMPLETE OUTPUT: return the ENTIRE corrected file, not a diff or a snippet.
 
 Return ONLY this JSON object (no markdown fence, no commentary before or after):

@@ -1,0 +1,18 @@
+# Code owners — reviewers are auto-requested when matching files change.
+# Replace the @your-org/* handles with your real teams/users.
+
+# Default owner for everything in the repo.
+*                   @your-org/qa-automation
+
+# Framework internals warrant a focused review.
+/pages/             @your-org/qa-automation
+/components/        @your-org/qa-automation
+/selectors/         @your-org/qa-automation
+/fixtures/          @your-org/qa-automation
+/flows/             @your-org/qa-automation
+/api/               @your-org/qa-automation
+/config/            @your-org/qa-automation
+
+# CI/CD changes need a maintainer.
+/.github/           @your-org/qa-platform
+/ci/                @your-org/qa-platform

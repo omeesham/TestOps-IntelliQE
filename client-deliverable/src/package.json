@@ -2,18 +2,33 @@
   "name": "qe-playwright-tests",
   "version": "1.0.0",
   "private": true,
-  "description": "Playwright end-to-end test package (source build).",
+  "description": "Playwright end-to-end test framework (source build) — layered Page Object Model.",
   "scripts": {
     "test": "playwright test -c config/playwright.config.ts",
     "test:headed": "playwright test -c config/playwright.config.ts --headed",
     "test:ui": "playwright test -c config/playwright.config.ts --ui",
     "test:chromium": "playwright test -c config/playwright.config.ts --project=chromium",
+    "test:firefox": "playwright test -c config/playwright.config.ts --project=firefox",
+    "test:webkit": "playwright test -c config/playwright.config.ts --project=webkit",
+    "test:smoke": "playwright test -c config/playwright.config.ts --grep @smoke",
+    "test:regression": "playwright test -c config/playwright.config.ts --grep @regression",
+    "test:api": "playwright test -c config/playwright.config.ts --grep @api",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
     "report": "playwright show-report ./reports/html",
+    "allure:generate": "allure generate ./reports/allure-results -o ./reports/allure --clean",
+    "allure:open": "allure open ./reports/allure",
     "install:browsers": "playwright install"
   },
   "devDependencies": {
+    "@eslint/js": "^9.9.0",
     "@playwright/test": "^1.58.2",
     "@types/node": "^20.11.0",
-    "typescript": "^5.4.0"
+    "allure-commandline": "^2.30.0",
+    "allure-playwright": "^3.0.0",
+    "eslint": "^9.9.0",
+    "eslint-plugin-playwright": "^2.0.0",
+    "typescript": "^5.4.0",
+    "typescript-eslint": "^8.0.0"
   }
 }

@@ -1,0 +1,7 @@
+{
+  "standardUser": {
+    "username": "standard_user",
+    "displayName": "Standard User"
+  },
+  "note": "Non-sensitive sample data only. Real credentials come from environment variables, never this file."
+}

@@ -4,6 +4,7 @@ import { runClaudePrompt, isClaudeCliAuthenticated, parseJsonFromResponse } from
 import { executeRunScripts, PlaywrightRunError } from '../services/playwright-runner.service.js';
 import { healRunScripts } from '../services/healing.service.js';
 import { hydrateAnthropicEnv } from '../services/llm-config.service.js';
+import { buildPomSpecPrompt, pomFallbackSpec, type PomCasePayload } from '../agents/pom-spec-prompt.js';
 
 const router = Router();
 const SCHEMA = process.env.DB_SCHEMA || 'JBSTestOpsAI';
@@ -210,55 +211,26 @@ router.post('/generate/:testRunId', async (req: Request, res: Response) => {
       // async runner no longer blocks) so a 15-case run takes ~one call's
       // wall-time instead of 4 serial calls. Concurrency is capped below.
       const runBatch = async (batch: any[]) => {
-        const tcSummary = batch.map((tc: any) => ({
-          id: tc.id,
+        const cases: PomCasePayload[] = batch.map((tc: any) => ({
+          testCaseId: tc.id,
           tcNumber: tc.tc_number,
           title: tc.title,
           feature: tc.feature || '',
+          precondition: tc.precondition || '',
           steps: tc.steps || [],
           testSteps: tc.test_steps || [],
           testData: tc.test_data || {},
-          expected: tc.expected_result || tc.expected || '',
-          precondition: tc.precondition || '',
+          expectedResult: tc.expected_result || tc.expected || '',
           type: tc.type,
           priority: tc.priority,
         }));
 
-        const prompt = `You are a Principal SDET who builds resilient Playwright automation using the Page Object Model (POM). Generate a complete, robust, runnable Playwright + TypeScript spec for EACH test case below.
-
-Target Application: ${appName}
-Target URL: ${targetUrl}
-Story: ${run.story_key || ''} - ${run.story_title || ''}
-
-Test Cases (JSON):
-${JSON.stringify(tcSummary, null, 2)}
-
-═══════════════════════════════════════════════════════════
-PAGE OBJECT MODEL — MANDATORY STRUCTURE FOR EVERY SPEC
-═══════════════════════════════════════════════════════════
-Each spec file MUST be self-contained (independently runnable — it will be executed in isolation, so do NOT import from other generated files) and follow this exact layout:
-1. import { test, expect, type Page, type Locator } from '@playwright/test';
-2. One or more Page Object CLASSES for the screen(s) under test:
-   - All locators declared ONCE as 'readonly' Locator fields, initialised in the constructor. NO raw selectors anywhere in the test body.
-   - Action methods that express user intent (e.g. async login(user, pass), async submit(), async expectDashboard()).
-   - Navigation method (e.g. async goto()) using page.goto('${targetUrl}') or the relevant path.
-3. A test.describe() block whose test(s) instantiate the page object(s) and call ONLY their methods — the test body reads like a scenario, never touches a locator directly.
-
-═══════════════════════════════════════════════════════════
-LOCATOR RULES (this is what makes the tests foolproof)
-═══════════════════════════════════════════════════════════
-- Prefer accessibility-first locators IN THIS ORDER: getByRole(role, { name }) → getByLabel → getByPlaceholder → getByText. Use exact, realistic accessible names.
-- NEVER use CSS selectors, XPath, data-testid, or positional .nth()/.first() unless there is genuinely no accessible alternative (then add a // comment explaining why).
-- Use Playwright's WEB-FIRST assertions that auto-wait and auto-retry: await expect(locator).toBeVisible(), toHaveText(), toHaveURL(), toBeEnabled().
-- NEVER use page.waitForTimeout() or fixed sleeps. Rely on auto-waiting and expect() polling.
-- Assert every step's expected outcome from the test case. Each test maps to ONE test case and verifies its expectedResult.
-- Use realistic test data from the test case's testData when present.
-- Add test.describe.configure or beforeEach for shared navigation/setup.
-
-Return ONLY a JSON array (no markdown fence, no commentary), one object per input test case, testCaseId MUST match:
-[
-  { "testCaseId": "<id from above>", "fileName": "<kebab-case-name>.spec.ts", "code": "<full self-contained TypeScript POM spec>" }
-]`;
+        // Single shared POM convention — identical to the pipeline's scriptAgent.
+        const prompt = buildPomSpecPrompt(cases, {
+          appName,
+          targetUrl,
+          story: `${run.story_key || ''} - ${run.story_title || ''}`.trim(),
+        });
 
         try {
           const raw = await runClaudePrompt(prompt, { maxTokens: 16000 });
@@ -289,43 +261,31 @@ Return ONLY a JSON array (no markdown fence, no commentary), one object per inpu
       }
     }
 
-    // Fallback: generate template-based scripts if Claude didn't produce results
+    // Fallback: generate self-contained POM template specs if Claude didn't
+    // produce results. Uses the SAME pomFallbackSpec as the pipeline so the
+    // template output is identical and still POM-compliant (a Page Object class
+    // + a runnable test), never flat raw-page.* code.
     if (scripts.length === 0) {
       for (const tc of testCases) {
-        const steps = (tc.steps || []).map((step: string, i: number) => {
-          const s = step.toLowerCase();
-          if (s.includes('navigate') || s.includes('go to') || s.includes('open'))
-            return `  await page.goto('${targetUrl}');`;
-          if (s.includes('click'))
-            return `  await page.getByRole('button', { name: '${step.replace(/click\s*/i, '').replace(/['"]/g, '')}' }).click();`;
-          if (s.includes('enter') || s.includes('type') || s.includes('fill'))
-            return `  await page.getByLabel('${step.replace(/enter|type|fill|input/gi, '').trim().split(' ')[0]}').fill('test-value');`;
-          if (s.includes('verify') || s.includes('assert') || s.includes('check') || s.includes('should'))
-            return `  await expect(page.getByText('${step.replace(/verify|assert|check|should|see|that/gi, '').trim().split(' ').slice(0, 3).join(' ')}')).toBeVisible();`;
-          return `  // Step ${i + 1}: ${step}`;
-        }).join('\n');
-
-        const fileName = `${(tc.tc_number || 'tc').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${tc.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}.spec.ts`;
-        const code = `import { test, expect } from '@playwright/test';
-
-test.describe('${tc.title}', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto('${targetUrl}');
-  });
-
-  test('${tc.tc_number} - ${tc.title}', async ({ page }) => {
-${tc.precondition ? `    // Precondition: ${tc.precondition}\n` : ''}${steps}
-
-    // Expected: ${(tc.expected_result || tc.expected || 'Verify expected behavior').replace(/'/g, "\\'")}
-  });
-});
-`;
+        const fb = pomFallbackSpec(
+          {
+            testCaseId: tc.id,
+            tcNumber: tc.tc_number,
+            title: tc.title,
+            feature: tc.feature || '',
+            precondition: tc.precondition || '',
+            steps: tc.steps || [],
+            testSteps: tc.test_steps || [],
+            expectedResult: tc.expected_result || tc.expected || '',
+          },
+          targetUrl,
+        );
         scripts.push({
           testCaseId: tc.id,
           tcNumber: tc.tc_number,
           title: tc.title,
-          fileName,
-          code,
+          fileName: fb.fileName,
+          code: fb.code,
         });
       }
     }

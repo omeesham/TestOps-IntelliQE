@@ -91,6 +91,31 @@ Every DB query filters by `tenant_id`. Auth middleware attaches tenant context f
 
 `.github/agents/` contains 6 agent markdown files (playwright-requirements, playwright-test-planner, playwright-test-generator, playwright-test-healer, playwright-pipeline-audit, playwright-framework-maintainer) loaded by the orchestrator at runtime.
 
+### Test Automation — Page Object Model (POM) convention
+
+Every Playwright spec the platform produces, and the framework shipped to clients,
+follow one POM convention. There are two physical forms of the **same** rules
+(specs are scenarios; Page Objects own the UI with `readonly` locators + intent
+methods; accessibility-first locators; web-first assertions; no `page.waitForTimeout`):
+
+- **Generated specs (platform output)** are **self-contained single-file POM** —
+  each `.spec.ts` declares its Page Object class(es) inline and imports only
+  `@playwright/test`. This is mandatory because `services/playwright-runner.service.ts`
+  executes each spec in isolation (no sibling framework files are written), so a
+  spec importing `../pages/...` would fail to load.
+  - Single source of truth: **`backend/src/agents/pom-spec-prompt.ts`**
+    (`buildPomSpecPrompt` + `pomFallbackSpec`). Both generators import it:
+    `agents/scriptAgent.ts` (pipeline "scripting" stage) and
+    `routes/automation-scripts.routes.ts` (wizard "Generate Scripts"). The healer
+    (`agents/healing-prompt.ts`) preserves the POM structure on fix.
+- **Client-deliverable framework** (`client-deliverable/src/`) is the **shared**
+  form of the same convention: `pages/` (extend `BasePage`), central `selectors/`
+  registry, `fixtures/` injecting page objects, `tests/` specs with zero raw
+  `page.*`. Documented in `client-deliverable/src/README.md`.
+
+When changing how specs are generated, edit `pom-spec-prompt.ts` (not the two
+call sites) so the generators cannot drift.
+
 ### Key Patterns
 
 - **Token format**: `intelliqe-demo-token-{timestamp}:{username}` (not JWT)
