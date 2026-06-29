@@ -284,12 +284,12 @@ function renderHtml(run: RunRow, cases: CaseRow[], generatedAt: string): string 
       ${sub ? `<div class="sub">${sub}</div>` : ''}
       <div class="gen">Generated ${esc(genStr)}</div>
       <div class="grid-kpi">
-        ${kpi('Total', total, '#fff')}
-        ${kpi('Passed', passed, '#D1FAE5')}
-        ${kpi('Failed', failed, '#FECACA')}
-        ${kpi('Not run', notRun, '#E5E7EB')}
-        ${kpi('Pass rate', `${passRate}%`, '#fff', `${executed} executed`)}
-        ${kpi('Automation', `${autoCov}%`, '#fff', `${scripted}/${total} scripted`)}
+        ${kpi('Total', total, C.ink)}
+        ${kpi('Passed', passed, C.passed)}
+        ${kpi('Failed', failed, C.failed)}
+        ${kpi('Not run', notRun, C.muted)}
+        ${kpi('Pass rate', `${passRate}%`, C.brand, `${executed} executed`)}
+        ${kpi('Automation', `${autoCov}%`, C.indigo, `${scripted}/${total} scripted`)}
       </div>
     </div>
 
