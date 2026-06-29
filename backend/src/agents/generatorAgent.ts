@@ -224,7 +224,9 @@ export async function generatorAgent(state: TestOpsState): Promise<TestOpsState>
   const firstParsed = await runClaudeJson<RawTestCase[]>(buildPrompt(state), {
     maxTokens: 16384,
     model: 'claude-sonnet-4-6',
-    attempts: 2,
+    // Critical path (produces the test cases): 3 fresh samples so one flaky/
+    // truncated reply doesn't sink the run.
+    attempts: 3,
   });
 
   if (!Array.isArray(firstParsed) || firstParsed.length === 0) {

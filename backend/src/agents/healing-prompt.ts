@@ -15,6 +15,21 @@
  *      refusals).
  */
 
+/**
+ * One prior heal attempt, fed back into the next attempt so the model learns
+ * from its own failed fixes instead of repeating them.
+ */
+export interface HealAttemptRecord {
+  attempt: number;
+  diagnosis: string;
+  fix: string;
+  outcome: 'passed' | 'still-failing' | 'rejected-weakening' | 'stuck' | 'no-change' | 'ai-error';
+  /** Re-run error for a still-failing attempt. */
+  error?: string;
+  /** Why an attempt was rejected by the anti-cheat guard. */
+  weakeningReasons?: string[];
+}
+
 export interface HealingPromptInput {
   /** Crisp title / scenario of the test (what it must prove). */
   title: string;
@@ -33,6 +48,8 @@ export interface HealingPromptInput {
   error: string;
   /** Target application URL, used to correct wrong paths / http→https. */
   targetUrl?: string;
+  /** Prior failed attempts in this heal cycle — so the model does not repeat them. */
+  attemptHistory?: HealAttemptRecord[];
 }
 
 /** Shape Claude is required to return. */
@@ -46,6 +63,34 @@ export interface HealingFix {
 function formatSteps(steps?: string[]): string {
   if (!steps || steps.length === 0) return '(no explicit steps recorded)';
   return steps.map((s, i) => `  ${i + 1}. ${s}`).join('\n');
+}
+
+/**
+ * Render prior failed attempts so the next attempt does not repeat a fix that
+ * already failed or was rejected for weakening the test.
+ */
+function formatAttemptHistory(history?: HealAttemptRecord[]): string {
+  // Only failed attempts are worth feeding back; a 'passed' record means the
+  // cycle already succeeded and this prompt would not be built.
+  const failures = (history || []).filter((h) => h.outcome !== 'passed');
+  if (failures.length === 0) return '';
+  const lines = failures.map((h) => {
+    if (h.outcome === 'rejected-weakening') {
+      return `  Attempt ${h.attempt}: diagnosed "${h.diagnosis}" → REJECTED — it weakened the test (${(h.weakeningReasons || []).join('; ')}). Never do this.`;
+    }
+    if (h.outcome === 'no-change') {
+      return `  Attempt ${h.attempt}: returned the same code unchanged — that does not fix anything.`;
+    }
+    return `  Attempt ${h.attempt}: diagnosed "${h.diagnosis}", changed "${h.fix}" → STILL FAILED with: ${(h.error || 'unknown error').slice(0, 300)}`;
+  });
+  return `
+
+═══════════════════════════════════════════════════════════
+PREVIOUS HEAL ATTEMPTS THAT DID NOT WORK — do NOT repeat them
+═══════════════════════════════════════════════════════════
+${lines.join('\n')}
+
+Produce a DIFFERENT fix that addresses the ROOT CAUSE the prior attempts missed. Do not resubmit a prior attempt's code.`;
 }
 
 /**
@@ -73,9 +118,11 @@ export function buildHealingPrompt(input: HealingPromptInput): string {
     code,
     error,
     targetUrl,
+    attemptHistory,
   } = input;
 
   const cleanError = stripAnsi(error || 'No error message was captured.').slice(0, 4000);
+  const historyBlock = formatAttemptHistory(attemptHistory);
 
   return `You are a Principal SDET and Playwright auto-healing specialist. A generated Playwright test has FAILED during a real execution. Diagnose the true cause from the actual error output, then return a corrected, fully-runnable spec that makes the test pass FOR THE RIGHT REASON — by faithfully verifying the test's original intent, never by weakening, faking, skipping, or deleting the verification.
 
@@ -104,6 +151,7 @@ ACTUAL FAILURE OUTPUT (from the Playwright run — this is ground truth)
 \`\`\`
 ${cleanError}
 \`\`\`
+${historyBlock}
 
 ═══════════════════════════════════════════════════════════
 DIAGNOSE, THEN FIX — match the error to ONE primary cause:

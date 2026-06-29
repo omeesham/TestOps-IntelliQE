@@ -1,4 +1,4 @@
-import type { TestOpsState, AutomationScript, TestCase } from './state.js';
+import type { TestOpsState, AutomationScript, TestCase, ExploredApp } from './state.js';
 import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
 import {
   buildPomSpecPrompt,
@@ -30,6 +30,30 @@ import {
 
 const BATCH_SIZE = 5;
 
+/**
+ * Condense the live-crawl UI map (exploreAgent output) into a compact, token-
+ * bounded description the POM prompt can use to build locators from real,
+ * observed elements rather than guesses. Returns undefined when no crawl ran.
+ */
+function renderUiMap(explored: ExploredApp | null | undefined): string | undefined {
+  if (!explored || !explored.pages?.length) return undefined;
+  const lines: string[] = [];
+  for (const page of explored.pages.slice(0, 6)) {
+    lines.push(`# ${page.title || page.url} (${page.url})`);
+    if (page.headings?.length) lines.push(`  headings: ${page.headings.slice(0, 6).join(' | ')}`);
+    for (const form of (page.forms || []).slice(0, 4)) {
+      const fields = form.fields
+        .slice(0, 12)
+        .map((f) => `${f.label || f.name || '?'}${f.required ? '*' : ''} [${f.type}]`)
+        .join(', ');
+      if (fields) lines.push(`  form${form.name ? ` "${form.name}"` : ''}: ${fields}`);
+    }
+    if (page.buttons?.length) lines.push(`  buttons: ${page.buttons.slice(0, 10).join(' | ')}`);
+  }
+  const out = lines.join('\n');
+  return out.length > 3000 ? `${out.slice(0, 3000)}\n…(truncated)` : out;
+}
+
 function toPayload(tc: TestCase): PomCasePayload {
   return {
     testCaseId: tc.id,
@@ -49,6 +73,9 @@ async function aiBatch(state: TestOpsState, batch: TestCase[]): Promise<Automati
   const ctx = {
     appName: state.appContext?.appName || 'Web Application',
     targetUrl: state.appContext?.targetUrl || '',
+    // Feed the live-crawl UI map (when a crawl ran) into POM generation so page
+    // objects use real, observed locators — POM + live-crawl reinforcing each other.
+    uiMap: renderUiMap(state.exploredApp),
   };
 
   const prompt = buildPomSpecPrompt(batch.map(toPayload), ctx);

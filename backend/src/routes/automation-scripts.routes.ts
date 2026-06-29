@@ -400,12 +400,12 @@ router.post('/heal/:testRunId', async (req: Request, res: Response) => {
   const testRunId = String(req.params.testRunId);
   const failures = Array.isArray(req.body?.failures) ? req.body.failures : [];
   try {
-    const { details, healedCount, stillFailing } = await healRunScripts(tenantId, isPlatform, testRunId, failures);
+    const { details, healedCount, stillFailing, quarantined } = await healRunScripts(tenantId, isPlatform, testRunId, failures);
     res.json({
       runId: testRunId,
       // Same shape as /execute so the frontend maps results by testCaseId the same way.
       executionDetails: details,
-      summary: { totalTests: details.length, healed: healedCount, stillFailing, executed: true },
+      summary: { totalTests: details.length, healed: healedCount, stillFailing, quarantined, executed: true },
     });
   } catch (err: any) {
     if (err instanceof PlaywrightRunError) {

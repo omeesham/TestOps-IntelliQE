@@ -40,6 +40,14 @@ export interface PomPromptContext {
   appName: string;
   targetUrl?: string;
   story?: string;
+  /**
+   * Optional compact UI map harvested by the live-crawl agent (exploreAgent):
+   * real pages, forms, fields, and buttons observed on the running app. When
+   * present it is injected into the prompt so generated Page Objects build
+   * locators from ACTUALLY-OBSERVED accessible names instead of guessing —
+   * this is what makes POM + live-crawl reinforce each other.
+   */
+  uiMap?: string;
 }
 
 /** Shape Claude must return — one object per input case (fileName optional;
@@ -129,10 +137,22 @@ export function buildPomSpecPrompt(cases: PomCasePayload[], ctx: PomPromptContex
     ? `Target URL is "${ctx.targetUrl}". Use it in goto() (relative paths are fine when the test references a path on that origin).`
     : `No Target URL was provided — use relative paths like '/login' and let the Playwright config's baseURL resolve them.`;
 
+  const observedUi = ctx.uiMap
+    ? `
+
+═══════════════════════════════════════════════════════════
+OBSERVED UI — captured from a LIVE CRAWL of the target application
+═══════════════════════════════════════════════════════════
+These elements were actually seen on the running app. PREFER these real,
+observed accessible names / labels / field names when building Page Object
+locators — do NOT invent a selector when a matching element appears below.
+${ctx.uiMap}`
+    : '';
+
   return `You are a Principal SDET who builds resilient Playwright automation using the Page Object Model (POM). Generate a complete, robust, runnable Playwright + TypeScript spec for EACH test case below.
 
 Target Application: ${ctx.appName}
-${ctx.story ? `Story: ${ctx.story}\n` : ''}${baseUrlNote}
+${ctx.story ? `Story: ${ctx.story}\n` : ''}${baseUrlNote}${observedUi}
 
 Test cases (JSON):
 ${JSON.stringify(cases, null, 2)}

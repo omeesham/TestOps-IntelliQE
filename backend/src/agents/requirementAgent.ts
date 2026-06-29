@@ -92,7 +92,10 @@ EXTRACTION RULES (read carefully):
   const parsed = await runClaudeJson<ParsedRequirements>(prompt, {
     maxTokens: 8000,
     model: 'claude-sonnet-4-6',
-    attempts: 2,
+    // Critical path: a non-JSON/truncated reply here fails the whole run. 3 fresh
+    // samples make that vanishingly rare (this was the intermittent "No JSON
+    // object or array found" failure seen in the headless loop).
+    attempts: 3,
   });
 
   // Defensive normalisation — Claude may omit some optional sections.

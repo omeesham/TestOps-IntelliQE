@@ -108,6 +108,14 @@ methods; accessibility-first locators; web-first assertions; no `page.waitForTim
     `agents/scriptAgent.ts` (pipeline "scripting" stage) and
     `routes/automation-scripts.routes.ts` (wizard "Generate Scripts"). The healer
     (`agents/healing-prompt.ts`) preserves the POM structure on fix.
+  - **POM + live-crawl integration:** when only a URL is supplied, `exploreAgent.ts`
+    crawls the live app (headless Chromium) and produces a UI map (`state.exploredApp`).
+    `scriptAgent.ts` condenses that map (`renderUiMap`) into `PomPromptContext.uiMap`,
+    so generated Page Objects build locators from REAL observed elements instead of
+    guessing — the two features reinforce each other rather than conflict. Both run
+    in `runPipeline` (`execute.routes.ts`); the wizard path (`generate.routes.ts` →
+    `runGenerationOnly`) crawls into test cases, which the Generate-Scripts route then
+    turns into POM specs.
 - **Client-deliverable framework** (`client-deliverable/src/`) is the **shared**
   form of the same convention: `pages/` (extend `BasePage`), central `selectors/`
   registry, `fixtures/` injecting page objects, `tests/` specs with zero raw
@@ -115,6 +123,30 @@ methods; accessibility-first locators; web-first assertions; no `page.waitForTim
 
 When changing how specs are generated, edit `pom-spec-prompt.ts` (not the two
 call sites) so the generators cannot drift.
+
+### Auto-healer (heal engine)
+
+Both heal paths — `services/healing.service.ts` (wizard "Auto-Heal", DB-backed)
+and `agents/healingAgent.ts` (in-pipeline) — run ONE shared engine,
+**`agents/heal-engine.ts`** (`healSpecs`). Edit the engine, not the call sites.
+
+Guarantees (the reason a healed test can be trusted):
+- **Iterative + feedback** — up to `HEAL_MAX_ATTEMPTS` rounds (clamped 1–5); each
+  failed attempt's real re-run error + the attempt history is fed back so the
+  model fixes the root cause, not the same wrong guess. Re-runs are batched per
+  round (one Playwright run for all still-failing specs).
+- **Anti-cheat guard** (`agents/heal-guard.ts`, pure/testable) — statically rejects
+  any fix that passes by WEAKENING the test (dropped/loosened assertions,
+  `expect.soft` replacing hard, `test.skip`/`only`, trivially-true or match-all
+  assertions, removed `.not.*` guards, `if(false)` dead branches, empty
+  swallowing `catch`). Compared against the ORIGINAL spec.
+- **Verify-before-persist** — a candidate is "healed" only after `verifySpecsByKey`
+  (`services/playwright-runner.service.ts`) re-runs it in a throwaway workspace
+  and it cleanly passes (a `flaky` pass is NOT trusted). Only verified, non-weakening
+  fixes are written back; nothing else is ever persisted.
+- **Convergence + quarantine** — repeated/exhausted fixes are quarantined for human
+  review, never blanket-retried or silently passed. Bounded AI concurrency
+  (`HEAL_CONCURRENCY`, default 4). Per-attempt telemetry for heal-rate/flake metrics.
 
 ### Key Patterns
 
