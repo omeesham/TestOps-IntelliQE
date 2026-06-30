@@ -6,11 +6,21 @@ import { fileURLToPath } from 'url';
 import os from 'os';
 import crypto from 'crypto';
 import pool from '../db.js';
-import { executeRunScripts, storedAllureResultsDir } from './playwright-runner.service.js';
+import { runPlaywrightForRun } from './playwright-runner.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
+
+/**
+ * Root directory for built test reports (Playwright HTML + Allure). On Azure
+ * Container Apps the container filesystem is EPHEMERAL and per-replica — reports
+ * written there vanish on redeploy and aren't visible to other replicas. Set
+ * REPORTS_DIR to a mounted Azure Files volume (e.g. /data/reports) so reports
+ * persist across deploys and are shared across replicas. Falls back to the
+ * in-image path for local dev. Every reader AND writer must use this.
+ */
+export const REPORTS_ROOT = process.env.REPORTS_DIR || path.join(BACKEND_ROOT, 'allure-reports');
 
 const execFileAsync = promisify(execFile);
 
@@ -163,58 +173,39 @@ export async function generateAllureResults(
   return resultsDir;
 }
 
-/* ── Node-based Allure 3 CLI (no Java) ── */
-function getAllureNodeCli(): string {
-  // The `allure` v3 package ships a pure-JS Node CLI at <pkg>/cli.js — no Java,
-  // unlike the legacy allure-commandline 2.x. We invoke it directly via `node`.
-  return path.join(BACKEND_ROOT, 'node_modules', 'allure', 'cli.js');
-}
-
-async function dirHasFiles(dir: string): Promise<boolean> {
-  try {
-    const files = await fs.readdir(dir);
-    return files.length > 0;
-  } catch {
-    return false;
+/* ── Find the allure CLI binary ── */
+function getAllureBin(): string {
+  if (process.platform === 'win32') {
+    return path.join(BACKEND_ROOT, 'node_modules', '.bin', 'allure.cmd');
   }
+  return path.join(BACKEND_ROOT, 'node_modules', '.bin', 'allure');
 }
 
-/* ── Generate Allure HTML from result files (Node CLI, single self-contained file) ── */
+/* ── Generate Allure HTML from result files ── */
 export async function generateAllureHtml(resultsDir: string, outputDir: string): Promise<void> {
-  const cli = getAllureNodeCli();
+  const allureBin = getAllureBin();
+
+  // Check that allure binary exists
   try {
-    await fs.access(cli);
+    await fs.access(allureBin);
   } catch {
-    throw new Error('Allure 3 Node CLI not found. Run `npm install` in the backend folder (package: allure).');
+    throw new Error('allure-commandline binary not found. Run: npm install allure-commandline');
   }
 
-  // Start clean so no stale artifacts linger, then let the CLI recreate it.
-  await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
   await fs.mkdir(outputDir, { recursive: true });
 
-  // Throwaway Allure config enabling the Awesome plugin's single-file output →
-  // one self-contained index.html that both embeds in an iframe and downloads
-  // as a standalone file. No Java required.
-  const cfgDir = path.join(os.tmpdir(), `allurerc-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
-  await fs.mkdir(cfgDir, { recursive: true });
-  const cfgPath = path.join(cfgDir, 'allurerc.mjs');
-  await fs.writeFile(
-    cfgPath,
-    `export default {\n  name: "JBSIntelliQE Test Report",\n  plugins: {\n    awesome: {\n      options: { singleFile: true },\n    },\n  },\n};\n`,
-    'utf-8',
-  );
-
   try {
-    // node <cli> generate <resultsDir> --output <outputDir> --config <allurerc.mjs>
-    await execFileAsync(
-      process.execPath,
-      [cli, 'generate', resultsDir, '--output', outputDir, '--config', cfgPath],
-      { timeout: 120_000, maxBuffer: 50 * 1024 * 1024 },
-    );
+    if (process.platform === 'win32') {
+      await execFileAsync('cmd', ['/c', allureBin, 'generate', resultsDir, '-o', outputDir, '--clean'], {
+        timeout: 120_000,
+      });
+    } else {
+      await execFileAsync(allureBin, ['generate', resultsDir, '-o', outputDir, '--clean'], {
+        timeout: 120_000,
+      });
+    }
   } catch (err: any) {
-    throw new Error(`Allure report generation failed: ${err.stderr || err.message}`);
-  } finally {
-    await fs.rm(cfgDir, { recursive: true, force: true }).catch(() => {});
+    throw new Error(`Allure generate failed: ${err.stderr || err.message}`);
   }
 }
 
@@ -229,45 +220,21 @@ export async function getOrGenerateRealReport(
   runId: string,
 ): Promise<{ outputDir: string; generatedAt: string }> {
   if (!runId) throw new Error('runId is required');
-  const outputDir = path.join(BACKEND_ROOT, 'allure-reports', tenantId, runId);
+  const outputDir = path.join(REPORTS_ROOT, tenantId, runId);
 
-  // 1) Prefer the real allure-results captured when the wizard executed this run.
-  let resultsDir = storedAllureResultsDir(tenantId, runId);
-  let haveResults = await dirHasFiles(resultsDir);
-
-  // 2) Otherwise run the saved scripts now via the reliable Edge runner — which
-  //    also persists allure-results to the store as a side effect.
-  if (!haveResults) {
-    try {
-      await executeRunScripts(tenantId, isPlatform, runId);
-      haveResults = await dirHasFiles(resultsDir);
-    } catch (err) {
-      // No scripts, unreachable target, etc. Fall through to the synthetic path
-      // so the user still gets a report built from saved test-case status.
-      console.warn('[allure] execution path unavailable, using DB status:', (err as Error).message);
-    }
-  }
-
-  // 3) Last resort — synthesize allure-results from DB test_cases status so the
-  //    report is never blank. Statuses are real; durations are nominal.
-  let synthDir: string | null = null;
-  if (!haveResults) {
-    synthDir = await generateAllureResults(tenantId, isPlatform, runId);
-    resultsDir = synthDir;
-  }
-
+  const { resultsDir, workspace } = await runPlaywrightForRun(tenantId, isPlatform, runId);
   try {
     await generateAllureHtml(resultsDir, outputDir);
     const meta = {
       generatedAt: new Date().toISOString(),
       runId,
       tenantId,
-      real: !synthDir,
+      real: true,
     };
     await fs.writeFile(path.join(outputDir, 'report-meta.json'), JSON.stringify(meta, null, 2));
     return { outputDir, generatedAt: meta.generatedAt };
   } finally {
-    if (synthDir) await fs.rm(synthDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -282,8 +249,7 @@ export async function getOrGenerateReport(
   runId?: string,
 ): Promise<{ outputDir: string; generatedAt: string }> {
   const scope = runId || 'latest';
-  const backendRoot = BACKEND_ROOT;
-  const outputDir = path.join(backendRoot, 'allure-reports', tenantId, scope);
+  const outputDir = path.join(REPORTS_ROOT, tenantId, scope);
 
   // Generate allure results
   const resultsDir = await generateAllureResults(tenantId, isPlatform, runId);
@@ -303,25 +269,85 @@ export async function getOrGenerateReport(
   }
 }
 
+/**
+ * The presence of `index.html` is the source of truth for "a report exists" —
+ * `report-meta.json` is only an optional sidecar that records when it was built.
+ * Older builds (and any future build where the sidecar write is skipped or the
+ * `allure generate --clean` step wipes it) produce a perfectly good report with
+ * no meta; keying existence off the meta file made those reports invisible to
+ * the Reports page. So: check index.html, then read generatedAt from the meta
+ * if present, else fall back to the report file's mtime.
+ */
+async function readReportMeta(dir: string): Promise<{ exists: boolean; generatedAt?: string }> {
+  let stat;
+  try {
+    stat = await fs.stat(path.join(dir, 'index.html'));
+  } catch {
+    return { exists: false }; // no rendered report here
+  }
+  let generatedAt: string | undefined;
+  try {
+    const meta = JSON.parse(await fs.readFile(path.join(dir, 'report-meta.json'), 'utf-8'));
+    if (meta?.generatedAt) generatedAt = meta.generatedAt;
+  } catch {
+    /* no/invalid sidecar — fall back to the report's mtime below */
+  }
+  return { exists: true, generatedAt: generatedAt || new Date(stat.mtimeMs).toISOString() };
+}
+
+/* ── Find the most recently generated report across all runs for a tenant ── */
+export async function getLatestReport(
+  tenantId: string,
+): Promise<{ exists: boolean; runId?: string; generatedAt?: string; reportUrl?: string }> {
+  const baseDir = path.join(REPORTS_ROOT, tenantId);
+  let entries: string[];
+  try {
+    entries = await fs.readdir(baseDir);
+  } catch {
+    return { exists: false };
+  }
+
+  let best: { runId: string; generatedAt: string; ms: number } | null = null;
+  for (const runId of entries) {
+    const meta = await readReportMeta(path.join(baseDir, runId));
+    if (!meta.exists) continue; // skip dirs without a rendered report
+    const ms = Date.parse(meta.generatedAt || '') || 0;
+    if (!best || ms > best.ms) best = { runId, generatedAt: meta.generatedAt!, ms };
+  }
+
+  if (!best) return { exists: false };
+  return {
+    exists: true,
+    runId: best.runId,
+    generatedAt: best.generatedAt,
+    reportUrl: `/api/allure/report/${tenantId}/${best.runId}/index.html`,
+  };
+}
+
 /* ── Check if a report already exists ── */
 export async function getReportStatus(
   tenantId: string,
   runId?: string,
-): Promise<{ exists: boolean; generatedAt?: string; reportUrl?: string }> {
+): Promise<{ exists: boolean; generatedAt?: string; reportUrl?: string; allureReportUrl?: string }> {
   const scope = runId || 'latest';
-  const backendRoot = BACKEND_ROOT;
-  const outputDir = path.join(backendRoot, 'allure-reports', tenantId, scope);
-  const metaPath = path.join(outputDir, 'report-meta.json');
+  const outputDir = path.join(REPORTS_ROOT, tenantId, scope);
 
+  const meta = await readReportMeta(outputDir);
+  if (!meta.exists) return { exists: false };
+
+  // The run root holds the Playwright HTML report (the "Basic Report"). The
+  // Allure report, when built, lives in the `/allure` subfolder. Surface both
+  // so the Reports page can show each under its own tab.
+  let allureReportUrl: string | undefined;
   try {
-    const raw = await fs.readFile(metaPath, 'utf-8');
-    const meta = JSON.parse(raw);
-    return {
-      exists: true,
-      generatedAt: meta.generatedAt,
-      reportUrl: `/api/allure/report/${tenantId}/${scope}/index.html`,
-    };
-  } catch {
-    return { exists: false };
-  }
+    await fs.access(path.join(outputDir, 'allure', 'index.html'));
+    allureReportUrl = `/api/allure/report/${tenantId}/${scope}/allure/index.html`;
+  } catch { /* no Allure report for this run */ }
+
+  return {
+    exists: true,
+    generatedAt: meta.generatedAt,
+    reportUrl: `/api/allure/report/${tenantId}/${scope}/index.html`,
+    allureReportUrl,
+  };
 }

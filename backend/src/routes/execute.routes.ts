@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { runPipeline } from '../agents/pipeline.js';
+import { getTenantLlm } from '../services/llm.service.js';
 
 const router = Router();
 
@@ -10,7 +11,13 @@ router.post('/', async (req: Request, res: Response) => {
     ? { targetUrl, appName, environment }
     : undefined;
 
-  const result = await runPipeline(requirements || 'Run standard test suite', appContext);
+  const llm = req.user ? await getTenantLlm(req.user.tenantId) : null;
+  if (!llm) {
+    res.status(400).json({ error: 'No LLM configured. Add an Anthropic API key in System Configuration → LLM Configuration.' });
+    return;
+  }
+
+  const result = await runPipeline(requirements || 'Run standard test suite', appContext, llm);
 
   res.json({
     executionResults: result.state.executionResults,

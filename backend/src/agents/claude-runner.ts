@@ -13,7 +13,8 @@ import { execSync, spawnSync } from 'child_process';
 import { homedir, tmpdir } from 'os';
 import { join } from 'path';
 import { writeFileSync, unlinkSync } from 'fs';
-import Anthropic from '@anthropic-ai/sdk';
+import type { LlmConfig } from './state.js';
+export type { LlmConfig };
 
 let resolvedCliPath: string | null = null;
 const IS_WINDOWS = process.platform === 'win32';
@@ -39,92 +40,7 @@ function findClaudeCli(): string | null {
 }
 
 /**
- * Run a prompt through Claude and return the response text.
- *
- * Auth strategy, in priority order:
- *   1. ANTHROPIC_API_KEY set → call the Anthropic API directly via the official
- *      SDK. This is the durable, portable path: API keys don't expire like an
- *      interactive `claude auth login` session, they work headlessly, and
- *      anyone who clones the repo can run the pipeline by setting their own key.
- *      PREFERRED.
- *   2. Otherwise → shell out to the locally-authenticated `claude` CLI
- *      (subscription login). Kept as a fallback so existing CLI setups keep
- *      working — but its login token expires periodically, which is the failure
- *      the API-key path above is meant to eliminate.
- *
- * Returns a Promise now (the SDK is async). All call sites `await` it.
- */
-export async function runClaudePrompt(
-  prompt: string,
-  options?: { maxTokens?: number; model?: string },
-): Promise<string> {
-  // Empty string is intentionally treated as "not set" so a placeholder
-  // `ANTHROPIC_API_KEY=` line in .env falls through to the CLI fallback.
-  if (process.env.ANTHROPIC_API_KEY) {
-    return runViaAnthropicApi(prompt, options);
-  }
-  return runViaClaudeCli(prompt, options);
-}
-
-/** Default model for the API path; override with ANTHROPIC_MODEL (e.g. claude-sonnet-4-6 for lower cost). */
-const DEFAULT_API_MODEL = 'claude-opus-4-8';
-
-let anthropicClient: Anthropic | null = null;
-function getAnthropicClient(): Anthropic {
-  if (!anthropicClient) {
-    // Reads ANTHROPIC_API_KEY from the environment. Generous timeout + retries
-    // so a long 16k-token generation can't trip the SDK's default request bound.
-    anthropicClient = new Anthropic({ maxRetries: 2, timeout: 290_000 });
-  }
-  return anthropicClient;
-}
-
-/**
- * Call the Anthropic Messages API via the official SDK. Streams and collects the
- * final message so that large `max_tokens` (the generator/script agents use
- * 16384) can't hit the SDK's non-streaming HTTP timeout.
- */
-async function runViaAnthropicApi(
-  prompt: string,
-  options?: { maxTokens?: number; model?: string },
-): Promise<string> {
-  const client = getAnthropicClient();
-  const model = process.env.ANTHROPIC_MODEL || options?.model || DEFAULT_API_MODEL;
-  const maxTokens = options?.maxTokens ?? 4096;
-
-  try {
-    const stream = client.messages.stream({
-      model,
-      max_tokens: maxTokens,
-      messages: [{ role: 'user', content: prompt }],
-    });
-    const message = await stream.finalMessage();
-
-    let text = '';
-    for (const block of message.content) {
-      if (block.type === 'text') text += block.text;
-    }
-    text = text.trim();
-    if (!text) throw new Error('Anthropic API returned an empty response');
-    return text;
-  } catch (err: any) {
-    // Re-throw with messages the route's mapGenError() can classify into calm,
-    // user-facing text (it keys on "not authenticated" / "rate limit" / "timeout").
-    if (err instanceof Anthropic.AuthenticationError || err?.status === 401) {
-      throw new Error('Anthropic API not authenticated — ANTHROPIC_API_KEY is missing or invalid.');
-    }
-    if (err instanceof Anthropic.PermissionDeniedError || err?.status === 403) {
-      throw new Error('Anthropic API not authenticated — this API key lacks access to the requested model.');
-    }
-    if (err instanceof Anthropic.RateLimitError || err?.status === 429) {
-      throw new Error('Anthropic API rate limit reached — please retry in a moment.');
-    }
-    throw err;
-  }
-}
-
-/**
- * Run a prompt through the Claude CLI and return the response text.
+ * Run a prompt through Claude CLI and return the response text.
  * Uses `claude -p` (print mode — non-interactive, returns text).
  *
  * Uses spawnSync (not execSync) because spawnSync gives us the child PID
@@ -133,13 +49,22 @@ async function runViaAnthropicApi(
  * small shell wrapper on POSIX or use `taskkill /T` on Windows via the
  * timeout-kill helper below.
  */
-function runViaClaudeCli(prompt: string, options?: { maxTokens?: number; model?: string }): string {
+export function runClaudePrompt(prompt: string, options?: { maxTokens?: number; model?: string; oauthToken?: string }): string {
   const cli = findClaudeCli();
   if (!cli) throw new Error('Claude CLI not found');
 
   const args: string[] = ['-p'];
   if (options?.model) args.push('--model', options.model);
   // Note: Claude CLI does not support --max-tokens; use --max-budget-usd for cost control
+
+  // Authenticate the CLI with the saved Claude Code OAuth token when provided.
+  // Without this the CLI relies on an interactive `claude login` session, which
+  // a headless backend process usually doesn't have — the classic
+  // "401 Invalid authentication credentials" from `claude -p`. Passing the token
+  // via CLAUDE_CODE_OAUTH_TOKEN is the documented non-interactive path.
+  const env = options?.oauthToken
+    ? { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: options.oauthToken }
+    : process.env;
 
   // Write prompt to a temp file to avoid shell escaping issues
   const tmpFile = join(tmpdir(), `claude-prompt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
@@ -158,6 +83,7 @@ function runViaClaudeCli(prompt: string, options?: { maxTokens?: number; model?:
       shell: IS_WINDOWS,
       windowsHide: true,
       input: prompt,
+      env,
       killSignal: 'SIGKILL',
     });
 
@@ -174,7 +100,8 @@ function runViaClaudeCli(prompt: string, options?: { maxTokens?: number; model?:
     }
 
     if (result.status !== 0) {
-      throw new Error(`Claude CLI exited with code ${result.status}: ${String(result.stderr || '').slice(0, 500)}`);
+      const detail = `${String(result.stderr || '')}${result.stderr && result.stdout ? ' | ' : ''}${String(result.stdout || '')}`.trim();
+      throw new Error(`Claude CLI exited with code ${result.status}: ${detail.slice(0, 800) || '(no output)'}`);
     }
 
     return String(result.stdout || '').trim();
@@ -203,24 +130,267 @@ export function isClaudeCliAvailable(): boolean {
   return findClaudeCli() !== null;
 }
 
+// =====================================================================
+// LLM via the Anthropic Messages API (DB-configured key)
+// =====================================================================
+
+const ANTHROPIC_VERSION = '2023-06-01';
+const DEFAULT_API_MODEL = 'claude-opus-4-8';
+
+/** Pipeline stages that make LLM calls. Used as keys for per-agent model choice. */
+export type AgentStage = 'requirement' | 'audit' | 'planner' | 'generator' | 'script' | 'heal' | 'explore';
+
 /**
- * Check if Claude is actually usable — i.e. the CLI is present AND authenticated.
- *
- * `isClaudeCliAvailable()` only proves the binary exists; `claude -p` still fails
- * with "Not logged in" until the user runs `claude auth login`. The generation
- * agents have no offline fallback, so callers should preflight with THIS before
- * starting a pipeline to fail fast with an actionable message instead of a deep
- * JSON-parse error. An ANTHROPIC_API_KEY in the environment also satisfies auth.
+ * Resolve the LLM config for a given pipeline stage. The admin can pick a model
+ * per agent in System Configuration → LLM Configuration; we apply that here,
+ * falling back to the provider's default model when a stage has no override.
+ * This lets e.g. requirement/audit/planner run on a fast model while generation
+ * uses a stronger one — entirely the admin's choice.
  */
-export function isClaudeCliAuthenticated(): boolean {
-  if (process.env.ANTHROPIC_API_KEY) return true;
-  const cli = findClaudeCli();
-  if (!cli) return false;
+export function llmForStage(llm: LlmConfig | undefined | null, stage: AgentStage): LlmConfig | undefined {
+  if (!llm) return undefined;
+  const model = llm.agentModels?.[stage] || llm.model;
+  return { ...llm, model };
+}
+
+/**
+ * Run a prompt through an LLM and return the response text.
+ *
+ * Primary path: when an `apiKey` is supplied (resolved per-tenant from the DB —
+ * see services/llm.service.ts), call the Anthropic Messages API directly. This
+ * is what makes the chat pipeline work with the key the admin saved in System
+ * Configuration, with no env var and no local `claude` CLI login.
+ *
+ * Fallback: if no key is configured, fall back to the `claude` CLI (useful for
+ * local dev where the CLI is logged in). If neither is available, throw a clear
+ * error so the caller can tell the user to configure an LLM.
+ */
+export async function runLLM(
+  prompt: string,
+  options?: { maxTokens?: number; system?: string; llm?: LlmConfig },
+): Promise<string> {
+  const llm = options?.llm;
+  const method = llm?.authMethod || 'api_key';
+  const model = llm?.model || DEFAULT_API_MODEL;
+  const baseUrl = llm?.baseUrl || 'https://api.anthropic.com';
+  const maxTokens = options?.maxTokens ?? 4096;
+
+  // ONE recovery attempt on a transient CONNECTION error (socket dropped before
+  // returning anything). NOT a content retry — it only fires when the call
+  // produced no output, so it never wastes tokens nor re-runs a succeeded agent.
+  const callApi = async (opts: MessagesApiOpts): Promise<string> => {
+    try {
+      return await runViaMessagesApi(prompt, opts);
+    } catch (err) {
+      if (isTransientNetworkError(err)) {
+        console.warn(`[claude-runner] connection dropped (${(err as Error).message}); reconnecting once`);
+        return await runViaMessagesApi(prompt, opts);
+      }
+      throw err;
+    }
+  };
+
+  // Claude Code (subscription): OAuth token primary, logged-in CLI as fallback.
+  if (method === 'claude_code') {
+    if (llm?.oauthToken) {
+      return callApi({ authMethod: 'claude_code', oauthToken: llm.oauthToken, model, baseUrl, maxTokens, system: options?.system, effort: llm?.effort, extendedThinking: llm?.extendedThinking });
+    }
+    if (isClaudeCliAvailable()) {
+      return runClaudePrompt(prompt, { maxTokens: options?.maxTokens, model: llm?.model, oauthToken: llm?.oauthToken });
+    }
+    throw new Error(
+      'Claude Code is selected but no OAuth token is saved and no local Claude CLI is available. ' +
+      'Run `claude setup-token` and paste the token in System Configuration → LLM Configuration.',
+    );
+  }
+
+  // Standard API key path.
+  if (llm?.apiKey) {
+    return callApi({ authMethod: 'api_key', apiKey: llm.apiKey, model, baseUrl, maxTokens, system: options?.system, effort: llm?.effort, extendedThinking: llm?.extendedThinking });
+  }
+  if (isClaudeCliAvailable()) {
+    // Local-dev fallback — CLI must be logged in.
+    return runClaudePrompt(prompt, { maxTokens: options?.maxTokens, model: llm?.model });
+  }
+  throw new Error(
+    'No LLM configured. Add an Anthropic API key in System Configuration → LLM Configuration.',
+  );
+}
+
+interface MessagesApiOpts {
+  authMethod: 'api_key' | 'claude_code';
+  apiKey?: string;
+  oauthToken?: string;
+  model: string;
+  baseUrl: string;
+  maxTokens: number;
+  system?: string;
+  /** Reasoning effort — gated per model in buildEffort(). */
+  effort?: string;
+  /** Extended/"ultra" thinking — gated per model in supportsAdaptiveThinking(). */
+  extendedThinking?: boolean;
+}
+
+/**
+ * Resolve a safe `output_config.effort` value for a model, or null when the
+ * model doesn't support effort at all. Haiku 4.5 and Sonnet 4.5 reject effort
+ * entirely (400); `xhigh`/`max` are only on the newest tiers — clamp down to
+ * `high` rather than 400. low/medium/high are safe on every effort-capable model.
+ */
+function buildEffort(effort: string | undefined, model: string): string | null {
+  if (!effort) return null;
+  const m = model.toLowerCase();
+  // Models that accept output_config.effort at all.
+  const effortCapable = /opus-4-(5|6|7|8)|sonnet-4-6|fable-5|mythos-5/.test(m);
+  if (!effortCapable) return null; // haiku-4-5, sonnet-4-5, older → drop
+  let e = effort;
+  const supportsXhigh = /opus-4-(7|8)|fable-5|mythos-5/.test(m);
+  const supportsMax = /opus-4-(6|7|8)|sonnet-4-6|fable-5|mythos-5/.test(m);
+  if (e === 'xhigh' && !supportsXhigh) e = 'high';
+  if (e === 'max' && !supportsMax) e = 'high';
+  return ['low', 'medium', 'high', 'xhigh', 'max'].includes(e) ? e : null;
+}
+
+/** Adaptive ("ultra") thinking is supported on Opus 4.6+/Sonnet 4.6/Fable/Mythos. */
+function supportsAdaptiveThinking(model: string): boolean {
+  return /opus-4-(6|7|8)|sonnet-4-6|fable-5|mythos-5/.test(model.toLowerCase());
+}
+
+/**
+ * True for transient connection failures worth one reconnect — the socket
+ * dropped (ECONNRESET / "terminated" / socket hang up) or DNS/connect blipped.
+ * Explicitly EXCLUDES AbortError (we already waited the full timeout) and HTTP
+ * status errors (those are real API responses, not connection drops).
+ */
+function isTransientNetworkError(err: any): boolean {
+  if (err?.name === 'AbortError') return false;
+  if (typeof err?.message === 'string' && err.message.startsWith('Anthropic API error (')) return false;
+  const msg = String(err?.message || '');
+  const causeCode = String(err?.cause?.code || err?.code || '');
+  return (
+    /terminated|fetch failed|network|socket hang up|ECONNRESET|ETIMEDOUT|EPIPE|ECONNREFUSED|EAI_AGAIN/i.test(msg) ||
+    /ECONNRESET|ETIMEDOUT|EPIPE|ECONNREFUSED|EAI_AGAIN|UND_ERR/i.test(causeCode)
+  );
+}
+
+async function runViaMessagesApi(
+  prompt: string,
+  opts: MessagesApiOpts,
+): Promise<string> {
+  const url = `${opts.baseUrl.replace(/\/+$/, '')}/v1/messages`;
+  const controller = new AbortController();
+  // Generous ceiling — a single functionality-driven generation can be large.
+  const timer = setTimeout(() => controller.abort(), 600_000);
+
+  // Choose auth by the credential's ACTUAL shape, not just the selected method,
+  // so a credential entered in the "wrong" field still authenticates:
+  //   sk-ant-api…  → API key  → x-api-key header
+  //   sk-ant-oat…  → OAuth    → Authorization: Bearer + the OAuth beta header
+  // (A correct API key pasted under Claude Code was the classic "Invalid bearer
+  // token" 401 — routing by prefix fixes it.)
+  const cred = ((opts.authMethod === 'claude_code' ? opts.oauthToken : opts.apiKey) || opts.oauthToken || opts.apiKey || '').trim();
+  const looksApiKey = /^sk-ant-api/i.test(cred);
+  const useBearer = !looksApiKey && (/^sk-ant-oat/i.test(cred) || opts.authMethod === 'claude_code') && !!cred;
+  const headers: Record<string, string> =
+    useBearer
+      ? {
+          authorization: `Bearer ${cred}`,
+          'anthropic-beta': 'oauth-2025-04-20',
+          'anthropic-version': ANTHROPIC_VERSION,
+          'content-type': 'application/json',
+        }
+      : {
+          'x-api-key': cred,
+          'anthropic-version': ANTHROPIC_VERSION,
+          'content-type': 'application/json',
+        };
+
+  // Claude Code (OAuth) tokens are only authorized for the Claude Code client:
+  // the request MUST present the Claude Code system identity as its first system
+  // block, or Anthropic rejects it with "401 Invalid bearer token". API-key
+  // requests have no such requirement.
+  const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
+  // For OAuth, the FIRST system block must be exactly the identity. Use the
+  // content-block array form so any real system prompt follows as a second block.
+  const effectiveSystem: unknown = useBearer
+    ? (opts.system && opts.system.trim() && !opts.system.startsWith(CLAUDE_CODE_IDENTITY)
+        ? [{ type: 'text', text: CLAUDE_CODE_IDENTITY }, { type: 'text', text: opts.system }]
+        : CLAUDE_CODE_IDENTITY)
+    : opts.system;
   try {
-    const out = execSync(`"${cli}" auth status`, { timeout: 10000, encoding: 'utf-8', stdio: 'pipe' });
-    return JSON.parse(out.trim()).loggedIn === true;
-  } catch {
-    return false;
+    // We STREAM: large generator/script outputs exceed ~16K tokens, and a
+    // non-streaming request risks an HTTP timeout before the body completes.
+    // Streaming also lets us see the real stop_reason (truncation) clearly.
+    // Reasoning effort + extended thinking, each gated to models that accept
+    // them so a per-agent Haiku/Sonnet-4.5 model never 400s the request.
+    const effort = buildEffort(opts.effort, opts.model);
+    const useThinking = opts.extendedThinking && supportsAdaptiveThinking(opts.model);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: opts.model,
+        max_tokens: opts.maxTokens,
+        stream: true,
+        ...(effort ? { output_config: { effort } } : {}),
+        ...(useThinking ? { thinking: { type: 'adaptive', display: 'summarized' } } : {}),
+        ...(effectiveSystem ? { system: effectiveSystem } : {}),
+        messages: [{ role: 'user', content: prompt }],
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok || !res.body) {
+      const errBody = (await res.json().catch(() => ({}))) as any;
+      const msg = errBody?.error?.message || `HTTP ${res.status}`;
+      throw new Error(`Anthropic API error (${res.status}): ${msg}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let text = '';
+    let stopReason: string | undefined;
+    let streamError: string | undefined;
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+        try {
+          const evt = JSON.parse(payload) as any;
+          if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta') {
+            text += evt.delta.text;
+          } else if (evt.type === 'message_delta' && evt.delta?.stop_reason) {
+            stopReason = evt.delta.stop_reason;
+          } else if (evt.type === 'error') {
+            streamError = evt.error?.message || 'stream error';
+          }
+        } catch {
+          /* ignore non-JSON keepalive lines */
+        }
+      }
+    }
+
+    if (streamError) throw new Error(`Anthropic API stream error: ${streamError}`);
+    const out = text.trim();
+    if (!out) throw new Error('Anthropic API returned no text content');
+    if (stopReason === 'max_tokens') {
+      // Output hit the cap — surface it so callers don't silently get truncated JSON.
+      console.warn(`[claude-runner] response truncated at max_tokens=${opts.maxTokens}; consider raising it`);
+    }
+    return out;
+  } catch (err: any) {
+    if (err?.name === 'AbortError') throw new Error('Anthropic API request timed out after 10 minutes');
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -246,11 +416,31 @@ export function parseJsonFromResponse<T>(response: string): T {
   // Fast path
   try { return JSON.parse(cleaned) as T; } catch { /* fall through */ }
 
-  const extracted = extractFirstJson(cleaned);
-  if (extracted === null) {
-    throw new Error('No JSON object or array found in response');
-  }
+  const extracted = extractFirstJson(cleaned) ?? cleaned;
+
+  // Repaired path — fix common model artifacts (e.g. `"a" * 10000` shorthand for
+  // a long value, trailing commas) that aren't valid JSON, then parse.
+  try {
+    return JSON.parse(repairJsonArtifacts(extracted)) as T;
+  } catch { /* fall through to the raw attempt for a clearer error */ }
+
   return JSON.parse(extracted) as T;
+}
+
+/**
+ * Repair non-JSON artifacts LLMs sometimes emit inside otherwise-valid JSON:
+ *   "a" * 10000          → "a (repeated 10000 times)"   (string-multiply shorthand)
+ *   "a".repeat(10000)    → "a (repeated 10000 times)"
+ *   trailing commas before } or ]  → removed
+ * These are conservative, targeted fixes — they only touch these exact shapes.
+ */
+function repairJsonArtifacts(text: string): string {
+  return text
+    .replace(/(["'])((?:\\.|(?!\1).)*)\1\s*\*\s*(\d+)/g,
+      (_m, _q, body, n) => JSON.stringify(`${body} (repeated ${n} times)`))
+    .replace(/(["'])((?:\\.|(?!\1).)*)\1\s*\.\s*repeat\s*\(\s*(\d+)\s*\)/g,
+      (_m, _q, body, n) => JSON.stringify(`${body} (repeated ${n} times)`))
+    .replace(/,(\s*[}\]])/g, '$1');
 }
 
 /**

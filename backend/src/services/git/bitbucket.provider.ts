@@ -14,13 +14,47 @@
  * stores the app password under `app_password` and the username under
  * `username` (mirrors the integrationCatalog Bitbucket entry).
  */
-import type { GitFile, GitProvider, GitProviderConfig, PublishResult } from './git.types.js';
+import type { GitFile, GitProvider, GitProviderConfig, GitTestResult, PublishResult } from './git.types.js';
 import { parseRepoUrl } from './git.types.js';
 
 const BB_API = 'https://api.bitbucket.org/2.0';
 
 export const bitbucketProvider: GitProvider = {
   id: 'bitbucket',
+
+  async test(config): Promise<GitTestResult> {
+    const coords = parseRepoUrl(config.repoUrl);
+    if (coords.provider !== 'bitbucket') {
+      throw new Error(`Expected a Bitbucket URL but got ${coords.provider}: ${config.repoUrl}`);
+    }
+    if (!config.username) {
+      throw new Error('Bitbucket requires a username alongside the app password — fill in the Username field.');
+    }
+    const auth = 'Basic ' + Buffer.from(`${config.username}:${config.accessToken}`).toString('base64');
+    const headers: Record<string, string> = { Authorization: auth };
+    const { owner: workspace, repo } = coords;
+    const base = `${BB_API}/repositories/${encodeURIComponent(workspace)}/${encodeURIComponent(repo)}`;
+
+    // 1. Repo reachable + credentials valid.
+    const repoRes = await fetch(base, { headers });
+    if (!repoRes.ok) {
+      if (repoRes.status === 401) throw new Error('Authentication failed — the username or app password is invalid.');
+      if (repoRes.status === 404) throw new Error(`Repository ${workspace}/${repo} not found, or the app password lacks Repositories:Read access.`);
+      throw new Error(`Could not reach ${workspace}/${repo}: HTTP ${repoRes.status}`);
+    }
+
+    // 2. Default branch (PR target) must exist.
+    const brRes = await fetch(`${base}/refs/branches/${encodeURIComponent(config.defaultBranch)}`, { headers });
+    if (!brRes.ok) {
+      if (brRes.status === 404) {
+        throw new Error(`Default branch '${config.defaultBranch}' does not exist on ${workspace}/${repo}. Set "Default Branch" to an existing branch (e.g. main).`);
+      }
+      throw new Error(`Could not read default branch '${config.defaultBranch}': HTTP ${brRes.status}`);
+    }
+
+    return { ok: true, message: `Connected to ${workspace}/${repo}. Default branch '${config.defaultBranch}' found. Ready to raise pull requests.` };
+  },
+
   async publish(config, files, opts): Promise<PublishResult> {
     const coords = parseRepoUrl(config.repoUrl);
     if (coords.provider !== 'bitbucket') {

@@ -7,11 +7,7 @@
 const SHARED_KEY = 'iQE-s3cure-tr@nsit-2024!';
 
 export function encryptField(value: string): string {
-  // Idempotency guard — never re-encrypt an already-encrypted value. Without
-  // this, re-saving a form that loaded a stored `__ENC__`/`__AES__` value (e.g.
-  // a role password in Application Setup) would wrap it in another layer, and
-  // the server's single-pass decrypt would then hand ciphertext to consumers.
-  if (!value || value.startsWith('__ENC__') || value.startsWith('__AES__')) return value;
+  if (!value) return value;
   const keyBytes = new TextEncoder().encode(SHARED_KEY);
   const valueBytes = new TextEncoder().encode(value);
   const encrypted = new Uint8Array(valueBytes.length);

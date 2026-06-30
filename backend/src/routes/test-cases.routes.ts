@@ -18,23 +18,17 @@ function normaliseTags(input: unknown): string[] {
 router.post('/save', async (req: Request, res: Response) => {
   try {
     const user = req.user!;
-    const { storyKey, storyTitle, source, columns, testCases, module, submodule, platform, appMetadata } = req.body;
+    const { storyKey, storyTitle, source, columns, testCases, module, submodule } = req.body;
     if (!Array.isArray(testCases) || testCases.length === 0) {
       res.status(400).json({ error: 'testCases[] are required' });
       return;
     }
 
-    // Mobile Application Automation marker (additive; NULL for web/API runs).
-    const mobilePlatform = platform === 'android' || platform === 'ios' ? platform : null;
-    const mobileContext = mobilePlatform && appMetadata && typeof appMetadata === 'object'
-      ? JSON.stringify(appMetadata)
-      : null;
-
     // Create test_run record with tenant_id
     const runResult = await pool.query(
-      `INSERT INTO test_runs (username, story_key, story_title, source, columns, tenant_id, module, submodule, platform, mobile_context)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-      [user.username, storyKey || null, storyTitle || null, source || null, JSON.stringify(columns || []), user.tenantId, module || null, submodule || null, mobilePlatform, mobileContext]
+      `INSERT INTO test_runs (username, story_key, story_title, source, columns, tenant_id, module, submodule)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+      [user.username, storyKey || null, storyTitle || null, source || null, JSON.stringify(columns || []), user.tenantId, module || null, submodule || null]
     );
     const testRunId: string = runResult.rows[0].id;
 
@@ -175,18 +169,28 @@ router.get('/facets', async (req: Request, res: Response) => {
         ORDER BY module, submodule`,
       [user.tenantId]
     );
-    const tagsRes = await pool.query(
-      `SELECT DISTINCT UNNEST(tc.tags) AS tag
-         FROM "JBSTestOpsAI".test_cases tc
-         JOIN "JBSTestOpsAI".test_runs r ON r.id = tc.test_run_id
-        WHERE r.tenant_id = $1
-        ORDER BY tag`,
-      [user.tenantId]
-    );
+    // tags is stored as a JSON array string in Azure SQL — UNNEST is Postgres-only
+    // and 500s here. Use OPENJSON (the T-SQL equivalent), and keep it NON-FATAL so
+    // a bad/empty tags value never blanks the whole Generated Test Cases page.
+    let tags: string[] = [];
+    try {
+      const tagsRes = await pool.query(
+        `SELECT DISTINCT jt.value AS tag
+           FROM "JBSTestOpsAI".test_cases tc
+           JOIN "JBSTestOpsAI".test_runs r ON r.id = tc.test_run_id
+           CROSS APPLY OPENJSON(tc.tags) jt
+          WHERE r.tenant_id = $1 AND tc.tags IS NOT NULL AND tc.tags <> ''
+          ORDER BY tag`,
+        [user.tenantId]
+      );
+      tags = tagsRes.rows.map((r) => r.tag).filter(Boolean);
+    } catch (e: any) {
+      console.warn('[facets] tags query failed (non-fatal):', e.message);
+    }
     res.json({
       modules: modulesRes.rows.map((r) => r.module),
       submodules: submodulesRes.rows.map((r) => ({ module: r.module, name: r.submodule })),
-      tags: tagsRes.rows.map((r) => r.tag),
+      tags,
     });
   } catch (err: any) {
     console.error('Facets error:', err.message);

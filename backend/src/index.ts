@@ -23,12 +23,11 @@ import rateLimit from 'express-rate-limit';
 import bcrypt from 'bcrypt';
 import generateRoutes from './routes/generate.routes.js';
 import executeRoutes from './routes/execute.routes.js';
+import pipelineFlowRoutes from './routes/pipeline-flow.routes.js';
 import agentsRoutes from './routes/agents.routes.js';
 import chatRoutes from './routes/chat.routes.js';
 import jiraRoutes from './routes/jira.routes.js';
 import documentRoutes from './routes/document.routes.js';
-import mobileRoutes from './routes/mobile.routes.js';
-import testrailRoutes from './routes/testrail.routes.js';
 import gitRoutes from './routes/git.routes.js';
 import confluenceRoutes from './routes/confluence.routes.js';
 import sharepointRoutes from './routes/sharepoint.routes.js';
@@ -40,13 +39,13 @@ import pipelineEventsRoutes from './routes/pipeline-events.routes.js';
 import pipelineWorkerRoutes from './routes/pipeline-worker.routes.js';
 import pipelineAdminRoutes from './routes/pipeline-admin.routes.js';
 import pipelinePagesRoutes from './routes/pipeline-pages.routes.js';
-import automationScriptsRoutes from './routes/automation-scripts.routes.js';
 import artifactsRoutes from './routes/artifacts.routes.js';
 import userManagementRoutes from './routes/user-management.routes.js';
 import allureRoutes from './routes/allure.routes.js';
-import recordingsRoutes from './routes/recordings.routes.js';
 import tenantSettingsRoutes from './routes/tenant-settings.routes.js';
+import llmConfigRoutes from './routes/llm-config.routes.js';
 import publicApiRoutes from './routes/public/public-api.routes.js';
+import clientLogsRoutes from './routes/client-logs.routes.js';
 import { initDb } from './db.js';
 import pool from './db.js';
 import { decryptField } from './utils/crypto.js';
@@ -117,6 +116,20 @@ const authLimiter = rateLimit({
   standardHeaders: 'draft-7',
   legacyHeaders: false,
 });
+// Client diagnostics get their own (looser) budget so a noisy browser tab
+// reporting errors can't exhaust the app's general request allowance.
+const clientLogLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: Number(process.env.RATE_LIMIT_CLIENT_LOGS || 300),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+});
+
+/* ─────────────────────────────────────────────────────────────
+   Client log ingest (no auth, own rate limit) — mounted before the
+   general limiter so browser error bursts don't starve real traffic.
+   ───────────────────────────────────────────────────────────── */
+app.use('/api/client-logs', clientLogLimiter, clientLogsRoutes);
 
 app.use('/api/', generalLimiter);
 
@@ -238,12 +251,11 @@ app.post('/api/auth/signup', authLimiter, async (req, res) => {
    ───────────────────────────────────────────────────────────── */
 app.use('/api/generate', authMiddleware, generateRoutes);
 app.use('/api/execute', authMiddleware, executeRoutes);
+app.use('/api/pipeline-flow', authMiddleware, pipelineFlowRoutes);
 app.use('/api/agents', authMiddleware, agentsRoutes);
 app.use('/api/chat', authMiddleware, chatRoutes);
 app.use('/api/jira', authMiddleware, jiraRoutes);
 app.use('/api/document', authMiddleware, documentRoutes);
-app.use('/api/mobile', authMiddleware, mobileRoutes);
-app.use('/api/testrail', authMiddleware, testrailRoutes);
 app.use('/api/git', authMiddleware, gitRoutes);
 app.use('/api/confluence', authMiddleware, confluenceRoutes);
 app.use('/api/sharepoint', authMiddleware, sharepointRoutes);
@@ -251,19 +263,16 @@ app.use('/api/test-cases', authMiddleware, testCasesRoutes);
 app.use('/api/configurations', authMiddleware, configurationsRoutes);
 app.use('/api/reports', authMiddleware, reportsRoutes);
 app.use('/api/tenant-settings', authMiddleware, tenantSettingsRoutes);
+app.use('/api/llm-config', authMiddleware, llmConfigRoutes);
 
 app.use('/api/pipeline', authMiddleware, pipelineRoutes);
 app.use('/api/pipeline-events', authMiddleware, pipelineEventsRoutes);
 app.use('/api/pipeline-pages', authMiddleware, pipelinePagesRoutes);
 app.use('/api/pipeline-admin', authMiddleware, pipelineAdminRoutes);
 app.use('/api/pipeline-worker', pipelineWorkerRoutes);  // worker secret auth
-app.use('/api/automation-scripts', authMiddleware, automationScriptsRoutes);
 app.use('/api/artifacts', authMiddleware, artifactsRoutes);
 app.use('/api/users', authMiddleware, userManagementRoutes);
 app.use('/api/allure', allureRoutes);
-// Execution recordings — every route authenticates inside (tenantId is taken
-// from the authenticated user, never the URL, so there is no cross-tenant surface).
-app.use('/api/recordings', authMiddleware, recordingsRoutes);
 
 /* ─────────────────────────────────────────────────────────────
    Public business-capability API (HIPAA boundary)

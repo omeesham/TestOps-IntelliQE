@@ -43,9 +43,6 @@ backend/allure-reports/
 playwright-report/
 test-results/
 coverage/
-# Execution Recordings feature — captured videos + manifests
-backend/recordings-store/
-**/recordings-store/
 
 # ─────────────────────────────────────────────────────────────
 # Logs

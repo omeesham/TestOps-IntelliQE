@@ -23,6 +23,18 @@ export interface GitProviderConfig {
   accessToken: string;
   /** Bitbucket-only: workspace username for Basic auth */
   username?: string;
+  /** Optional repo subdirectory the generated scripts are committed into
+   *  (e.g. "tests/e2e"). Defaults to "tests" when unset. */
+  scriptsPath?: string;
+}
+
+/** Result of a read-only connectivity test (no branch/PR is created). */
+export interface GitTestResult {
+  ok: boolean;
+  /** Human-readable summary shown in the UI. */
+  message: string;
+  /** Whether the token has push/write access (when the provider can tell). */
+  canPush?: boolean;
 }
 
 /** Result of a successful publish. */
@@ -54,6 +66,14 @@ export interface GitProvider {
     files: GitFile[],
     opts: { branch: string; title: string; body: string; commitMessage: string },
   ): Promise<PublishResult>;
+
+  /**
+   * Read-only connectivity check: verify the token can reach the repo and
+   * that `defaultBranch` exists — WITHOUT creating any branch, commit or PR.
+   * Throws with a clear message on failure (bad token, repo not found,
+   * missing branch); returns a GitTestResult on success.
+   */
+  test(config: GitProviderConfig): Promise<GitTestResult>;
 }
 
 /**

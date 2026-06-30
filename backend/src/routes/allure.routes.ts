@@ -1,35 +1,15 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import fs from 'fs/promises';
-import { getOrGenerateRealReport, getReportStatus } from '../services/allure-report.service.js';
+import { getOrGenerateRealReport, getReportStatus, getLatestReport, REPORTS_ROOT } from '../services/allure-report.service.js';
 import { PlaywrightRunError } from '../services/playwright-runner.service.js';
 import { authMiddleware } from '../middleware/auth.middleware.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
 
 const router = Router();
 
 // In-flight generation lock to prevent concurrent builds for the same key
 const inFlight = new Map<string, Promise<any>>();
-
-/**
- * Reject a tenantId/scope URL segment that could escape its directory. Express
- * URL-decodes %2F/%2E inside a single param, so a raw `includes` check on the
- * decoded value is what stops `..%2Fother-tenant` style cross-tenant traversal.
- */
-function unsafeSegment(s: string): boolean {
-  return !s || s.includes('/') || s.includes('\\') || s.includes('..') || s.includes('\0');
-}
-
-/** True when `target` is NOT strictly contained within `baseDir`. */
-function escapesDir(baseDir: string, target: string): boolean {
-  const rel = path.relative(baseDir, target);
-  return rel === '' ? false : rel.startsWith('..') || path.isAbsolute(rel);
-}
 
 /**
  * POST /api/allure/generate  (auth required)
@@ -45,6 +25,21 @@ router.post('/generate', authMiddleware, async (req: Request, res: Response) => 
       return;
     }
     const key = `${user.tenantId}:${runId}`;
+
+    // If a report already exists for this run (e.g. built during the Chat
+    // execution), serve it instead of re-running — the Chat flow is stateless
+    // and stores no DB scripts to re-run. Pass { force: true } to rebuild.
+    if (!req.body?.force) {
+      const existing = await getReportStatus(user.tenantId, runId);
+      if (existing.exists) {
+        res.json({
+          ok: true,
+          generatedAt: existing.generatedAt,
+          reportUrl: `/api/allure/report/${user.tenantId}/${runId}/index.html`,
+        });
+        return;
+      }
+    }
 
     // Deduplicate concurrent requests
     if (inFlight.has(key)) {
@@ -108,38 +103,19 @@ router.get('/status', authMiddleware, async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/allure/report/:tenantId/:scope/download  (NO auth — tenant UUID is an opaque token)
- * Download the single self-contained report HTML as a file attachment.
- * Registered BEFORE the wildcard serve route so "download" isn't treated as a filename.
+ * GET /api/allure/latest  (auth required)
+ * Return the most recently generated report across all of the tenant's runs,
+ * so the Reports page can show the latest report by default even when the
+ * selected run has none.
  */
-router.get('/report/:tenantId/:scope/download', async (req: Request, res: Response) => {
+router.get('/latest', authMiddleware, async (req: Request, res: Response) => {
   try {
-    const tenantId = String(req.params.tenantId || '');
-    const scope = String(req.params.scope || '');
-    // Validate the path segments BEFORE building baseDir — otherwise a crafted
-    // tenantId/scope (e.g. "..%2Fother-tenant") escapes into another tenant's dir.
-    if (unsafeSegment(tenantId) || unsafeSegment(scope)) {
-      res.status(400).json({ error: 'Invalid path' });
-      return;
-    }
-    const baseDir = path.join(BACKEND_ROOT, 'allure-reports', tenantId, scope);
-    const indexFile = path.resolve(baseDir, 'index.html');
-
-    // Directory traversal protection
-    if (escapesDir(baseDir, indexFile)) {
-      res.status(400).json({ error: 'Invalid path' });
-      return;
-    }
-    try {
-      await fs.access(indexFile);
-    } catch {
-      res.status(404).json({ error: 'Report not found. Generate the report first, then download.' });
-      return;
-    }
-    res.download(indexFile, `allure-report-${scope.slice(0, 8)}.html`);
+    const user = req.user!;
+    const latest = await getLatestReport(user.tenantId);
+    res.json(latest);
   } catch (err: any) {
-    console.error('Allure download error:', err.message);
-    res.status(500).json({ error: 'Failed to download report file' });
+    console.error('Allure latest error:', err.message);
+    res.status(500).json({ error: 'Failed to look up the latest Allure report' });
   }
 });
 
@@ -152,20 +128,15 @@ router.get('/report/:tenantId/:scope/{*filePath}', async (req: Request, res: Res
   try {
     const tenantId = String(req.params.tenantId || '');
     const scope = String(req.params.scope || '');
-    // Validate the tenant/scope segments before they become trusted path roots.
-    if (unsafeSegment(tenantId) || unsafeSegment(scope)) {
-      res.status(400).json({ error: 'Invalid path' });
-      return;
-    }
 
     const rawFilePath = req.params.filePath;
     const filePath = Array.isArray(rawFilePath) ? rawFilePath.join('/') : (rawFilePath || '');
 
-    const baseDir = path.join(BACKEND_ROOT, 'allure-reports', tenantId, scope);
+    const baseDir = path.join(REPORTS_ROOT, tenantId, scope);
     const requestedFile = path.resolve(baseDir, filePath);
 
-    // Directory traversal protection — boundary-checked, not a bare prefix match.
-    if (escapesDir(baseDir, requestedFile)) {
+    // Directory traversal protection
+    if (!requestedFile.startsWith(baseDir)) {
       res.status(400).json({ error: 'Invalid path' });
       return;
     }
@@ -197,8 +168,15 @@ router.get('/report/:tenantId/:scope/{*filePath}', async (req: Request, res: Res
       res.setHeader('Content-Type', mimeTypes[ext]);
     }
 
-    // Don't block iframe embedding for our own reports
+    // These are self-contained reports (Playwright HTML / Allure) that rely on
+    // INLINE scripts + styles. In production, helmet's default CSP (script-src
+    // 'self') blocks inline scripts, so the report iframe renders BLANK. They are
+    // trusted, internally-generated, same-origin assets — drop the restrictive
+    // security headers for this static-report route so the report actually runs.
     res.removeHeader('X-Frame-Options');
+    res.removeHeader('Content-Security-Policy');
+    res.removeHeader('Cross-Origin-Embedder-Policy');
+    res.removeHeader('Cross-Origin-Opener-Policy');
 
     res.sendFile(requestedFile);
   } catch (err: any) {

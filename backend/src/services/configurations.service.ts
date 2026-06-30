@@ -115,9 +115,35 @@ export async function upsertConfig(
 }
 
 /**
- * Disconnect (remove) an integration configuration for a tenant.
+ * Soft-disconnect an integration: flip its status to 'disconnected' but KEEP
+ * the stored config_data (repo URL, token, branch, …) so it can be reconnected
+ * later without re-entering everything. The config is only removed by
+ * deleteConfig(). Active consumers filter on status='connected', so a
+ * disconnected config is inert until reconnected.
  */
 export async function disconnectConfig(tenantId: string, integrationId: string): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE client_configurations
+       SET status = 'disconnected', updated_at = SYSUTCDATETIME()
+     WHERE tenant_id = $1 AND integration_id = $2`,
+    [tenantId, integrationId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** Reconnect a previously-disconnected integration, reusing its stored config. */
+export async function reconnectConfig(tenantId: string, integrationId: string): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE client_configurations
+       SET status = 'connected', connected_at = SYSUTCDATETIME(), updated_at = SYSUTCDATETIME()
+     WHERE tenant_id = $1 AND integration_id = $2`,
+    [tenantId, integrationId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** Permanently delete an integration configuration for a tenant. */
+export async function deleteConfig(tenantId: string, integrationId: string): Promise<boolean> {
   const result = await pool.query(
     `DELETE FROM client_configurations WHERE tenant_id = $1 AND integration_id = $2`,
     [tenantId, integrationId]

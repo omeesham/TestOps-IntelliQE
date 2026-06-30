@@ -12,7 +12,7 @@
  * hand to a team lead — not just numeric counts.
  */
 import type { TestOpsState } from './state.js';
-import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
+import { runLLM, parseJsonFromResponse, llmForStage } from './claude-runner.js';
 
 export interface ExtendedTestPlan {
   /** Headline counts — used by the generator as soft targets */
@@ -132,7 +132,7 @@ RULES:
 
   let parsed: Partial<ExtendedTestPlan>;
   try {
-    const response = await runClaudePrompt(prompt, { maxTokens: 4000 });
+    const response = await runLLM(prompt, { maxTokens: 8000, llm: llmForStage(state.llm, 'planner') });
     parsed = parseJsonFromResponse<ExtendedTestPlan>(response);
   } catch (err) {
     // eslint-disable-next-line no-console

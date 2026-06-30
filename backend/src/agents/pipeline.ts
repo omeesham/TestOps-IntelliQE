@@ -7,7 +7,7 @@ import { scriptAgent } from './scriptAgent.js';
 import { executionAgent } from './executionAgent.js';
 import { healingAgent } from './healingAgent.js';
 import { exploreAgent } from './exploreAgent.js';
-import type { TestOpsState, AppContext } from './state.js';
+import type { TestOpsState, AppContext, LlmConfig } from './state.js';
 
 /**
  * Decide if the explore agent should run. We trigger it when:
@@ -45,9 +45,10 @@ async function runStage<T>(
 export async function runPipeline(
   requirements: string,
   appContext?: AppContext,
+  llm?: LlmConfig | null,
 ): Promise<PipelineResult> {
   const stages: PipelineResult['stages'] = [];
-  let state = createInitialState(requirements, appContext);
+  let state = createInitialState(requirements, appContext, llm);
 
   // Path 4 — exploration fallback. If we only have a URL, crawl the AUT
   // first to synthesise requirements before the analyst agent runs.
@@ -59,11 +60,19 @@ export async function runPipeline(
   const s1 = await runStage('requirement', () => requirementAgent(state));
   state = s1.result; stages.push(s1.stage);
 
-  const s2 = await runStage('audit', () => auditAgent(state));
-  state = s2.result; stages.push(s2.stage);
-
-  const s3 = await runStage('planning', () => plannerAgent(state));
-  state = s3.result; stages.push(s3.stage);
+  // Audit and planning both depend only on the parsed requirements — run them
+  // in PARALLEL, then merge (audit's enhanced requirements + planner's plan).
+  const [s2, s3] = await Promise.all([
+    runStage('audit', () => auditAgent(state)),
+    runStage('planning', () => plannerAgent(state)),
+  ]);
+  state = {
+    ...state,
+    parsedRequirements: s2.result.parsedRequirements,
+    testPlan: s3.result.testPlan,
+    extendedTestPlan: s3.result.extendedTestPlan,
+  };
+  stages.push(s2.stage, s3.stage);
 
   const s4 = await runStage('generation', () => generatorAgent(state));
   state = s4.result; stages.push(s4.stage);
@@ -84,56 +93,33 @@ export async function runPipeline(
   return { state, stages };
 }
 
-/**
- * Progress callback for the generation pipeline. Stage keys are aligned with
- * the frontend's pipeline panel keys (see ChatPage `pipelineStages`) so the
- * route layer can broadcast them straight over SSE without translation.
- */
-export type GenProgress = (
-  stageKey: 'requirements' | 'test-design',
-  status: 'running' | 'completed',
-  detail: string,
-) => void;
-
 export async function runGenerationOnly(
   requirements: string,
-  options?: { maxTestCases?: number; appContext?: AppContext; onProgress?: GenProgress },
+  options?: { maxTestCases?: number; appContext?: AppContext; llm?: LlmConfig | null },
 ): Promise<TestOpsState> {
-  const onProgress: GenProgress = options?.onProgress ?? (() => {});
-  let state = createInitialState(requirements, options?.appContext);
+  let state = createInitialState(requirements, options?.appContext, options?.llm);
   if (options?.maxTestCases !== undefined) {
     state.generationOptions = { maxTestCases: options.maxTestCases };
   }
-
-  // ── Requirement Analysis stage ──
-  onProgress('requirements', 'running', 'Analyzing requirements…');
   // Path 4 — explore the live application first when the user provided
   // only a URL (no Jira story, no upload, no pasted requirements).
   if (shouldExploreFirst(state)) {
-    onProgress('requirements', 'running', 'Exploring the live application…');
     state = await exploreAgent(state);
   }
   state = await requirementAgent(state);
-  onProgress('requirements', 'running', 'Auditing coverage & edge cases…');
-  state = await auditAgent(state);
-  const featureCount = state.parsedRequirements?.features?.length || 0;
-  onProgress(
-    'requirements',
-    'completed',
-    featureCount > 0 ? `${featureCount} feature(s) identified` : 'Requirements analyzed',
-  );
-
-  // ── Test Design stage ──
-  onProgress('test-design', 'running', 'Planning test strategy…');
-  state = await plannerAgent(state);
-  onProgress('test-design', 'running', 'Generating test cases…');
+  // Audit (enhances edge cases) and planning (produces the strategy) both depend
+  // only on the parsed requirements — run them in PARALLEL, then merge.
+  const [audited, planned] = await Promise.all([auditAgent(state), plannerAgent(state)]);
+  state = {
+    ...state,
+    parsedRequirements: audited.parsedRequirements,
+    testPlan: planned.testPlan,
+    extendedTestPlan: planned.extendedTestPlan,
+  };
   state = await generatorAgent(state);
-  onProgress('test-design', 'completed', `${state.testCases.length} test cases generated`);
-
-  // NOTE: scriptAgent is intentionally NOT run here. This path backs the chat
-  // wizard's "Test Design" step, which only needs test cases — Playwright
-  // scripts are produced later by the separate Script Generation stage. Running
-  // scriptAgent inline added a 16k-token Claude call (~2-3 min) that pushed the
-  // request past the frontend's 2-min timeout, so the wizard never got results.
+  // NOTE: scripts are intentionally NOT generated here. The chat flow generates
+  // them in a later, DOM-grounded step (POST /api/pipeline-flow/scripts), which
+  // crawls the live app for real selectors. Generating blind scripts here would
+  // just waste tokens on output the script stage replaces.
   return state;
 }

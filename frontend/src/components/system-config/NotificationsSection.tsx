@@ -3,7 +3,7 @@ import { Send, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 import { getNotifications } from './integrationCatalog';
 import IntegrationCard from './IntegrationCard';
 import ConnectModal from './ConnectModal';
-import { connectIntegration, disconnectIntegration, testNotificationIntegration } from '@/services/api';
+import { connectIntegration, disconnectIntegration, reconnectIntegration, deleteIntegration, testNotificationIntegration } from '@/services/api';
 import type { CatalogItem } from './integrationCatalog';
 
 interface DbConfig {
@@ -61,11 +61,13 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
   /** Merge catalog entries with live config state */
   const merged = catalog.map((item) => {
     const cfg = configs.find((c) => c.integrationId === item.id);
-    const status: 'connected' | 'available' | 'coming_soon' = item.comingSoon
+    const status: 'connected' | 'available' | 'disconnected' | 'coming_soon' = item.comingSoon
       ? 'coming_soon'
       : cfg?.status === 'connected'
         ? 'connected'
-        : 'available';
+        : cfg
+          ? 'disconnected'
+          : 'available';
     return { ...item, status, connectedBy: cfg?.connectedBy ?? null, lastSyncAt: cfg?.lastSyncAt ?? null };
   });
 
@@ -99,6 +101,15 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
     }
   };
 
+  const handleReconnect = async (integrationId: string) => {
+    try { await reconnectIntegration(integrationId); onRefresh(); }
+    catch (err: any) { console.error('Failed to reconnect:', err); }
+  };
+  const handleDelete = async (integrationId: string) => {
+    try { await deleteIntegration(integrationId); onRefresh(); }
+    catch (err: any) { console.error('Failed to delete:', err); }
+  };
+
   const handleTriggerToggle = (integrationId: string, eventKey: string, checked: boolean) => {
     setTriggerEvents((prev) => ({
       ...prev,
@@ -112,13 +123,13 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
   return (
     <div>
       <div className="mb-4">
-        <h3 className="text-sm font-semibold text-[#1E3A8A]">Notifications</h3>
+        <h3 className="text-sm font-semibold text-[#1E1B4B]">Notifications</h3>
         <p className="text-xs text-[#6B7280] mt-0.5">
           Configure notification channels to receive test execution results, alerts, and reports.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
         {merged.map((item) => (
           <div key={item.id}>
             <IntegrationCard
@@ -135,13 +146,15 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
                 setModalIntegration(catalog.find((c) => c.id === item.id) ?? null);
               }}
               onDisconnect={() => handleDisconnect(item.id)}
+              onReconnect={() => handleReconnect(item.id)}
+              onDelete={() => handleDelete(item.id)}
             />
 
             {/* Trigger Events + Test — only shown when this notification channel is connected */}
             {item.status === 'connected' && (
-              <div className="mt-2 ml-2 p-4 bg-[#EEF4FF] border border-[#C5D6FF]/60 rounded-xl space-y-3">
+              <div className="mt-2 ml-2 p-4 bg-[#F5F3FF] border border-[#DDD6FE]/60 rounded-xl space-y-3">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-semibold text-[#1E3A8A]">Trigger Events</h4>
+                  <h4 className="text-xs font-semibold text-[#1E1B4B]">Trigger Events</h4>
                   <button
                     onClick={() => handleSendTest(item.id)}
                     disabled={testStatus[item.id] === 'sending'}
@@ -150,7 +163,7 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
                         ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                         : testStatus[item.id] === 'failed'
                         ? 'bg-red-50 text-red-600 border border-red-200'
-                        : 'bg-white text-[#2143A8] border border-[#C5D6FF] hover:bg-[#EEF4FF] hover:shadow-sm'
+                        : 'bg-white text-[#7C3AED] border border-[#DDD6FE] hover:bg-[#F5F3FF] hover:shadow-sm'
                     } disabled:opacity-50`}
                   >
                     {testStatus[item.id] === 'sending' ? (
@@ -174,9 +187,9 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
                         type="checkbox"
                         checked={triggerEvents[item.id]?.[evt.key] ?? false}
                         onChange={(e) => handleTriggerToggle(item.id, evt.key, e.target.checked)}
-                        className="w-4 h-4 text-[#2143A8] rounded border-[#C5D6FF] focus:ring-[#3366FF]/20"
+                        className="w-4 h-4 text-[#7C3AED] rounded border-[#DDD6FE] focus:ring-[#7C3AED]/20"
                       />
-                      <span className="text-xs text-[#1E3A8A] group-hover:text-[#2143A8] transition-colors">
+                      <span className="text-xs text-[#1E1B4B] group-hover:text-[#7C3AED] transition-colors">
                         {evt.label}
                       </span>
                     </label>
@@ -194,6 +207,11 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
           saving={saving}
           error={error}
           onSave={handleConnect}
+          onTest={
+            modalIntegration.id === 'notif-slack' || modalIntegration.id === 'notif-teams'
+              ? (formData) => testNotificationIntegration(modalIntegration.id, { webhook_url: formData.webhook_url })
+              : undefined
+          }
           onClose={() => {
             setModalIntegration(null);
             setError('');

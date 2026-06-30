@@ -1,11 +1,15 @@
 # Execution & Configuration Guide
 
-This package contains Playwright end-to-end tests in two forms:
+This package is a Playwright end-to-end suite in a standard **Page Object Model**
+(POM) layout — human-readable TypeScript. Self-contained, environment-agnostic,
+and contains no credentials or proprietary framework internals.
 
-- `src/` — human-readable TypeScript source (for engineers who want to read, extend, or debug the tests)
-- `dist/` — minified JavaScript distribution (for running the tests without a TypeScript toolchain)
-
-Both are self-contained, environment-agnostic, and contain no credentials or proprietary framework internals.
+```
+playwright.config.ts          # testDir ./tests
+src/pages/                     # page objects (extend base.page.ts)
+src/fixtures/ src/utils/ src/data/ src/types/
+tests/<module>/<name>.spec.ts  # specs drive scenarios through page objects
+```
 
 ## 1. Prerequisites
 
@@ -13,19 +17,10 @@ Both are self-contained, environment-agnostic, and contain no credentials or pro
 - ~500 MB disk space for Playwright browsers
 - Network access to the application under test (`BASE_URL`)
 
-## 2. Choose a build
-
-| Build | When to use | Commands work from |
-|---|---|---|
-| `src/` | You want to read or modify tests | `client-deliverable/src/` |
-| `dist/` | You just want to run tests quickly | `client-deliverable/dist/` |
-
-The instructions below apply to both; only the working directory changes.
-
-## 3. Install
+## 2. Install
 
 ```bash
-cd client-deliverable/src     # or: cd client-deliverable/dist
+cd client-deliverable/src
 npm ci
 npm run install:browsers      # downloads Chromium, Firefox, WebKit (one-time)
 ```
@@ -72,16 +67,16 @@ steps:
     with:
       node-version: 20
   - run: npm ci
-    working-directory: client-deliverable/dist
+    working-directory: client-deliverable/src
   - run: npx playwright install --with-deps
-    working-directory: client-deliverable/dist
+    working-directory: client-deliverable/src
   - run: CI=true BASE_URL=${{ secrets.BASE_URL }} npm test
-    working-directory: client-deliverable/dist
+    working-directory: client-deliverable/src
   - uses: actions/upload-artifact@v4
     if: always()
     with:
       name: playwright-report
-      path: client-deliverable/dist/reports
+      path: client-deliverable/src/reports
 ```
 
 ## 7. Troubleshooting
@@ -96,7 +91,8 @@ steps:
 
 ## 8. Extending
 
-Add new tests under `src/tests/*.spec.ts`. Each file is a standard Playwright
-test module — no framework-specific base classes required. Non-sensitive
-fixtures can live in `src/data/*.json` and be loaded via `loadData()` from
-`utils/test-data.ts`.
+Add page objects under `src/pages/<module>/<name>.page.ts` (extend
+`src/pages/base.page.ts`) and specs under `tests/<module>/<name>.spec.ts` that
+import and drive those page objects. Keep selectors in the page objects, not the
+specs. Non-sensitive fixtures live in `src/data/*.json`, loaded via `loadData()`
+from `src/utils/test-data.ts`.

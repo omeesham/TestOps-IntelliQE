@@ -21,7 +21,7 @@
  *    string that requirementAgent treats as if it were a functional spec.
  */
 import type { TestOpsState, ExploredApp, AppContext } from './state.js';
-import { runClaudePrompt, parseJsonFromResponse, isClaudeCliAuthenticated } from './claude-runner.js';
+import { runLLM, parseJsonFromResponse, isClaudeCliAvailable, llmForStage } from './claude-runner.js';
 
 // Lazy import so unit tests that don't touch this agent don't drag in a
 // 100 MB browser binary on require().
@@ -101,9 +101,10 @@ export async function exploreAgent(state: TestOpsState): Promise<TestOpsState> {
   };
 
   // Hand the UI map to Claude — produce a natural-language requirements
-  // document that mimics what a BA would have written for this app.
-  const synthesized = isClaudeCliAuthenticated()
-    ? await synthesizeRequirements(exploredApp)
+  // document that mimics what a BA would have written for this app. Use the
+  // DB-configured LLM key when present; fall back to the CLI, else a naive map.
+  const synthesized = (state.llm?.apiKey || state.llm?.oauthToken || isClaudeCliAvailable())
+    ? await synthesizeRequirements(exploredApp, llmForStage(state.llm, 'explore'))
     : naiveRequirementsFromMap(exploredApp);
 
   return {
@@ -113,6 +114,24 @@ export async function exploreAgent(state: TestOpsState): Promise<TestOpsState> {
     // unchanged. We append rather than overwrite so any partial text the
     // user did provide is preserved.
     requirements: [state.requirements?.trim(), synthesized].filter(Boolean).join('\n\n'),
+  };
+}
+
+/**
+ * Crawl-only entry point: return the structured UI map (selectors, forms,
+ * buttons, pages) for a target app WITHOUT the LLM requirements synthesis.
+ * Used by the script generator to ground Playwright selectors in the real DOM.
+ * Logs in with the first role's credentials when a login screen is detected.
+ */
+export async function crawlAppMap(targetUrl: string, appContext?: AppContext): Promise<ExploredApp> {
+  const { snapshots, authDetected, notes } = await crawlApp(targetUrl, appContext);
+  return {
+    appName: appContext?.appName,
+    baseUrl: targetUrl,
+    pages: snapshots,
+    detectedFeatures: deriveFeatures(snapshots),
+    authDetected,
+    notes,
   };
 }
 
@@ -134,6 +153,11 @@ async function crawlApp(
       ignoreHTTPSErrors: true,
       viewport: { width: 1280, height: 800 },
     });
+    // tsx/esbuild injects a `__name` helper into functions; when Playwright
+    // serializes a page.evaluate() callback into the browser, that reference is
+    // undefined there. Define a no-op shim before any page script runs so the
+    // DOM-extraction evaluate works under tsx (harmless no-op under tsc/prod).
+    await context.addInitScript({ content: 'window.__name = window.__name || function (f) { return f; };' });
     const page = await context.newPage();
 
     // Same-origin gate
@@ -146,6 +170,9 @@ async function crawlApp(
     // Heuristic: if landing page looks like a login screen and we have
     // credentials, try to authenticate.
     const landingSnap = await snapshotPage(page);
+    // ALWAYS keep the landing/login page — its form selectors (username,
+    // password, submit) are what most generated tests need.
+    const snapshots: PageSnapshot[] = [landingSnap];
     const isLoginLike = looksLikeLogin(landingSnap);
     if (isLoginLike) {
       authDetected = true;
@@ -153,18 +180,20 @@ async function crawlApp(
       if (role?.username && role?.password) {
         const ok = await tryLogin(page, role.username, role.password);
         notes.push(ok ? `Logged in as ${role.username}` : `Login attempt with ${role.username} failed`);
+        if (ok) {
+          // Let the post-login SPA render, then capture the authenticated page.
+          await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => { /* SPA */ });
+          snapshots.push(await snapshotPage(page));
+        }
       } else {
         notes.push('Login screen detected but no credentials supplied — crawling as anonymous');
       }
     }
 
-    // BFS crawl, bounded.
+    // BFS crawl, bounded — seed from the CURRENT page (post-login if we logged in).
     const visited = new Set<string>([normaliseUrl(startUrl)]);
-    const snapshots: PageSnapshot[] = [];
-    snapshots.push(await snapshotPage(page));
-
     const queue: { url: string; depth: number }[] = [];
-    for (const link of snapshots[0].links) {
+    for (const link of snapshots[snapshots.length - 1].links) {
       if (snapshots.length + queue.length >= MAX_PAGES) break;
       const abs = resolveSameOrigin(link.href, startOrigin);
       if (abs && !visited.has(normaliseUrl(abs))) {
@@ -339,7 +368,7 @@ function deriveFeatures(snaps: PageSnapshot[]): string[] {
  * Claude is instructed to write as if it were a BA who had just shadowed
  * the application, NOT to invent features the crawler did not observe.
  */
-async function synthesizeRequirements(app: ExploredApp): Promise<string> {
+async function synthesizeRequirements(app: ExploredApp, llm?: import('./state.js').LlmConfig | null): Promise<string> {
   const uiMap = JSON.stringify(
     {
       baseUrl: app.baseUrl,
@@ -382,7 +411,7 @@ Rules:
 - Output markdown only, no commentary.`;
 
   try {
-    const response = await runClaudePrompt(prompt, { maxTokens: 6000 });
+    const response = await runLLM(prompt, { maxTokens: 6000, llm: llm || undefined });
     return response.trim();
   } catch (err) {
     // eslint-disable-next-line no-console

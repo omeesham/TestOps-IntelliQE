@@ -5,11 +5,14 @@ import {
   getConfigsForTenantByCategory,
   upsertConfig,
   disconnectConfig,
+  reconnectConfig,
+  deleteConfig,
 } from '../services/configurations.service.js';
 import {
   maskConfigData,
   decryptConfigData,
   encryptConfigData,
+  decryptField,
 } from '../utils/crypto.js';
 
 const router = Router();
@@ -80,25 +83,61 @@ router.put('/:integrationId', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/configurations/:integrationId/disconnect
+ * Soft-disconnect — keeps the stored config so it can be reconnected later.
+ */
+router.post('/:integrationId/disconnect', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const { integrationId } = req.params;
+    const ok = await disconnectConfig(user.tenantId, integrationId as string);
+    if (!ok) { res.status(404).json({ error: 'Configuration not found' }); return; }
+    console.log(`Configuration disconnected (kept): tenant=${user.tenantId}, integration=${integrationId}`);
+    res.json({ ok: true });
+  } catch (err: any) {
+    console.error('Disconnect configuration error:', err.message);
+    res.status(500).json({ error: 'Failed to disconnect integration' });
+  }
+});
+
+/**
+ * POST /api/configurations/:integrationId/reconnect
+ * Reactivate a previously-disconnected integration using its stored config.
+ */
+router.post('/:integrationId/reconnect', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const { integrationId } = req.params;
+    const ok = await reconnectConfig(user.tenantId, integrationId as string);
+    if (!ok) { res.status(404).json({ error: 'Configuration not found' }); return; }
+    console.log(`Configuration reconnected: tenant=${user.tenantId}, integration=${integrationId}`);
+    res.json({ ok: true });
+  } catch (err: any) {
+    console.error('Reconnect configuration error:', err.message);
+    res.status(500).json({ error: 'Failed to reconnect integration' });
+  }
+});
+
+/**
  * DELETE /api/configurations/:integrationId
- * Disconnect an integration for the tenant.
+ * Permanently remove an integration configuration for the tenant.
  */
 router.delete('/:integrationId', async (req: Request, res: Response) => {
   try {
     const user = req.user!;
     const { integrationId } = req.params;
 
-    const deleted = await disconnectConfig(user.tenantId, integrationId as string);
+    const deleted = await deleteConfig(user.tenantId, integrationId as string);
     if (!deleted) {
       res.status(404).json({ error: 'Configuration not found' });
       return;
     }
 
-    console.log(`Configuration disconnected: tenant=${user.tenantId}, integration=${integrationId}`);
+    console.log(`Configuration deleted: tenant=${user.tenantId}, integration=${integrationId}`);
     res.json({ ok: true });
   } catch (err: any) {
-    console.error('Disconnect configuration error:', err.message);
-    res.status(500).json({ error: 'Failed to disconnect integration' });
+    console.error('Delete configuration error:', err.message);
+    res.status(500).json({ error: 'Failed to delete integration' });
   }
 });
 
@@ -116,6 +155,19 @@ router.post('/:integrationId/test', async (req: Request, res: Response) => {
       const { sendTestEmail, clearSmtpCache } = await import('../services/email.service.js');
       clearSmtpCache(user.tenantId);
       const result = await sendTestEmail(user.tenantId, user.username);
+      res.json({ ok: result.sent, ...result });
+      return;
+    }
+
+    if (integrationId === 'notif-slack' || integrationId === 'notif-teams') {
+      const provider = integrationId === 'notif-slack' ? 'slack' : 'teams';
+      const { sendWebhookTest, sendWebhookTestUrl } = await import('../services/webhook-notification.service.js');
+      // Ad-hoc test: if the request carries a webhook_url (transit-encrypted),
+      // verify THAT url (before it's saved). Otherwise test the saved config.
+      const rawUrl = (req.body?.webhook_url || '') as string;
+      const result = rawUrl
+        ? await sendWebhookTestUrl(provider, decryptField(rawUrl))
+        : await sendWebhookTest(user.tenantId, provider);
       res.json({ ok: result.sent, ...result });
       return;
     }

@@ -12,6 +12,46 @@ type StoryDetails = {
   acceptanceCriteria?: string;
 };
 
+/**
+ * Reduce any JIRA URL to the API base = the site ORIGIN (scheme + host).
+ * Atlassian Cloud serves the REST API at the host root (https://site.atlassian.net
+ * + /rest/api/3/...). Users frequently paste a board/project URL like
+ * `https://site.atlassian.net/jira/software/c/projects/IQ/boards/447`; that path
+ * returns the app's HTML (HTTP 200) for every `/rest/...` sub-path, so requests
+ * silently "succeed" while returning no data. Stripping to the origin fixes it.
+ * Applied on BOTH write and read so already-saved bad values self-heal.
+ */
+export function toApiBase(raw: string): string {
+  let s = (raw || '').trim();
+  if (!s) return s;
+  if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
+  try {
+    const u = new URL(s);
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return s.replace(/\/+$/, '');
+  }
+}
+
+/**
+ * Pull the JIRA project key out of a pasted URL so we can scope story fetches to
+ * the project the user is actually working on — not every project in the org.
+ * Handles the common shapes:
+ *   .../projects/IQ/boards/447   .../jira/software/c/projects/IQ/...
+ *   .../browse/IQ-123            ?projectKey=IQ / ?selectedProjectKey=IQ
+ * Returns the upper-cased key, or undefined when the URL is just the site root.
+ */
+export function extractProjectKey(url: string): string | undefined {
+  const s = url || '';
+  let m = s.match(/\/projects\/([A-Za-z][A-Za-z0-9_]+)/);
+  if (m) return m[1]!.toUpperCase();
+  m = s.match(/\/browse\/([A-Za-z][A-Za-z0-9_]+)-\d+/);
+  if (m) return m[1]!.toUpperCase();
+  m = s.match(/[?&](?:projectKey|selectedProjectKey)=([A-Za-z0-9_]+)/i);
+  if (m) return m[1]!.toUpperCase();
+  return undefined;
+}
+
 // --- DB helpers (tenant-scoped) ---
 export async function getCredsForTenant(tenantId: string): Promise<JiraCreds | null> {
   // First check client_configurations, fall back to legacy jira_connections
@@ -22,7 +62,10 @@ export async function getCredsForTenant(tenantId: string): Promise<JiraCreds | n
   if (rows.length > 0) {
     // Decrypt any encrypted fields from DB storage
     const cfg = decryptConfigData(rows[0].config_data);
-    return { baseUrl: cfg.jira_url, authHeader: cfg.auth_header, projectKey: cfg.project_key || undefined };
+    // Prefer an explicitly stored project_key; otherwise recover it from the
+    // originally-saved URL (which still carries /projects/<KEY>/...).
+    const projectKey = cfg.project_key || extractProjectKey(cfg.jira_url);
+    return { baseUrl: toApiBase(cfg.jira_url), authHeader: cfg.auth_header, projectKey };
   }
   // Legacy fallback
   const legacy = await pool.query(
@@ -30,7 +73,11 @@ export async function getCredsForTenant(tenantId: string): Promise<JiraCreds | n
     [tenantId]
   );
   if (legacy.rows.length === 0) return null;
-  return { baseUrl: legacy.rows[0].jira_url, authHeader: legacy.rows[0].auth_header };
+  return {
+    baseUrl: toApiBase(legacy.rows[0].jira_url),
+    authHeader: legacy.rows[0].auth_header,
+    projectKey: extractProjectKey(legacy.rows[0].jira_url),
+  };
 }
 
 export async function saveCredsForTenant(
@@ -116,12 +163,21 @@ async function request<T>(creds: JiraCreds, url: string, params?: Record<string,
 }
 
 // --- Issue type discovery ---
+// Best-effort: discovery is a convenience to scope the JQL to this instance's
+// real Story/Task names. If it fails (permission scope, deprecated payload,
+// transient error) we MUST NOT abort the whole stories fetch — fall back to the
+// standard names and let the search itself surface any genuine auth error.
 async function getIssueTypeNames(creds: JiraCreds): Promise<string[]> {
-  const url = `${creds.baseUrl}/rest/api/3/issuetype`;
-  const all = await request<any[]>(creds, url);
-  const names = (all || []).map((t) => String(t?.name || '').trim()).filter(Boolean);
-  const matched = Array.from(new Set(names.filter((n) => /story/i.test(n) || /^task$/i.test(n))));
-  return matched.length ? matched : ['Story', 'Task'];
+  try {
+    const url = `${creds.baseUrl}/rest/api/3/issuetype`;
+    const all = await request<any[]>(creds, url);
+    const names = (all || []).map((t) => String(t?.name || '').trim()).filter(Boolean);
+    const matched = Array.from(new Set(names.filter((n) => /story/i.test(n) || /^task$/i.test(n))));
+    return matched.length ? matched : ['Story', 'Task'];
+  } catch (err: any) {
+    console.warn('[jira] issue-type discovery failed, using defaults:', err?.response?.status || err?.message);
+    return ['Story', 'Task'];
+  }
 }
 
 // --- HTML to plain text helpers ---
@@ -182,42 +238,63 @@ function extractSectionByHeading(html: string, contains: RegExp) {
 export async function testConnection(creds: JiraCreds): Promise<any> {
   const url = `${creds.baseUrl}/rest/api/3/myself`;
   const me = await request<any>(creds, url);
-  // A wrong base URL (e.g. a board URL) makes Atlassian return its SPA HTML with
-  // a 200 status, so `me` parses to something without an accountId. Reject that
-  // explicitly instead of saving a connection that can never fetch issues.
+  // A wrong Base URL (e.g. a board URL) returns the app's HTML with HTTP 200 and
+  // no accountId — reject it instead of saving a connection that can't fetch.
   if (!me || typeof me !== 'object' || !me.accountId) {
-    throw new Error('JIRA did not return a valid account — check the site URL (use https://your-domain.atlassian.net, not a board/project URL)');
+    throw new Error(
+      'That URL did not return a JIRA API response. Use your site root — e.g. https://your-site.atlassian.net — not a board or project URL.',
+    );
   }
   return { accountId: me.accountId, displayName: me.displayName, locale: me.locale };
 }
 
+function isStoryOrTask(name: string): boolean {
+  return /story/i.test(name) || /^task$/i.test(name);
+}
+
 export async function getStories(creds: JiraCreds): Promise<StorySummary[]> {
-  // Use the new /search/jql endpoint (old /search was removed by Atlassian)
+  // Use the new /search/jql endpoint (old /search was removed by Atlassian).
   const url = `${creds.baseUrl}/rest/api/3/search/jql`;
+
+  const run = async (jql: string, maxResults: number): Promise<any[]> => {
+    const data = await request<any>(creds, url, { jql, maxResults, fields: 'summary,issuetype' });
+    return Array.isArray(data.issues) ? data.issues : [];
+  };
+
   const issueTypeNames = await getIssueTypeNames(creds);
   const quoted = issueTypeNames.map((n) => `"${n.replace(/"/g, '\\"')}"`).join(', ');
-  // Scope to the connected project (e.g. project = "IQ") so the wizard lists
-  // only that project's issues, not every project on the JIRA site. When no
-  // project was captured, fall back to a site-wide query.
-  const projectClause = creds.projectKey ? `project = "${creds.projectKey.replace(/"/g, '\\"')}" AND ` : '';
-  const jql = `${projectClause}issuetype in (${quoted}) ORDER BY created DESC`;
-  const params = { jql, maxResults: 50, fields: 'summary,issuetype' };
+  // Scope to the project the user linked (e.g. "IQ"), not the whole org. The
+  // project restriction also makes the JQL "bounded" for the new search API.
+  const projectClause = creds.projectKey ? `project = "${creds.projectKey}" AND ` : '';
+  const scopedJql = `${projectClause}issuetype in (${quoted}) ORDER BY created DESC`;
+
+  let issues: any[] = [];
   try {
-    const data = await request<any>(creds, url, params);
-    const issues = Array.isArray(data.issues) ? data.issues : [];
-    return issues.map((i: any) => ({ key: i.key, summary: i.fields?.summary ?? '' }));
-  } catch {
-    // Fallback: broad search then filter client-side. The new /search/jql
-    // endpoint rejects fully-unbounded JQL ("Unbounded JQL queries are not
-    // allowed here"), so bound it with the project clause (or a wide date floor).
-    const fallbackJql = `${projectClause}created >= "1970/01/01" ORDER BY created DESC`;
-    const fallbackParams = { jql: fallbackJql, maxResults: 100, fields: 'summary,issuetype' };
-    const data = await request<any>(creds, url, fallbackParams);
-    const issues = (data.issues || []).filter((i: any) =>
-      ((n) => /story/i.test(n) || /^task$/i.test(n))(String(i?.fields?.issuetype?.name || ''))
-    );
-    return issues.map((i: any) => ({ key: i.key, summary: i.fields?.summary ?? '' }));
+    issues = await run(scopedJql, 50);
+  } catch (err: any) {
+    // Auth / permission failures won't be fixed by a broader query — surface them.
+    const status = err?.response?.status;
+    if (status === 401 || status === 403) throw err;
   }
+
+  // Empty result OR a non-auth failure above → broaden issue types but KEEP the
+  // project scope. The new endpoint rejects unbounded JQL, so when there's no
+  // project we add a date restriction instead.
+  if (issues.length === 0) {
+    const broadJql = creds.projectKey
+      ? `project = "${creds.projectKey}" ORDER BY created DESC`
+      : 'created >= "2000-01-01" ORDER BY created DESC';
+    try {
+      const broad = await run(broadJql, 100);
+      issues = broad.filter((i: any) => isStoryOrTask(String(i?.fields?.issuetype?.name || '')));
+    } catch (err: any) {
+      const status = err?.response?.status;
+      if (status === 401 || status === 403) throw err;
+      // Otherwise return whatever we have (likely empty).
+    }
+  }
+
+  return issues.map((i: any) => ({ key: i.key, summary: i.fields?.summary ?? '' }));
 }
 
 export async function getStory(creds: JiraCreds, key: string): Promise<StoryDetails> {

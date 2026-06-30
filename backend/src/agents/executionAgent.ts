@@ -4,7 +4,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
-import type { TestOpsState, TestCase } from './state.js';
+import type { TestOpsState, TestCase, PageObjectFile } from './state.js';
+import { collectClientDeliverableBundle } from '../services/client-deliverable.service.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -18,6 +19,8 @@ function sanitizeFileName(raw: string): string {
 
 interface PwSummary {
   stats?: { expected?: number; unexpected?: number; skipped?: number; flaky?: number };
+  /** Top-level load/compile errors (populated when specs fail to even load). */
+  errors?: { message?: string; location?: { file?: string; line?: number } }[];
   suites?: PwSuite[];
 }
 
@@ -37,6 +40,8 @@ interface PwSpec {
 
 interface SpecResult {
   scenario: string;
+  /** Test case id resolved from the spec's file name (deterministic mapping). */
+  testCaseId?: string;
   passed: boolean;
   /** Wall-clock duration of the test attempt, in milliseconds. */
   durationMs?: number;
@@ -48,7 +53,15 @@ function collectSpecs(suite: PwSuite, out: PwSpec[]): void {
   if (Array.isArray(suite.suites)) for (const child of suite.suites) collectSpecs(child, out);
 }
 
-function summarizeSpecs(summary: PwSummary): SpecResult[] {
+/**
+ * Map each Playwright spec result back to its originating test case.
+ *
+ * We write one file per test case named after its id (see runPlaywrightInMemory),
+ * so the file's basename is the source of truth — far more reliable than matching
+ * on the free-form `test('<title>')` string, which Claude may rephrase.
+ * `fileToTcId` maps a written file basename → test case id.
+ */
+function summarizeSpecs(summary: PwSummary, fileToTcId: Map<string, string>): SpecResult[] {
   const allSpecs: PwSpec[] = [];
   for (const top of summary.suites || []) collectSpecs(top, allSpecs);
   const results: SpecResult[] = [];
@@ -56,10 +69,19 @@ function summarizeSpecs(summary: PwSummary): SpecResult[] {
     const firstResult = spec.tests?.[0]?.results?.[0];
     const status = firstResult?.status ?? 'failed';
     const passed = status === 'passed' || status === 'expected';
-    const errorMessage = passed ? undefined : firstResult?.error?.message;
+    // Playwright embeds ANSI color codes in error messages; strip them so the
+    // UI renders readable text instead of raw escape sequences (\x1b[31m…).
+    const errorMessage = passed ? undefined : stripAnsi(firstResult?.error?.message || '') || undefined;
     // Duration comes back in milliseconds from Playwright's JSON reporter.
     const durationMs = typeof firstResult?.duration === 'number' ? firstResult.duration : undefined;
-    results.push({ scenario: spec.title || '', passed, durationMs, errorMessage });
+    const fileBase = spec.file ? path.basename(spec.file) : '';
+    results.push({
+      scenario: spec.title || '',
+      testCaseId: fileToTcId.get(fileBase),
+      passed,
+      durationMs,
+      errorMessage,
+    });
   }
   return results;
 }
@@ -76,8 +98,11 @@ function summarizeSpecs(summary: PwSummary): SpecResult[] {
  * "0 passed, 0 failed".
  */
 async function runPlaywrightInMemory(
-  scripts: { fileName: string; code: string; testCaseId: string }[],
+  scripts: { fileName: string; code: string; testCaseId: string; path?: string }[],
+  pageObjects: PageObjectFile[],
   targetUrl: string | undefined,
+  htmlReportDir?: string,
+  allureResultsDir?: string,
 ): Promise<{ specResults: SpecResult[]; summary: PwSummary | null }> {
   const workspace = path.join(os.tmpdir(), `jbs-pw-sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const testsDir = path.join(workspace, 'tests');
@@ -85,9 +110,42 @@ async function runPlaywrightInMemory(
   await fs.mkdir(testsDir, { recursive: true });
   await fs.mkdir(resultsDir, { recursive: true });
 
+  // Helper: write a file at a repo-relative path inside the workspace.
+  const writeRel = async (rel: string, content: string) => {
+    const abs = path.join(workspace, rel);
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.writeFile(abs, content, 'utf-8');
+  };
+
+  // 1. Lay down the POM scaffold support files (base.page.ts, fixtures, utils,
+  // types, data) so the generated page objects/specs resolve their imports.
+  // Skip the package's own tests/ (we write generated specs) and root config /
+  // package.json (we synthesize the config; deps resolve via NODE_PATH).
+  try {
+    const bundle = await collectClientDeliverableBundle();
+    for (const f of bundle) {
+      if (f.path.startsWith('tests/')) continue;
+      if (f.path === 'playwright.config.ts' || f.path === 'package.json' || f.path === 'tsconfig.json') continue;
+      await writeRel(f.path, f.content);
+    }
+  } catch (e) {
+    console.warn('[executionAgent] scaffold bundle unavailable:', (e as Error).message);
+  }
+
+  // 2. Generated page objects at their declared repo-relative paths.
+  for (const po of pageObjects) {
+    if (po?.path && typeof po.code === 'string') await writeRel(po.path, po.code);
+  }
+
+  // 3. Generated specs. Results map back by file BASENAME → testCaseId, so we
+  // dedup basenames globally (cross-module collisions get a -N suffix) while
+  // preserving each spec's POM directory (tests/<module>/...).
   const seen = new Set<string>();
+  const fileToTcId = new Map<string, string>();
   for (const s of scripts) {
-    let base = sanitizeFileName(s.fileName || s.testCaseId);
+    const declared = s.path || `tests/${sanitizeFileName(s.fileName || s.testCaseId)}`;
+    const dir = path.posix.dirname(declared.replace(/\\/g, '/'));
+    let base = sanitizeFileName(path.posix.basename(declared));
     if (!base.endsWith('.spec.ts')) base = `${base}.spec.ts`;
     let candidate = base;
     let suffix = 1;
@@ -95,26 +153,49 @@ async function runPlaywrightInMemory(
       candidate = base.replace(/\.spec\.ts$/, `-${++suffix}.spec.ts`);
     }
     seen.add(candidate);
-    await fs.writeFile(path.join(testsDir, candidate), s.code, 'utf-8');
+    fileToTcId.set(candidate, s.testCaseId);
+    await writeRel(`${dir === '.' ? 'tests' : dir}/${candidate}`, s.code);
   }
 
   const configPath = path.join(workspace, 'playwright.config.cjs');
   const baseUrlLine = targetUrl ? `    baseURL: ${JSON.stringify(targetUrl)},\n` : '';
+  // Persist a full Playwright HTML report when a destination is given, so it can
+  // be served (and linked from notifications). `open:'never'` keeps CI headless.
+  const htmlReporterLine = htmlReportDir
+    ? `    ['html', { outputFolder: ${JSON.stringify(htmlReportDir)}, open: 'never' }],\n`
+    : '';
+  // allure-results for the Reports page. Written to a caller-supplied dir so the
+  // route can run `allure generate` against it after the run.
+  // allure-playwright v3 reads `resultsDir`; v2 read `outputFolder`. Pass both
+  // (absolute) so results land in the caller's dir regardless of the installed
+  // major — otherwise v3 ignores `outputFolder`, writes to the default
+  // ./allure-results, and buildAllureReport finds an empty dir → no report.
+  const allureReporterLine = allureResultsDir
+    ? `    ['allure-playwright', { resultsDir: ${JSON.stringify(allureResultsDir)}, outputFolder: ${JSON.stringify(allureResultsDir)}, detail: true, suiteTitle: false }],\n`
+    : '';
   const configSrc = `const { defineConfig } = require('@playwright/test');
 module.exports = defineConfig({
   testDir: './tests',
   fullyParallel: true,
   retries: 0,
-  timeout: 60_000,
+  timeout: 90_000,
+  // Real apps (especially SPAs like OrangeHRM) render asynchronously and can be
+  // slow over the network from a container. The default 5s expect timeout is too
+  // short and surfaces as "element not found" on the very first assertion. Give
+  // visibility/action/navigation generous ceilings so genuinely-correct selectors
+  // aren't failed purely for being slow to appear.
+  expect: { timeout: 20_000 },
   reporter: [
     ['line'],
     ['json', { outputFile: './pw-summary.json' }],
-  ],
+${htmlReporterLine}${allureReporterLine}  ],
   use: {
-${baseUrlLine}    trace: 'retain-on-failure',
+${baseUrlLine}    actionTimeout: 20_000,
+    navigationTimeout: 45_000,
+    trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  projects: [{ name: 'edge', use: { channel: '${process.env.PLAYWRIGHT_CHANNEL || 'msedge'}' } }],
+  projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
 });
 `;
   await fs.writeFile(configPath, configSrc, 'utf-8');
@@ -127,35 +208,125 @@ ${baseUrlLine}    trace: 'retain-on-failure',
   };
 
   const isWindows = process.platform === 'win32';
-  let stdout = '';
-  let stderr = '';
-  try {
-    const result = await execFileAsync(
-      isWindows ? 'npx.cmd' : 'npx',
-      ['playwright', 'test', '--config', configPath],
-      { cwd: BACKEND_ROOT, env, timeout: 600_000, maxBuffer: 50 * 1024 * 1024, shell: isWindows },
-    );
-    stdout = result.stdout;
-    stderr = result.stderr;
-  } catch (err: any) {
-    stdout = err.stdout || '';
-    stderr = err.stderr || err.message || '';
+  const summaryPath = path.join(workspace, 'pw-summary.json');
+
+  // Spawn Playwright once. Spec failures (exit 1) are real results, not errors —
+  // only a missing summary (couldn't even run) is fatal.
+  async function runOnce(): Promise<{ summary: PwSummary | null; stdout: string; stderr: string }> {
+    let stdout = '';
+    let stderr = '';
+    try {
+      const result = await execFileAsync(
+        isWindows ? 'npx.cmd' : 'npx',
+        ['playwright', 'test', '--config', configPath],
+        { cwd: BACKEND_ROOT, env, timeout: 600_000, maxBuffer: 50 * 1024 * 1024, shell: isWindows },
+      );
+      stdout = result.stdout;
+      stderr = result.stderr;
+    } catch (err: any) {
+      stdout = err.stdout || '';
+      stderr = err.stderr || err.message || '';
+    }
+    let summary: PwSummary | null = null;
+    try {
+      summary = JSON.parse(await fs.readFile(summaryPath, 'utf-8'));
+    } catch {
+      summary = null;
+    }
+    return { summary, stdout, stderr };
   }
+
+  // `remaining` tracks the spec files still on disk (basename). When a generated
+  // spec fails to LOAD (syntax error, bad import, no test block), Playwright
+  // aborts collection for the ENTIRE run — so a single broken file zeroes out
+  // all the others. We pinpoint the offenders from summary.errors, quarantine
+  // them, and re-run the rest, recording each quarantined spec as a real
+  // failure (so the healing stage can fix it) rather than letting it sink the
+  // whole suite.
+  const remaining = new Set<string>(fileToTcId.keys());
+  const quarantined: { base: string; message: string }[] = [];
 
   let summary: PwSummary | null = null;
-  try {
-    const raw = await fs.readFile(path.join(workspace, 'pw-summary.json'), 'utf-8');
-    summary = JSON.parse(raw);
-  } catch {
-    summary = null;
+  let specResults: SpecResult[] = [];
+  for (let attempt = 0; attempt <= scripts.length; attempt++) {
+    const run = await runOnce();
+    summary = run.summary;
+    if (!summary) {
+      const tail = (run.stderr.slice(-800) || run.stdout.slice(-800)).trim();
+      throw new Error(tail || 'Playwright produced no summary');
+    }
+    specResults = summarizeSpecs(summary, fileToTcId);
+    if (specResults.length > 0) break; // collection succeeded — real results in hand
+
+    // Zero specs collected: identify which remaining files failed to load.
+    const offenders = collectLoadErrorFiles(summary, run.stdout, run.stderr, remaining);
+    if (offenders.size === 0) {
+      // Couldn't pinpoint a culprit — surface the raw diagnostic.
+      const loadErr = summary.errors?.find((e) => e?.message)?.message;
+      const detail = stripAnsi(loadErr || run.stderr.slice(-800) || run.stdout.slice(-800))
+        .replace(/\s+/g, ' ').trim().slice(0, 600);
+      throw new Error(
+        `Playwright collected 0 runnable tests from ${scripts.length} generated script(s) — the specs failed to load. ${detail || 'Check the generated scripts for syntax errors or missing test() blocks.'}`,
+      );
+    }
+    // Quarantine the broken files and retry with what's left.
+    for (const [base, message] of offenders) {
+      quarantined.push({ base, message });
+      remaining.delete(base);
+      await fs.rm(path.join(testsDir, base), { force: true }).catch(() => {});
+    }
+    if (remaining.size === 0) break; // every spec was broken — nothing left to run
   }
 
-  if (!summary) {
-    const tail = (stderr.slice(-800) || stdout.slice(-800)).trim();
-    throw new Error(tail || 'Playwright produced no summary');
+  // Record each quarantined spec as a real failure against its test case, so it
+  // shows up honestly (not "not_run") and feeds the healing loop.
+  for (const q of quarantined) {
+    specResults.push({
+      scenario: '',
+      testCaseId: fileToTcId.get(q.base),
+      passed: false,
+      errorMessage: q.message,
+    });
   }
 
-  return { specResults: summarizeSpecs(summary), summary };
+  return { specResults, summary };
+}
+
+/** Strip ANSI color codes Playwright embeds in error messages. */
+function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return (s || '').replace(/\[[0-9;]*m/g, '');
+}
+
+/**
+ * From a zero-spec Playwright run, map each load/compile error back to the
+ * generated spec file that caused it (by basename), so it can be quarantined.
+ * Returns basename → first-line error message for files still in `remaining`.
+ */
+function collectLoadErrorFiles(
+  summary: PwSummary,
+  stdout: string,
+  stderr: string,
+  remaining: Set<string>,
+): Map<string, string> {
+  const out = new Map<string, string>();
+  const errs = summary.errors && summary.errors.length
+    ? summary.errors
+    : [{ message: stderr || stdout }];
+  for (const e of errs) {
+    const msg = stripAnsi(e?.message || '');
+    // Prefer the structured location; fall back to scanning the message for any
+    // remaining spec basename (the path is embedded in the SyntaxError text).
+    let base = e?.location?.file ? path.basename(e.location.file) : undefined;
+    if (!base || !remaining.has(base)) {
+      base = [...remaining].find((b) => msg.includes(b));
+    }
+    if (base && remaining.has(base) && !out.has(base)) {
+      const firstLine = msg.split('\n').map((l) => l.trim()).find(Boolean) || 'Spec failed to load';
+      out.set(base, firstLine.slice(0, 300));
+    }
+  }
+  return out;
 }
 
 /**
@@ -170,7 +341,10 @@ ${baseUrlLine}    trace: 'retain-on-failure',
  *    `executionResults` null with an explanatory failureReason. The UI
  *    then knows nothing was actually run — no fabricated "0 failed" pass.
  */
-export async function executionAgent(state: TestOpsState): Promise<TestOpsState> {
+export async function executionAgent(
+  state: TestOpsState,
+  opts?: { htmlReportDir?: string; allureResultsDir?: string },
+): Promise<TestOpsState> {
   const targetUrl = state.appContext?.targetUrl;
   const scripts = state.automationScripts || [];
 
@@ -191,10 +365,16 @@ export async function executionAgent(state: TestOpsState): Promise<TestOpsState>
   }
 
   try {
-    const { specResults } = await runPlaywrightInMemory(scripts, targetUrl);
+    const { specResults } = await runPlaywrightInMemory(scripts, state.pageObjects || [], targetUrl, opts?.htmlReportDir, opts?.allureResultsDir);
 
+    // Primary lookup is by test case id (from the spec file name); scenario
+    // title is only a fallback for results we couldn't map by file.
+    const resultByTcId = new Map<string, SpecResult>();
     const resultByScenario = new Map<string, SpecResult>();
-    for (const r of specResults) resultByScenario.set(r.scenario, r);
+    for (const r of specResults) {
+      if (r.testCaseId) resultByTcId.set(r.testCaseId, r);
+      if (r.scenario) resultByScenario.set(r.scenario, r);
+    }
 
     let passed = 0;
     let failed = 0;
@@ -203,7 +383,7 @@ export async function executionAgent(state: TestOpsState): Promise<TestOpsState>
     // any inference or fabrication.
     const details: NonNullable<TestOpsState['executionResults']>['details'] = [];
     const updated: TestCase[] = state.testCases.map((tc) => {
-      const match = resultByScenario.get(tc.scenario);
+      const match = resultByTcId.get(tc.id) || resultByScenario.get(tc.scenario);
       if (!match) {
         // Test case had no matching Playwright spec — script generation
         // skipped it (e.g., API-only test). Mark honestly as not_run.

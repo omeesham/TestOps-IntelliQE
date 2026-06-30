@@ -3,7 +3,6 @@ import type { Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import pool from '../db.js';
 import { decryptField } from '../utils/crypto.js';
-import { upsertConfig } from '../services/configurations.service.js';
 
 const S = '"JBSTestOpsAI"';
 const router = Router();
@@ -35,57 +34,6 @@ router.get('/menu-config', async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('Menu config error:', err.message);
     res.status(500).json({ error: 'Failed to fetch menu config' });
-  }
-});
-
-/* ───────────────────────────────────────────
-   GET /api/users/feature-flags
-   The current tenant's per-feature on/off map. Stored as a single
-   client_configurations row (integration_id='feature-flags'). Any key NOT
-   present defaults to ENABLED, so existing tenants get the full app until
-   someone explicitly turns something off. Self-service: any authenticated role.
-   ─────────────────────────────────────────── */
-router.get('/feature-flags', async (req: Request, res: Response) => {
-  try {
-    const tenantId = req.user!.tenantId;
-    const { rows } = await pool.query(
-      `SELECT config_data FROM ${S}.client_configurations WHERE tenant_id = $1 AND integration_id = 'feature-flags'`,
-      [tenantId]
-    );
-    const flags = rows.length && rows[0].config_data && typeof rows[0].config_data === 'object'
-      ? (rows[0].config_data.flags || {})
-      : {};
-    res.json({ flags });
-  } catch (err: any) {
-    console.error('Get feature flags error:', err.message);
-    res.status(500).json({ error: 'Failed to fetch feature flags' });
-  }
-});
-
-/* ───────────────────────────────────────────
-   PUT /api/users/feature-flags
-   Upsert the tenant's feature on/off map. Self-service per the product spec:
-   any authenticated user may change them, and the change applies org-wide
-   (per-tenant). Body: { flags: { [featureKey]: boolean } }.
-   ─────────────────────────────────────────── */
-router.put('/feature-flags', async (req: Request, res: Response) => {
-  try {
-    const tenantId = req.user!.tenantId;
-    const username = req.user!.username || 'system';
-    const incoming = req.body?.flags;
-    if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
-      res.status(400).json({ error: 'flags object is required' });
-      return;
-    }
-    // Normalise to a clean { key: boolean } map (anything not explicitly false → true).
-    const flags: Record<string, boolean> = {};
-    for (const [k, v] of Object.entries(incoming)) flags[String(k)] = v !== false;
-
-    await upsertConfig(tenantId, 'feature-flags', 'connected', { flags }, username);
-    res.json({ ok: true, flags });
-  } catch (err: any) {
-    console.error('Save feature flags error:', err.message);
-    res.status(500).json({ error: 'Failed to save feature flags' });
   }
 });
 

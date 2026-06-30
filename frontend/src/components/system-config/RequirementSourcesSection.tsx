@@ -3,7 +3,7 @@ import { getRequirementSources } from './integrationCatalog';
 import type { CatalogItem } from './integrationCatalog';
 import IntegrationCard from './IntegrationCard';
 import ConnectModal from './ConnectModal';
-import { connectIntegration, disconnectIntegration, connectJira } from '@/services/api';
+import { connectIntegration, disconnectIntegration, reconnectIntegration, deleteIntegration, connectJira } from '@/services/api';
 import { encryptField } from '@/utils/crypto';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -39,6 +39,9 @@ export default function RequirementSourcesSection({ configs, onRefresh }: Props)
       if (dbRow && dbRow.status === 'connected') {
         return { ...cat, status: 'connected' as const, dbRow };
       }
+      if (dbRow) {
+        return { ...cat, status: 'disconnected' as const, dbRow };
+      }
       return { ...cat, status: 'available' as const, dbRow: null };
     });
   }, [catalog, configs]);
@@ -49,12 +52,16 @@ export default function RequirementSourcesSection({ configs, onRefresh }: Props)
   };
 
   const handleDisconnect = async (integrationId: string) => {
-    try {
-      await disconnectIntegration(integrationId);
-      onRefresh();
-    } catch (err: any) {
-      console.error('Disconnect error:', err);
-    }
+    try { await disconnectIntegration(integrationId); onRefresh(); }
+    catch (err: any) { console.error('Disconnect error:', err); }
+  };
+  const handleReconnect = async (integrationId: string) => {
+    try { await reconnectIntegration(integrationId); onRefresh(); }
+    catch (err: any) { console.error('Reconnect error:', err); }
+  };
+  const handleDelete = async (integrationId: string) => {
+    try { await deleteIntegration(integrationId); onRefresh(); }
+    catch (err: any) { console.error('Delete error:', err); }
   };
 
   const handleSaveConnect = async (formData: Record<string, string>) => {
@@ -90,7 +97,7 @@ export default function RequirementSourcesSection({ configs, onRefresh }: Props)
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="text-sm font-semibold text-[#1E3A8A] mb-1">Requirement Sources</h3>
+        <h3 className="text-sm font-semibold text-[#1E1B4B] mb-1">Requirement Sources</h3>
         <p className="text-xs text-[#6B7280]">
           Connect project management and documentation tools to import requirements
         </p>
@@ -110,6 +117,8 @@ export default function RequirementSourcesSection({ configs, onRefresh }: Props)
             lastSyncAt={item.dbRow?.lastSyncAt}
             onConnect={() => handleConnect(item)}
             onDisconnect={() => handleDisconnect(item.id)}
+            onReconnect={() => handleReconnect(item.id)}
+            onDelete={() => handleDelete(item.id)}
           />
         ))}
       </div>

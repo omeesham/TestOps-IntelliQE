@@ -27,29 +27,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return saved ? JSON.parse(saved) : null;
   });
 
+  // NOTE: we deliberately do NOT swallow errors here. A network failure, a 500
+  // (e.g. backend can't reach the DB), and a real 401 are very different things;
+  // the caller must be able to tell them apart and show the true reason. Only a
+  // clean { success: false } resolves to `false`; everything else throws.
   const login = async (username: string, password: string): Promise<boolean> => {
-    try {
-      const result = await loginUser(username, password);
-      if (result.success) {
-        const u: User = {
-          username: result.user.username,
-          role: result.user.role as UserRole,
-          displayName: result.user.displayName,
-          tenantId: result.user.tenantId,
-          tenantName: result.user.tenantName,
-          isPlatform: result.user.isPlatform,
-        };
-        setUser(u);
-        sessionStorage.setItem('intelliqe_user', JSON.stringify(u));
-        if (result.token) {
-          sessionStorage.setItem('intelliqe_token', result.token);
-        }
-        return true;
+    const result = await loginUser(username, password);
+    if (result.success) {
+      const u: User = {
+        username: result.user.username,
+        role: result.user.role as UserRole,
+        displayName: result.user.displayName,
+        tenantId: result.user.tenantId,
+        tenantName: result.user.tenantName,
+        isPlatform: result.user.isPlatform,
+      };
+      setUser(u);
+      sessionStorage.setItem('intelliqe_user', JSON.stringify(u));
+      if (result.token) {
+        sessionStorage.setItem('intelliqe_token', result.token);
       }
-      return false;
-    } catch {
-      return false;
+      return true;
     }
+    return false;
   };
 
   const logout = () => {

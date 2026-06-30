@@ -34,7 +34,7 @@ const JSON_COLUMNS = new Set<string>([
   'config_data', 'metadata', 'columns', 'steps', 'test_steps', 'test_data',
   'tags', 'details', 'cascade_plan', 'result_data', 'context', 'result',
   'definition', 'capabilities', 'artifact_summary', 'auth_config',
-  'setup_config', 'fields', 'source_config', 'stages', 'mobile_context',
+  'setup_config', 'fields', 'source_config', 'stages',
 ]);
 
 // ── Connection config ──
@@ -408,9 +408,6 @@ export async function initDb(): Promise<void> {
     await addColumn('test_runs', 'tenant_id', 'UNIQUEIDENTIFIER');
     await addColumn('test_runs', 'module', 'NVARCHAR(200)');
     await addColumn('test_runs', 'submodule', 'NVARCHAR(200)');
-    // Mobile Application Automation (additive; NULL = web/API run)
-    await addColumn('test_runs', 'platform', 'NVARCHAR(20)');
-    await addColumn('test_runs', 'mobile_context', 'NVARCHAR(MAX)');
 
     await createTable('test_cases', `
       CREATE TABLE ${SCHEMA}.test_cases (
@@ -461,59 +458,6 @@ export async function initDb(): Promise<void> {
         created_at      DATETIMEOFFSET DEFAULT SYSUTCDATETIME(),
         updated_at      DATETIMEOFFSET DEFAULT SYSUTCDATETIME(),
         CONSTRAINT automation_scripts_unique_tc_per_run UNIQUE (test_run_id, test_case_id)
-      )`);
-
-    // ─── 7b. TestRail integration (synced from TestRail; tenant-scoped) ───
-    await createTable('testrail_projects', `
-      CREATE TABLE ${SCHEMA}.testrail_projects (
-        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
-        tenant_id    UNIQUEIDENTIFIER NOT NULL,
-        project_id   INT NOT NULL,
-        name         NVARCHAR(500),
-        is_completed BIT DEFAULT 0,
-        synced_at    DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT testrail_projects_unique UNIQUE (tenant_id, project_id)
-      )`);
-    await createTable('testrail_runs', `
-      CREATE TABLE ${SCHEMA}.testrail_runs (
-        id             UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
-        tenant_id      UNIQUEIDENTIFIER NOT NULL,
-        project_id     INT NOT NULL,
-        run_id         INT NOT NULL,
-        name           NVARCHAR(500),
-        milestone_id   INT,
-        is_completed   BIT DEFAULT 0,
-        created_on     DATETIMEOFFSET,
-        passed_count   INT DEFAULT 0,
-        failed_count   INT DEFAULT 0,
-        blocked_count  INT DEFAULT 0,
-        retest_count   INT DEFAULT 0,
-        untested_count INT DEFAULT 0,
-        total_count    INT DEFAULT 0,
-        synced_at      DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT testrail_runs_unique UNIQUE (tenant_id, run_id)
-      )`);
-    await createTable('testrail_milestones', `
-      CREATE TABLE ${SCHEMA}.testrail_milestones (
-        id            UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
-        tenant_id     UNIQUEIDENTIFIER NOT NULL,
-        project_id    INT NOT NULL,
-        milestone_id  INT NOT NULL,
-        name          NVARCHAR(500),
-        is_completed  BIT DEFAULT 0,
-        started_on    DATETIMEOFFSET,
-        due_on        DATETIMEOFFSET,
-        synced_at     DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT testrail_milestones_unique UNIQUE (tenant_id, milestone_id)
-      )`);
-    await createTable('testrail_sync', `
-      CREATE TABLE ${SCHEMA}.testrail_sync (
-        tenant_id      UNIQUEIDENTIFIER PRIMARY KEY,
-        last_synced_at DATETIMEOFFSET,
-        status         NVARCHAR(50),
-        message        NVARCHAR(MAX),
-        projects_count INT DEFAULT 0,
-        runs_count     INT DEFAULT 0
       )`);
 
     // ─── 8. Audit log ───
