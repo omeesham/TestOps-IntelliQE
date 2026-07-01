@@ -94,6 +94,9 @@ export default function LlmConfigurationSection() {
   const [authMethod, setAuthMethod] = useState<'api_key' | 'claude_code'>('api_key');
   const [oauthToken, setOauthToken] = useState('');
   const [showToken, setShowToken] = useState(false);
+  // Claude Code transport: 'api' (OAuth token → Messages API) or 'cli' (local
+  // `claude` CLI — subscription, no API cost, for local testing).
+  const [claudeCodeMode, setClaudeCodeMode] = useState<'api' | 'cli'>('api');
 
   // Reasoning effort + extended ("ultra") thinking (Anthropic). Empty effort = provider default.
   const [effort, setEffort] = useState<'' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>('');
@@ -139,6 +142,7 @@ export default function LlmConfigurationSection() {
     setOauthToken('');
     setShowToken(false);
     setAuthMethod(provider === 'anthropic' && p?.authMethod === 'claude_code' ? 'claude_code' : 'api_key');
+    setClaudeCodeMode(p?.claudeCodeMode === 'cli' ? 'cli' : 'api');
     setEffort((p?.effort as any) || '');
     setExtendedThinking(!!p?.extendedThinking);
     setBaseUrl(p?.baseUrl || PROVIDER_META.find((m) => m.value === provider)?.endpoint || '');
@@ -223,6 +227,7 @@ export default function LlmConfigurationSection() {
         apiKey: !isClaudeCode && keyChanged ? apiKey.trim() : undefined,
         oauthToken: isClaudeCode && tokenChanged ? oauthToken.trim() : undefined,
         authMethod: isAnthropic ? authMethod : undefined,
+        claudeCodeMode: isClaudeCode ? claudeCodeMode : undefined,
         effort: isAnthropic && effort ? effort : undefined,
         extendedThinking: isAnthropic ? extendedThinking : undefined,
         baseUrl: baseUrl.trim() || meta.endpoint,
@@ -460,6 +465,31 @@ export default function LlmConfigurationSection() {
                   <p className="text-[11px] text-[#6B7280] mt-1 flex items-center gap-1">
                     <ShieldCheck className="w-3 h-3" /> Run <code className="px-1 bg-[#F5F3FF] rounded">claude setup-token</code> in a terminal, then paste the token. Uses your Claude subscription, not API credits. Encrypted at rest.
                   </p>
+
+                  {/* Transport — API (OAuth token) vs local CLI. The pipeline uses
+                      exactly what's selected here. CLI is for local testing on a
+                      machine with the `claude` CLI installed (no API cost). */}
+                  <label className={`${LABEL_CLASS} mt-3`}>Connection Method</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {([
+                      { v: 'api', label: 'API', hint: 'OAuth token → Anthropic API' },
+                      { v: 'cli', label: 'Claude CLI', hint: 'Local claude CLI — no API cost' },
+                    ] as const).map((opt) => (
+                      <button
+                        key={opt.v}
+                        type="button"
+                        onClick={() => { setClaudeCodeMode(opt.v); setTestResult(null); }}
+                        className={`flex flex-col items-start px-3 py-2 rounded-xl border text-left transition-all ${
+                          claudeCodeMode === opt.v
+                            ? 'border-[#7C3AED] bg-[#F5F3FF] ring-2 ring-[#7C3AED]/20'
+                            : 'border-[#DDD6FE] bg-white hover:bg-[#F5F3FF]'
+                        }`}
+                      >
+                        <span className="text-sm font-semibold text-[#1E1B4B]">{opt.label}</span>
+                        <span className="text-[11px] text-[#6B7280]">{opt.hint}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               ) : (
                 <div>

@@ -190,13 +190,27 @@ export async function runLLM(
     }
   };
 
-  // Claude Code (subscription): OAuth token primary, logged-in CLI as fallback.
+  // Claude Code (subscription). The admin picks the transport in the UI:
+  //   - 'cli' → run through the logged-in local `claude` CLI (no per-token API
+  //             cost — for local testing on a machine with Claude installed).
+  //   - 'api' → OAuth token against the Messages API (default; works on Azure).
   if (method === 'claude_code') {
+    const mode = llm?.claudeCodeMode || 'api';
+    if (mode === 'cli') {
+      if (!isClaudeCliAvailable()) {
+        throw new Error(
+          'Claude Code is set to CLI mode, but the `claude` CLI is not available on this server. ' +
+          'Install and log in the Claude CLI here, or switch Claude Code to API mode in System Configuration → LLM Configuration.',
+        );
+      }
+      return runClaudePrompt(prompt, { maxTokens: options?.maxTokens, model, oauthToken: llm?.oauthToken });
+    }
+    // API mode.
     if (llm?.oauthToken) {
       return callApi({ authMethod: 'claude_code', oauthToken: llm.oauthToken, model, baseUrl, maxTokens, system: options?.system, effort: llm?.effort, extendedThinking: llm?.extendedThinking });
     }
     if (isClaudeCliAvailable()) {
-      return runClaudePrompt(prompt, { maxTokens: options?.maxTokens, model: llm?.model, oauthToken: llm?.oauthToken });
+      return runClaudePrompt(prompt, { maxTokens: options?.maxTokens, model, oauthToken: llm?.oauthToken });
     }
     throw new Error(
       'Claude Code is selected but no OAuth token is saved and no local Claude CLI is available. ' +

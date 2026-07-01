@@ -649,6 +649,8 @@ export interface LlmProviderConfig {
   status: 'connected' | 'not_configured' | 'invalid_credentials' | 'connection_failed';
   /** Anthropic only: 'api_key' (API credits) or 'claude_code' (subscription). */
   authMethod?: 'api_key' | 'claude_code';
+  /** Claude Code transport: 'api' (OAuth→API) or 'cli' (local claude CLI). */
+  claudeCodeMode?: 'api' | 'cli';
   model: string | null;
   /** Per-agent model overrides (stage → model). Empty object when unset. */
   agentModels?: Record<string, string>;
@@ -689,12 +691,14 @@ export async function saveLlmConfig(
     apiKey?: string; baseUrl?: string; model?: string | null;
     agentModels?: Record<string, string>;
     authMethod?: 'api_key' | 'claude_code'; oauthToken?: string;
+    claudeCodeMode?: 'api' | 'cli';
     effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
     extendedThinking?: boolean;
   },
 ) {
   const body: Record<string, any> = { baseUrl: payload.baseUrl, model: payload.model };
   if (payload.authMethod) body.authMethod = payload.authMethod;
+  if (payload.claudeCodeMode) body.claudeCodeMode = payload.claudeCodeMode;
   if (payload.agentModels) body.agentModels = payload.agentModels;
   if (payload.effort) body.effort = payload.effort;
   if (typeof payload.extendedThinking === 'boolean') body.extendedThinking = payload.extendedThinking;

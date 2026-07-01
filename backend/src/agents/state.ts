@@ -165,6 +165,14 @@ export interface LlmConfig {
   apiKey?: string;
   /** Claude Code OAuth token (sk-ant-oat…) — used when authMethod is 'claude_code'. */
   oauthToken?: string;
+  /**
+   * Claude Code transport, chosen by the admin when authMethod is 'claude_code':
+   *   - 'api' → OAuth token against the Anthropic Messages API (Bearer).
+   *   - 'cli' → the logged-in local `claude` CLI (subscription, no API cost).
+   * Defaults to 'api'. Used to run local testing through the CLI while Azure
+   * uses the API key/token — the two run against separate databases.
+   */
+  claudeCodeMode?: 'api' | 'cli';
   /** Default model, used for any stage without a specific override. */
   model?: string;
   baseUrl?: string;

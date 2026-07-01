@@ -21,6 +21,8 @@ export interface TenantLlm {
   apiKey?: string;
   /** Claude Code OAuth token — present when authMethod is 'claude_code'. */
   oauthToken?: string;
+  /** Claude Code transport: 'api' (OAuth→Messages API) or 'cli' (local claude CLI). */
+  claudeCodeMode?: 'api' | 'cli';
   model: string;
   baseUrl: string;
   /** Per-agent model overrides (stage → model), chosen by the admin in the UI. */
@@ -67,7 +69,8 @@ export async function getTenantLlm(tenantId: string): Promise<TenantLlm | null> 
         if (cfg.oauthToken && typeof cfg.oauthToken === 'string') {
           oauthToken = decryptStored(cfg.oauthToken) || undefined;
         }
-        return { provider: 'anthropic', authMethod, oauthToken, model, baseUrl, agentModels, effort, extendedThinking };
+        const claudeCodeMode: 'api' | 'cli' = cfg.claudeCodeMode === 'cli' ? 'cli' : 'api';
+        return { provider: 'anthropic', authMethod, oauthToken, claudeCodeMode, model, baseUrl, agentModels, effort, extendedThinking };
       }
 
       const rawKey = cfg.apiKey;

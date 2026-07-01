@@ -2158,7 +2158,7 @@ export default function ChatPage() {
           <button
             onClick={runOnce(handleExecuteTests)}
             disabled={busy}
-            className="w-full py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2 shadow-sm shadow-emerald-200"
+            className="inline-flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all"
           >
             <Play className="w-4 h-4" />Execute Test Suite
           </button>
@@ -2272,7 +2272,7 @@ export default function ChatPage() {
               disabled={busy}
               className={`${executionSummary.failed > 0 && healingAttempt < 2 ? 'flex-1' : 'w-full'} py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2`}
             >
-              <BarChart3 className="w-4 h-4" />{executionSummary.failed > 0 && healingAttempt < 2 ? 'Skip to Report' : 'Generate Report'}
+              <BarChart3 className="w-4 h-4" />Generate Report
             </button>
           </div>
         </div>

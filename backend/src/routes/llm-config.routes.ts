@@ -273,6 +273,7 @@ router.get('/', async (req: Request, res: Response) => {
         configured,
         status: (configured ? (row?.status as ConnStatus) || 'connected' : 'not_configured') as ConnStatus,
         authMethod,
+        claudeCodeMode: cfg.claudeCodeMode === 'cli' ? 'cli' : 'api',
         model: cfg.model || null,
         agentModels: (cfg.agentModels && typeof cfg.agentModels === 'object') ? cfg.agentModels : {},
         effort: cfg.effort || null,
@@ -400,10 +401,18 @@ router.put('/:provider', async (req: Request, res: Response) => {
       ? req.body.extendedThinking
       : (prevCfg.extendedThinking ?? false);
 
+    // Claude Code transport (Anthropic + claude_code only): 'api' (OAuth→API) or
+    // 'cli' (local claude CLI). Preserved when the caller omits it.
+    const claudeCodeMode: 'api' | 'cli' =
+      req.body?.claudeCodeMode === 'cli' ? 'cli'
+      : req.body?.claudeCodeMode === 'api' ? 'api'
+      : (prevCfg.claudeCodeMode === 'cli' ? 'cli' : 'api');
+
     const configData = {
       apiKey: storedApiKey,
       oauthToken: storedOauthToken,
       authMethod,
+      claudeCodeMode,
       baseUrl,
       model,
       agentModels,
