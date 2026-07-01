@@ -326,7 +326,17 @@ export default function ChatPage() {
       if (s.healingLog?.length)     setHealingLog(s.healingLog);
       if (s.healingAttempt)         setHealingAttempt(s.healingAttempt);
       if (s.savedTestRunId)         setSavedTestRunId(s.savedTestRunId);
-      if (s.pipelineStages)         setPipelineStages(s.pipelineStages);
+      if (s.pipelineStages) {
+        // Reconcile by KEY against the current stage list — a session saved when the
+        // stage set differed must not misalign the index-paired pipeline render.
+        // Unknown saved keys are dropped; new stages default to pending.
+        const saved = new Map<string, PipelineStageState>(
+          (s.pipelineStages as PipelineStageState[]).map((x) => [x.key, x]),
+        );
+        setPipelineStages(PIPELINE_STAGES.map((def) =>
+          saved.get(def.key) ?? { key: def.key, status: 'pending' as const, detail: 'Pending' },
+        ));
+      }
       setSessionRestored(true);
       // Auto-hide after 4 seconds
       setTimeout(() => setSessionRestored(false), 4000);
@@ -1072,6 +1082,15 @@ export default function ChatPage() {
 
     if (failed > 0) {
       push('tessa', `Execution complete: ${passed} passed, ${failed} failed out of ${finalResults.length} tests. You can auto-heal failing tests or skip to report.`);
+    } else if (passed === 0) {
+      // Nothing passed AND nothing failed → no test actually ran (all not_run).
+      // NEVER claim "all passed" here — that masked broken/non-runnable scripts.
+      push('tessa', `⚠️ No tests actually executed — ${notRun} script(s) produced no result. ${execRes?.failureReason || 'The generated scripts may not be runnable; review them in Automation Scripts and regenerate if needed.'}`);
+      updatePipeline('execution', 'skipped', `0/${finalResults.length} executed`);
+      setStep('execution-results');
+      return;
+    } else if (notRun > 0) {
+      push('tessa', `${passed} of ${finalResults.length} tests passed; ${notRun} did not run. Review the report, or regenerate the scripts that didn't run.`);
     } else {
       push('tessa', `All ${passed} tests passed! Proceed to generate the execution report.`);
     }
@@ -1227,7 +1246,18 @@ export default function ChatPage() {
     if (savedTestRunId) {
       setReportGenStatus('generating');
       try {
-        const allure = await generateAllureReport(savedTestRunId);
+        // Pass the wizard's final per-test results so the downloadable Allure
+        // report is built from the SAME data shown above — guaranteeing the
+        // report's pass/fail matches the Test Execution Report (no stale snapshot).
+        const allure = await generateAllureReport(
+          savedTestRunId,
+          executionResults.map(r => ({
+            testCaseId: r.testCaseId,
+            status: r.status,
+            durationMs: Math.round((parseFloat(r.duration || '0') || 0) * 1000),
+            error: r.error,
+          })),
+        );
         if (allure?.reportUrl) {
           setReportDownloadUrl(allure.reportUrl.replace(/\/index\.html$/, '/download'));
           setReportGenStatus('ready');

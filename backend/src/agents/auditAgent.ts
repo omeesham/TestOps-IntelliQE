@@ -1,5 +1,5 @@
 import type { TestOpsState } from './state.js';
-import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
+import { runClaudeJson } from './claude-runner.js';
 
 export async function auditAgent(state: TestOpsState): Promise<TestOpsState> {
   if (!state.parsedRequirements) return state;
@@ -22,12 +22,22 @@ Return ONLY valid JSON (no markdown):
 
 Focus on: XSS, SQL injection, CSRF, session management, input validation, boundary values, concurrent access, error recovery, accessibility.`;
 
-  const response = await runClaudePrompt(prompt, { maxTokens: 2048 });
-  const parsed = parseJsonFromResponse<{
-    additionalEdgeCases: string[];
-    securityConcerns: string[];
-    additionalDataRules: string[];
-  }>(response);
+  // The audit only ENRICHES the requirements with extra edge/security cases — it
+  // is not on the critical path. If Claude returns unparseable/truncated JSON,
+  // degrade gracefully and proceed with the un-enriched requirements rather than
+  // failing the whole generation (this used to crash the pipeline intermittently).
+  let parsed: {
+    additionalEdgeCases?: string[];
+    securityConcerns?: string[];
+    additionalDataRules?: string[];
+  };
+  try {
+    parsed = await runClaudeJson(prompt, { maxTokens: 4096, model: 'claude-sonnet-4-6', attempts: 2 });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[auditAgent] enrichment failed, proceeding without extra cases:', (err as Error).message);
+    return state;
+  }
 
   const allEdgeCases = [
     ...edgeCases,

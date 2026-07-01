@@ -87,10 +87,15 @@ function buildAllureResult(tc: any, run: any) {
 }
 
 /* ── Generate Allure result JSON files to a temp dir ── */
+export interface ExecOutcome { status: string; durationMs?: number; error?: string }
+
 export async function generateAllureResults(
   tenantId: string,
   isPlatform: boolean,
   runId?: string,
+  /** Optional per-test outcomes keyed by test_case id. When given, they OVERRIDE
+   *  the DB status so the report reflects the exact pass/fail the wizard showed. */
+  execResults?: Map<string, ExecOutcome>,
 ): Promise<string> {
   // Query test cases with their runs
   let query: string;
@@ -153,7 +158,27 @@ export async function generateAllureResults(
 
   for (const row of rows) {
     const run = runMap.get(row.run_id)!;
-    const result = buildAllureResult(row, run);
+    const result: any = buildAllureResult(row, run);
+    // Override with the real in-app execution outcome when provided, so the
+    // downloadable report matches the wizard's Test Execution Report exactly.
+    const exec = execResults?.get(row.id);
+    if (exec) {
+      const st = exec.status === 'passed' ? 'passed'
+        : exec.status === 'failed' ? 'failed'
+        : exec.status === 'not_run' ? 'skipped' : 'unknown';
+      result.status = st;
+      if (typeof exec.durationMs === 'number' && exec.durationMs >= 0) {
+        result.stop = result.start + exec.durationMs;
+      }
+      result.statusDetails = exec.error ? { message: String(exec.error).slice(0, 4000) } : {};
+      if (Array.isArray(result.steps) && result.steps.length) {
+        const last = result.steps.length - 1;
+        result.steps = result.steps.map((s: any, i: number) => ({
+          ...s,
+          status: st === 'failed' ? (i === last ? 'failed' : 'passed') : st === 'passed' ? 'passed' : s.status,
+        }));
+      }
+    }
     await fs.writeFile(
       path.join(resultsDir, `${result.uuid}-result.json`),
       JSON.stringify(result, null, 2),
@@ -161,6 +186,31 @@ export async function generateAllureResults(
   }
 
   return resultsDir;
+}
+
+/**
+ * Build the Allure report deterministically from the in-app execution results
+ * (the wizard's Test Execution Report). This is the single source of truth, so
+ * the downloadable report ALWAYS matches what the user saw — no stale snapshot,
+ * no flaky re-run.
+ */
+export async function getOrGenerateReportFromExecution(
+  tenantId: string,
+  isPlatform: boolean,
+  runId: string,
+  execResults: Map<string, ExecOutcome>,
+): Promise<{ outputDir: string; generatedAt: string }> {
+  if (!runId) throw new Error('runId is required');
+  const outputDir = path.join(BACKEND_ROOT, 'allure-reports', tenantId, runId);
+  const resultsDir = await generateAllureResults(tenantId, isPlatform, runId, execResults);
+  try {
+    await generateAllureHtml(resultsDir, outputDir);
+    const meta = { generatedAt: new Date().toISOString(), runId, tenantId, real: true, fromExecution: true };
+    await fs.writeFile(path.join(outputDir, 'report-meta.json'), JSON.stringify(meta, null, 2));
+    return { outputDir, generatedAt: meta.generatedAt };
+  } finally {
+    await fs.rm(resultsDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 /* ── Node-based Allure 3 CLI (no Java) ── */

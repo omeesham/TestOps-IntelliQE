@@ -1,0 +1,28 @@
+// Example Jenkins pipeline — equivalent to .github/workflows/e2e.yml.
+// Inject BASE_URL and credentials via Jenkins credentials, never source.
+pipeline {
+  agent { docker { image 'mcr.microsoft.com/playwright:v1.59.1-jammy' } }
+
+  environment {
+    CI = 'true'
+    ENV = 'qa'
+    BASE_URL = credentials('e2e-base-url')
+    API_BASE_URL = credentials('e2e-api-base-url')
+    USERNAME = credentials('e2e-username')
+    PASSWORD = credentials('e2e-password')
+  }
+
+  stages {
+    stage('Install') { steps { sh 'npm ci' } }
+    stage('Quality') { steps { sh 'npm run typecheck'; sh 'npm run lint' } }
+    stage('Test')    { steps { sh 'npx playwright test -c config/playwright.config.ts' } }
+    stage('Report')  { steps { sh 'npm run allure:generate' } }
+  }
+
+  post {
+    always {
+      junit testResults: 'reports/junit.xml', allowEmptyResults: true
+      archiveArtifacts artifacts: 'reports/**, test-results/**', allowEmptyArchive: true
+    }
+  }
+}

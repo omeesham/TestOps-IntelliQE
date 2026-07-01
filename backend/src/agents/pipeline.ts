@@ -114,8 +114,22 @@ export async function runGenerationOnly(
     state = await exploreAgent(state);
   }
   state = await requirementAgent(state);
-  onProgress('requirements', 'running', 'Auditing coverage & edge cases…');
-  state = await auditAgent(state);
+
+  // PERF: auditAgent (enriches the requirements with extra edge/security cases) and
+  // plannerAgent (builds the test strategy) BOTH read only the requirement output and
+  // depend on nothing from each other, so run them CONCURRENTLY instead of back-to-back.
+  // Each Claude call's latency is dominated by I/O-wait startup, so two in parallel
+  // overlap and roughly halve this slice's wall-clock. Merge: keep audit's ENRICHED
+  // parsedRequirements + planner's plan (planner sees pre-audit requirements; the
+  // generator's coverage mandate still exercises the audit's extra edge cases).
+  onProgress('requirements', 'running', 'Auditing coverage & planning strategy…');
+  const [audited, planned] = await Promise.all([auditAgent(state), plannerAgent(state)]);
+  state = {
+    ...state,
+    parsedRequirements: audited.parsedRequirements,
+    testPlan: planned.testPlan,
+    extendedTestPlan: planned.extendedTestPlan,
+  };
   const featureCount = state.parsedRequirements?.features?.length || 0;
   onProgress(
     'requirements',
@@ -124,8 +138,6 @@ export async function runGenerationOnly(
   );
 
   // ── Test Design stage ──
-  onProgress('test-design', 'running', 'Planning test strategy…');
-  state = await plannerAgent(state);
   onProgress('test-design', 'running', 'Generating test cases…');
   state = await generatorAgent(state);
   onProgress('test-design', 'completed', `${state.testCases.length} test cases generated`);

@@ -69,7 +69,9 @@ async function loadConfig(): Promise<PipelineDefinition['defaults']> {
   return {
     model: 'sonnet', maxTurnsPerStage: 50, budgetPerRunUsd: 2.00,
     budgetPerStageUsd: 0.50, workerPollIntervalMs: 5000,
-    workerHeartbeatIntervalMs: 30000, cliPath: 'claude',
+    // cliPath intentionally empty — the worker runs agents via the Anthropic SDK
+    // (agentRunner: 'sdk'); the legacy `claude` CLI path is disabled.
+    workerHeartbeatIntervalMs: 30000, cliPath: '',
     cliOutputFormat: 'json', agentRunner: 'sdk' as const, autoInvoke: true,
   };
 }

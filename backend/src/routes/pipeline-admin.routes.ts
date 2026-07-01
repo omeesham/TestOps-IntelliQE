@@ -3,9 +3,25 @@ import type { Request, Response } from 'express';
 import pool from '../db.js';
 import { loadPipelineDefinition, loadPipelineDefinitionForClient, savePipelineDefinition } from '../orchestrator/orchestrator.js';
 import { getUsageStats, isWorkerConnected, getLastHeartbeat, setPendingWorkerCommand } from '../services/pipeline-queries.js';
+import { getConfig } from '../services/configurations.service.js';
+import { decryptConfigData } from '../utils/crypto.js';
 
 const SCHEMA = '"JBSTestOpsAI"';
 const router = Router();
+
+// Shared fetch timeout for provider probes (connection test + model listing) —
+// keeps a hung endpoint from holding the request open and lets us surface a
+// clean "timeout" status to the UI.
+const TIMEOUT_MS = 15000;
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<globalThis.Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // GET /pipeline-definition
 router.get('/pipeline-definition', async (req: Request, res: Response) => {
@@ -81,60 +97,20 @@ router.post('/worker/:action', async (req: Request, res: Response) => {
 // POST /test-ai-connection — validates the AI API key by making a minimal request
 router.post('/test-ai-connection', async (req: Request, res: Response) => {
   try {
-    const { provider, authMethod, apiKey, model, baseUrl, cliPath } = req.body;
+    const { provider, authMethod, integrationId } = req.body;
+    let { apiKey, model, baseUrl } = req.body;
+    const norm = String(provider || '').toLowerCase();
 
-    // Claude CLI auth — test by running `claude --version`
+    // ── CLI AUTH DISABLED (2026-06-27) ──
+    // The platform standardised on API keys (LLM Configuration). The legacy
+    // `claude` CLI auth path (execSync `claude --version` / `claude auth status`)
+    // has been removed — it expired periodically and caused the recurring
+    // "AI engine not connected" failures. Reject CLI-auth test requests with an
+    // actionable message instead of probing for the binary.
     if (authMethod === 'claude-cli') {
-      const { execSync } = await import('child_process');
-      const os = await import('os');
-      const path = await import('path');
-
-      // Build candidate paths: user-specified, bare command, and common npm global locations
-      const npmGlobalBin = path.join(os.homedir(), 'AppData', 'Roaming', 'npm', 'claude.cmd');
-      const candidates = [
-        cliPath,                         // user-specified path
-        'claude',                        // bare command (if in PATH)
-        npmGlobalBin,                    // Windows npm global default
-      ].filter(Boolean) as string[];
-
-      let resolved: string | null = null;
-      let version = '';
-      for (const cmd of candidates) {
-        try {
-          version = execSync(`"${cmd}" --version`, { timeout: 10000, encoding: 'utf-8' }).trim();
-          resolved = cmd;
-          break;
-        } catch (_) { /* try next candidate */ }
-      }
-      if (!resolved) {
-        res.status(400).json({
-          error: `Claude CLI not found. Install it with: npm install -g @anthropic-ai/claude-code — then add the npm global bin to your PATH:\n  setx PATH "%PATH%;${path.dirname(npmGlobalBin)}"\nThen restart your terminal and run: claude auth login --claudeai`,
-        });
-        return;
-      }
-
-      // Detecting the binary is not enough — `claude -p` fails (and the pipeline
-      // silently falls back to template generation) when the CLI is logged out.
-      // Verify real authentication via `claude auth status`, which prints JSON
-      // { loggedIn, authMethod, ... } without consuming any tokens.
-      let loggedIn = false;
-      let authMethod = 'none';
-      try {
-        const statusRaw = execSync(`"${resolved}" auth status`, { timeout: 10000, encoding: 'utf-8' }).trim();
-        const status = JSON.parse(statusRaw);
-        loggedIn = status.loggedIn === true;
-        authMethod = status.authMethod || 'none';
-      } catch (_) { /* treat as logged out */ }
-
-      if (!loggedIn) {
-        res.status(400).json({
-          error: `Claude CLI detected (${version}) but NOT logged in — the pipeline would fall back to template generation. Authenticate once as the user that runs the backend:\n  claude auth login --claudeai\nThen click Test Connection again.`,
-          resolvedPath: resolved,
-        });
-        return;
-      }
-
-      res.json({ ok: true, message: `Claude CLI ready: ${version} (authenticated via ${authMethod})`, resolvedPath: resolved });
+      res.status(400).json({
+        error: 'Claude CLI authentication is disabled. Configure an Anthropic API key in System Configuration → LLM Configuration and test that instead.',
+      });
       return;
     }
 
@@ -262,6 +238,7 @@ router.post('/test-ai-connection', async (req: Request, res: Response) => {
 
     res.status(400).json({ error: `Unsupported provider "${provider}" for cloud API connectivity.` });
   } catch (err: any) {
+<<<<<<< HEAD
     // A throw here is almost always a transport failure — the cloud API host was
     // genuinely unreachable (DNS, refused, TLS, timeout). Report it as such so the
     // UI can tell the user it's a connectivity problem, not a credential one.
@@ -272,7 +249,95 @@ router.post('/test-ai-connection', async (req: Request, res: Response) => {
         ? 'Could not reach the cloud API endpoint. Check the Base URL and your network connection, then try again.'
         : (raw || 'Connection test failed'),
     });
+=======
+    res.status(500).json({ ok: false, status: 'failed', error: err.message || 'Connection test failed' });
+>>>>>>> 24902532bc8dc5cece07abe81ba85949b71436a4
   }
+});
+
+// POST /list-models — fetch the live model catalogue for a provider after a
+// successful connection. Falls back to a curated list when the provider has no
+// list endpoint or the call fails, so the UI always has something to show.
+router.post('/list-models', async (req: Request, res: Response) => {
+  const { provider, integrationId } = req.body || {};
+  let { apiKey, baseUrl } = req.body || {};
+  const norm = String(provider || '').toLowerCase();
+
+  // Resolve the stored credential when the UI lists models for a saved provider
+  // (it never holds the plaintext key). Mirrors the test-connection resolution.
+  if ((!apiKey || apiKey === '__KEEP_EXISTING__') && integrationId) {
+    const tenantId = (req as any).user?.tenantId;
+    if (tenantId) {
+      const existing = await getConfig(tenantId, integrationId);
+      if (existing?.configData) {
+        const dec = decryptConfigData(existing.configData);
+        if (dec.apiKey) apiKey = dec.apiKey;
+        if (!baseUrl && dec.endpoint) baseUrl = dec.endpoint;
+      }
+    }
+  }
+
+  const FALLBACKS: Record<string, string[]> = {
+    anthropic: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-sonnet-4-20250514', 'claude-opus-4-20250514'],
+    claude: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-sonnet-4-20250514', 'claude-opus-4-20250514'],
+    openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o1', 'o1-mini'],
+    gemini: ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
+    google: ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
+    groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
+    mistral: ['mistral-large-latest', 'mistral-small-latest', 'codestral-latest'],
+    cohere: ['command-r-plus', 'command-r', 'command'],
+    'azure-openai': ['gpt-4o', 'gpt-4-turbo', 'gpt-35-turbo'],
+    'aws-bedrock': ['anthropic.claude-3-5-sonnet-20241022-v2:0', 'anthropic.claude-3-haiku-20240307-v1:0'],
+    ollama: ['llama3.2', 'llama3.1', 'mistral', 'qwen2.5'],
+  };
+
+  const respond = (models: string[], source: 'live' | 'fallback') =>
+    res.json({ models: Array.from(new Set(models)).filter(Boolean), source });
+
+  try {
+    if ((norm === 'anthropic' || norm === 'claude') && apiKey) {
+      const r = await fetchWithTimeout(`${baseUrl || 'https://api.anthropic.com'}/v1/models?limit=100`, {
+        headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      });
+      if (r.ok) {
+        const data: any = await r.json();
+        const ids = (data.data || []).map((m: any) => m.id).filter(Boolean);
+        return respond(ids.length ? ids : FALLBACKS[norm], ids.length ? 'live' : 'fallback');
+      }
+    } else if ((norm === 'openai' || norm === 'groq' || norm === 'mistral') && apiKey) {
+      const base = baseUrl || (norm === 'groq' ? 'https://api.groq.com/openai/v1'
+        : norm === 'mistral' ? 'https://api.mistral.ai/v1'
+        : 'https://api.openai.com/v1');
+      const r = await fetchWithTimeout(`${base}/models`, { headers: { 'Authorization': `Bearer ${apiKey}` } });
+      if (r.ok) {
+        const data: any = await r.json();
+        const ids = (data.data || []).map((m: any) => m.id).filter(Boolean).sort();
+        return respond(ids.length ? ids : FALLBACKS[norm], ids.length ? 'live' : 'fallback');
+      }
+    } else if ((norm === 'gemini' || norm === 'google') && apiKey) {
+      const base = baseUrl || 'https://generativelanguage.googleapis.com';
+      const r = await fetchWithTimeout(`${base}/v1beta/models?key=${encodeURIComponent(apiKey)}`, {});
+      if (r.ok) {
+        const data: any = await r.json();
+        const ids = (data.models || [])
+          .map((m: any) => String(m.name || '').replace(/^models\//, ''))
+          .filter((id: string) => id);
+        return respond(ids.length ? ids : FALLBACKS[norm], ids.length ? 'live' : 'fallback');
+      }
+    } else if (norm === 'ollama') {
+      const base = baseUrl || 'http://localhost:11434';
+      const r = await fetchWithTimeout(`${base}/api/tags`, {});
+      if (r.ok) {
+        const data: any = await r.json();
+        const ids = (data.models || []).map((m: any) => m.name).filter(Boolean);
+        return respond(ids.length ? ids : FALLBACKS[norm], ids.length ? 'live' : 'fallback');
+      }
+    }
+  } catch {
+    /* fall through to curated list */
+  }
+
+  return respond(FALLBACKS[norm] || [], 'fallback');
 });
 
 // GET /ai-config — returns the saved AI configuration for use by the pipeline

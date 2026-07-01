@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import crypto from 'crypto';
 import { runGenerationOnly } from '../agents/pipeline.js';
-import { isClaudeCliAuthenticated } from '../agents/claude-runner.js';
+import { hydrateAnthropicEnv } from '../services/llm-config.service.js';
 import { broadcastSSE } from '../services/sse-manager.js';
 import { createJob, updateJob, getJob } from '../services/generation-jobs.js';
 
@@ -44,7 +44,7 @@ function mapGenError(err: unknown): { message: string; code: string } {
       message: 'The AI engine is busy right now (rate limit). Please wait a few seconds and try again.',
     };
   }
-  if (raw.includes('claude') && raw.includes('not found')) {
+  if ((raw.includes('claude') || raw.includes('anthropic')) && raw.includes('not found')) {
     return {
       code: 'CLAUDE_NOT_FOUND',
       message: 'The AI engine isn’t available on the server. Please contact your administrator, then try again.',
@@ -77,7 +77,7 @@ function mapGenError(err: unknown): { message: string; code: string } {
  * long request open, so it can no longer hit an axios timeout — which was the
  * root cause of the "timeout of 300000ms exceeded" failures.
  */
-router.post('/', (req: Request, res: Response) => {
+router.post('/', async (req: Request, res: Response) => {
   const {
     requirements,
     testType,
@@ -89,11 +89,13 @@ router.post('/', (req: Request, res: Response) => {
     exploreMode,
   } = req.body;
 
-  // Preflight: the generation agents call Claude with no offline fallback, so a
-  // logged-out CLI yields an opaque failure. Fail fast with an actionable code.
-  if (!isClaudeCliAuthenticated()) {
+  // Preflight: the generation agents call the Anthropic API with no offline
+  // fallback. Resolve + load the API key configured in LLM Configuration for
+  // this tenant, then fail fast with an actionable code if none is available.
+  await hydrateAnthropicEnv(req.user?.tenantId ?? null);
+  if (!process.env.ANTHROPIC_API_KEY) {
     res.status(503).json({
-      error: 'AI engine not connected. Set ANTHROPIC_API_KEY in the backend environment (recommended — create one at console.anthropic.com), or sign in the Claude CLI with `claude auth login --claudeai` on the server, then retry.',
+      error: 'AI engine not connected. Add your Anthropic Claude API key in System Configuration → LLM Configuration, then retry.',
       code: 'CLAUDE_NOT_AUTHENTICATED',
     });
     return;
@@ -119,10 +121,10 @@ router.post('/', (req: Request, res: Response) => {
       }
     : undefined;
 
-  // The Claude CLI ignores maxTokens; bound interactive generation with a sane
-  // default so a single pass completes quickly. Callers wanting exhaustive
-  // coverage can pass an explicit higher maxTestCases.
-  const DEFAULT_MAX_TEST_CASES = 12;
+  // Bound interactive generation with a sane default so a single pass completes
+  // quickly. Callers wanting exhaustive coverage can pass an explicit higher
+  // maxTestCases.
+  const DEFAULT_MAX_TEST_CASES = 15;
   const effectiveMax = Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : DEFAULT_MAX_TEST_CASES;
 
   const runId = crypto.randomUUID();

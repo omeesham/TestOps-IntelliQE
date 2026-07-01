@@ -81,9 +81,7 @@ async function runPlaywrightInMemory(
 ): Promise<{ specResults: SpecResult[]; summary: PwSummary | null }> {
   const workspace = path.join(os.tmpdir(), `jbs-pw-sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const testsDir = path.join(workspace, 'tests');
-  const resultsDir = path.join(workspace, 'allure-results');
   await fs.mkdir(testsDir, { recursive: true });
-  await fs.mkdir(resultsDir, { recursive: true });
 
   const seen = new Set<string>();
   for (const s of scripts) {
@@ -99,25 +97,7 @@ async function runPlaywrightInMemory(
   }
 
   const configPath = path.join(workspace, 'playwright.config.cjs');
-  const baseUrlLine = targetUrl ? `    baseURL: ${JSON.stringify(targetUrl)},\n` : '';
-  const configSrc = `const { defineConfig } = require('@playwright/test');
-module.exports = defineConfig({
-  testDir: './tests',
-  fullyParallel: true,
-  retries: 0,
-  timeout: 60_000,
-  reporter: [
-    ['line'],
-    ['json', { outputFile: './pw-summary.json' }],
-  ],
-  use: {
-${baseUrlLine}    trace: 'retain-on-failure',
-    screenshot: 'only-on-failure',
-  },
-  projects: [{ name: 'edge', use: { channel: '${process.env.PLAYWRIGHT_CHANNEL || 'msedge'}' } }],
-});
-`;
-  await fs.writeFile(configPath, configSrc, 'utf-8');
+  await fs.writeFile(configPath, `const { createHarnessConfig } = require(${JSON.stringify(path.join(BACKEND_ROOT, 'playwright.harness.cjs'))});\nmodule.exports = createHarnessConfig(${targetUrl ? JSON.stringify({ baseURL: targetUrl }) : '{}'});`, 'utf-8');
 
   const env = {
     ...process.env,

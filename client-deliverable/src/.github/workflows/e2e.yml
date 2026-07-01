@@ -1,0 +1,90 @@
+# Example CI pipeline (GitHub Actions). Move this to your repository root's
+# .github/workflows/ (adjust `working-directory` if the tests live in a subfolder).
+# Equivalent Jenkins and Azure DevOps pipelines ship alongside in ../ci/.
+name: E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Gate 1 — static quality. Fails fast (before browsers) on type or lint errors.
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+
+  # Gate 2 — tests, sharded across workers. Runs only if quality passes; a failing
+  # test makes this job (and the build) fail via the non-zero exit code.
+  e2e:
+    needs: quality
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Add shards as the suite grows, e.g. ['1/3','2/3','3/3'] for 3 shards.
+        shard: ['1/2', '2/2']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps
+      - name: Run tests (sharded, parallel)
+        run: npx playwright test -c config/playwright.config.ts --shard=${{ matrix.shard }}
+        env:
+          CI: 'true'
+          ENV: qa
+          BASE_URL: ${{ secrets.BASE_URL }}
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          USERNAME: ${{ secrets.TEST_USERNAME }}
+          PASSWORD: ${{ secrets.TEST_PASSWORD }}
+      - name: Upload reports & traces (always)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-artifacts-${{ strategy.job-index }}
+          path: |
+            reports/
+            test-results/
+          retention-days: 14
+
+  # Gate 3 — merge Allure results from every shard into one browsable HTML report.
+  allure-report:
+    needs: e2e
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Download shard artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: playwright-artifacts-*
+          path: artifacts
+          merge-multiple: true
+      - name: Generate Allure HTML report
+        run: |
+          mkdir -p reports/allure-results
+          cp -r artifacts/reports/allure-results/. reports/allure-results/ 2>/dev/null || true
+          npm run allure:generate
+      - name: Upload Allure report
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report
+          path: reports/allure
+          retention-days: 14

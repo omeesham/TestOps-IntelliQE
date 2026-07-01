@@ -1,6 +1,6 @@
 import {
   Settings, AppWindow, FileText, Database,
-  GitBranch, Bell, Brain, Volume2,
+  GitBranch, Bell, Sparkles, Volume2,
 } from 'lucide-react';
 
 export type TabKey =
@@ -10,7 +10,7 @@ export type TabKey =
   | 'data-sources'
   | 'git-repos'
   | 'notifications'
-  | 'ai-healing'
+  | 'llm-config'
   | 'voice';
 
 interface Tab {
@@ -26,7 +26,7 @@ const TABS: Tab[] = [
   { key: 'data-sources',  label: 'Data Sources',           icon: Database  },
   { key: 'git-repos',     label: 'Git Repositories',       icon: GitBranch },
   { key: 'notifications', label: 'Notifications',          icon: Bell      },
-  { key: 'ai-healing',    label: 'AI & Healer Agent',      icon: Brain     },
+  { key: 'llm-config',    label: 'LLM Configuration',      icon: Sparkles  },
   { key: 'voice',         label: 'Voice Assistant',        icon: Volume2   },
 ];
 
@@ -37,7 +37,7 @@ interface Props {
 
 export default function ConfigTabNav({ activeTab, onTabChange }: Props) {
   return (
-    <nav className="w-60 flex-shrink-0 space-y-0.5">
+    <nav className="w-full space-y-0.5">
       {TABS.map((tab) => {
         const isActive = tab.key === activeTab;
         return (

@@ -47,6 +47,7 @@ import publicApiRoutes from './routes/public/public-api.routes.js';
 import { initDb } from './db.js';
 import pool from './db.js';
 import { decryptField } from './utils/crypto.js';
+import { hydrateAnthropicEnv, describeResolved } from './services/llm-config.service.js';
 import { signToken } from './utils/jwt.js';
 import { authMiddleware } from './middleware/auth.middleware.js';
 import { requestContext } from './middleware/request-context.middleware.js';
@@ -275,7 +276,12 @@ app.use(errorHandler);
 setEventCallback((runId, event) => broadcastSSE(runId, event));
 
 initDb()
-  .then(() => {
+  .then(async () => {
+    // Load the Anthropic API key configured in the LLM Configuration page into
+    // the environment so the generation pipeline (and worker) can talk to the
+    // Anthropic API directly — the durable path that replaced the `claude` CLI.
+    const resolved = await hydrateAnthropicEnv(null);
+    logger.info('AI engine (Anthropic) configuration', { key: describeResolved(resolved) });
     app.listen(PORT, () => {
       logger.info(`JBS IntelliQE API listening`, { port: PORT, env: NODE_ENV });
     });

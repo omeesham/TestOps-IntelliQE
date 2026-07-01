@@ -1,0 +1,44 @@
+# Example Azure DevOps pipeline — equivalent to .github/workflows/e2e.yml.
+# Define BASE_URL / API_BASE_URL / TEST_USERNAME / TEST_PASSWORD as secret
+# pipeline variables (or a variable group backed by a key vault).
+trigger:
+  branches:
+    include: [main]
+pr:
+  branches:
+    include: ['*']
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  CI: 'true'
+  ENV: qa
+
+steps:
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '20.x'
+  - script: npm ci
+    displayName: Install
+  - script: npm run typecheck && npm run lint
+    displayName: Quality gate
+  - script: npx playwright install --with-deps
+    displayName: Install browsers
+  - script: npx playwright test -c config/playwright.config.ts
+    displayName: Run tests
+    env:
+      BASE_URL: $(BASE_URL)
+      API_BASE_URL: $(API_BASE_URL)
+      USERNAME: $(TEST_USERNAME)
+      PASSWORD: $(TEST_PASSWORD)
+  - task: PublishTestResults@2
+    condition: always()
+    inputs:
+      testResultsFormat: JUnit
+      testResultsFiles: reports/junit.xml
+  - task: PublishBuildArtifacts@1
+    condition: always()
+    inputs:
+      pathToPublish: reports
+      artifactName: playwright-reports

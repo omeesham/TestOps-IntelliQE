@@ -1,5 +1,6 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { createHash } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
@@ -256,37 +257,8 @@ export async function runPlaywrightForRun(
     written.push({ scriptId: row.id, specFile });
   }
 
-  // Minimal Playwright config. The config lives in a temp workspace
-  // (no local node_modules), so we write it as CommonJS (.cjs) and set
-  // NODE_PATH so `require()` finds @playwright/test, allure-playwright,
-  // and any spec-level imports from backend/node_modules. ESM would not
-  // honor NODE_PATH and would force absolute file:// URLs everywhere.
   const configPath = path.join(workspace, 'playwright.config.cjs');
-  const configSrc = `const { defineConfig } = require('@playwright/test');
-module.exports = defineConfig({
-  testDir: './tests',
-  fullyParallel: true,
-  // Cap concurrency — launching one Edge per test (a full suite) at once
-  // starves CPU/memory on a single host and makes tests time out. 2 workers
-  // keeps the run stable while still parallelising.
-  workers: ${Number(process.env.PLAYWRIGHT_WORKERS) || 2},
-  retries: 0,
-  timeout: 45_000,
-  reporter: [
-    ['line'],
-    ['json', { outputFile: './pw-summary.json' }],
-    ['allure-playwright', { resultsDir: ${JSON.stringify(resultsDir)}, detail: true, suiteTitle: false }],
-  ],
-  use: {
-    trace: 'retain-on-failure',
-    screenshot: 'only-on-failure',
-    actionTimeout: 15_000,
-    navigationTimeout: 30_000,
-  },
-  projects: [{ name: 'edge', use: { channel: '${process.env.PLAYWRIGHT_CHANNEL || 'msedge'}' } }],
-});
-`;
-  await fs.writeFile(configPath, configSrc, 'utf-8');
+  await fs.writeFile(configPath, `const { createHarnessConfig } = require(${JSON.stringify(path.join(BACKEND_ROOT, 'playwright.harness.cjs'))});\nmodule.exports = createHarnessConfig({ allureResultsDir: ${JSON.stringify(resultsDir)} });`, 'utf-8');
 
   // Run Playwright from the backend root so it can resolve @playwright/test and allure-playwright
   // from backend/node_modules. Failing tests still return exit code 1 — that's a real result,
@@ -400,6 +372,9 @@ export async function executeRunScripts(
   const testsDir = path.join(workspace, 'tests');
   await fs.mkdir(testsDir, { recursive: true });
 
+  // try/finally guarantees the temp workspace is removed on every path
+  // (success, test failures, or a thrown infra error) — no /tmp accumulation.
+  try {
   // Write each spec (no BOM via Node fs) and map its final file name → DB row.
   const byFile = new Map<string, any>();
   const seen = new Set<string>();
@@ -415,20 +390,8 @@ export async function executeRunScripts(
   }
 
   const configPath = path.join(workspace, 'playwright.config.cjs');
-  const channel = process.env.PLAYWRIGHT_CHANNEL || 'msedge';
-  const workers = Number(process.env.PLAYWRIGHT_WORKERS) || 2;
-  // allure-playwright resolves outputFolder relative to CWD (BACKEND_ROOT), not
-  // the config dir — so use an ABSOLUTE path into the workspace, otherwise the
-  // results leak to backend/allure-results and the persist below finds nothing.
   const allureResultsDir = path.join(workspace, 'allure-results');
-  await fs.writeFile(configPath, `const { defineConfig } = require('@playwright/test');
-module.exports = defineConfig({
-  testDir: './tests', fullyParallel: true, workers: ${workers}, retries: 0, timeout: 45_000,
-  reporter: [['line'], ['json', { outputFile: './pw-summary.json' }], ['allure-playwright', { resultsDir: ${JSON.stringify(allureResultsDir)}, detail: true, suiteTitle: false }]],
-  use: { actionTimeout: 15_000, navigationTimeout: 30_000, trace: 'off', screenshot: 'off' },
-  projects: [{ name: 'edge', use: { channel: '${channel}' } }],
-});
-`, 'utf-8');
+  await fs.writeFile(configPath, `const { createHarnessConfig } = require(${JSON.stringify(path.join(BACKEND_ROOT, 'playwright.harness.cjs'))});\nmodule.exports = createHarnessConfig({ allureResultsDir: ${JSON.stringify(allureResultsDir)} });`, 'utf-8');
 
   const env = {
     ...process.env, CI: '1',
@@ -496,6 +459,25 @@ module.exports = defineConfig({
     };
   });
 
+  // A VALID summary that collected ZERO tests means every spec file was written
+  // but Playwright could not load a single runnable test() — almost always a
+  // TypeScript/syntax error, a missing test() block, or an import of a file that
+  // doesn't exist in the generated spec. Returning 0/0 here made the wizard report
+  // "All 0 tests passed", masking the real failure. Surface it as an actionable
+  // error instead so the user sees WHY nothing ran.
+  if (details.length === 0) {
+    const logPath = path.join(workspace, 'pw-run.log');
+    await fs.writeFile(logPath, `STDOUT:\n${stdout}\n\nSTDERR:\n${stderr}`, 'utf-8').catch(() => {});
+    throw new PlaywrightRunError({
+      code: 'NO_TESTS',
+      httpStatus: 422,
+      message: `Playwright ran but collected 0 runnable tests from ${rows.length} generated script(s).`,
+      hint: 'The generated specs did not load — they likely have a TypeScript/syntax error, no test() block, or import a file that does not exist. Open Automation Scripts, review or regenerate the specs, then execute again.',
+      details: (stderr || stdout || '').slice(-3000),
+      logPath,
+    });
+  }
+
   const passed = details.filter((d) => d.status === 'passed').length;
   const failed = details.filter((d) => d.status === 'failed').length;
 
@@ -510,4 +492,119 @@ module.exports = defineConfig({
   } catch { /* ignore */ }
 
   return { details, passed, failed };
+  } finally {
+    await fs.rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/** Verdict for a single verified spec, keyed back to the caller's key. */
+export interface SpecVerdict {
+  status: 'passed' | 'failed' | 'flaky' | 'not_run';
+  durationMs?: number;
+  error?: string;
+}
+
+/**
+ * Verify candidate specs in a throwaway Playwright workspace and return a
+ * per-key pass/fail verdict. This is the SHARED verification core used by the
+ * auto-healer (both the DB-backed service and the in-memory pipeline agent):
+ * write each spec under a deterministic filename, run Playwright ONCE, map
+ * results back by key. It persists nothing — pure verification, so a fix can be
+ * proven before anything is saved. Throws a typed PlaywrightRunError only when
+ * Playwright could not run at all (missing browsers, spawn failure).
+ */
+export async function verifySpecsByKey(
+  specs: { key: string; fileName?: string; code: string }[],
+): Promise<Map<string, SpecVerdict>> {
+  const out = new Map<string, SpecVerdict>();
+  for (const s of specs) out.set(s.key, { status: 'not_run' });
+  if (specs.length === 0) return out;
+
+  const workspace = path.join(os.tmpdir(), `jbs-pwverify-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const testsDir = path.join(workspace, 'tests');
+  await fs.mkdir(testsDir, { recursive: true });
+
+  // try/finally guarantees the temp workspace is removed on EVERY path (success,
+  // test failures, or a thrown infra error) — no /tmp accumulation.
+  try {
+    // Collision-free filename: an ordering index PLUS a hash of the FULL key, so
+    // two distinct keys can never map to the same spec file (which would misroute
+    // a verdict to the wrong test).
+    const fileToKey = new Map<string, string>();
+    let i = 0;
+    for (const s of specs) {
+      const hash = createHash('sha1').update(s.key).digest('hex').slice(0, 12);
+      const name = `verify-${i++}-${hash}.spec.ts`;
+      await fs.writeFile(path.join(testsDir, name), s.code, 'utf-8');
+      fileToKey.set(name.toLowerCase().replace(/\.spec\.ts$/, ''), s.key);
+    }
+
+    const configPath = path.join(workspace, 'playwright.config.cjs');
+    await fs.writeFile(configPath, `const { createHarnessConfig } = require(${JSON.stringify(path.join(BACKEND_ROOT, 'playwright.harness.cjs'))});\nmodule.exports = createHarnessConfig({});`, 'utf-8');
+
+    const env = {
+      ...process.env, CI: '1',
+      PLAYWRIGHT_JSON_OUTPUT_NAME: path.join(workspace, 'pw-summary.json'),
+      NODE_PATH: path.join(BACKEND_ROOT, 'node_modules'),
+    };
+    const isWindows = process.platform === 'win32';
+    let stdout = '';
+    let stderr = '';
+    try {
+      const r = await execFileAsync(
+        isWindows ? 'npx.cmd' : 'npx',
+        ['playwright', 'test', '--config', configPath],
+        { cwd: BACKEND_ROOT, env, timeout: 600_000, maxBuffer: 50 * 1024 * 1024, shell: isWindows },
+      );
+      stdout = r.stdout; stderr = r.stderr;
+    } catch (err: any) {
+      // Non-zero exit = real test failures, not fatal.
+      stdout = err.stdout || ''; stderr = err.stderr || err.message || '';
+    }
+
+    let summary: PwSummary | null = null;
+    try {
+      summary = JSON.parse(await fs.readFile(path.join(workspace, 'pw-summary.json'), 'utf-8'));
+    } catch { summary = null; }
+    if (!summary) {
+      // Preserve the failure log OUTSIDE the workspace so it survives cleanup.
+      const logPath = path.join(os.tmpdir(), `jbs-verify-fail-${Date.now()}.log`);
+      await fs.writeFile(logPath, `STDOUT:\n${stdout}\n\nSTDERR:\n${stderr}`, 'utf-8').catch(() => {});
+      throw classifyPlaywrightFailure(stdout, stderr, logPath);
+    }
+
+    const specsOut: any[] = [];
+    const walk = (s: any) => {
+      if (Array.isArray(s?.specs)) specsOut.push(...s.specs);
+      if (Array.isArray(s?.suites)) s.suites.forEach(walk);
+    };
+    (summary.suites || []).forEach(walk);
+
+    const baseName = (f: string) => (f || '').split(/[\\/]/).pop()!.toLowerCase().replace(/\.spec\.ts$/, '');
+    for (const spec of specsOut) {
+      const key = fileToKey.get(baseName(spec?.file || ''));
+      if (!key) continue;
+      const tests: any[] = Array.isArray(spec?.tests) ? spec.tests : [];
+      // Playwright test.status: 'expected' | 'unexpected' | 'flaky' | 'skipped'.
+      // A heal counts as PASSED only when every test is cleanly 'expected' — a
+      // 'flaky' result (passed only on retry) is NOT trusted as a stable fix.
+      const statuses = tests.map((t) => t?.status).filter(Boolean) as string[];
+      const lastResults = tests.map((t) => t?.results?.[t.results.length - 1]).filter(Boolean);
+      const durationMs = lastResults.reduce((sum, r) => sum + (typeof r?.duration === 'number' ? r.duration : 0), 0) || undefined;
+      const firstError = lastResults.map((r) => r?.error?.message).find(Boolean);
+
+      let status: SpecVerdict['status'];
+      if (statuses.length === 0) status = 'not_run';
+      else if (statuses.every((s) => s === 'expected')) status = 'passed';
+      else if (statuses.some((s) => s === 'unexpected')) status = 'failed';
+      else if (statuses.some((s) => s === 'flaky')) status = 'flaky';
+      else status = 'not_run'; // all skipped / interrupted
+
+      out.set(key, { status, durationMs, error: status === 'passed' ? undefined : firstError });
+    }
+
+    return out;
+  } finally {
+    await fs.rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
 }

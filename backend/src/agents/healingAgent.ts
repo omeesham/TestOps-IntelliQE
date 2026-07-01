@@ -1,7 +1,15 @@
 import type { TestOpsState, AutomationScript } from './state.js';
-import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
-import { buildHealingPrompt, type HealingFix } from './healing-prompt.js';
+import { isClaudeCliAuthenticated } from './claude-runner.js';
+import { healSpecs, type HealSpecInput } from './heal-engine.js';
+import { verifySpecsByKey } from '../services/playwright-runner.service.js';
 
+/**
+ * In-memory pipeline healer. Runs the SAME shared heal engine as the DB-backed
+ * wizard service (agents/heal-engine.ts), so the in-pipeline heal is just as
+ * rigorous: iterative + feedback + anti-cheat + verify-before-trust. A test is
+ * only marked healed after the engine re-ran it and it actually passed without
+ * weakening — no more "apply the AI fix and hope".
+ */
 export async function healingAgent(state: TestOpsState): Promise<TestOpsState> {
   if (!state.failureReason) return state;
 
@@ -14,64 +22,60 @@ export async function healingAgent(state: TestOpsState): Promise<TestOpsState> {
   }
 
   // Per-test error from the real execution run — far more useful to the healer
-  // than the single global failureReason that was previously sent for EVERY
-  // test. Falls back to the global reason when a per-test message is missing.
+  // than the single global failureReason.
   const errorByTcId = new Map<string, string>();
   for (const d of state.executionResults?.details || []) {
     if (d.status === 'failed' && d.error) errorByTcId.set(d.testCaseId, d.error);
   }
 
-  const targetUrl = state.appContext?.targetUrl;
-  const healedScripts: AutomationScript[] = [];
-
+  const inputs: HealSpecInput[] = [];
   for (const tc of failedCases) {
     const script = scriptMap.get(tc.id);
     if (!script) continue;
-
-    try {
-      const prompt = buildHealingPrompt({
+    inputs.push({
+      id: tc.id,
+      fileName: script.fileName,
+      code: script.code,
+      intent: {
         title: tc.title || tc.scenario,
         feature: tc.feature,
         type: tc.type,
         precondition: tc.precondition,
         steps: tc.steps,
         expectedResult: tc.expectedResult,
-        fileName: script.fileName,
-        code: script.code,
-        error: errorByTcId.get(tc.id) || state.failureReason || 'Test failed during execution.',
-        targetUrl,
-      });
-
-      const response = await runClaudePrompt(prompt, { maxTokens: 8000 });
-      const fixed = parseJsonFromResponse<HealingFix>(response);
-
-      if (fixed?.code?.trim() && fixed.code.trim() !== script.code.trim()) {
-        healedScripts.push({
-          testCaseId: tc.id,
-          fileName: fixed.fileName?.trim() || script.fileName,
-          code: fixed.code,
-        });
-      }
-    } catch {
-      // Could not heal this test — leave script unchanged, status stays 'failed'
-    }
+      },
+      initialError: errorByTcId.get(tc.id) || state.failureReason || 'Test failed during execution.',
+    });
   }
+  if (inputs.length === 0) return state;
 
-  const healedIds = new Set(healedScripts.map((s) => s.testCaseId));
+  const outcomes = await healSpecs(inputs, verifySpecsByKey, {
+    canUseAi: isClaudeCliAuthenticated(),
+    targetUrl: state.appContext?.targetUrl,
+  });
 
-  const updatedScripts = [
-    ...state.automationScripts.filter((s) => !healedIds.has(s.testCaseId)),
-    ...healedScripts,
-  ];
+  // Apply ONLY verified-healed fixes to the in-memory scripts.
+  const healedIds = new Set<string>();
+  const updatedScripts = state.automationScripts.map((s) => {
+    const o = outcomes.get(s.testCaseId);
+    if (o?.healed) {
+      healedIds.add(s.testCaseId);
+      return { ...s, code: o.finalCode };
+    }
+    return s;
+  });
 
-  // Healed tests move to 'automated' — fixed but not yet re-verified by execution
+  // Healed tests were re-run and PASSED inside the engine → mark them 'passed'
+  // (verified), not merely 'automated'.
   const updatedCases = state.testCases.map((tc) =>
-    tc.status === 'failed' && healedIds.has(tc.id)
-      ? { ...tc, status: 'automated' as const }
-      : tc
+    healedIds.has(tc.id) ? { ...tc, status: 'passed' as const } : tc,
   );
 
   const stillFailed = updatedCases.filter((tc) => tc.status === 'failed').length;
+  const prevPassed = state.executionResults?.passed ?? 0;
+  const updatedDetails = (state.executionResults?.details || []).map((d) =>
+    healedIds.has(d.testCaseId) ? { ...d, status: 'passed' as const, error: undefined } : d,
+  );
 
   return {
     ...state,
@@ -80,7 +84,7 @@ export async function healingAgent(state: TestOpsState): Promise<TestOpsState> {
     healingAttempted: true,
     failureReason: stillFailed > 0 ? `${stillFailed} test(s) could not be healed` : null,
     executionResults: state.executionResults
-      ? { ...state.executionResults, failed: stillFailed }
+      ? { ...state.executionResults, passed: prevPassed + healedIds.size, failed: stillFailed, details: updatedDetails }
       : null,
   };
 }
