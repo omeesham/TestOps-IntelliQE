@@ -58,6 +58,7 @@ const ANTHROPIC_KNOWN_MODELS = [
   'claude-opus-4-7',
   'claude-opus-4-6',
   'claude-opus-4-5',
+  'claude-sonnet-5',
   'claude-sonnet-4-6',
   'claude-sonnet-4-5',
   'claude-haiku-4-5',
@@ -89,6 +90,39 @@ function sanitizeAgentModels(input: any, fallback: Record<string, string>): Reco
     if (typeof v === 'string' && v.trim()) out[stage] = v.trim();
   }
   return out;
+}
+
+/**
+ * Model settings (Default Model, per-agent models, effort, extended thinking)
+ * for a single auth method. Stored PER method so API Key and Claude Code stay
+ * independent. Legacy configs stored one top-level set — attribute it to the
+ * saved auth method and leave the other method empty.
+ */
+function methodSettings(cfg: any, method: AuthMethod): {
+  model: string | null;
+  agentModels: Record<string, string>;
+  effort: string | null;
+  extendedThinking: boolean;
+} {
+  const s = cfg?.settingsByMethod?.[method];
+  if (s && typeof s === 'object') {
+    return {
+      model: s.model || null,
+      agentModels: (s.agentModels && typeof s.agentModels === 'object' && !Array.isArray(s.agentModels)) ? s.agentModels : {},
+      effort: s.effort || null,
+      extendedThinking: s.extendedThinking === true,
+    };
+  }
+  const legacyMethod: AuthMethod = cfg?.authMethod === 'claude_code' ? 'claude_code' : 'api_key';
+  if (method === legacyMethod) {
+    return {
+      model: cfg?.model || null,
+      agentModels: (cfg?.agentModels && typeof cfg?.agentModels === 'object' && !Array.isArray(cfg.agentModels)) ? cfg.agentModels : {},
+      effort: cfg?.effort || null,
+      extendedThinking: cfg?.extendedThinking === true,
+    };
+  }
+  return { model: null, agentModels: {}, effort: null, extendedThinking: false };
 }
 
 interface LlmRow {
@@ -266,6 +300,10 @@ router.get('/', async (req: Request, res: Response) => {
       const configured =
         authMethod === 'claude_code' ? (!!token || isClaudeCliAvailable()) : !!key;
 
+      // Per-auth-method settings: expose the active method's values top-level
+      // (getTenantLlm / the pipeline read these) plus BOTH methods so the UI can
+      // keep API Key and Claude Code independent.
+      const active = methodSettings(cfg, authMethod);
       if (configured && cfg.isDefault) defaultProvider = p;
       providers.push({
         provider: p,
@@ -273,10 +311,14 @@ router.get('/', async (req: Request, res: Response) => {
         configured,
         status: (configured ? (row?.status as ConnStatus) || 'connected' : 'not_configured') as ConnStatus,
         authMethod,
-        model: cfg.model || null,
-        agentModels: (cfg.agentModels && typeof cfg.agentModels === 'object') ? cfg.agentModels : {},
-        effort: cfg.effort || null,
-        extendedThinking: cfg.extendedThinking === true,
+        model: active.model,
+        agentModels: active.agentModels,
+        effort: active.effort,
+        extendedThinking: active.extendedThinking,
+        settingsByMethod: {
+          api_key: methodSettings(cfg, 'api_key'),
+          claude_code: methodSettings(cfg, 'claude_code'),
+        },
         baseUrl: cfg.baseUrl || PROVIDERS[p].defaultBaseUrl,
         maskedKey: key ? maskSecret(key) : null,
         maskedToken: token ? maskSecret(token) : null,
@@ -289,6 +331,36 @@ router.get('/', async (req: Request, res: Response) => {
     res.json({ providers, defaultProvider });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET /api/llm-config/:provider/models ──────────────────────────────
+// Live model discovery: list the provider's currently-available models using
+// the stored credential, so a newly released model (e.g. a new Sonnet) shows up
+// automatically with no code change. Falls back to the known lineup when no
+// credential is saved or the provider can't be reached. Always returns 200 with
+// a `models` array so the dropdown is never empty.
+router.get('/:provider/models', async (req: Request, res: Response) => {
+  if (!requireAdmin(req, res)) return;
+  const provider = req.params.provider as string;
+  if (!isProvider(provider)) { res.status(400).json({ error: 'Unknown provider' }); return; }
+  const fallback = provider === 'anthropic' ? ANTHROPIC_KNOWN_MODELS : [];
+  try {
+    const tenantId = req.user!.tenantId;
+    const row = await getRow(tenantId, provider);
+    const baseUrl = (row?.config_data?.baseUrl || '').trim() || PROVIDERS[provider].defaultBaseUrl;
+    // Resolve a usable stored credential (API key, or Claude Code OAuth token).
+    const authMethod: AuthMethod = provider === 'anthropic' ? authMethodOf(row) : 'api_key';
+    const cred = authMethod === 'claude_code' ? storedToken(row) : storedKey(row);
+    if (!cred) { res.json({ ok: false, source: 'fallback', models: fallback }); return; }
+    const result = await listModels(provider, cred, baseUrl);
+    if (result.ok && result.models.length) {
+      res.json({ ok: true, source: 'live', models: result.models });
+    } else {
+      res.json({ ok: false, source: 'fallback', models: fallback });
+    }
+  } catch {
+    res.json({ ok: false, source: 'fallback', models: fallback });
   }
 });
 
@@ -388,27 +460,42 @@ router.put('/:provider', async (req: Request, res: Response) => {
     }
 
     const baseUrl = (req.body?.baseUrl ?? prevCfg.baseUrl ?? PROVIDERS[provider].defaultBaseUrl) as string;
-    const model = (req.body?.model ?? prevCfg.model ?? null) as string | null;
-    // Per-agent model overrides — preserve existing when the caller omits them.
-    const agentModels = sanitizeAgentModels(req.body?.agentModels, prevCfg.agentModels || {});
+
+    // Model settings are stored PER auth method so API Key and Claude Code stay
+    // independent. Fall back to the ACTIVE method's previously-saved values when
+    // the caller omits a field (not the other method's).
+    const prevActive = methodSettings(prevCfg, authMethod);
+    const model = (req.body?.model ?? prevActive.model ?? null) as string | null;
+    // Per-agent model overrides — preserve the active method's existing set when omitted.
+    const agentModels = sanitizeAgentModels(req.body?.agentModels, prevActive.agentModels || {});
 
     // Reasoning effort + extended ("ultra") thinking. Anthropic only; preserved
     // when the caller omits them. Applied per-model-capability at call time.
     const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
-    const effort = VALID_EFFORTS.includes(req.body?.effort) ? req.body.effort : (prevCfg.effort ?? undefined);
+    const effort = VALID_EFFORTS.includes(req.body?.effort) ? req.body.effort : (prevActive.effort ?? undefined);
     const extendedThinking = typeof req.body?.extendedThinking === 'boolean'
       ? req.body.extendedThinking
-      : (prevCfg.extendedThinking ?? false);
+      : (prevActive.extendedThinking ?? false);
+
+    // Update only the active method's slot; preserve the other method's settings.
+    const settingsByMethod = {
+      api_key: methodSettings(prevCfg, 'api_key'),
+      claude_code: methodSettings(prevCfg, 'claude_code'),
+      [authMethod]: { model, agentModels, effort, extendedThinking },
+    };
 
     const configData = {
       apiKey: storedApiKey,
       oauthToken: storedOauthToken,
       authMethod,
       baseUrl,
+      // Mirror the active method's settings to top-level so getTenantLlm and the
+      // pipeline (which read these) use the active method's models unchanged.
       model,
       agentModels,
       effort,
       extendedThinking,
+      settingsByMethod,
       isDefault: !!prevCfg.isDefault,
     };
 

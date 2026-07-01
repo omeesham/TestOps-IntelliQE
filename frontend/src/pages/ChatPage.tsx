@@ -31,6 +31,7 @@ import {
   SkipForward, XCircle, Volume2, VolumeX, Settings,
 } from 'lucide-react';
 import { initTTS, speak, speakAsync, waitForSpeech, waitForVoices, stopSpeaking, isTTSEnabled, toggleTTS } from '@/utils/tts';
+import { normalizeError } from '@/utils/apiError';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES
@@ -441,11 +442,13 @@ export default function ChatPage() {
   };
 
   const pickInFlight = useRef(false);
+  const [pickingSource, setPickingSource] = useState(false);
   const pickSource = async (s: ReqSource) => {
     // Guard against a double-fire (double-click / re-render) replaying the whole
     // message thread. Block re-entry until this pick finishes.
     if (pickInFlight.current) return;
     pickInFlight.current = true;
+    setPickingSource(true); // hide the source buttons at once so they can't be re-clicked mid-connect
     try {
     push('user', REQ_SOURCES.find(r => r.id === s)!.title);
     setSource(s);
@@ -529,6 +532,7 @@ export default function ChatPage() {
     }
     } finally {
       pickInFlight.current = false;
+      setPickingSource(false);
     }
   };
 
@@ -705,6 +709,7 @@ export default function ChatPage() {
     // Agent 1: Requirement Analyst
     setAgentSteps(prev => prev.map((s, idx) => idx === 0 ? { ...s, status: 'running' } : s));
     let res: any = null;
+    let genErrorMsg = '';
     try {
       // Detect explore-mode marker stashed by handleExploreSubmit.
       // When present, route to the backend with exploreMode=true and roles
@@ -725,6 +730,21 @@ export default function ChatPage() {
       }
     } catch (err) {
       console.error('Generate tests failed:', err);
+      // Surface the REAL backend error — the /generate route returns { error }
+      // with the actual pipeline failure — instead of a generic message.
+      const n = normalizeError(err);
+      genErrorMsg = n.message || n.title || 'Test generation failed.';
+    }
+
+    // /generate runs the entire server-side pipeline in one request. If it threw,
+    // do NOT fake "Requirement Analysis: Completed" — show the real cause and stop.
+    if (genErrorMsg) {
+      setAgentSteps(prev => prev.map((s, idx) => idx === 0 ? { ...s, status: 'completed', detail: `Failed: ${genErrorMsg}` } : s));
+      updatePipeline('requirements', 'skipped', `Failed: ${genErrorMsg}`);
+      updatePipeline('test-design', 'skipped', 'Not run');
+      push('tessa', `Test generation failed: ${genErrorMsg}`);
+      setStep('welcome');
+      return;
     }
 
     // Track pipeline run
@@ -1475,6 +1495,16 @@ export default function ChatPage() {
 
     /* ── SOURCE SELECT ── */
     if (step === 'source-select') {
+      // Once a source is picked, connecting (e.g. JIRA) is async — hide the
+      // buttons immediately and show a connecting state so they can't be re-clicked.
+      if (pickingSource) {
+        return (
+          <div className="flex items-center gap-2 ml-11 text-sm text-gray-500">
+            <Loader2 className="w-4 h-4 animate-spin text-violet-500" />
+            Connecting…
+          </div>
+        );
+      }
       return (
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-w-lg ml-11">
           {REQ_SOURCES.map(s => {
@@ -2636,7 +2666,7 @@ export default function ChatPage() {
             >
               {voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
             </button>
-            {step !== 'welcome' && (
+            {(step !== 'welcome' || messages.length > 1) && (
               <button
                 onClick={requestReset}
                 title="New chat"

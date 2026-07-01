@@ -190,10 +190,26 @@ export async function runLLM(
     }
   };
 
-  // Claude Code (subscription): OAuth token primary, logged-in CLI as fallback.
+  // Claude Code (subscription): OAuth token via the Messages API is the primary
+  // path (fast, streaming, works headless). If the token is rejected by the API
+  // (e.g. 401 "Invalid bearer token" — expired, or not authorized for direct API
+  // use), fall back to a logged-in local `claude` CLI, which authenticates
+  // against the SAME Claude Code subscription without needing an API key.
   if (method === 'claude_code') {
     if (llm?.oauthToken) {
-      return callApi({ authMethod: 'claude_code', oauthToken: llm.oauthToken, model, baseUrl, maxTokens, system: options?.system, effort: llm?.effort, extendedThinking: llm?.extendedThinking });
+      try {
+        return await callApi({ authMethod: 'claude_code', oauthToken: llm.oauthToken, model, baseUrl, maxTokens, system: options?.system, effort: llm?.effort, extendedThinking: llm?.extendedThinking });
+      } catch (err) {
+        const authFailed = /\b40[13]\b|invalid bearer|unauthor|expired|authentication/i.test(String((err as Error)?.message || ''));
+        if (!authFailed || !isClaudeCliAvailable()) throw err;
+        console.warn(
+          `[claude-runner] Claude Code OAuth token rejected by the Messages API ` +
+          `(${(err as Error).message}); falling back to the local \`claude\` CLI login.`,
+        );
+        // Don't forward the rejected token — let the CLI use its own logged-in
+        // Claude Code session, the working credential on this machine.
+        return runClaudePrompt(prompt, { maxTokens: options?.maxTokens, model: llm?.model });
+      }
     }
     if (isClaudeCliAvailable()) {
       return runClaudePrompt(prompt, { maxTokens: options?.maxTokens, model: llm?.model, oauthToken: llm?.oauthToken });

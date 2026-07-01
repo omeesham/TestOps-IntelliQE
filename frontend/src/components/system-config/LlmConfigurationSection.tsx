@@ -1,16 +1,26 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   BrainCircuit, Eye, EyeOff, Loader2, Zap, Save, Pencil, Trash2, X,
   CheckCircle2, AlertTriangle, ShieldCheck, Star, KeyRound, Link2, Cpu,
 } from 'lucide-react';
 import {
-  getLlmConfig, testLlmConnection, saveLlmConfig,
-  setDefaultLlmProvider, deleteLlmConfig,
+  getLlmConfig, getLlmModels, testLlmConnection, saveLlmConfig, deleteLlmConfig,
   type LlmProviderConfig,
 } from '@/services/api';
+import { useToast } from '@/components/feedback/ToastProvider';
 
 type ProviderId = 'anthropic' | 'gemini' | 'openai';
 type ConnStatus = LlmProviderConfig['status'];
+type AuthMethodId = 'api_key' | 'claude_code';
+
+/** Editable model settings kept per auth method so API Key and Claude Code stay independent. */
+interface MethodDraft {
+  model: string;
+  agentModels: Record<string, string>;
+  effort: '' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  extendedThinking: boolean;
+}
+const BLANK_DRAFT: MethodDraft = { model: '', agentModels: {}, effort: '', extendedThinking: false };
 
 const PROVIDER_META: { value: ProviderId; label: string; endpoint: string; keyHint: string }[] = [
   { value: 'anthropic', label: 'Anthropic Claude', endpoint: 'https://api.anthropic.com',                  keyHint: 'sk-ant-api03-…' },
@@ -23,7 +33,7 @@ const PROVIDER_META: { value: ProviderId; label: string; endpoint: string; keyHi
 const PROVIDER_MODELS: Record<ProviderId, string[]> = {
   anthropic: [
     'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6',
-    'claude-opus-4-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-haiku-4-5',
+    'claude-opus-4-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-haiku-4-5',
   ],
   openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4-turbo', 'o3', 'o3-mini', 'o1'],
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
@@ -33,6 +43,15 @@ const PROVIDER_MODELS: Record<ProviderId, string[]> = {
 function modelsFor(provider: ProviderId, savedModel?: string | null): string[] {
   const base = PROVIDER_MODELS[provider] || [];
   return savedModel && !base.includes(savedModel) ? [savedModel, ...base] : base;
+}
+
+/**
+ * Display-only label for a model id: render version numbers with dots
+ * (e.g. "claude-opus-4-8" → "claude-opus-4.8"). The stored value keeps the
+ * real dashed id that the provider APIs require.
+ */
+function formatModelLabel(id: string): string {
+  return id.replace(/(\d)-(\d)/g, '$1.$2');
 }
 
 // Pipeline agents the admin can assign a model to. Keys MUST match the backend
@@ -76,8 +95,8 @@ function StatusBadge({ status }: { status: ConnStatus }) {
 }
 
 export default function LlmConfigurationSection() {
+  const toast = useToast();
   const [providers, setProviders] = useState<LlmProviderConfig[]>([]);
-  const [defaultProvider, setDefaultProvider] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
 
@@ -99,6 +118,13 @@ export default function LlmConfigurationSection() {
   const [effort, setEffort] = useState<'' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>('');
   const [extendedThinking, setExtendedThinking] = useState(false);
 
+  // Model settings held separately per auth method so switching API Key ⇄ Claude
+  // Code never bleeds one config's models into the other.
+  const [methodDrafts, setMethodDrafts] = useState<Record<AuthMethodId, MethodDraft>>({
+    api_key: { ...BLANK_DRAFT },
+    claude_code: { ...BLANK_DRAFT },
+  });
+
   // Set/clear a per-agent model override (empty value = use the default model).
   const setAgentModel = (stage: string, value: string) =>
     setAgentModels((prev) => {
@@ -113,7 +139,6 @@ export default function LlmConfigurationSection() {
   const [models, setModels] = useState<string[]>([]);
 
   const [saving, setSaving] = useState(false);
-  const [savedFlash, setSavedFlash] = useState(false);
   const [busyAction, setBusyAction] = useState(false);
 
   const current = providers.find((p) => p.provider === selected);
@@ -125,27 +150,69 @@ export default function LlmConfigurationSection() {
   const tokenChanged = oauthToken.trim().length > 0;
   // Enough to run a Test: a new credential entered, or one already saved.
   const canTest = isClaudeCode ? (tokenChanged || !!current?.configured) : (keyChanged || !!current?.configured);
-  // Save when a credential is present (new or already saved) and a model is
-  // chosen. A passing Test Connection is recommended but NOT required — a
-  // transient/credential test failure must not block saving the config.
-  const canSave = canTest && !!model;
+  // Save is enabled whenever there's something savable — a credential entered
+  // (new provider) or an already-configured provider being edited. A passing
+  // Test Connection also enables it (it implies a credential is present) but is
+  // NOT required, so any simple change keeps Save available in both auth methods.
+  const canSave = canTest || !!testResult?.ok;
 
   /** Reset the editor fields for a provider (used on load + provider switch). */
   const resetEditor = useCallback((p?: LlmProviderConfig) => {
     const provider = (p?.provider ?? 'anthropic') as ProviderId;
+    const method: AuthMethodId = provider === 'anthropic' && p?.authMethod === 'claude_code' ? 'claude_code' : 'api_key';
     const list = modelsFor(provider, p?.model);
     setApiKey('');
     setShowKey(false);
     setOauthToken('');
     setShowToken(false);
-    setAuthMethod(provider === 'anthropic' && p?.authMethod === 'claude_code' ? 'claude_code' : 'api_key');
-    setEffort((p?.effort as any) || '');
-    setExtendedThinking(!!p?.extendedThinking);
+    setAuthMethod(method);
     setBaseUrl(p?.baseUrl || PROVIDER_META.find((m) => m.value === provider)?.endpoint || '');
-    setModel(p?.model || list[0] || '');
-    setAgentModels(p?.agentModels && typeof p.agentModels === 'object' ? { ...p.agentModels } : {});
+
+    // Build a per-method draft so API Key and Claude Code keep independent model
+    // settings. Prefer the server's settingsByMethod; fall back to the top-level
+    // values for the active method (legacy configs) and blanks for the other.
+    const draftFrom = (m: AuthMethodId): MethodDraft => {
+      const s = p?.settingsByMethod?.[m];
+      if (s) return {
+        model: s.model || '',
+        agentModels: s.agentModels && typeof s.agentModels === 'object' ? { ...s.agentModels } : {},
+        effort: (s.effort as MethodDraft['effort']) || '',
+        extendedThinking: !!s.extendedThinking,
+      };
+      if (m === method) return {
+        model: p?.model || '',
+        agentModels: p?.agentModels && typeof p.agentModels === 'object' ? { ...p.agentModels } : {},
+        effort: (p?.effort as MethodDraft['effort']) || '',
+        extendedThinking: !!p?.extendedThinking,
+      };
+      return { ...BLANK_DRAFT };
+    };
+    const drafts: Record<AuthMethodId, MethodDraft> = { api_key: draftFrom('api_key'), claude_code: draftFrom('claude_code') };
+    setMethodDrafts(drafts);
+
+    // Show the active method's draft (Default Model placeholder shows until chosen).
+    const active = drafts[method];
+    setModel(active.model);
+    setAgentModels(active.agentModels);
+    setEffort(active.effort);
+    setExtendedThinking(active.extendedThinking);
     setModels(list);
     setTestResult(null);
+  }, []);
+
+  // Pull the provider's LIVE model list (auto-includes newly released models)
+  // and merge it on top of the curated fallback. A ref guards against a stale
+  // response overwriting a newer provider selection.
+  const modelReqProvider = useRef<ProviderId>('anthropic');
+  const refreshModels = useCallback(async (provider: ProviderId) => {
+    modelReqProvider.current = provider;
+    try {
+      const { models: live } = await getLlmModels(provider);
+      if (modelReqProvider.current !== provider) return; // superseded by a newer switch
+      if (Array.isArray(live) && live.length) {
+        setModels((prev) => [...new Set([...live, ...prev])]);
+      }
+    } catch { /* keep the curated fallback already in place */ }
   }, []);
 
   const load = useCallback(async (keepSelection?: ProviderId) => {
@@ -154,7 +221,6 @@ export default function LlmConfigurationSection() {
     try {
       const data = await getLlmConfig();
       setProviders(data.providers);
-      setDefaultProvider(data.defaultProvider);
       const next: ProviderId =
         keepSelection ||
         (data.defaultProvider as ProviderId) ||
@@ -164,12 +230,13 @@ export default function LlmConfigurationSection() {
       const cur = data.providers.find((p) => p.provider === next);
       setMode(cur?.configured ? 'view' : 'edit');
       resetEditor(cur);
+      void refreshModels(next);
     } catch (err: any) {
       setLoadError(err?.response?.data?.error || err.message || 'Failed to load LLM configuration.');
     } finally {
       setLoading(false);
     }
-  }, [resetEditor]);
+  }, [resetEditor, refreshModels]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -178,6 +245,7 @@ export default function LlmConfigurationSection() {
     const cur = providers.find((x) => x.provider === p);
     setMode(cur?.configured ? 'view' : 'edit');
     resetEditor(cur);
+    void refreshModels(p);
   };
 
   const enterEdit = () => {
@@ -185,8 +253,25 @@ export default function LlmConfigurationSection() {
     resetEditor(current);
   };
 
-  const cancelEdit = () => {
-    if (current?.configured) { setMode('view'); resetEditor(current); }
+  // Discard unsaved edits: configured providers return to the read-only view;
+  // new (unconfigured) providers simply have their entered values cleared.
+  const handleCancel = () => {
+    if (current?.configured) setMode('view');
+    resetEditor(current);
+  };
+
+  // Switch auth method while keeping each method's model settings independent:
+  // stash the current method's edits, then load the target method's own draft.
+  const switchAuthMethod = (next: AuthMethodId) => {
+    if (next === authMethod) return;
+    setMethodDrafts((prev) => ({ ...prev, [authMethod]: { model, agentModels, effort, extendedThinking } }));
+    const draft = methodDrafts[next] || { ...BLANK_DRAFT };
+    setModel(draft.model);
+    setAgentModels(draft.agentModels);
+    setEffort(draft.effort);
+    setExtendedThinking(draft.extendedThinking);
+    setAuthMethod(next);
+    setTestResult(null);
   };
 
   const handleTest = async (testMode?: 'api' | 'cli') => {
@@ -204,9 +289,10 @@ export default function LlmConfigurationSection() {
       setTestResult({ ok: res.ok, status: (res.status as ConnStatus) || (res.ok ? 'connected' : 'connection_failed'), message: label + res.message });
       if (res.ok) {
         // Merge live models on top of the curated list (live first, deduped).
+        // Do NOT auto-select — the Default Model stays on "Select Model" until the
+        // admin explicitly chooses one (a saved model, if any, is preserved).
         const merged = [...new Set([...(res.models || []), ...modelsFor(selected, model)])];
         setModels(merged);
-        if (!model || !merged.includes(model)) setModel(merged[0] || '');
       }
     } catch (err: any) {
       const label = isClaudeCode ? (testMode === 'cli' ? 'CLI: ' : 'API: ') : '';
@@ -229,25 +315,12 @@ export default function LlmConfigurationSection() {
         model: model || null,
         agentModels,
       });
-      setSavedFlash(true);
-      setTimeout(() => setSavedFlash(false), 3000);
       await load(selected);
+      toast.success('Configuration saved', `${meta.label} settings have been updated.`);
     } catch (err: any) {
-      setTestResult({ ok: false, status: 'connection_failed', message: err?.response?.data?.error || 'Failed to save configuration.' });
+      toast.error('Save failed', err?.response?.data?.error || 'Failed to save configuration.');
     } finally {
       setSaving(false);
-    }
-  };
-
-  const handleSetDefault = async () => {
-    setBusyAction(true);
-    try {
-      await setDefaultLlmProvider(selected);
-      await load(selected);
-    } catch (err: any) {
-      setLoadError(err?.response?.data?.error || 'Failed to set default provider.');
-    } finally {
-      setBusyAction(false);
     }
   };
 
@@ -257,6 +330,7 @@ export default function LlmConfigurationSection() {
     try {
       await deleteLlmConfig(selected);
       await load(selected);
+      toast.success('Configuration deleted', `${meta.label} configuration has been removed.`);
     } catch (err: any) {
       setLoadError(err?.response?.data?.error || 'Failed to delete configuration.');
     } finally {
@@ -272,8 +346,6 @@ export default function LlmConfigurationSection() {
       </div>
     );
   }
-
-  const activeProvider = providers.find((p) => p.provider === defaultProvider);
 
   return (
     <div className="max-w-3xl space-y-5">
@@ -327,6 +399,23 @@ export default function LlmConfigurationSection() {
         </div>
       </div>
 
+      {/* ── Configuration Details ── */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+        <h3 className="text-sm font-semibold text-[#1E1B4B] mb-4 flex items-center gap-2">
+          <ShieldCheck className="w-4 h-4 text-[#7C3AED]" /> Configuration Details
+        </h3>
+        <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
+          <div>
+            <dt className={LABEL_CLASS}>Last Updated</dt>
+            <dd className="text-sm text-[#1E1B4B]" data-testid="llm-last-updated">{formatDate(current?.updatedAt ?? null)}</dd>
+          </div>
+          <div>
+            <dt className={LABEL_CLASS}>Updated By</dt>
+            <dd className="text-sm text-[#1E1B4B]" data-testid="llm-updated-by">{current?.updatedBy || '—'}</dd>
+          </div>
+        </dl>
+      </div>
+
       {/* ── Configuration ── */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100 bg-gray-50/50">
@@ -374,7 +463,7 @@ export default function LlmConfigurationSection() {
               </div>
               <div>
                 <dt className={LABEL_CLASS}>Default Model</dt>
-                <dd className="text-sm font-medium text-[#1E1B4B]">{current.model || '—'}</dd>
+                <dd className="text-sm font-medium text-[#1E1B4B]">{current.model ? formatModelLabel(current.model) : '—'}</dd>
               </div>
               {isAnthropic && (
                 <div>
@@ -393,7 +482,9 @@ export default function LlmConfigurationSection() {
                         <li key={s.key} className="flex items-center justify-between gap-3">
                           <span className="text-[#6B7280]">{s.label}</span>
                           <span className="font-medium">
-                            {current.agentModels?.[s.key] || `default (${current.model || '—'})`}
+                            {current.agentModels?.[s.key]
+                              ? formatModelLabel(current.agentModels[s.key]!)
+                              : `default (${current.model ? formatModelLabel(current.model) : '—'})`}
                           </span>
                         </li>
                       ))}
@@ -420,7 +511,7 @@ export default function LlmConfigurationSection() {
                       <button
                         key={opt.v}
                         type="button"
-                        onClick={() => { setAuthMethod(opt.v); setTestResult(null); }}
+                        onClick={() => switchAuthMethod(opt.v)}
                         className={`flex flex-col items-start px-3 py-2.5 rounded-xl border text-left transition-all ${
                           authMethod === opt.v
                             ? 'border-[#7C3AED] bg-[#F5F3FF] ring-2 ring-[#7C3AED]/20'
@@ -446,7 +537,7 @@ export default function LlmConfigurationSection() {
                         const v = e.target.value;
                         setTestResult(null);
                         // Pasted an API key here? Switch to API Key mode so it's sent correctly.
-                        if (/^sk-ant-api/i.test(v.trim())) { setAuthMethod('api_key'); setApiKey(v); setOauthToken(''); }
+                        if (/^sk-ant-api/i.test(v.trim())) { switchAuthMethod('api_key'); setApiKey(v); setOauthToken(''); }
                         else setOauthToken(v);
                       }}
                       placeholder={current?.maskedToken ? `Saved — ${current.maskedToken} (leave blank to keep)` : 'sk-ant-oat…'}
@@ -472,7 +563,7 @@ export default function LlmConfigurationSection() {
                         const v = e.target.value;
                         setTestResult(null);
                         // Pasted a Claude Code OAuth token here? Switch to Claude Code mode.
-                        if (isAnthropic && /^sk-ant-oat/i.test(v.trim())) { setAuthMethod('claude_code'); setOauthToken(v); setApiKey(''); }
+                        if (isAnthropic && /^sk-ant-oat/i.test(v.trim())) { switchAuthMethod('claude_code'); setOauthToken(v); setApiKey(''); }
                         else setApiKey(v);
                       }}
                       placeholder={current?.configured ? `Saved — ${current.maskedKey} (leave blank to keep)` : meta.keyHint}
@@ -503,13 +594,13 @@ export default function LlmConfigurationSection() {
                 <div>
                   <label className={LABEL_CLASS}>Default Model</label>
                   <select
+                    data-testid="llm-default-model"
                     value={model}
                     onChange={(e) => setModel(e.target.value)}
                     className={INPUT_CLASS}
                   >
-                    {models.length === 0
-                      ? <option value="">Select a model…</option>
-                      : models.map((m) => <option key={m} value={m}>{m}</option>)}
+                    <option value="">SELECT MODEL</option>
+                    {models.map((m) => <option key={m} value={m}>{formatModelLabel(m)}</option>)}
                   </select>
                 </div>
               </div>
@@ -570,8 +661,8 @@ export default function LlmConfigurationSection() {
                         onChange={(e) => setAgentModel(stage.key, e.target.value)}
                         className={INPUT_CLASS}
                       >
-                        <option value="">Use default{model ? ` (${model})` : ''}</option>
-                        {models.map((m) => <option key={m} value={m}>{m}</option>)}
+                        <option value="">SELECT MODEL</option>
+                        {models.map((m) => <option key={m} value={m}>{formatModelLabel(m)}</option>)}
                       </select>
                     </div>
                   ))}
@@ -579,58 +670,47 @@ export default function LlmConfigurationSection() {
               </div>
 
               {/* Actions */}
-              <div className="flex flex-wrap items-center gap-4 pt-3 mt-1 border-t border-gray-100">
+              <div className="flex flex-wrap items-center gap-3 pt-3 mt-1 border-t border-gray-100">
                 {isClaudeCode ? (
-                  <>
-                    {/* Two explicit tests so it's unambiguous which path is checked. */}
-                    <button
-                      onClick={() => handleTest('api')}
-                      disabled={testing || !canTest}
-                      title="Validate the OAuth token against the Anthropic Messages API (Bearer)"
-                      className="inline-flex items-center gap-2 px-4 py-2 border border-[#7C3AED] text-[#7C3AED] rounded-lg text-sm font-medium hover:bg-[#F5F3FF] transition-all disabled:opacity-50"
-                    >
-                      {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-                      Test API
-                    </button>
-                    <button
-                      onClick={() => handleTest('cli')}
-                      disabled={testing}
-                      title="Run the local `claude` CLI (passes your token via CLAUDE_CODE_OAUTH_TOKEN)"
-                      className="inline-flex items-center gap-2 px-4 py-2 border border-[#7C3AED] text-[#7C3AED] rounded-lg text-sm font-medium hover:bg-[#F5F3FF] transition-all disabled:opacity-50"
-                    >
-                      {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-                      Test CLI
-                    </button>
-                  </>
+                  <button
+                    onClick={() => handleTest('cli')}
+                    disabled={testing}
+                    title="Run the local `claude` CLI (passes your token via CLAUDE_CODE_OAUTH_TOKEN)"
+                    data-testid="llm-test-cli"
+                    className="inline-flex items-center gap-2 px-4 py-2 border border-[#7C3AED] text-[#7C3AED] rounded-lg text-sm font-medium hover:bg-[#F5F3FF] transition-all disabled:opacity-50"
+                  >
+                    {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                    {testing ? 'Testing…' : 'Test CLI Connection'}
+                  </button>
                 ) : (
                   <button
                     onClick={() => handleTest()}
                     disabled={testing || !canTest}
+                    data-testid="llm-test-api"
                     className="inline-flex items-center gap-2 px-4 py-2 border border-[#7C3AED] text-[#7C3AED] rounded-lg text-sm font-medium hover:bg-[#F5F3FF] transition-all disabled:opacity-50"
                   >
                     {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-                    {testing ? 'Testing…' : 'Test Connection'}
+                    {testing ? 'Testing…' : 'Test API Connection'}
                   </button>
                 )}
                 <button
                   onClick={handleSave}
                   disabled={saving || !canSave}
-                  title={!canSave ? 'Enter an API key/token and choose a model to save' : undefined}
+                  title={!canSave ? 'Enter an API key or Claude Code token to enable Save' : undefined}
+                  data-testid="llm-save-config"
                   className="inline-flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white rounded-lg text-sm font-medium hover:from-[#6D28D9] hover:to-[#4F46E5] shadow-md shadow-purple-500/20 transition-all disabled:opacity-50"
                 >
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                   {saving ? 'Saving…' : 'Save Configuration'}
                 </button>
-                {current?.configured && (
-                  <button onClick={cancelEdit} className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-[#6B7280] hover:text-[#1E1B4B] transition-colors">
-                    <X className="w-4 h-4" /> Cancel
-                  </button>
-                )}
-                {savedFlash && (
-                  <span className="inline-flex items-center gap-1.5 text-xs text-emerald-600 font-medium">
-                    <CheckCircle2 className="w-4 h-4" /> Saved
-                  </span>
-                )}
+                <button
+                  onClick={handleCancel}
+                  disabled={saving}
+                  data-testid="llm-cancel-config"
+                  className="ml-auto inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-[#6B7280] border border-gray-200 rounded-lg hover:bg-gray-50 hover:text-[#1E1B4B] transition-colors disabled:opacity-50"
+                >
+                  <X className="w-4 h-4" /> Cancel
+                </button>
               </div>
 
               {testResult && (
@@ -644,50 +724,6 @@ export default function LlmConfigurationSection() {
         </div>
       </div>
 
-      {/* ── Configuration Details ── */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-        <h3 className="text-sm font-semibold text-[#1E1B4B] mb-4 flex items-center gap-2">
-          <ShieldCheck className="w-4 h-4 text-[#7C3AED]" /> Configuration Details
-        </h3>
-        <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
-          <div className="flex items-center justify-between sm:block">
-            <dt className={LABEL_CLASS}>Default Provider</dt>
-            <dd className="text-sm">
-              {current?.isDefault ? (
-                <span className="inline-flex items-center gap-1.5 font-medium text-emerald-600">
-                  <CheckCircle2 className="w-4 h-4" /> Yes
-                </span>
-              ) : current?.configured ? (
-                <button onClick={handleSetDefault} disabled={busyAction} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#7C3AED] border border-[#DDD6FE] rounded-lg hover:bg-[#F5F3FF] transition-colors disabled:opacity-50">
-                  {busyAction ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Star className="w-3.5 h-3.5" />} Set as Default
-                </button>
-              ) : (
-                <span className="text-sm text-[#6B7280]">—</span>
-              )}
-            </dd>
-          </div>
-          <div>
-            <dt className={LABEL_CLASS}>Selected Model</dt>
-            <dd className="text-sm font-medium text-[#1E1B4B]">{current?.model || '—'}</dd>
-          </div>
-          <div>
-            <dt className={LABEL_CLASS}>Last Updated</dt>
-            <dd className="text-sm text-[#1E1B4B]">{formatDate(current?.updatedAt ?? null)}</dd>
-          </div>
-          <div>
-            <dt className={LABEL_CLASS}>Updated By</dt>
-            <dd className="text-sm text-[#1E1B4B]">{current?.updatedBy || '—'}</dd>
-          </div>
-        </dl>
-
-        <div className="mt-4 pt-4 border-t border-gray-100 text-xs text-[#6B7280] flex items-center gap-1.5">
-          <Star className="w-3.5 h-3.5 text-[#A5B4FC]" />
-          Active platform provider:&nbsp;
-          <span className="font-medium text-[#1E1B4B]">
-            {activeProvider ? `${activeProvider.label} (${activeProvider.model || 'no model'})` : 'None selected'}
-          </span>
-        </div>
-      </div>
     </div>
   );
 }

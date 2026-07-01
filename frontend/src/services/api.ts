@@ -656,6 +656,17 @@ export interface LlmProviderConfig {
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
   /** Extended ("ultra") thinking toggle. */
   extendedThinking?: boolean;
+  /**
+   * Per-auth-method model settings so API Key and Claude Code stay independent.
+   * The top-level model/agentModels/effort/extendedThinking reflect the active
+   * method; this exposes both so the editor can swap without cross-contamination.
+   */
+  settingsByMethod?: Partial<Record<'api_key' | 'claude_code', {
+    model: string | null;
+    agentModels?: Record<string, string>;
+    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
+    extendedThinking?: boolean;
+  }>>;
   baseUrl: string;
   maskedKey: string | null;
   /** Masked Claude Code OAuth token (Anthropic + claude_code). */
@@ -667,6 +678,18 @@ export interface LlmProviderConfig {
 
 export async function getLlmConfig(): Promise<{ providers: LlmProviderConfig[]; defaultProvider: string | null }> {
   const { data } = await api.get('/llm-config');
+  return data;
+}
+
+/**
+ * Live model discovery for a provider. Returns the currently-available models
+ * (auto-includes newly released ones) resolved from the provider's own API using
+ * the stored credential, with a fallback lineup when nothing is configured.
+ */
+export async function getLlmModels(
+  provider: string,
+): Promise<{ ok: boolean; source: string; models: string[] }> {
+  const { data } = await api.get(`/llm-config/${provider}/models`);
   return data;
 }
 
