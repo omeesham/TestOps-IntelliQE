@@ -138,10 +138,33 @@ router.post('/test-ai-connection', async (req: Request, res: Response) => {
       return;
     }
 
-    if (!apiKey && authMethod === 'api-key') { res.status(400).json({ error: 'API key is required' }); return; }
+    // ── Cloud is integrated with IntelliQE via API only ──
+    // Every branch below performs a REAL, live round-trip to the provider's cloud
+    // API with the supplied credentials and returns verifiable proof: the model the
+    // cloud echoed back, the measured latency, the provider request-id, and a
+    // server-stamped verification time. Nothing here is simulated — `ok: true`
+    // means IntelliQE actually reached the cloud API and it answered.
+    if (authMethod && authMethod !== 'api-key') {
+      res.status(400).json({ error: 'Cloud LLMs are integrated via API only. Select "API Key" as the authentication method.' });
+      return;
+    }
+    if (!apiKey) { res.status(400).json({ error: 'API key is required for cloud API connectivity.' }); return; }
+
+    const verifiedAt = new Date().toISOString();
+    const t0 = Date.now();
+
+    /** Build the genuine "connected" payload from a successful live response. */
+    const proof = (usedModel: string, latencyMs: number, requestId?: string) => ({
+      ok: true,
+      provider,
+      model: usedModel,
+      latencyMs,
+      requestId: requestId || null,
+      verifiedAt,
+      message: `Live cloud API connection verified — ${usedModel} responded in ${latencyMs} ms.`,
+    });
 
     if (provider === 'claude' || provider === 'anthropic') {
-      // Test Anthropic API
       const testRes = await fetch(`${baseUrl || 'https://api.anthropic.com'}/v1/messages`, {
         method: 'POST',
         headers: {
@@ -151,38 +174,104 @@ router.post('/test-ai-connection', async (req: Request, res: Response) => {
         },
         body: JSON.stringify({
           model: model || 'claude-sonnet-4-20250514',
-          max_tokens: 10,
-          messages: [{ role: 'user', content: 'Say hello in one word.' }],
+          max_tokens: 8,
+          messages: [{ role: 'user', content: 'Reply with the single word: connected.' }],
         }),
       });
+      const latencyMs = Date.now() - t0;
       if (testRes.ok) {
-        res.json({ ok: true, message: `Connected to ${model || 'Claude'} successfully!` });
+        const body = await testRes.json().catch(() => ({} as any));
+        const requestId = testRes.headers.get('request-id') || testRes.headers.get('x-request-id') || undefined;
+        res.json(proof(body?.model || model || 'claude', latencyMs, requestId));
       } else {
         const err = await testRes.json().catch(() => ({ error: { message: 'Unknown error' } }));
-        res.status(400).json({ error: err.error?.message || `API returned ${testRes.status}` });
+        res.status(400).json({ error: err.error?.message || `Anthropic API returned HTTP ${testRes.status}.` });
       }
-    } else if (provider === 'openai') {
-      const testRes = await fetch(`${baseUrl || 'https://api.openai.com/v1'}/chat/completions`, {
+      return;
+    }
+
+    if (provider === 'openai' || provider === 'azure-openai') {
+      // OpenAI and Azure OpenAI share the chat/completions shape; Azure routes
+      // through a deployment path and uses the api-key header + api-version query.
+      const isAzure = provider === 'azure-openai';
+      const url = isAzure
+        ? `${(baseUrl || '').replace(/\/$/, '')}/openai/deployments/${encodeURIComponent(model || 'gpt-4o')}/chat/completions?api-version=2024-06-01`
+        : `${baseUrl || 'https://api.openai.com/v1'}/chat/completions`;
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (isAzure) headers['api-key'] = apiKey; else headers['Authorization'] = `Bearer ${apiKey}`;
+      const testRes = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: model || 'gpt-4o-mini',
+          max_tokens: 8,
+          messages: [{ role: 'user', content: 'Reply with the single word: connected.' }],
+        }),
+      });
+      const latencyMs = Date.now() - t0;
+      if (testRes.ok) {
+        const body = await testRes.json().catch(() => ({} as any));
+        const requestId = testRes.headers.get('x-request-id') || body?.id || undefined;
+        res.json(proof(body?.model || model || (isAzure ? 'azure-openai' : 'openai'), latencyMs, requestId));
+      } else {
+        const err = await testRes.json().catch(() => ({ error: { message: 'Unknown error' } }));
+        res.status(400).json({ error: err.error?.message || `${isAzure ? 'Azure OpenAI' : 'OpenAI'} API returned HTTP ${testRes.status}.` });
+      }
+      return;
+    }
+
+    if (provider === 'gemini') {
+      // Google Generative Language API — an authenticated model-metadata GET is a
+      // genuine round-trip that fails on a bad key without consuming generation quota.
+      const base = baseUrl || 'https://generativelanguage.googleapis.com';
+      const m = model || 'gemini-1.5-flash';
+      const testRes = await fetch(`${base}/v1beta/models/${encodeURIComponent(m)}?key=${encodeURIComponent(apiKey)}`);
+      const latencyMs = Date.now() - t0;
+      if (testRes.ok) {
+        const body = await testRes.json().catch(() => ({} as any));
+        res.json(proof(String(body?.name || `models/${m}`).replace(/^models\//, ''), latencyMs));
+      } else {
+        const err = await testRes.json().catch(() => ({ error: { message: 'Unknown error' } }));
+        res.status(400).json({ error: err.error?.message || `Gemini API returned HTTP ${testRes.status}.` });
+      }
+      return;
+    }
+
+    if (provider === 'custom') {
+      // Custom / self-hosted endpoint — still a real OpenAI-compatible round-trip.
+      if (!baseUrl) { res.status(400).json({ error: 'Base URL is required for a custom cloud API endpoint.' }); return; }
+      const testRes = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
         body: JSON.stringify({
-          model: model || 'gpt-4o-mini',
-          max_tokens: 10,
-          messages: [{ role: 'user', content: 'Say hello in one word.' }],
+          model: model || 'custom-model',
+          max_tokens: 8,
+          messages: [{ role: 'user', content: 'Reply with the single word: connected.' }],
         }),
       });
+      const latencyMs = Date.now() - t0;
       if (testRes.ok) {
-        res.json({ ok: true, message: `Connected to ${model || 'OpenAI'} successfully!` });
+        const body = await testRes.json().catch(() => ({} as any));
+        res.json(proof(body?.model || model || 'custom-model', latencyMs, body?.id));
       } else {
         const err = await testRes.json().catch(() => ({ error: { message: 'Unknown error' } }));
-        res.status(400).json({ error: err.error?.message || `API returned ${testRes.status}` });
+        res.status(400).json({ error: err.error?.message || `Custom endpoint returned HTTP ${testRes.status}.` });
       }
-    } else {
-      // For other providers, just validate the key format
-      res.json({ ok: true, message: `API key saved for ${provider}. Connection test not implemented for this provider.` });
+      return;
     }
+
+    res.status(400).json({ error: `Unsupported provider "${provider}" for cloud API connectivity.` });
   } catch (err: any) {
-    res.status(500).json({ error: err.message || 'Connection test failed' });
+    // A throw here is almost always a transport failure — the cloud API host was
+    // genuinely unreachable (DNS, refused, TLS, timeout). Report it as such so the
+    // UI can tell the user it's a connectivity problem, not a credential one.
+    const raw = String(err?.message || err || '');
+    const isNetwork = /fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ECONNRESET|socket hang up|network/i.test(raw);
+    res.status(isNetwork ? 502 : 500).json({
+      error: isNetwork
+        ? 'Could not reach the cloud API endpoint. Check the Base URL and your network connection, then try again.'
+        : (raw || 'Connection test failed'),
+    });
   }
 });
 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Brain, Eye, EyeOff, CheckCircle, Loader2, Shield, Cpu, Zap, AlertTriangle, Key, Cloud, Lock } from 'lucide-react';
+import { Brain, Eye, EyeOff, CheckCircle, Loader2, Shield, Cpu, Zap, AlertTriangle, Key, Cloud } from 'lucide-react';
 import { connectIntegration } from '@/services/api';
 
 interface DbConfig {
@@ -15,40 +15,24 @@ interface Props {
   configs: DbConfig[];
 }
 
-type AuthMethod = 'api-key' | 'claude-cli' | 'aws-bedrock' | 'gcp-vertex' | 'azure-ad' | 'oauth';
-
+/**
+ * Cloud LLMs are integrated with IntelliQE via API ONLY. There is a single
+ * authentication method — an API key — and a connection is only considered valid
+ * once a live round-trip to the provider's cloud API has succeeded. No CLI,
+ * IAM, service-account or simulated "saved" path exists here anymore.
+ */
 interface FormState {
-  // LLM Provider
+  // LLM Provider (cloud, API-only)
   aiProvider: string;
-  authMethod: AuthMethod;
   aiModel: string;
   aiBaseUrl: string;
+  aiApiKey: string;
   aiMaxTokens: number;
   aiTemperature: number;
-  // API Key auth
-  aiApiKey: string;
-  // Claude CLI auth
-  cliPath: string;
-  cliAutoDetect: boolean;
-  // AWS Bedrock auth
-  awsAccessKeyId: string;
-  awsSecretAccessKey: string;
-  awsRegion: string;
-  awsSessionToken: string;
-  // GCP Vertex AI auth
-  gcpProjectId: string;
-  gcpLocation: string;
-  gcpServiceAccountKey: string;
-  // Azure AD auth
-  azureTenantId: string;
-  azureClientId: string;
-  azureClientSecret: string;
-  azureResourceName: string;
-  // OAuth / SSO
-  oauthClientId: string;
-  oauthClientSecret: string;
-  oauthTokenUrl: string;
-  oauthScope: string;
+  // Genuine connectivity proof — persisted so the verified badge survives reload
+  cloudConnected: boolean;
+  cloudVerifiedAt: string;
+  cloudVerifiedModel: string;
   // Pipeline settings
   pipelineMode: string;
   enableWorker: boolean;
@@ -65,8 +49,9 @@ interface ProviderDef {
   value: string;
   label: string;
   models: string[];
-  authMethods: { value: AuthMethod; label: string; icon: React.ElementType; desc: string }[];
   defaultBaseUrl: string;
+  /** Hint shown under the API Key field. */
+  keyHint: string;
 }
 
 const AI_PROVIDERS: ProviderDef[] = [
@@ -74,48 +59,31 @@ const AI_PROVIDERS: ProviderDef[] = [
     value: 'claude', label: 'Claude (Anthropic)',
     models: ['claude-sonnet-4-20250514', 'claude-haiku-4-20250414', 'claude-opus-4-20250514'],
     defaultBaseUrl: 'https://api.anthropic.com',
-    authMethods: [
-      { value: 'api-key', label: 'API Key', icon: Key, desc: 'Authenticate with an Anthropic API key (sk-ant-...)' },
-      { value: 'claude-cli', label: 'Claude CLI / Claude Code', icon: Lock, desc: 'Use your existing Claude CLI session — no API key needed. Runs via the claude command.' },
-      { value: 'aws-bedrock', label: 'AWS Bedrock', icon: Cloud, desc: 'Access Claude via AWS Bedrock with IAM credentials' },
-      { value: 'gcp-vertex', label: 'Google Vertex AI', icon: Cloud, desc: 'Access Claude via Google Cloud Vertex AI' },
-    ],
+    keyHint: 'Anthropic API key — starts with sk-ant-…  Create one at console.anthropic.com.',
   },
   {
     value: 'openai', label: 'GPT (OpenAI)',
     models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o1-preview'],
     defaultBaseUrl: 'https://api.openai.com/v1',
-    authMethods: [
-      { value: 'api-key', label: 'API Key', icon: Key, desc: 'Authenticate with an OpenAI API key (sk-...)' },
-      { value: 'azure-ad', label: 'Azure OpenAI', icon: Cloud, desc: 'Access GPT via Azure OpenAI with Azure AD credentials' },
-    ],
+    keyHint: 'OpenAI API key — starts with sk-…  Create one at platform.openai.com.',
   },
   {
     value: 'gemini', label: 'Gemini (Google)',
     models: ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
     defaultBaseUrl: 'https://generativelanguage.googleapis.com',
-    authMethods: [
-      { value: 'api-key', label: 'API Key', icon: Key, desc: 'Authenticate with a Google AI API key' },
-      { value: 'gcp-vertex', label: 'GCP Vertex AI', icon: Cloud, desc: 'Use Google Cloud service account credentials' },
-    ],
+    keyHint: 'Google AI Studio API key. Create one at aistudio.google.com/apikey.',
   },
   {
     value: 'azure-openai', label: 'Azure OpenAI',
     models: ['gpt-4o', 'gpt-4-turbo'],
     defaultBaseUrl: 'https://your-resource.openai.azure.com',
-    authMethods: [
-      { value: 'api-key', label: 'API Key', icon: Key, desc: 'Use Azure OpenAI resource API key' },
-      { value: 'azure-ad', label: 'Azure AD / Entra ID', icon: Lock, desc: 'Authenticate with Azure AD app registration (client credentials)' },
-    ],
+    keyHint: 'Azure OpenAI resource key. Base URL must be your resource endpoint; Model is the deployment name.',
   },
   {
-    value: 'custom', label: 'Custom / Self-Hosted',
+    value: 'custom', label: 'Custom / Self-Hosted (OpenAI-compatible)',
     models: ['custom-model'],
-    defaultBaseUrl: 'http://localhost:11434',
-    authMethods: [
-      { value: 'api-key', label: 'API Key / Token', icon: Key, desc: 'Bearer token or API key for your custom endpoint' },
-      { value: 'oauth', label: 'OAuth 2.0 Client Credentials', icon: Lock, desc: 'OAuth 2.0 client credentials flow for enterprise endpoints' },
-    ],
+    defaultBaseUrl: 'https://llm.example.com/v1',
+    keyHint: 'Bearer token / API key for your OpenAI-compatible cloud endpoint.',
   },
 ];
 
@@ -125,15 +93,8 @@ const PIPELINE_MODES = [
   { value: 'local-only', label: 'Local Agents Only', desc: 'Uses built-in rule-based agents. No AI credentials required.' },
 ];
 
-const AWS_REGIONS = [
-  'us-east-1', 'us-east-2', 'us-west-2', 'eu-west-1', 'eu-west-2', 'eu-central-1',
-  'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1', 'ap-south-1',
-];
-
-const GCP_LOCATIONS = [
-  'us-central1', 'us-east4', 'us-west1', 'europe-west1', 'europe-west4',
-  'asia-southeast1', 'asia-northeast1',
-];
+/** Fields whose change invalidates a prior live verification. */
+const CONNECTIVITY_FIELDS = new Set<keyof FormState>(['aiProvider', 'aiModel', 'aiBaseUrl', 'aiApiKey']);
 
 const INTEGRATION_ID = 'ai-self-healing';
 const INPUT_CLASS = 'w-full px-3 py-2.5 rounded-xl border border-[#DDD6FE] bg-[#F5F3FF] text-sm outline-none focus:ring-2 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED] placeholder:text-gray-400 transition-all';
@@ -141,19 +102,24 @@ const TOGGLE_CLASS = 'w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:rin
 
 function getDefaults(): FormState {
   return {
-    aiProvider: 'claude', authMethod: 'api-key',
+    aiProvider: 'claude',
     aiModel: 'claude-sonnet-4-20250514', aiBaseUrl: 'https://api.anthropic.com',
-    aiMaxTokens: 4096, aiTemperature: 0.3,
-    aiApiKey: '',
-    cliPath: '', cliAutoDetect: true,
-    awsAccessKeyId: '', awsSecretAccessKey: '', awsRegion: 'us-east-1', awsSessionToken: '',
-    gcpProjectId: '', gcpLocation: 'us-central1', gcpServiceAccountKey: '',
-    azureTenantId: '', azureClientId: '', azureClientSecret: '', azureResourceName: '',
-    oauthClientId: '', oauthClientSecret: '', oauthTokenUrl: '', oauthScope: '',
+    aiApiKey: '', aiMaxTokens: 4096, aiTemperature: 0.3,
+    cloudConnected: false, cloudVerifiedAt: '', cloudVerifiedModel: '',
     pipelineMode: 'auto', enableWorker: false, workerSecret: 'dev-secret',
     autoHealLocators: true, autoRetryAfterHealing: true, aiRootCauseAnalysis: false,
     healingConfidence: 75, maxHealingAttempts: 3,
   };
+}
+
+interface TestResult {
+  ok: boolean;
+  message: string;
+  provider?: string;
+  model?: string;
+  latencyMs?: number;
+  requestId?: string | null;
+  verifiedAt?: string;
 }
 
 export default function AISelfHealingSection({ configs }: Props) {
@@ -168,7 +134,7 @@ export default function AISelfHealingSection({ configs }: Props) {
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string; resolvedPath?: string } | null>(null);
+  const [testResult, setTestResult] = useState<TestResult | null>(null);
 
   useEffect(() => {
     if (existing?.configData) setForm({ ...getDefaults(), ...existing.configData });
@@ -178,6 +144,24 @@ export default function AISelfHealingSection({ configs }: Props) {
 
   const selectedProvider = AI_PROVIDERS.find(p => p.value === form.aiProvider) || AI_PROVIDERS[0];
 
+  /**
+   * Update a single field. Any edit to a connectivity-relevant field invalidates
+   * the prior live verification — the user must re-run "Test Connection" before
+   * the config can be saved again. This is what keeps the verified badge honest.
+   */
+  const setField = (field: keyof FormState, value: any) => {
+    setForm(prev => {
+      const next: FormState = { ...prev, [field]: value };
+      if (CONNECTIVITY_FIELDS.has(field)) {
+        next.cloudConnected = false;
+        next.cloudVerifiedAt = '';
+        next.cloudVerifiedModel = '';
+      }
+      return next;
+    });
+    if (CONNECTIVITY_FIELDS.has(field)) setTestResult(null);
+  };
+
   const handleProviderChange = (providerValue: string) => {
     const provider = AI_PROVIDERS.find(p => p.value === providerValue) || AI_PROVIDERS[0];
     setForm(prev => ({
@@ -185,24 +169,12 @@ export default function AISelfHealingSection({ configs }: Props) {
       aiProvider: providerValue,
       aiModel: provider.models[0],
       aiBaseUrl: provider.defaultBaseUrl,
-      authMethod: provider.authMethods[0].value,
+      cloudConnected: false, cloudVerifiedAt: '', cloudVerifiedModel: '',
     }));
     setTestResult(null);
   };
 
-  const handleAuthMethodChange = (method: AuthMethod) => {
-    setForm(prev => {
-      const updates: Partial<FormState> = { authMethod: method };
-      // Auto-set base URL based on auth method
-      if (method === 'aws-bedrock') updates.aiBaseUrl = `https://bedrock-runtime.${prev.awsRegion || 'us-east-1'}.amazonaws.com`;
-      else if (method === 'gcp-vertex') updates.aiBaseUrl = `https://${prev.gcpLocation || 'us-central1'}-aiplatform.googleapis.com`;
-      else if (method === 'azure-ad') updates.aiBaseUrl = `https://${prev.azureResourceName || 'your-resource'}.openai.azure.com`;
-      else updates.aiBaseUrl = selectedProvider.defaultBaseUrl;
-      return { ...prev, ...updates };
-    });
-    setTestResult(null);
-  };
-
+  /** Genuine, live cloud API connectivity check (never simulated). */
   const handleTestConnection = async () => {
     setTesting(true);
     setTestResult(null);
@@ -214,36 +186,51 @@ export default function AISelfHealingSection({ configs }: Props) {
           'Authorization': `Bearer ${sessionStorage.getItem('intelliqe_token')}`,
         },
         body: JSON.stringify({
-          provider: form.aiProvider, authMethod: form.authMethod,
-          apiKey: form.aiApiKey, model: form.aiModel, baseUrl: form.aiBaseUrl,
-          cliPath: form.cliAutoDetect ? undefined : form.cliPath,
-          awsAccessKeyId: form.awsAccessKeyId, awsSecretAccessKey: form.awsSecretAccessKey,
-          awsRegion: form.awsRegion, awsSessionToken: form.awsSessionToken,
-          gcpProjectId: form.gcpProjectId, gcpLocation: form.gcpLocation,
-          azureTenantId: form.azureTenantId, azureClientId: form.azureClientId,
-          azureClientSecret: form.azureClientSecret, azureResourceName: form.azureResourceName,
-          oauthClientId: form.oauthClientId, oauthClientSecret: form.oauthClientSecret,
-          oauthTokenUrl: form.oauthTokenUrl, oauthScope: form.oauthScope,
+          provider: form.aiProvider,
+          authMethod: 'api-key',
+          apiKey: form.aiApiKey,
+          model: form.aiModel,
+          baseUrl: form.aiBaseUrl,
         }),
       });
       const data = await res.json();
-      if (res.ok) {
-        setTestResult({ ok: true, message: data.message || 'Connection successful!', resolvedPath: data.resolvedPath });
+      if (res.ok && data.ok) {
+        setTestResult({
+          ok: true,
+          message: data.message || 'Live cloud API connection verified.',
+          provider: data.provider, model: data.model, latencyMs: data.latencyMs,
+          requestId: data.requestId, verifiedAt: data.verifiedAt,
+        });
+        // Record the genuine verification on the form so it persists on Save.
+        setForm(prev => ({
+          ...prev,
+          cloudConnected: true,
+          cloudVerifiedAt: data.verifiedAt || new Date().toISOString(),
+          cloudVerifiedModel: data.model || prev.aiModel,
+        }));
       } else {
         setTestResult({ ok: false, message: data.error || 'Connection test failed.' });
+        setForm(prev => ({ ...prev, cloudConnected: false, cloudVerifiedAt: '', cloudVerifiedModel: '' }));
       }
     } catch (err: any) {
-      setTestResult({ ok: false, message: err.message || 'Network error' });
+      setTestResult({ ok: false, message: err?.message || 'Could not reach the server to run the connection test.' });
+      setForm(prev => ({ ...prev, cloudConnected: false, cloudVerifiedAt: '', cloudVerifiedModel: '' }));
     } finally {
       setTesting(false);
     }
   };
 
   const handleSave = async () => {
+    // Guard: a cloud config cannot be saved until it has been genuinely verified.
+    if (!form.cloudConnected) {
+      setTestResult({ ok: false, message: 'Run "Test Connection" and get a live confirmation before saving.' });
+      return;
+    }
     setSaving(true);
     setSaveSuccess(false);
     try {
-      await connectIntegration(INTEGRATION_ID, { ...form });
+      // Always persist the enforced auth method so downstream code stays API-only.
+      await connectIntegration(INTEGRATION_ID, { ...form, authMethod: 'api-key' });
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (err: any) {
@@ -253,189 +240,20 @@ export default function AISelfHealingSection({ configs }: Props) {
     }
   };
 
-  // Reusable password input
-  const SecretInput = ({ label, field, placeholder }: { label: string; field: keyof FormState; placeholder: string }) => (
-    <div>
-      <label className="block text-sm font-medium text-[#1E1B4B] mb-1">{label}</label>
-      <div className="relative">
-        <input
-          type={visibleSecrets[field] ? 'text' : 'password'}
-          value={form[field] as string}
-          onChange={(e) => setForm(prev => ({ ...prev, [field]: e.target.value }))}
-          placeholder={placeholder}
-          autoComplete="off"
-          className={`${INPUT_CLASS} pr-10`}
-        />
-        <button type="button" onClick={() => toggleSecret(field)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#7C3AED] transition-colors">
-          {visibleSecrets[field] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-        </button>
-      </div>
-    </div>
-  );
-
-  const TextInput = ({ label, field, placeholder }: { label: string; field: keyof FormState; placeholder: string }) => (
-    <div>
-      <label className="block text-sm font-medium text-[#1E1B4B] mb-1">{label}</label>
-      <input
-        type="text"
-        value={form[field] as string}
-        onChange={(e) => setForm(prev => ({ ...prev, [field]: e.target.value }))}
-        placeholder={placeholder}
-        className={INPUT_CLASS}
-      />
-    </div>
-  );
-
-  const SelectInput = ({ label, field, options }: { label: string; field: keyof FormState; options: string[] }) => (
-    <div>
-      <label className="block text-sm font-medium text-[#1E1B4B] mb-1">{label}</label>
-      <select
-        value={form[field] as string}
-        onChange={(e) => setForm(prev => ({ ...prev, [field]: e.target.value }))}
-        className={INPUT_CLASS}
-      >
-        {options.map(o => <option key={o} value={o}>{o}</option>)}
-      </select>
-    </div>
-  );
-
-  // Auth-specific credential fields
-  const renderAuthFields = () => {
-    switch (form.authMethod) {
-      case 'api-key':
-        return (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <SecretInput label="API Key" field="aiApiKey" placeholder={form.aiProvider === 'claude' ? 'sk-ant-api03-...' : 'sk-...'} />
-            <TextInput label="Base URL" field="aiBaseUrl" placeholder={selectedProvider.defaultBaseUrl} />
-          </div>
-        );
-
-      case 'claude-cli':
-        return (
-          <div className="space-y-4">
-            <div className="p-3 bg-green-50 border border-green-200 rounded-xl text-xs text-green-800">
-              Uses your locally installed <strong>Claude CLI / Claude Code</strong> session. If you're already logged in via <code>claude</code> command, no additional credentials are needed. The pipeline worker will invoke Claude through the CLI.
-            </div>
-            <div className="flex items-center justify-between">
-              <div>
-                <span className="text-sm text-[#1E1B4B]">Auto-detect CLI path</span>
-                <p className="text-xs text-[#6B7280]">Automatically find the <code>claude</code> command on your system PATH</p>
-              </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input type="checkbox" checked={form.cliAutoDetect} onChange={(e) => setForm(prev => ({ ...prev, cliAutoDetect: e.target.checked }))} className="sr-only peer" />
-                <div className={TOGGLE_CLASS} />
-              </label>
-            </div>
-            {!form.cliAutoDetect && (
-              <TextInput label="Claude CLI Path" field="cliPath" placeholder="C:\\Users\\you\\.claude\\claude.exe or /usr/local/bin/claude" />
-            )}
-            <div className="p-3 bg-[#F5F3FF] border border-[#DDD6FE] rounded-xl text-xs text-[#1E1B4B] space-y-1.5">
-              <p className="font-semibold">How to set up Claude CLI:</p>
-              <ol className="list-decimal ml-4 space-y-1 text-[#6B7280]">
-                <li>Install Claude Code: <code className="bg-white px-1 rounded">npm install -g @anthropic-ai/claude-code</code></li>
-                <li>Login: <code className="bg-white px-1 rounded">claude login</code></li>
-                <li>Verify: <code className="bg-white px-1 rounded">claude --version</code></li>
-                <li>Come back here and click <strong>Test Connection</strong></li>
-              </ol>
-            </div>
-          </div>
-        );
-
-      case 'aws-bedrock':
-        return (
-          <div className="space-y-4">
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
-              Access Claude through AWS Bedrock using your IAM credentials. Ensure the Bedrock model access is enabled in your AWS account.
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <TextInput label="AWS Access Key ID" field="awsAccessKeyId" placeholder="AKIAIOSFODNN7EXAMPLE" />
-              <SecretInput label="AWS Secret Access Key" field="awsSecretAccessKey" placeholder="wJalrXUtnFEMI/K7MDENG/..." />
-              <SelectInput label="AWS Region" field="awsRegion" options={AWS_REGIONS} />
-              <SecretInput label="Session Token (optional)" field="awsSessionToken" placeholder="For temporary credentials / SSO" />
-            </div>
-          </div>
-        );
-
-      case 'gcp-vertex':
-        return (
-          <div className="space-y-4">
-            <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">
-              Access Claude or Gemini via Google Cloud Vertex AI. Provide your GCP project credentials.
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <TextInput label="GCP Project ID" field="gcpProjectId" placeholder="my-project-123456" />
-              <SelectInput label="Location" field="gcpLocation" options={GCP_LOCATIONS} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-[#1E1B4B] mb-1">Service Account Key (JSON)</label>
-              <textarea
-                value={form.gcpServiceAccountKey}
-                onChange={(e) => setForm(prev => ({ ...prev, gcpServiceAccountKey: e.target.value }))}
-                placeholder='Paste your service account JSON key here, or leave empty to use Application Default Credentials (ADC)'
-                rows={4}
-                className={`${INPUT_CLASS} font-mono text-xs`}
-              />
-              <p className="text-[10px] text-[#6B7280] mt-1">Leave empty if running on GCP with default credentials or using <code>gcloud auth</code></p>
-            </div>
-          </div>
-        );
-
-      case 'azure-ad':
-        return (
-          <div className="space-y-4">
-            <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">
-              Authenticate with Azure AD (Entra ID) using an App Registration. This uses the client credentials flow.
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <TextInput label="Azure Resource Name" field="azureResourceName" placeholder="my-openai-resource" />
-              <TextInput label="Tenant ID" field="azureTenantId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
-              <TextInput label="Client ID (App ID)" field="azureClientId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
-              <SecretInput label="Client Secret" field="azureClientSecret" placeholder="Your app registration secret" />
-            </div>
-          </div>
-        );
-
-      case 'oauth':
-        return (
-          <div className="space-y-4">
-            <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl text-xs text-purple-800">
-              OAuth 2.0 Client Credentials flow for enterprise / self-hosted LLM endpoints.
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <TextInput label="Token URL" field="oauthTokenUrl" placeholder="https://auth.example.com/oauth/token" />
-              <TextInput label="Scope" field="oauthScope" placeholder="llm:invoke (optional)" />
-              <TextInput label="Client ID" field="oauthClientId" placeholder="your-client-id" />
-              <SecretInput label="Client Secret" field="oauthClientSecret" placeholder="your-client-secret" />
-              <TextInput label="LLM Base URL" field="aiBaseUrl" placeholder="https://llm.example.com/v1" />
-            </div>
-          </div>
-        );
-
-      default:
-        return null;
-    }
-  };
-
-  const hasCredentials = () => {
-    switch (form.authMethod) {
-      case 'api-key': return !!form.aiApiKey;
-      case 'claude-cli': return true; // CLI auth is always ready if selected
-      case 'aws-bedrock': return !!form.awsAccessKeyId && !!form.awsSecretAccessKey;
-      case 'gcp-vertex': return !!form.gcpProjectId;
-      case 'azure-ad': return !!form.azureClientId && !!form.azureClientSecret && !!form.azureTenantId;
-      case 'oauth': return !!form.oauthClientId && !!form.oauthClientSecret && !!form.oauthTokenUrl;
-      default: return false;
-    }
-  };
+  const hasCredentials = () => !!form.aiApiKey && (form.aiProvider !== 'custom' || !!form.aiBaseUrl);
 
   return (
     <div className="space-y-6">
-      {/* ── LLM Provider ── */}
+      {/* ── LLM Provider (cloud, API only) ── */}
       <div>
-        <div className="flex items-center gap-2 mb-4">
+        <div className="flex items-center gap-2 mb-1">
           <Brain className="w-4 h-4 text-[#7C3AED]" />
           <h3 className="text-sm font-semibold text-[#1E1B4B]">LLM Provider Configuration</h3>
         </div>
+        <p className="text-xs text-[#6B7280] mb-4 ml-6">
+          Cloud LLMs connect to IntelliQE <strong>via API only</strong>. Provide your provider, model and API key,
+          then verify a live connection before saving.
+        </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
           <div>
@@ -445,49 +263,63 @@ export default function AISelfHealingSection({ configs }: Props) {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-[#1E1B4B] mb-1">Model</label>
-            <select value={form.aiModel} onChange={(e) => setForm(prev => ({ ...prev, aiModel: e.target.value }))} className={INPUT_CLASS}>
-              {selectedProvider.models.map(m => <option key={m} value={m}>{m}</option>)}
-            </select>
+            <label className="block text-sm font-medium text-[#1E1B4B] mb-1">Model{form.aiProvider === 'azure-openai' ? ' / Deployment' : ''}</label>
+            {form.aiProvider === 'azure-openai' || form.aiProvider === 'custom' ? (
+              <input
+                type="text" value={form.aiModel}
+                onChange={(e) => setField('aiModel', e.target.value)}
+                placeholder={form.aiProvider === 'azure-openai' ? 'your-deployment-name' : 'custom-model'}
+                className={INPUT_CLASS}
+              />
+            ) : (
+              <select value={form.aiModel} onChange={(e) => setField('aiModel', e.target.value)} className={INPUT_CLASS}>
+                {selectedProvider.models.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            )}
           </div>
         </div>
 
-        {/* Auth Method Selection */}
-        <div className="mb-4">
-          <label className="block text-sm font-medium text-[#1E1B4B] mb-2">Authentication Method</label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-            {selectedProvider.authMethods.map(am => {
-              const Icon = am.icon;
-              return (
-                <label
-                  key={am.value}
-                  className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
-                    form.authMethod === am.value
-                      ? 'border-[#7C3AED] bg-[#F5F3FF] ring-1 ring-[#7C3AED]/30'
-                      : 'border-[#E5E7EB] hover:border-[#DDD6FE] hover:bg-[#FAFAFE]'
-                  }`}
-                >
-                  <input
-                    type="radio" name="authMethod" value={am.value}
-                    checked={form.authMethod === am.value}
-                    onChange={() => handleAuthMethodChange(am.value)}
-                    className="mt-0.5 accent-[#7C3AED]"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <Icon className="w-3.5 h-3.5 text-[#7C3AED]" />
-                      <span className="text-sm font-medium text-[#1E1B4B]">{am.label}</span>
-                    </div>
-                    <p className="text-[11px] text-[#6B7280] mt-0.5 leading-snug">{am.desc}</p>
-                  </div>
-                </label>
-              );
-            })}
+        {/* ── Cloud API Connection (the ONLY integration path) ── */}
+        <div className="rounded-2xl border border-[#DDD6FE] bg-gradient-to-br from-[#FAFAFE] to-[#F5F3FF] p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Cloud className="w-4 h-4 text-[#7C3AED]" />
+            <span className="text-sm font-semibold text-[#1E1B4B]">Cloud API Connection</span>
+            <span className="ml-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-[#EDE9FE] text-[#7C3AED] flex items-center gap-1">
+              <Key className="w-3 h-3" /> API only
+            </span>
           </div>
-        </div>
 
-        {/* Auth Credential Fields */}
-        {renderAuthFields()}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* API Key */}
+            <div>
+              <label className="block text-sm font-medium text-[#1E1B4B] mb-1">API Key</label>
+              <div className="relative">
+                <input
+                  type={visibleSecrets.aiApiKey ? 'text' : 'password'}
+                  value={form.aiApiKey}
+                  onChange={(e) => setField('aiApiKey', e.target.value)}
+                  placeholder={form.aiProvider === 'claude' ? 'sk-ant-api03-…' : 'sk-…'}
+                  autoComplete="off"
+                  className={`${INPUT_CLASS} pr-10`}
+                />
+                <button type="button" onClick={() => toggleSecret('aiApiKey')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#7C3AED] transition-colors">
+                  {visibleSecrets.aiApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+            {/* Base URL */}
+            <div>
+              <label className="block text-sm font-medium text-[#1E1B4B] mb-1">Base URL</label>
+              <input
+                type="text" value={form.aiBaseUrl}
+                onChange={(e) => setField('aiBaseUrl', e.target.value)}
+                placeholder={selectedProvider.defaultBaseUrl}
+                className={INPUT_CLASS}
+              />
+            </div>
+          </div>
+          <p className="text-[11px] text-[#6B7280] mt-2">{selectedProvider.keyHint}</p>
+        </div>
 
         {/* Model Settings */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
@@ -504,22 +336,47 @@ export default function AISelfHealingSection({ configs }: Props) {
           </div>
         </div>
 
-        {/* Test Connection */}
-        <div className="mt-4 flex items-center gap-3">
-          <button
-            onClick={handleTestConnection}
-            disabled={testing || !hasCredentials()}
-            className="px-4 py-2 border border-[#7C3AED] text-[#7C3AED] rounded-lg text-sm font-medium hover:bg-[#F5F3FF] transition-all disabled:opacity-50 flex items-center gap-2"
-          >
-            {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-            {testing ? 'Testing...' : 'Test Connection'}
-          </button>
+        {/* Test Connection + genuine verification status */}
+        <div className="mt-4">
+          <div className="flex items-center gap-3 flex-wrap">
+            <button
+              onClick={handleTestConnection}
+              disabled={testing || !hasCredentials()}
+              className="px-4 py-2 border border-[#7C3AED] text-[#7C3AED] rounded-lg text-sm font-medium hover:bg-[#F5F3FF] transition-all disabled:opacity-50 flex items-center gap-2"
+            >
+              {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+              {testing ? 'Verifying live connection…' : 'Test Connection'}
+            </button>
+
+            {/* Persistent verified badge — shown whenever the saved/last config is verified */}
+            {form.cloudConnected && (
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full">
+                <CheckCircle className="w-3.5 h-3.5" /> Cloud connected via API
+              </span>
+            )}
+          </div>
+
+          {/* Live result panel — proves the connection is genuine, not simulated */}
           {testResult && (
-            <span className={`flex items-center gap-1.5 text-xs font-medium ${testResult.ok ? 'text-emerald-600' : 'text-red-500'}`}>
-              {testResult.ok ? <CheckCircle className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
-              {testResult.message}
-              {testResult.resolvedPath && <code className="text-[#6B7280] font-normal">({testResult.resolvedPath})</code>}
-            </span>
+            <div className={`mt-3 rounded-xl border p-3 text-xs ${testResult.ok ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
+              <div className={`flex items-center gap-1.5 font-semibold ${testResult.ok ? 'text-emerald-700' : 'text-red-600'}`}>
+                {testResult.ok ? <CheckCircle className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
+                {testResult.ok ? 'Cloud connected via API — verified live' : 'Connection failed'}
+              </div>
+              <p className={`mt-1 ${testResult.ok ? 'text-emerald-800' : 'text-red-700'}`}>{testResult.message}</p>
+              {testResult.ok && (
+                <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] text-emerald-900/80">
+                  {testResult.model != null && <div><span className="text-emerald-700/60">Model</span><br /><code>{testResult.model}</code></div>}
+                  {testResult.latencyMs != null && <div><span className="text-emerald-700/60">Latency</span><br /><code>{testResult.latencyMs} ms</code></div>}
+                  {testResult.requestId && <div className="truncate"><span className="text-emerald-700/60">Request ID</span><br /><code>{testResult.requestId}</code></div>}
+                  {testResult.verifiedAt && <div><span className="text-emerald-700/60">Verified</span><br /><code>{new Date(testResult.verifiedAt).toLocaleTimeString()}</code></div>}
+                </div>
+              )}
+            </div>
+          )}
+
+          {!testResult && !form.cloudConnected && (
+            <p className="mt-2 text-[11px] text-[#6B7280]">Run a live test to confirm the cloud is reachable over its API before saving.</p>
           )}
         </div>
       </div>
@@ -553,7 +410,24 @@ export default function AISelfHealingSection({ configs }: Props) {
               <div className={TOGGLE_CLASS} />
             </label>
           </div>
-          {form.enableWorker && <SecretInput label="Worker Secret" field="workerSecret" placeholder="dev-secret" />}
+          {form.enableWorker && (
+            <div>
+              <label className="block text-sm font-medium text-[#1E1B4B] mb-1">Worker Secret</label>
+              <div className="relative">
+                <input
+                  type={visibleSecrets.workerSecret ? 'text' : 'password'}
+                  value={form.workerSecret}
+                  onChange={(e) => setForm(prev => ({ ...prev, workerSecret: e.target.value }))}
+                  placeholder="dev-secret"
+                  autoComplete="off"
+                  className={`${INPUT_CLASS} pr-10`}
+                />
+                <button type="button" onClick={() => toggleSecret('workerSecret')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#7C3AED] transition-colors">
+                  {visibleSecrets.workerSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -593,13 +467,18 @@ export default function AISelfHealingSection({ configs }: Props) {
 
       {/* Save */}
       <div className="flex items-center justify-end gap-3 pt-2">
+        {!form.cloudConnected && (
+          <span className="flex items-center gap-1.5 text-xs text-amber-600 font-medium">
+            <AlertTriangle className="w-4 h-4" /> Verify the cloud API connection to enable saving
+          </span>
+        )}
         {saveSuccess && (
           <span className="flex items-center gap-1.5 text-xs text-emerald-600 font-medium">
             <CheckCircle className="w-4 h-4" /> Settings saved
           </span>
         )}
         <button
-          onClick={handleSave} disabled={saving}
+          onClick={handleSave} disabled={saving || !form.cloudConnected}
           className="px-6 py-2.5 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white rounded-lg text-sm font-medium hover:from-[#6D28D9] hover:to-[#4F46E5] shadow-md shadow-purple-500/20 transition-all disabled:opacity-50 flex items-center gap-2"
         >
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}

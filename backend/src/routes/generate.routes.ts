@@ -18,10 +18,24 @@ const nowIso = () => new Date().toISOString();
 function mapGenError(err: unknown): { message: string; code: string } {
   const raw = ((err as Error)?.message || String(err || '')).toLowerCase();
 
-  if (raw.includes('not authenticated') || raw.includes('claude_not_authenticated') || raw.includes('not logged in')) {
+  // Transport-level failure → the cloud API was genuinely unreachable mid-run.
+  // Surface it as a connectivity issue (not a generic failure) so the chat can
+  // interrupt the automation and point the user at System Configuration.
+  if (
+    raw.includes('fetch failed') || raw.includes('econnrefused') || raw.includes('enotfound') ||
+    raw.includes('eai_again') || raw.includes('econnreset') || raw.includes('socket hang up') ||
+    raw.includes('network error') || raw.includes('connection error') || raw.includes('unable to connect') ||
+    raw.includes('getaddrinfo')
+  ) {
+    return {
+      code: 'CLOUD_API_UNREACHABLE',
+      message: 'There is a connectivity issue with the cloud API. Please correct your System Configuration (LLM Configuration), then re-visit and restart the chat.',
+    };
+  }
+  if (raw.includes('not authenticated') || raw.includes('claude_not_authenticated') || raw.includes('not logged in') || raw.includes('invalid') && raw.includes('api key') || raw.includes('401') || raw.includes('403')) {
     return {
       code: 'CLAUDE_NOT_AUTHENTICATED',
-      message: 'The AI engine isn’t connected right now. Please make sure ANTHROPIC_API_KEY is set on the server (or the Claude CLI is signed in), then try again.',
+      message: 'There is a connectivity issue with the cloud API — the API key was rejected or is missing. Please correct your System Configuration (LLM Configuration), then re-visit and restart the chat.',
     };
   }
   if (raw.includes('rate limit') || raw.includes('rate_limit') || raw.includes('429')) {

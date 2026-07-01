@@ -63,7 +63,8 @@ type Step =
   | 'execution-results'
   | 'healing'
   | 'report'
-  | 'publish';
+  | 'publish'
+  | 'cloud-offline';
 
 type Category = 'application' | 'api';
 type ReqSource = 'jira' | 'confluence' | 'sharepoint' | 'upload' | 'text' | 'explore';
@@ -138,6 +139,18 @@ interface PipelineStageInfo {
   name: string;
   icon: React.ElementType;
 }
+
+/**
+ * Backend error codes that mean "the cloud LLM API is unreachable or rejected
+ * us". When generation fails with any of these, the chat interrupts the whole
+ * automation and shows a calm connectivity message instead of a raw error.
+ * Includes the generic HTTP gateway codes that normalizeError() produces when
+ * the preflight 503 has no catalog entry.
+ */
+const CONNECTIVITY_CODES = new Set<string>([
+  'CLOUD_API_UNREACHABLE', 'CLAUDE_NOT_AUTHENTICATED', 'CLAUDE_NOT_FOUND',
+  'NETWORK_DOWN', 'HTTP_502', 'HTTP_503', 'HTTP_504',
+]);
 
 const PIPELINE_STAGES: PipelineStageInfo[] = [
   { key: 'requirements', name: 'Requirement Analysis', icon: Search },
@@ -728,8 +741,31 @@ export default function ChatPage() {
       setStep('results');
     };
 
-    /* Friendly failure — never surface raw error text in the chat. */
-    const failGeneration = (message: string) => {
+    /* Interrupt the automation when IntelliQE cannot reach the cloud LLM API.
+       We never echo the raw error (e.g. "401" / "fetch failed" / "ETIMEDOUT") —
+       only a meaningful, actionable message, and we route the wizard to a
+       dedicated "cloud-offline" screen with Fix + Restart actions. */
+    const failCloudConnectivity = () => {
+      stopSpeaking();
+      // Mark every in-flight stage as interrupted (not "failed") so the panel reads honestly.
+      setPipelineStages(prev => prev.map(s =>
+        (s.status === 'running' || s.status === 'pending')
+          ? { ...s, status: 'skipped' as const, detail: 'Interrupted — cloud API offline' }
+          : s));
+      setAgentSteps(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'pending' } : s));
+      push('tessa', '🔌 There is a connectivity issue with the cloud API.\n\nI’ve stopped the automation because IntelliQE couldn’t reach the cloud LLM over its API. Nothing you’ve done so far is lost.\n\nTo continue:\n1. Open System Configuration → LLM Configuration.\n2. Re-check your cloud API key / Base URL and click “Test Connection” until it confirms “Cloud connected via API”.\n3. Come back and restart the chat to run the automation again.');
+      setStep('cloud-offline');
+    };
+
+    /* Friendly failure — never surface raw error text in the chat. When the
+       failure is a cloud-API connectivity problem we INTERRUPT the whole
+       automation with a single, calm, actionable message instead of a generic
+       "generation failed" line. */
+    const failGeneration = (message: string, code?: string) => {
+      if (code && CONNECTIVITY_CODES.has(code)) {
+        failCloudConnectivity();
+        return;
+      }
       push('tessa', `⚠️ ${message}`);
       updatePipeline('test-design', 'skipped', 'Generation failed');
       setAgentSteps(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'pending' } : s));
@@ -760,7 +796,12 @@ export default function ChatPage() {
       }
     } catch (err: any) {
       console.error('Start generation failed:', err);
-      failGeneration(normalizeError(err).message);
+      const ne = normalizeError(err);
+      // Prefer the backend's own code (e.g. the preflight CLAUDE_NOT_AUTHENTICATED
+      // 503) so a connectivity failure is recognised even when normalizeError
+      // collapsed it to a generic HTTP_503.
+      const code = err?.response?.data?.code || ne.code;
+      failGeneration(ne.message, code);
       return;
     }
 
@@ -781,14 +822,14 @@ export default function ChatPage() {
       if (pollTimer !== null) { clearInterval(pollTimer); pollTimer = null; }
     };
 
-    const onTerminal = (job: { status: string; result?: any; error?: string }) => {
+    const onTerminal = (job: { status: string; result?: any; error?: string; code?: string }) => {
       if (handled) return;
       handled = true;
       cleanup();
       if (job.status === 'done' && job.result) {
         applyGenerationResult(job.result);
       } else {
-        failGeneration(job.error || 'Generation did not complete. Please try again.');
+        failGeneration(job.error || 'Generation did not complete. Please try again.', job.code);
       }
     };
 
@@ -808,7 +849,7 @@ export default function ChatPage() {
           onTerminal({ status: 'error', error: 'Generation finished but the result could not be loaded. Please try again.' }),
         );
       } else if (event.type === 'generation_error') {
-        onTerminal({ status: 'error', error: event.error });
+        onTerminal({ status: 'error', error: event.error, code: event.code });
       }
     });
 
@@ -1506,6 +1547,44 @@ export default function ChatPage() {
               </button>
             );
           })}
+        </div>
+      );
+    }
+
+    /* ── CLOUD OFFLINE — automation interrupted: cloud LLM API unreachable ── */
+    if (step === 'cloud-offline') {
+      return (
+        <div className="max-w-md ml-11 bg-white border border-red-100 rounded-xl p-5 shadow-sm">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-9 h-9 rounded-lg bg-red-50 border border-red-200 flex items-center justify-center">
+              <Plug className="w-5 h-5 text-red-500" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-gray-800">Cloud API connectivity issue</p>
+              <p className="text-[11px] text-red-500 font-medium">Automation interrupted</p>
+            </div>
+          </div>
+          <p className="text-xs text-gray-500 mb-4 leading-relaxed">
+            IntelliQE couldn’t reach the cloud LLM over its API, so this run was stopped.
+            Fix the connection in <strong>System Configuration → LLM Configuration</strong>
+            (re-check the API key / Base URL and confirm <em>“Cloud connected via API”</em>), then restart the chat.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => window.location.href = '/system-configuration'}
+              className="px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-sm font-medium rounded-lg hover:from-violet-500 hover:to-indigo-500 transition-all inline-flex items-center gap-2"
+            >
+              <Settings className="w-4 h-4" />
+              Fix in System Configuration
+            </button>
+            <button
+              onClick={reset}
+              className="px-4 py-2 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-all inline-flex items-center gap-2"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Restart chat
+            </button>
+          </div>
         </div>
       );
     }
