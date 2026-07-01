@@ -270,6 +270,12 @@ export async function runPlaywrightForRun(
     // Let Node fall back to backend/node_modules when resolving reporters or
     // any other module the spec files import.
     NODE_PATH: path.join(BACKEND_ROOT, 'node_modules'),
+    // CRITICAL: when the backend runs under `tsx` (dev), tsx propagates its TS
+    // loader to child processes via NODE_OPTIONS. Playwright spawns its own node
+    // workers; inheriting tsx's loader crashes them BEFORE any output or summary
+    // is written → "Playwright produced no test results". Playwright loads specs
+    // with its OWN esbuild loader, so it must run with a clean NODE_OPTIONS.
+    NODE_OPTIONS: '',
   };
 
   let stdout = '';
@@ -393,6 +399,9 @@ export async function executeRunScripts(
     ...process.env, CI: '1',
     PLAYWRIGHT_JSON_OUTPUT_NAME: path.join(workspace, 'pw-summary.json'),
     NODE_PATH: path.join(BACKEND_ROOT, 'node_modules'),
+    // Strip the tsx loader inherited via NODE_OPTIONS — it crashes Playwright's
+    // spawned node workers (no output, no summary). See runPlaywrightForRun.
+    NODE_OPTIONS: '',
   };
   const isWindows = process.platform === 'win32';
   let stdout = '', stderr = '';

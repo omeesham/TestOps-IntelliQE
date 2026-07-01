@@ -129,6 +129,9 @@ async function reRunHealedSpecs(
     CI: '1',
     PLAYWRIGHT_JSON_OUTPUT_NAME: path.join(workspace, 'pw-summary.json'),
     NODE_PATH: path.join(BACKEND_ROOT, 'node_modules'),
+    // Strip the tsx loader inherited via NODE_OPTIONS — it crashes Playwright's
+    // spawned node workers (no output/summary). See playwright-runner.service.ts.
+    NODE_OPTIONS: '',
   };
   const isWindows = process.platform === 'win32';
   let stdout = '';
