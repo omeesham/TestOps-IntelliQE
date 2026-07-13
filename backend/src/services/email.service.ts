@@ -41,10 +41,13 @@ async function loadSmtpConfig(tenantId: string): Promise<SmtpConfig | null> {
       const user = c.smtpUser ? decryptField(c.smtpUser) : '';
       const pass = c.smtpPassword ? decryptField(c.smtpPassword) : '';
       if (user && pass) {
+        const port = Number(c.smtpPort) || 465;
         return {
-          host: c.smtpHost || 'smtp.gmail.com',
-          port: Number(c.smtpPort) || 465,
-          secure: c.smtpSecure !== false,
+          host: c.smtpHost || 'smtp.office365.com',
+          port,
+          // SSL on 465; STARTTLS (secure:false, auto-upgraded) on 587/25 — e.g. Outlook.
+          // An explicit smtpSecure flag still wins if ever set.
+          secure: c.smtpSecure !== undefined ? c.smtpSecure !== false : port === 465,
           user,
           pass,
           from: c.fromEmail || user,
@@ -80,7 +83,15 @@ async function getTransporter(tenantId: string): Promise<{ transporter: Transpor
     host: config.host,
     port: config.port,
     secure: config.secure,
+    // Outlook / Office 365 (smtp.office365.com:587) requires an enforced
+    // STARTTLS upgrade over the plaintext connection — without this the send
+    // fails. On SSL (465) the connection is already encrypted.
+    requireTLS: !config.secure,
     auth: { user: config.user, pass: config.pass },
+    tls: { minVersion: 'TLSv1.2' },
+    connectionTimeout: 15000,
+    greetingTimeout: 10000,
+    socketTimeout: 20000,
   });
   const entry = { config, transporter };
   cache.set(tenantId, entry);
@@ -108,7 +119,11 @@ export interface TestRunEmailPayload {
 function buildHtml(payload: TestRunEmailPayload): { subject: string; html: string; text: string } {
   const statusColor =
     payload.status === 'passed' ? '#16a34a' : payload.status === 'failed' ? '#b91c1c' : '#d97706';
-  const statusLabel = payload.status.toUpperCase();
+  // A mix of pass/fail is PARTIAL (not a blunt FAILED); show how many passed.
+  const statusLabel =
+    payload.status === 'passed' ? 'PASSED'
+      : payload.status === 'failed' ? 'FAILED'
+        : `PARTIAL · ${payload.passed}/${payload.totalTests} PASSED`;
   const subject = `[IntelliQE] Test Run ${statusLabel} — ${payload.feature}`;
   const duration =
     payload.durationSeconds !== undefined ? `${Math.round(payload.durationSeconds)}s` : 'n/a';

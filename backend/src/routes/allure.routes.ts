@@ -1,15 +1,10 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import fs from 'fs/promises';
-import { getOrGenerateRealReport, getReportStatus, getOrGenerateReportFromExecution, type ExecOutcome } from '../services/allure-report.service.js';
+import { getOrGenerateRealReport, getReportStatus, getLatestReport, REPORTS_ROOT, SAFE_RUN_ID_RE } from '../services/allure-report.service.js';
 import { PlaywrightRunError } from '../services/playwright-runner.service.js';
 import { authMiddleware } from '../middleware/auth.middleware.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
 
 const router = Router();
 
@@ -24,36 +19,27 @@ const inFlight = new Map<string, Promise<any>>();
 router.post('/generate', authMiddleware, async (req: Request, res: Response) => {
   try {
     const user = req.user!;
-    const { runId, results } = req.body || {};
+    const { runId } = req.body || {};
     if (!runId) {
       res.status(400).json({ error: 'runId is required to generate a real Allure report' });
       return;
     }
-
-    // Preferred path: build the report from the wizard's ACTUAL in-app results so
-    // the downloadable report matches the Test Execution Report exactly — one
-    // source of truth, immune to stale snapshots and flaky re-runs.
-    if (Array.isArray(results) && results.length > 0) {
-      const execMap = new Map<string, ExecOutcome>();
-      for (const r of results) {
-        if (r && r.testCaseId) {
-          execMap.set(String(r.testCaseId), {
-            status: String(r.status || 'unknown'),
-            durationMs: Number.isFinite(Number(r.durationMs)) ? Number(r.durationMs) : undefined,
-            error: r.error ? String(r.error) : undefined,
-          });
-        }
-      }
-      const result = await getOrGenerateReportFromExecution(user.tenantId, user.isPlatform, runId, execMap);
-      res.json({
-        ok: true,
-        generatedAt: result.generatedAt,
-        reportUrl: `/api/allure/report/${user.tenantId}/${runId}/index.html`,
-      });
-      return;
-    }
-
     const key = `${user.tenantId}:${runId}`;
+
+    // If a report already exists for this run (e.g. built during the Chat
+    // execution), serve it instead of re-running — the Chat flow is stateless
+    // and stores no DB scripts to re-run. Pass { force: true } to rebuild.
+    if (!req.body?.force) {
+      const existing = await getReportStatus(user.tenantId, runId);
+      if (existing.exists) {
+        res.json({
+          ok: true,
+          generatedAt: existing.generatedAt,
+          reportUrl: `/api/allure/report/${user.tenantId}/${runId}/allure/index.html`,
+        });
+        return;
+      }
+    }
 
     // Deduplicate concurrent requests
     if (inFlight.has(key)) {
@@ -61,7 +47,7 @@ router.post('/generate', authMiddleware, async (req: Request, res: Response) => 
       res.json({
         ok: true,
         generatedAt: result.generatedAt,
-        reportUrl: `/api/allure/report/${user.tenantId}/${runId}/index.html`,
+        reportUrl: `/api/allure/report/${user.tenantId}/${runId}/allure/index.html`,
       });
       return;
     }
@@ -75,7 +61,7 @@ router.post('/generate', authMiddleware, async (req: Request, res: Response) => 
       res.json({
         ok: true,
         generatedAt: result.generatedAt,
-        reportUrl: `/api/allure/report/${user.tenantId}/${scope}/index.html`,
+        reportUrl: `/api/allure/report/${user.tenantId}/${scope}/allure/index.html`,
       });
     } finally {
       inFlight.delete(key);
@@ -117,32 +103,19 @@ router.get('/status', authMiddleware, async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/allure/report/:tenantId/:scope/download  (NO auth — tenant UUID is an opaque token)
- * Download the single self-contained report HTML as a file attachment.
- * Registered BEFORE the wildcard serve route so "download" isn't treated as a filename.
+ * GET /api/allure/latest  (auth required)
+ * Return the most recently generated report across all of the tenant's runs,
+ * so the Reports page can show the latest report by default even when the
+ * selected run has none.
  */
-router.get('/report/:tenantId/:scope/download', async (req: Request, res: Response) => {
+router.get('/latest', authMiddleware, async (req: Request, res: Response) => {
   try {
-    const tenantId = String(req.params.tenantId || '');
-    const scope = String(req.params.scope || '');
-    const baseDir = path.join(BACKEND_ROOT, 'allure-reports', tenantId, scope);
-    const indexFile = path.resolve(baseDir, 'index.html');
-
-    // Directory traversal protection
-    if (!indexFile.startsWith(baseDir)) {
-      res.status(400).json({ error: 'Invalid path' });
-      return;
-    }
-    try {
-      await fs.access(indexFile);
-    } catch {
-      res.status(404).json({ error: 'Report not found. Generate the report first, then download.' });
-      return;
-    }
-    res.download(indexFile, `allure-report-${scope.slice(0, 8)}.html`);
+    const user = req.user!;
+    const latest = await getLatestReport(user.tenantId);
+    res.json(latest);
   } catch (err: any) {
-    console.error('Allure download error:', err.message);
-    res.status(500).json({ error: 'Failed to download report file' });
+    console.error('Allure latest error:', err.message);
+    res.status(500).json({ error: 'Failed to look up the latest Allure report' });
   }
 });
 
@@ -156,14 +129,23 @@ router.get('/report/:tenantId/:scope/{*filePath}', async (req: Request, res: Res
     const tenantId = String(req.params.tenantId || '');
     const scope = String(req.params.scope || '');
 
+    // Express decodes %2F only after route matching — an encoded slash inside
+    // tenantId/scope would otherwise escape REPORTS_ROOT before the resolve
+    // check below (which compares against the already-escaped baseDir).
+    if (!SAFE_RUN_ID_RE.test(tenantId) || !SAFE_RUN_ID_RE.test(scope)) {
+      res.status(400).json({ error: 'Invalid path' });
+      return;
+    }
+
     const rawFilePath = req.params.filePath;
     const filePath = Array.isArray(rawFilePath) ? rawFilePath.join('/') : (rawFilePath || '');
 
-    const baseDir = path.join(BACKEND_ROOT, 'allure-reports', tenantId, scope);
+    const baseDir = path.join(REPORTS_ROOT, tenantId, scope);
     const requestedFile = path.resolve(baseDir, filePath);
 
-    // Directory traversal protection
-    if (!requestedFile.startsWith(baseDir)) {
+    // Directory traversal protection (path.sep suffix so "…\scope-evil"
+    // can't pass as a prefix of "…\scope")
+    if (requestedFile !== baseDir && !requestedFile.startsWith(baseDir + path.sep)) {
       res.status(400).json({ error: 'Invalid path' });
       return;
     }
@@ -195,8 +177,15 @@ router.get('/report/:tenantId/:scope/{*filePath}', async (req: Request, res: Res
       res.setHeader('Content-Type', mimeTypes[ext]);
     }
 
-    // Don't block iframe embedding for our own reports
+    // These are self-contained reports (Playwright HTML / Allure) that rely on
+    // INLINE scripts + styles. In production, helmet's default CSP (script-src
+    // 'self') blocks inline scripts, so the report iframe renders BLANK. They are
+    // trusted, internally-generated, same-origin assets — drop the restrictive
+    // security headers for this static-report route so the report actually runs.
     res.removeHeader('X-Frame-Options');
+    res.removeHeader('Content-Security-Policy');
+    res.removeHeader('Cross-Origin-Embedder-Policy');
+    res.removeHeader('Cross-Origin-Opener-Policy');
 
     res.sendFile(requestedFile);
   } catch (err: any) {

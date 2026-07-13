@@ -139,22 +139,33 @@ export function decryptAtRest(encoded: string): string {
 /**
  * Decrypt any stored value — handles both legacy `__ENC__` (XOR) and
  * current `__AES__` (AES-GCM). Plaintext passes through.
+ *
+ * Legacy rows can carry NESTED encryption: the frontend transit-encrypts a
+ * password on save, and older backend versions XOR-encrypted that ciphertext
+ * again at rest. A single unwrap then yields another `__ENC__...` string,
+ * which ends up baked into agent prompts and generated specs as if it were
+ * the real credential. Unwrap until no encryption prefix remains (bounded).
  */
 export function decryptStored(value: string): string {
   if (!value) return value;
-  if (value.startsWith(REST_PREFIX)) return decryptAtRest(value);
-  if (value.startsWith(TRANSIT_PREFIX)) {
-    // Legacy at-rest format from before the AES migration
-    const b64 = value.slice(TRANSIT_PREFIX.length);
-    const keyBytes = Buffer.from(TRANSIT_KEY);
-    const encrypted = Buffer.from(b64, 'base64');
-    const decrypted = Buffer.alloc(encrypted.length);
-    for (let i = 0; i < encrypted.length; i++) {
-      decrypted[i] = encrypted[i]! ^ keyBytes[i % keyBytes.length]!;
+  let current = value;
+  for (let layer = 0; layer < 4; layer++) {
+    if (current.startsWith(REST_PREFIX)) {
+      current = decryptAtRest(current);
+    } else if (current.startsWith(TRANSIT_PREFIX)) {
+      const b64 = current.slice(TRANSIT_PREFIX.length);
+      const keyBytes = Buffer.from(TRANSIT_KEY);
+      const encrypted = Buffer.from(b64, 'base64');
+      const decrypted = Buffer.alloc(encrypted.length);
+      for (let i = 0; i < encrypted.length; i++) {
+        decrypted[i] = encrypted[i]! ^ keyBytes[i % keyBytes.length]!;
+      }
+      current = decrypted.toString('utf8');
+    } else {
+      break;
     }
-    return decrypted.toString('utf8');
   }
-  return value;
+  return current;
 }
 
 // =====================================================================

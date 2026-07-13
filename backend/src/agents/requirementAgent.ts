@@ -21,7 +21,7 @@
  * the agent must mark assumptions instead of inventing facts.
  */
 import type { TestOpsState, ParsedRequirements } from './state.js';
-import { runClaudeJson } from './claude-runner.js';
+import { runLLM, parseJsonFromResponse, llmForStage } from './claude-runner.js';
 
 export async function requirementAgent(state: TestOpsState): Promise<TestOpsState> {
   const appInfo = state.appContext
@@ -75,25 +75,20 @@ Return ONLY valid JSON (no markdown, no commentary, no explanation) matching thi
   ]
 }
 
-EXTRACTION RULES (read carefully):
-1. Be exhaustive on FEATURES — every distinct capability the user mentions counts as one feature.
-2. Be specific on FLOWS — each flow is a complete journey with an actor, sequence, and outcome. No generic placeholders.
-3. EDGE CASES must cover: empty/null/whitespace input, boundary values (min, max, off-by-one), invalid format, concurrency (two users editing the same record), session/auth expiry, network failure, partial writes, role-permission violations.
-4. DATA RULES must be field-specific. "Email is required" — good. "Inputs must be valid" — useless.
-5. ACCEPTANCE CRITERIA must be in Given/When/Then form. Generate at least 3 per major feature.
-6. NON-FUNCTIONAL REQUIREMENTS — even if the source text omits them, infer reasonable ones based on the domain (a banking app implies stronger security; an e-commerce app implies performance under load). Mark inferred items by ending them with " (inferred)".
-7. BUSINESS RISKS — rate each feature High / Medium / Low based on impact-on-revenue, regulatory exposure, user trust, and data sensitivity. Provide a one-line rationale.
-8. PERSONA MATRIX — for every actor + feature pair where authorisation matters, list whether the actor is allowed or denied. This drives RBAC negative tests.
-9. If the source text is sparse, INFER reasonable extensions based on the application domain — but mark inferences with " (inferred)" in the relevant field.
-10. NEVER return empty arrays for features / actors / flows — at minimum return one entry each based on what you can deduce.`;
+EXTRACTION RULES (read carefully — GROUND EVERYTHING IN EVIDENCE, do not invent):
+1. FEATURES — extract ONLY capabilities that are actually described in the requirements or visibly present in the observed application. Do NOT invent or infer features that aren't evidenced. A simple login page has a few features (e.g. "User Login", "Field Validation", "Forgot Password" if a link exists), NOT twenty. Quality and accuracy over breadth.
+2. FLOWS — specific, grounded journeys only. A single-form page may have just one flow.
+3. EDGE CASES — include ONLY edge cases that apply to the actual fields and behaviors present (e.g. empty required field, invalid format for a field that exists). Do NOT add a generic battery (concurrency, network failure, partial writes, session expiry) unless the requirements or the app clearly involve them.
+4. DATA RULES must be field-specific and only for fields that actually exist. "Email is required" — good. "Inputs must be valid" — useless.
+5. ACCEPTANCE CRITERIA — Given/When/Then form, only where they add real value. Do NOT pad to a fixed number per feature.
+6. NON-FUNCTIONAL REQUIREMENTS — include ONLY those explicitly stated in the source. Do NOT infer or add security, performance, accessibility, or compatibility requirements the source doesn't mention. Leave these arrays empty when the source is silent. (No "(inferred)" padding — speculative non-functional requirements create irrelevant test cases downstream.)
+7. BUSINESS RISKS — rate ONLY the real features you extracted. One-line rationale each.
+8. PERSONA MATRIX — populate ONLY when the requirements actually describe multiple roles with different access. For a single-actor page, return an empty array (or one entry) — do not fabricate roles to create RBAC tests.
+9. Do NOT invent features, rules, or requirements to look thorough. If the source is sparse, the analysis should be small and focused. Grounded, relevant coverage beats speculative breadth.
+10. NEVER return empty arrays for features / actors / flows — at minimum return one grounded entry each.`;
 
-  // Retry on a flaky/truncated reply — this is the first, essential stage; a
-  // single non-JSON response must not sink the whole generation.
-  const parsed = await runClaudeJson<ParsedRequirements>(prompt, {
-    maxTokens: 8000,
-    model: 'claude-sonnet-4-6',
-    attempts: 2,
-  });
+  const response = await runLLM(prompt, { maxTokens: 8000, llm: llmForStage(state.llm, 'requirement') });
+  const parsed = parseJsonFromResponse<ParsedRequirements>(response);
 
   // Defensive normalisation — Claude may omit some optional sections.
   const parsedRequirements: ParsedRequirements = {

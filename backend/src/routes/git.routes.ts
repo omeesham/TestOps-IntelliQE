@@ -29,6 +29,18 @@ import { parseRepoUrl, type GitProvider, type GitFile, type GitProviderConfig } 
 import { githubProvider } from '../services/git/github.provider.js';
 import { gitlabProvider } from '../services/git/gitlab.provider.js';
 import { bitbucketProvider } from '../services/git/bitbucket.provider.js';
+import { collectClientDeliverableBundle } from '../services/client-deliverable.service.js';
+import { buildTestCaseDocs } from '../services/test-case-doc.service.js';
+
+/**
+ * Repo-name fragments that identify the IntelliQE FRAMEWORK monorepo. Pushing a
+ * client deliverable there would expose framework IP, so we refuse it. Override
+ * via FRAMEWORK_REPO_GUARD (comma-separated) for differently-named forks.
+ */
+const FRAMEWORK_REPO_MARKERS = (process.env.FRAMEWORK_REPO_GUARD || 'jbsintelliqe,intelliqe-framework')
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
 
 const router = Router();
 
@@ -81,6 +93,7 @@ function cfgToProvider(cfg: Record<string, any>): GitProviderConfig {
     defaultBranch: String(cfg.branch || cfg.default_branch || 'main').trim(),
     accessToken: String(cfg.access_token || cfg.accessToken || cfg.app_password || '').trim(),
     username: cfg.username ? String(cfg.username).trim() : undefined,
+    scriptsPath: String(cfg.scripts_path || cfg.scriptsPath || '').trim() || undefined,
   };
 }
 
@@ -93,6 +106,8 @@ router.post('/publish', async (req: Request, res: Response) => {
       description: requestedDescription,
       commitMessage: requestedCommitMessage,
       scripts,
+      pageObjects: requestedPageObjects,
+      testCases: requestedTestCases,
       directory: requestedDir,
       testRunId,
       integrationId,
@@ -137,26 +152,63 @@ router.post('/publish', async (req: Request, res: Response) => {
       );
     }
 
-    // 3. Build commit payload. Files are placed under the requested
-    // subdirectory (default "tests/"). File names are sanitised so we
-    // never end up with directory traversal or empty path segments.
-    const dir = (requestedDir || 'tests').replace(/^\/+|\/+$/g, '');
-    const files: GitFile[] = scripts.map((s: any, i: number) => {
-      const raw = String(s.fileName || `test-${i + 1}.spec.ts`).trim();
-      const cleaned = raw.replace(/^\/+/, '').replace(/\.\.+/g, '_').replace(/\s+/g, '-');
-      return {
-        path: `${dir}/${cleaned}`,
-        content: String(s.code || ''),
-      };
+    // 2b. IP guard — refuse to publish into the IntelliQE framework monorepo.
+    // The client deliverable must go to a DEDICATED client repository; pushing
+    // it into the framework repo would expose proprietary internals.
+    const repoNameLower = String(coords.repo || '').toLowerCase();
+    if (FRAMEWORK_REPO_MARKERS.some((m) => repoNameLower.includes(m))) {
+      res.status(400).json({
+        error:
+          `Refusing to publish into "${coords.owner}/${coords.repo}" — this looks like the IntelliQE framework repository. ` +
+          `Configure a DEDICATED client repository under System Configuration → Code Repositories so framework IP is never exposed.`,
+      });
+      return;
+    }
+
+    // 3. Build the commit payload = the IP-safe client-deliverable runner
+    // package + the generated test specs. ONLY this self-contained package is
+    // published — never the framework.
+    // Bundle the static runner package (config, utils, package.json, README,
+    // .env.example). Best-effort: if unavailable at runtime, we still publish
+    // the specs so the client at least receives the tests.
+    const bundle = await collectClientDeliverableBundle();
+    // When the runner package is bundled, specs MUST go in `tests/` because the
+    // package's playwright.config.ts hardcodes testDir '../tests'. Only honor a
+    // custom path in the specs-only fallback (no package present).
+    const dir = (bundle.length > 0 ? 'tests' : (requestedDir || config.scriptsPath || 'tests'))
+      .replace(/^\/+|\/+$/g, '');
+    const cleanRel = (p: string) => p.replace(/^\/+/, '').replace(/\.\.+/g, '_').replace(/\\/g, '/').replace(/\s+/g, '-');
+    // Specs honor their POM `path` (tests/<module>/<name>.spec.ts) when present.
+    const specFiles: GitFile[] = scripts.map((s: any, i: number) => {
+      const declared = typeof s.path === 'string' && s.path.trim()
+        ? cleanRel(s.path)
+        : `${dir}/${cleanRel(String(s.fileName || `test-${i + 1}.spec.ts`))}`;
+      return { path: declared, content: String(s.code || '') };
     });
+    // Generated page objects (POM) at their declared src/pages/... paths.
+    const pageObjectFiles: GitFile[] = Array.isArray(requestedPageObjects)
+      ? requestedPageObjects
+          .filter((p: any) => p && typeof p.path === 'string' && typeof p.code === 'string')
+          .map((p: any) => ({ path: cleanRel(p.path), content: String(p.code || '') }))
+      : [];
+    // Test-case documentation (Markdown + CSV) under docs/, so the client gets
+    // the human-readable test cases alongside the automation.
+    const docFiles: GitFile[] = buildTestCaseDocs(Array.isArray(requestedTestCases) ? requestedTestCases : []);
+
+    // Assemble scaffold + page objects + specs + docs; dedup by path (later wins
+    // so a generated file overrides a same-named scaffold placeholder if any).
+    const byPath = new Map<string, GitFile>();
+    for (const f of [...bundle, ...pageObjectFiles, ...specFiles, ...docFiles]) byPath.set(f.path, f);
+    const files: GitFile[] = [...byPath.values()];
+    console.log(`[git.publish] deliverable = ${bundle.length} scaffold + ${pageObjectFiles.length} page object(s) + ${specFiles.length} spec(s) + ${docFiles.length} doc(s)`);
 
     // 4. Defaults — branch name, PR title, commit message, PR body.
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const branch = (requestedBranch && String(requestedBranch).trim()) || `intelliqe/tests-${ts}`;
     const title = (requestedTitle && String(requestedTitle).trim())
-      || `IntelliQE: ${files.length} generated test script(s)${testRunId ? ` (run ${testRunId})` : ''}`;
+      || `IntelliQE: ${specFiles.length} generated test script(s)${testRunId ? ` (run ${testRunId})` : ''}`;
     const commitMessage = (requestedCommitMessage && String(requestedCommitMessage).trim()) || title;
-    const body = (requestedDescription && String(requestedDescription).trim()) || buildDefaultPrBody(files, { testRunId, username: user.username });
+    const body = (requestedDescription && String(requestedDescription).trim()) || buildDefaultPrBody(specFiles, { testRunId, username: user.username });
 
     // 5. Publish.
     const result = await provider.publish(config, files, { branch, title, body, commitMessage });
@@ -180,6 +232,57 @@ router.post('/publish', async (req: Request, res: Response) => {
         ? 400
         : 500;
     res.status(status).json({ error: msg });
+  }
+});
+
+/**
+ * POST /api/git/test
+ * Read-only connectivity check. Verifies the token can reach the repo and
+ * that the configured default branch exists — WITHOUT creating any branch,
+ * commit or PR. Accepts either:
+ *   - form values being entered:  { repo_url, branch, access_token, username }
+ *   - a saved integration:        { integrationId }  (or nothing → auto-detect)
+ */
+router.post('/test', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const { repo_url, repoUrl, branch, access_token, accessToken, username, app_password, integrationId } = req.body || {};
+
+    // Prefer explicitly-entered form values (testing before saving); otherwise
+    // fall back to the stored, connected integration.
+    const enteredUrl = String(repo_url || repoUrl || '').trim();
+    const enteredToken = String(access_token || accessToken || app_password || '').trim();
+
+    let config: GitProviderConfig;
+    if (enteredUrl && enteredToken) {
+      config = {
+        repoUrl: enteredUrl,
+        defaultBranch: String(branch || 'main').trim() || 'main',
+        accessToken: enteredToken,
+        username: username ? String(username).trim() : undefined,
+      };
+    } else {
+      const loaded = await loadGitConfig(user.tenantId, integrationId);
+      if (!loaded) {
+        res.status(400).json({ ok: false, error: 'No connected git-repo integration found, and no repository URL/token was provided.' });
+        return;
+      }
+      config = loaded.config;
+    }
+
+    if (!config.repoUrl) { res.status(400).json({ ok: false, error: 'Repository URL is required.' }); return; }
+    if (!config.accessToken) { res.status(400).json({ ok: false, error: 'Access token is required.' }); return; }
+
+    const coords = parseRepoUrl(config.repoUrl);
+    const provider = PROVIDERS[coords.provider];
+    if (!provider) { res.status(400).json({ ok: false, error: `No provider implementation for ${coords.provider}` }); return; }
+
+    const result = await provider.test(config);
+    res.json(result);
+  } catch (err: any) {
+    // A failed test is an expected outcome, not a server error — return 200 with
+    // ok:false so the modal can render the reason inline.
+    res.json({ ok: false, error: err?.message || 'Connection test failed.' });
   }
 });
 

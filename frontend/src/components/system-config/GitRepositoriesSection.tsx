@@ -2,8 +2,9 @@ import { useState } from 'react';
 import { getGitRepos } from './integrationCatalog';
 import IntegrationCard from './IntegrationCard';
 import ConnectModal from './ConnectModal';
-import { connectIntegration, disconnectIntegration } from '@/services/api';
+import { connectIntegration, disconnectIntegration, reconnectIntegration, deleteIntegration, testGitConnection } from '@/services/api';
 import type { CatalogItem } from './integrationCatalog';
+import { useToast } from '@/components/feedback/ToastProvider';
 
 interface DbConfig {
   integrationId: string;
@@ -20,20 +21,46 @@ interface Props {
 }
 
 export default function GitRepositoriesSection({ configs, onRefresh }: Props) {
+  const toast = useToast();
   const catalog = getGitRepos();
 
   const [modalIntegration, setModalIntegration] = useState<CatalogItem | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, { ok: boolean; message: string }>>({});
 
-  /** Merge catalog entries with live config state */
+  /** Verify a saved git connection can reach the repo + default branch. */
+  const handleTest = async (integrationId: string) => {
+    setTestingId(integrationId);
+    setTestResults((prev) => { const next = { ...prev }; delete next[integrationId]; return next; });
+    try {
+      const r = await testGitConnection({ integrationId });
+      setTestResults((prev) => ({
+        ...prev,
+        [integrationId]: { ok: !!r.ok, message: r.ok ? (r.message || 'Connection OK.') : (r.error || r.message || 'Connection test failed.') },
+      }));
+    } catch (err: any) {
+      setTestResults((prev) => ({
+        ...prev,
+        [integrationId]: { ok: false, message: err?.response?.data?.error || err?.message || 'Connection test failed.' },
+      }));
+    } finally {
+      setTestingId(null);
+    }
+  };
+
+  /** Merge catalog entries with live config state. A saved-but-inactive config
+   *  shows as 'disconnected' (data retained) rather than 'available'. */
   const merged = catalog.map((item) => {
     const cfg = configs.find((c) => c.integrationId === item.id);
-    const status: 'connected' | 'available' | 'coming_soon' = item.comingSoon
+    const status: 'connected' | 'available' | 'disconnected' | 'coming_soon' = item.comingSoon
       ? 'coming_soon'
       : cfg?.status === 'connected'
         ? 'connected'
-        : 'available';
+        : cfg
+          ? 'disconnected'
+          : 'available';
     return { ...item, status, connectedBy: cfg?.connectedBy ?? null, lastSyncAt: cfg?.lastSyncAt ?? null };
   });
 
@@ -45,6 +72,7 @@ export default function GitRepositoriesSection({ configs, onRefresh }: Props) {
       await connectIntegration(modalIntegration.id, formData);
       setModalIntegration(null);
       onRefresh();
+      toast.success('Connected successfully');
     } catch (err: any) {
       setError(err?.response?.data?.error || err.message || 'Connection failed');
     } finally {
@@ -53,18 +81,24 @@ export default function GitRepositoriesSection({ configs, onRefresh }: Props) {
   };
 
   const handleDisconnect = async (integrationId: string) => {
-    try {
-      await disconnectIntegration(integrationId);
-      onRefresh();
-    } catch (err: any) {
-      console.error('Failed to disconnect:', err);
-    }
+    try { await disconnectIntegration(integrationId); onRefresh(); toast.success('Disconnected successfully'); }
+    catch (err: any) { console.error('Failed to disconnect:', err); toast.fromError(err); }
+  };
+
+  const handleReconnect = async (integrationId: string) => {
+    try { await reconnectIntegration(integrationId); onRefresh(); toast.success('Reconnected successfully'); }
+    catch (err: any) { console.error('Failed to reconnect:', err); toast.fromError(err); }
+  };
+
+  const handleDelete = async (integrationId: string) => {
+    try { await deleteIntegration(integrationId); onRefresh(); toast.success('Deleted successfully'); }
+    catch (err: any) { console.error('Failed to delete:', err); toast.fromError(err); }
   };
 
   return (
     <div>
       <div className="mb-4">
-        <h3 className="text-sm font-semibold text-[#1E3A8A]">Git Repositories</h3>
+        <h3 className="text-sm font-semibold text-[#1E1B4B]">Code Repositories</h3>
         <p className="text-xs text-[#6B7280] mt-0.5">
           Connect version control platforms to trigger test generation on PRs and push test scripts.
         </p>
@@ -87,6 +121,11 @@ export default function GitRepositoriesSection({ configs, onRefresh }: Props) {
               setModalIntegration(catalog.find((c) => c.id === item.id) ?? null);
             }}
             onDisconnect={() => handleDisconnect(item.id)}
+            onReconnect={() => handleReconnect(item.id)}
+            onDelete={() => handleDelete(item.id)}
+            onTest={item.status === 'connected' ? () => handleTest(item.id) : undefined}
+            testing={testingId === item.id}
+            testResult={testResults[item.id] ?? null}
           />
         ))}
       </div>
@@ -97,6 +136,13 @@ export default function GitRepositoriesSection({ configs, onRefresh }: Props) {
           saving={saving}
           error={error}
           onSave={handleConnect}
+          testLabel="Test Connection"
+          onTest={(formData) => testGitConnection({
+            repo_url: formData.repo_url,
+            branch: formData.branch,
+            access_token: formData.access_token,
+            username: formData.username,
+          })}
           onClose={() => {
             setModalIntegration(null);
             setError('');

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, Plug, Loader2, Eye, EyeOff } from 'lucide-react';
+import { X, Plug, Loader2, Eye, EyeOff, Send, CheckCircle, AlertCircle } from 'lucide-react';
 import type { CatalogItem } from './integrationCatalog';
 
 interface Props {
@@ -8,11 +8,17 @@ interface Props {
   error: string;
   onSave: (formData: Record<string, string>) => void;
   onClose: () => void;
+  /** Optional: verify connectivity with the entered values before saving. */
+  onTest?: (formData: Record<string, string>) => Promise<{ ok?: boolean; sent?: boolean; error?: string; message?: string }>;
+  /** Label for the test button (default "Send Test"). */
+  testLabel?: string;
 }
 
-export default function ConnectModal({ integration, saving, error, onSave, onClose }: Props) {
+export default function ConnectModal({ integration, saving, error, onSave, onClose, onTest, testLabel = 'Send Test' }: Props) {
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [visibleFields, setVisibleFields] = useState<Set<string>>(new Set());
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const toggleVisibility = (key: string) => {
     setVisibleFields(prev => {
@@ -22,13 +28,28 @@ export default function ConnectModal({ integration, saving, error, onSave, onClo
     });
   };
 
+  const handleTest = async () => {
+    if (!onTest) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const r = await onTest(formData);
+      const ok = !!(r.ok || r.sent);
+      setTestResult({ ok, message: ok ? (r.message || 'Test message sent — check your channel.') : (r.error || r.message || 'Test failed.') });
+    } catch (err: any) {
+      setTestResult({ ok: false, message: err?.response?.data?.error || err?.message || 'Test failed.' });
+    } finally {
+      setTesting(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 relative">
         <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
           <X className="w-5 h-5" />
         </button>
-        <h3 className="text-lg font-bold text-[#1E3A8A] mb-1">Connect {integration.name}</h3>
+        <h3 className="text-lg font-bold text-[#1E1B4B] mb-1">Connect {integration.name}</h3>
         <p className="text-xs text-[#6B7280] mb-5">{integration.category}</p>
 
         {error && (
@@ -46,13 +67,13 @@ export default function ConnectModal({ integration, saving, error, onSave, onClo
                   value={formData[field.key] || ''}
                   onChange={(e) => setFormData(prev => ({ ...prev, [field.key]: e.target.value }))}
                   autoComplete="off"
-                  className="w-full px-3 py-2 border border-[#C5D6FF] rounded-lg text-sm outline-none focus:ring-2 focus:ring-[#3366FF]/20 focus:border-[#3366FF] pr-10"
+                  className="w-full px-3 py-2 border border-[#DDD6FE] rounded-lg text-sm outline-none focus:ring-2 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED] pr-10"
                 />
                 {field.type === 'password' && (
                   <button
                     type="button"
                     onClick={() => toggleVisibility(field.key)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#2143A8] transition-colors"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#7C3AED] transition-colors"
                   >
                     {visibleFields.has(field.key) ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
@@ -62,14 +83,31 @@ export default function ConnectModal({ integration, saving, error, onSave, onClo
           ))}
         </div>
 
+        {testResult && (
+          <div className={`mt-4 flex items-center gap-2 p-3 rounded-lg text-xs border ${testResult.ok ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-600'}`}>
+            {testResult.ok ? <CheckCircle className="w-4 h-4 flex-shrink-0" /> : <AlertCircle className="w-4 h-4 flex-shrink-0" />}
+            {testResult.message}
+          </div>
+        )}
+
         <div className="flex justify-end gap-3 mt-6">
           <button onClick={onClose} className="px-4 py-2 text-sm text-[#6B7280] hover:bg-gray-100 rounded-lg transition-colors">
             Cancel
           </button>
+          {onTest && (
+            <button
+              onClick={handleTest}
+              disabled={testing || saving}
+              className="flex items-center gap-2 px-4 py-2 border border-[#7C3AED] text-[#7C3AED] rounded-lg text-sm font-medium hover:bg-[#F5F3FF] transition-all disabled:opacity-50"
+            >
+              {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              {testing ? 'Testing…' : testLabel}
+            </button>
+          )}
           <button
             onClick={() => onSave(formData)}
             disabled={saving}
-            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#3366FF] to-[#2645D6] text-white rounded-lg text-sm font-medium hover:from-[#2A55D6] hover:to-[#2645D6] shadow-md shadow-purple-500/20 transition-all disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white rounded-lg text-sm font-medium hover:from-[#6D28D9] hover:to-[#4F46E5] shadow-md shadow-purple-500/20 transition-all disabled:opacity-50"
           >
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plug className="w-4 h-4" />}
             {saving ? 'Connecting...' : 'Connect'}

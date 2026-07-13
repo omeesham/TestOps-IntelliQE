@@ -4,14 +4,11 @@ import { useNavigate, useLocation } from 'react-router-dom';
 
 const PAGE_TITLES: Record<string, string> = {
   '/chat': 'Chat',
-  '/dashboard': 'Overview',
   '/system-configuration': 'System Configuration',
   '/reports': 'Reports',
-  '/agents': 'Agent Monitor',
   '/login': 'Sign In',
   '/user-management': 'User Management',
   '/generated-tests': 'Generated Test Cases',
-  '/automation-scripts': 'Automation Scripts',
 };
 
 export default function Header() {
@@ -29,14 +26,14 @@ export default function Header() {
   };
 
   return (
-    <header className="h-14 bg-white/80 backdrop-blur-xl border-b border-[#C5D6FF]/60 flex items-center justify-between px-6 z-30 flex-shrink-0">
-      <h1 className="text-lg font-bold text-[#1E3A8A]">{pageTitle}</h1>
+    <header className="h-14 bg-white/80 backdrop-blur-xl border-b border-[#DDD6FE]/60 flex items-center justify-between px-6 z-30 flex-shrink-0">
+      <h1 className="text-lg font-bold text-[#1E1B4B]">{pageTitle}</h1>
       <div className="flex items-center gap-2">
-        <div className="w-8 h-8 bg-gradient-to-br from-[#3366FF] to-[#2645D6] rounded-full flex items-center justify-center shadow-md shadow-purple-500/20">
+        <div className="w-8 h-8 bg-gradient-to-br from-[#7C3AED] to-[#6366F1] rounded-full flex items-center justify-center shadow-md shadow-purple-500/20">
           <User className="w-4 h-4 text-white" />
         </div>
         <div className="text-sm hidden sm:block">
-          <p className="font-medium text-[#1E3A8A] capitalize">{user?.username || 'User'}</p>
+          <p className="font-medium text-[#1E1B4B] capitalize">{user?.username || 'User'}</p>
           <p className="text-[10px] text-gray-500">{user?.role || 'Guest'}</p>
         </div>
         <button

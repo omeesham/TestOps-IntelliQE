@@ -345,7 +345,7 @@ export async function initDb(): Promise<void> {
         integration_id NVARCHAR(50) NOT NULL,
         category       NVARCHAR(30) DEFAULT 'integration',
         status         NVARCHAR(20) NOT NULL DEFAULT 'available'
-                       CHECK (status IN ('connected', 'available')),
+                       CONSTRAINT CK_client_config_status CHECK (status IN ('connected', 'available', 'disconnected')),
         config_data    NVARCHAR(MAX) NOT NULL DEFAULT '{}',
         connected_by   NVARCHAR(100),
         connected_at   DATETIMEOFFSET,
@@ -355,6 +355,26 @@ export async function initDb(): Promise<void> {
         CONSTRAINT uq_client_config_tenant_integration UNIQUE (tenant_id, integration_id)
       )`);
     await addColumn('client_configurations', 'category', "NVARCHAR(30) DEFAULT 'integration'");
+    // Migration: older DBs created the status CHECK as ('connected','available')
+    // only, so soft-disconnect (status='disconnected') fails with a constraint
+    // violation → "Failed to disconnect integration". Replace whatever CHECK is
+    // on the status column with one that allows 'disconnected'. Idempotent: skips
+    // once the correctly-named constraint exists.
+    await exec(
+      `IF NOT EXISTS (SELECT 1 FROM sys.check_constraints
+                        WHERE parent_object_id = OBJECT_ID(N'${SCHEMA}.client_configurations')
+                          AND name = N'CK_client_config_status')
+       BEGIN
+         DECLARE @old sysname;
+         SELECT @old = cc.name
+           FROM sys.check_constraints cc
+           JOIN sys.columns c ON c.object_id = cc.parent_object_id AND c.column_id = cc.parent_column_id
+          WHERE cc.parent_object_id = OBJECT_ID(N'${SCHEMA}.client_configurations') AND c.name = N'status';
+         IF @old IS NOT NULL EXEC('ALTER TABLE ${SCHEMA}.client_configurations DROP CONSTRAINT [' + @old + ']');
+         ALTER TABLE ${SCHEMA}.client_configurations
+           ADD CONSTRAINT CK_client_config_status CHECK (status IN ('connected', 'available', 'disconnected'));
+       END`,
+    );
 
     // ─── 4. Conversations + messages ───
     await createTable('conversations', `
@@ -653,6 +673,63 @@ export async function initDb(): Promise<void> {
         dataset_id   NVARCHAR(20) NOT NULL,
         created_at   DATETIMEOFFSET DEFAULT SYSUTCDATETIME()
       )`);
+    // No FK on test_run_id: validations attach to orchestrator runs
+    // (qa_pipeline_runs) AND chat-flow runs (test_runs).
+    await createTable('test_data_validations', `
+      CREATE TABLE ${SCHEMA}.test_data_validations (
+        id          UNIQUEIDENTIFIER DEFAULT NEWID() PRIMARY KEY,
+        test_run_id UNIQUEIDENTIFIER NOT NULL,
+        field       NVARCHAR(200) NOT NULL,
+        value       NVARCHAR(MAX),
+        validation  NVARCHAR(50) DEFAULT 'accepted',
+        reason      NVARCHAR(500),
+        created_at  DATETIMEOFFSET DEFAULT SYSUTCDATETIME()
+      )`);
+
+    // ─── 10b. Bug tracker ───
+    await createTable('bugs', `
+      CREATE TABLE ${SCHEMA}.bugs (
+        id                 UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        bug_number         INT IDENTITY(1,1) NOT NULL,
+        tenant_id          UNIQUEIDENTIFIER NOT NULL,
+        title              NVARCHAR(400) NOT NULL,
+        description        NVARCHAR(MAX),
+        severity           NVARCHAR(20) NOT NULL DEFAULT 'medium'
+                           CHECK (severity IN ('critical', 'high', 'medium', 'low')),
+        priority           NVARCHAR(10) NOT NULL DEFAULT 'P2'
+                           CHECK (priority IN ('P0', 'P1', 'P2', 'P3')),
+        status             NVARCHAR(20) NOT NULL DEFAULT 'open'
+                           CHECK (status IN ('open', 'in_progress', 'resolved', 'closed', 'revoked')),
+        environment        NVARCHAR(100),
+        module             NVARCHAR(100),
+        steps_to_reproduce NVARCHAR(MAX),
+        expected_result    NVARCHAR(MAX),
+        actual_result      NVARCHAR(MAX),
+        tags               NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        test_run_id        UNIQUEIDENTIFIER,
+        test_case_id       NVARCHAR(100),
+        reported_by        NVARCHAR(100),
+        assigned_to        NVARCHAR(100),
+        resolution_notes   NVARCHAR(MAX),
+        revoke_reason      NVARCHAR(500),
+        created_at         DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at         DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('bug_activity', `
+      CREATE TABLE ${SCHEMA}.bug_activity (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        bug_id       UNIQUEIDENTIFIER NOT NULL REFERENCES ${SCHEMA}.bugs(id) ON DELETE CASCADE,
+        tenant_id    UNIQUEIDENTIFIER NOT NULL,
+        action       NVARCHAR(30) NOT NULL,
+        details      NVARCHAR(MAX),
+        performed_by NVARCHAR(100),
+        created_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    // Azure DevOps push tracking: when a bug is raised as an ADO Bug work item,
+    // record its numeric id, browser url, and when it was pushed.
+    await addColumn('bugs', 'ado_work_item_id', 'INT');
+    await addColumn('bugs', 'ado_url', 'NVARCHAR(500)');
+    await addColumn('bugs', 'ado_pushed_at', 'DATETIMEOFFSET');
 
     // ─── 11. Indexes ───
     await createIndex('idx_users_tenant', 'users', '(tenant_id)');
@@ -676,6 +753,9 @@ export async function initDb(): Promise<void> {
     await createIndex('idx_qa_artifacts_run', 'qa_artifacts', '(run_id)');
     await createIndex('idx_qa_worker_tasks_status', 'qa_worker_tasks', "(status) WHERE status = 'pending'");
     await createIndex('idx_qa_pages_tenant', 'qa_pages', '(tenant_id)');
+    await createIndex('idx_bugs_tenant_status', 'bugs', '(tenant_id, status)');
+    await createIndex('idx_bugs_tenant_created', 'bugs', '(tenant_id, created_at DESC)');
+    await createIndex('idx_bug_activity_bug', 'bug_activity', '(bug_id)');
 
     // ─── 12. Seed: JBS platform tenant + default users ───
     await exec(`

@@ -32,12 +32,12 @@ export default function LandingPage() {
         <div className="w-full flex">
           <div className="w-1/2 flex-shrink-0" />
           <div className="w-1/2 pl-6 pr-4">
-            <span className="inline-block px-6 py-1.5 border border-violet-400/50 bg-violet-500/10 rounded-full text-sm text-violet-200 tracking-wide mb-6">
+            <span className="inline-block px-6 py-1.5 border border-cyan-400/50 rounded-full text-sm text-cyan-300 tracking-wide mb-6">
               Introducing
             </span>
 
             <h1 className="text-5xl sm:text-6xl lg:text-7xl font-bold leading-[1.08] tracking-tight">
-              <span className="bg-gradient-to-r from-violet-400 via-indigo-400 to-indigo-300 bg-clip-text text-transparent">
+              <span className="bg-gradient-to-r from-violet-400 via-indigo-400 to-cyan-400 bg-clip-text text-transparent">
                 IntelliQE
               </span>{' '}
               <span className="text-3xl sm:text-4xl lg:text-5xl text-white/90 font-semibold">

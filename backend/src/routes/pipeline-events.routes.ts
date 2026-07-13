@@ -7,6 +7,13 @@ const router = Router();
 // GET /:runId — SSE stream for pipeline events
 router.get('/:runId', (req: Request, res: Response) => {
   const runId = req.params.runId as string;
+  // Composite keys (e.g. "bugs:<tenantId>") are reserved for server-derived
+  // channels — allowing them here would let a client subscribe to another
+  // tenant's stream through the shared connection map.
+  if (runId.includes(':')) {
+    res.status(400).json({ error: 'Invalid run id' });
+    return;
+  }
   const role = (req.query.role === 'admin') ? 'admin' : 'user';
 
   res.setHeader('Content-Type', 'text/event-stream');

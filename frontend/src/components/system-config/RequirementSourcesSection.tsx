@@ -3,9 +3,10 @@ import { getRequirementSources } from './integrationCatalog';
 import type { CatalogItem } from './integrationCatalog';
 import IntegrationCard from './IntegrationCard';
 import ConnectModal from './ConnectModal';
-import { connectIntegration, disconnectIntegration, connectJira } from '@/services/api';
+import { connectIntegration, disconnectIntegration, reconnectIntegration, deleteIntegration, connectJira, connectAzureDevops } from '@/services/api';
 import { encryptField } from '@/utils/crypto';
 import { useAuth } from '@/contexts/AuthContext';
+import { useToast } from '@/components/feedback/ToastProvider';
 
 interface DbConfig {
   integrationId: string;
@@ -23,6 +24,7 @@ interface Props {
 
 export default function RequirementSourcesSection({ configs, onRefresh }: Props) {
   const { user } = useAuth();
+  const toast = useToast();
   const [connectModal, setConnectModal] = useState<CatalogItem | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -39,6 +41,9 @@ export default function RequirementSourcesSection({ configs, onRefresh }: Props)
       if (dbRow && dbRow.status === 'connected') {
         return { ...cat, status: 'connected' as const, dbRow };
       }
+      if (dbRow) {
+        return { ...cat, status: 'disconnected' as const, dbRow };
+      }
       return { ...cat, status: 'available' as const, dbRow: null };
     });
   }, [catalog, configs]);
@@ -49,12 +54,16 @@ export default function RequirementSourcesSection({ configs, onRefresh }: Props)
   };
 
   const handleDisconnect = async (integrationId: string) => {
-    try {
-      await disconnectIntegration(integrationId);
-      onRefresh();
-    } catch (err: any) {
-      console.error('Disconnect error:', err);
-    }
+    try { await disconnectIntegration(integrationId); onRefresh(); toast.success('Disconnected successfully'); }
+    catch (err: any) { console.error('Disconnect error:', err); toast.fromError(err); }
+  };
+  const handleReconnect = async (integrationId: string) => {
+    try { await reconnectIntegration(integrationId); onRefresh(); toast.success('Reconnected successfully'); }
+    catch (err: any) { console.error('Reconnect error:', err); toast.fromError(err); }
+  };
+  const handleDelete = async (integrationId: string) => {
+    try { await deleteIntegration(integrationId); onRefresh(); toast.success('Deleted successfully'); }
+    catch (err: any) { console.error('Delete error:', err); toast.fromError(err); }
   };
 
   const handleSaveConnect = async (formData: Record<string, string>) => {
@@ -74,12 +83,22 @@ export default function RequirementSourcesSection({ configs, onRefresh }: Props)
           formData.email || '',
           formData.api_token || '',
         );
+      } else if (connectModal.id === 'azure-devops') {
+        // Azure DevOps uses a dedicated endpoint that validates the PAT and
+        // returns the resolved project before saving.
+        await connectAzureDevops(
+          formData.org_url || '',
+          formData.project || '',
+          formData.pat || '',
+          formData.areaPath || undefined,
+        );
       } else {
         // Generic connect for Confluence, SharePoint, etc.
         await connectIntegration(connectModal.id, formData);
       }
       setConnectModal(null);
       onRefresh();
+      toast.success('Connected successfully');
     } catch (err: any) {
       setError(err?.response?.data?.error || err?.message || 'Failed to connect');
     } finally {
@@ -90,7 +109,7 @@ export default function RequirementSourcesSection({ configs, onRefresh }: Props)
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="text-sm font-semibold text-[#1E3A8A] mb-1">Requirement Sources</h3>
+        <h3 className="text-sm font-semibold text-[#1E1B4B] mb-1">Requirement Sources</h3>
         <p className="text-xs text-[#6B7280]">
           Connect project management and documentation tools to import requirements
         </p>
@@ -110,6 +129,8 @@ export default function RequirementSourcesSection({ configs, onRefresh }: Props)
             lastSyncAt={item.dbRow?.lastSyncAt}
             onConnect={() => handleConnect(item)}
             onDisconnect={() => handleDisconnect(item.id)}
+            onReconnect={() => handleReconnect(item.id)}
+            onDelete={() => handleDelete(item.id)}
           />
         ))}
       </div>

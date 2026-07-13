@@ -1,721 +1,728 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
-  Sparkles, ShieldCheck, ShieldAlert, CheckCircle2, XCircle, AlertTriangle, Clock,
-  Circle, Eye, EyeOff, Zap, Save, Trash2, Star, RefreshCw, Lock, History as HistoryIcon,
-  Loader2, ChevronRight, Server,
+  BrainCircuit, Eye, EyeOff, Loader2, Zap, Save, Pencil, Trash2, X,
+  CheckCircle2, AlertTriangle, ShieldCheck, Star, KeyRound, Link2, Cpu,
 } from 'lucide-react';
-import { useAuth } from '@/contexts/AuthContext';
 import {
-  connectIntegration, disconnectIntegration, testLLMConnection, listLLMModels,
+  getLlmConfig, testLlmConnection, saveLlmConfig,
+  setDefaultLlmProvider, deleteLlmConfig,
+  type LlmProviderConfig,
 } from '@/services/api';
-import {
-  LLM_PROVIDERS, getProvider, providerRowId, LLM_SETTINGS_ID,
-  type LLMEnvironment, type LLMProviderDef,
-} from './llmProviders';
+import { useToast } from '@/components/feedback/ToastProvider';
 
-interface DbConfig {
-  integrationId: string;
-  status: string;
-  configData: Record<string, any>;
-  connectedBy: string | null;
-  connectedAt: string | null;
-  lastSyncAt: string | null;
+type ProviderId = 'anthropic' | 'gemini' | 'openai';
+type ConnStatus = LlmProviderConfig['status'];
+
+const PROVIDER_META: { value: ProviderId; label: string; endpoint: string; keyHint: string }[] = [
+  { value: 'anthropic', label: 'Anthropic Claude', endpoint: 'https://api.anthropic.com',                  keyHint: 'sk-ant-api03-…' },
+  { value: 'gemini',    label: 'Google Gemini',    endpoint: 'https://generativelanguage.googleapis.com',  keyHint: 'AIza…' },
+  { value: 'openai',    label: 'OpenAI ChatGPT',   endpoint: 'https://api.openai.com/v1',                  keyHint: 'sk-…' },
+];
+
+// Selectable models per provider. Shown immediately so the model can always be
+// changed; live models from a successful Test Connection are merged on top.
+const PROVIDER_MODELS: Record<ProviderId, string[]> = {
+  anthropic: [
+    'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6',
+    'claude-opus-4-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-haiku-4-5',
+  ],
+  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4-turbo', 'o3', 'o3-mini', 'o1'],
+  gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
+};
+
+/** Curated list for a provider, with the saved model pinned first if not already present. */
+function modelsFor(provider: ProviderId, savedModel?: string | null): string[] {
+  const base = PROVIDER_MODELS[provider] || [];
+  return savedModel && !base.includes(savedModel) ? [savedModel, ...base] : base;
 }
 
-interface Props {
-  configs: DbConfig[];
-  onRefresh: () => void;
-}
+// Pipeline agents the admin can assign a model to. Keys MUST match the backend
+// (services/llm.service.ts / agents). Each can run on its own model, or fall
+// back to the provider's default model when left as "Use default".
+const AGENT_STAGES: { key: string; label: string; hint: string }[] = [
+  { key: 'requirement', label: 'Requirement Analysis', hint: 'Parse requirements into structured analysis' },
+  { key: 'audit',       label: 'Edge-Case & Security Audit', hint: 'Add security / boundary scenarios' },
+  { key: 'planner',     label: 'Test Planning', hint: 'Risk-based test strategy' },
+  { key: 'generator',   label: 'Test Case Generation', hint: 'Author the test cases' },
+  { key: 'script',      label: 'Script Generation', hint: 'Playwright automation scripts' },
+  { key: 'heal',        label: 'Auto-Healing', hint: 'Fix failing tests' },
+];
 
-type ConnStatus =
-  | 'connected' | 'configured' | 'disabled' | 'not-configured'
-  | 'invalid-key' | 'failed' | 'timeout';
-
-interface HistoryEntry {
-  at: string;
-  by: string;
-  action: string;
-  provider: string;
-  env: string;
-}
-
-interface ProviderForm {
-  apiKey: string;
-  endpoint: string;
-  model: string;
-  orgId: string;
-  projectId: string;
-  enabled: boolean;
-}
-
-const KEEP_SECRET = '__KEEP_EXISTING__';
-
-const STATUS_META: Record<ConnStatus, { label: string; cls: string; dot: string; Icon: React.ElementType }> = {
-  connected:        { label: 'Connected',         cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', dot: 'bg-emerald-500', Icon: CheckCircle2 },
-  configured:       { label: 'Configured',        cls: 'bg-indigo-50 text-indigo-700 border-indigo-200',    dot: 'bg-indigo-500',  Icon: ShieldCheck },
-  disabled:         { label: 'Disabled',          cls: 'bg-gray-100 text-gray-500 border-gray-200',         dot: 'bg-gray-400',    Icon: Circle },
-  'not-configured': { label: 'Not Configured',    cls: 'bg-gray-50 text-gray-500 border-gray-200',          dot: 'bg-gray-300',    Icon: Circle },
-  'invalid-key':    { label: 'Invalid API Key',   cls: 'bg-red-50 text-red-700 border-red-200',             dot: 'bg-red-500',     Icon: XCircle },
-  failed:           { label: 'Connection Failed', cls: 'bg-red-50 text-red-700 border-red-200',             dot: 'bg-red-500',     Icon: AlertTriangle },
-  timeout:          { label: 'Timeout',           cls: 'bg-amber-50 text-amber-700 border-amber-200',       dot: 'bg-amber-500',   Icon: Clock },
+const STATUS_META: Record<ConnStatus, { label: string; dot: string; text: string; bg: string; border: string }> = {
+  connected:           { label: 'Connected',           dot: 'bg-emerald-500', text: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200' },
+  not_configured:      { label: 'Not Configured',      dot: 'bg-gray-400',    text: 'text-gray-600',    bg: 'bg-gray-50',    border: 'border-gray-200' },
+  invalid_credentials: { label: 'Invalid Credentials', dot: 'bg-red-500',     text: 'text-red-700',     bg: 'bg-red-50',     border: 'border-red-200' },
+  connection_failed:   { label: 'Connection Failed',   dot: 'bg-amber-500',   text: 'text-amber-700',   bg: 'bg-amber-50',   border: 'border-amber-200' },
 };
 
 const INPUT_CLASS =
-  'w-full px-3 py-2.5 rounded-xl border border-[#E5E7EB] bg-white text-sm text-[#1E1B4B] outline-none focus:ring-2 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED] placeholder:text-gray-400 transition-all disabled:bg-gray-50 disabled:text-gray-400';
+  'w-full px-3 py-2.5 rounded-xl border border-[#DDD6FE] bg-[#F5F3FF] text-sm outline-none focus:ring-2 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED] placeholder:text-gray-400 transition-all';
+const LABEL_CLASS = 'block text-xs font-semibold uppercase tracking-wide text-[#6B7280] mb-1.5';
 
-/* ── Module-level presentational helpers (stable identity → no focus loss) ── */
-
-function ProviderAvatar({ provider, size = 40 }: { provider: LLMProviderDef; size?: number }) {
-  return (
-    <div
-      className="rounded-xl flex items-center justify-center font-semibold text-white flex-shrink-0"
-      style={{ width: size, height: size, backgroundColor: provider.accent, fontSize: size * 0.36 }}
-    >
-      {provider.initials}
-    </div>
-  );
+function formatDate(iso: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).replace(/ /g, '-');
 }
 
 function StatusBadge({ status }: { status: ConnStatus }) {
   const m = STATUS_META[status];
-  const { Icon } = m;
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium ${m.cls}`}>
-      <Icon className="w-3.5 h-3.5" />
+    <span className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border ${m.bg} ${m.text} ${m.border}`}>
+      <span className={`w-2 h-2 rounded-full ${m.dot}`} />
       {m.label}
     </span>
   );
 }
 
-function StatusDot({ status }: { status: ConnStatus }) {
-  return <span className={`w-2 h-2 rounded-full ${STATUS_META[status].dot}`} />;
-}
+export default function LlmConfigurationSection() {
+  const toast = useToast();
+  const [providers, setProviders] = useState<LlmProviderConfig[]>([]);
+  const [defaultProvider, setDefaultProvider] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
 
-function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: () => void; disabled?: boolean }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={onChange}
-      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-40 ${checked ? 'bg-[#7C3AED]' : 'bg-gray-300'}`}
-    >
-      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-4' : 'translate-x-0.5'}`} />
-    </button>
-  );
-}
+  const [selected, setSelected] = useState<ProviderId>('anthropic');
+  const [mode, setMode] = useState<'view' | 'edit'>('edit');
 
-function Field({ label, required, help, children }: { label: string; required?: boolean; help?: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <label className="block text-sm font-medium text-[#1E1B4B] mb-1">
-        {label}{required && <span className="text-red-500 ml-0.5">*</span>}
-      </label>
-      {children}
-      {help && <p className="text-[11px] text-[#6B7280] mt-1">{help}</p>}
-    </div>
-  );
-}
-
-/* ── Date helpers ── */
-function formatDateTime(iso: string | null): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return '—';
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  let h = d.getHours();
-  const ampm = h >= 12 ? 'PM' : 'AM';
-  h = h % 12 || 12;
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return `${String(d.getDate()).padStart(2, '0')}-${months[d.getMonth()]}-${d.getFullYear()} ${String(h).padStart(2, '0')}:${mm} ${ampm}`;
-}
-
-function timeAgo(iso: string): string {
-  const d = new Date(iso).getTime();
-  if (isNaN(d)) return '';
-  const s = Math.floor((Date.now() - d) / 1000);
-  if (s < 60) return 'just now';
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
-}
-
-/* ───────────────────────────────────────────────────────────── */
-
-export default function LLMConfigurationSection({ configs, onRefresh }: Props) {
-  const { user } = useAuth();
-  const isAdmin = user?.role === 'admin';
-  const actor = user?.displayName || user?.username || 'admin';
-
-  const settingsRow = configs.find((c) => c.integrationId === LLM_SETTINGS_ID);
-  const settings = settingsRow?.configData || {};
-  const defaults: Record<string, string> = settings.defaults || {};
-  const history: HistoryEntry[] = Array.isArray(settings.history) ? settings.history : [];
-
-  // Environment is fixed (the picker was removed); kept as a stable storage key.
-  const env: LLMEnvironment = settings.activeEnvironment || 'production';
-  const defaultProviderId = defaults[env] || '';
-
-  const [selectedId, setSelectedId] = useState<string>(defaultProviderId || 'anthropic');
-  const selectedProvider = getProvider(selectedId)!;
-
-  const rowFor = (pid: string) => configs.find((c) => c.integrationId === providerRowId(pid, env));
-  const selectedRow = rowFor(selectedId);
-  const hasKey = !!selectedRow?.configData?.apiKey;
-
-  const [liveStatus, setLiveStatus] = useState<Record<string, { status: ConnStatus; message?: string }>>({});
-  const [form, setForm] = useState<ProviderForm>(() => initForm(selectedProvider, selectedRow));
-  const [keyDirty, setKeyDirty] = useState(false);
+  const [apiKey, setApiKey] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [model, setModel] = useState('');
+  const [agentModels, setAgentModels] = useState<Record<string, string>>({});
   const [showKey, setShowKey] = useState(false);
-  const [models, setModels] = useState<string[]>(selectedProvider.fallbackModels);
-  const [modelSource, setModelSource] = useState<'live' | 'fallback'>('fallback');
-  const [loadingModels, setLoadingModels] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [removing, setRemoving] = useState(false);
-  const [savedFlash, setSavedFlash] = useState(false);
-  const [validationError, setValidationError] = useState<string | null>(null);
-  const [busyProvider, setBusyProvider] = useState<string | null>(null);
 
-  // Re-seed the form whenever the selected provider, environment, or the saved
-  // row's last write changes. Keyed on lastSyncAt so a post-save refresh syncs
-  // the "saved" state without clobbering an in-progress edit on other rows.
-  useEffect(() => {
-    setForm(initForm(selectedProvider, selectedRow));
-    setKeyDirty(false);
-    setShowKey(false);
-    setValidationError(null);
-    setModels(selectedProvider.fallbackModels);
-    setModelSource('fallback');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, env, selectedRow?.lastSyncAt]);
+  // Anthropic auth method: 'api_key' (API credits) or 'claude_code' (subscription).
+  const [authMethod, setAuthMethod] = useState<'api_key' | 'claude_code'>('api_key');
+  const [oauthToken, setOauthToken] = useState('');
+  const [showToken, setShowToken] = useState(false);
+  // Claude Code transport: 'api' (OAuth token → Messages API) or 'cli' (local
+  // `claude` CLI — subscription, no API cost, for local testing).
+  const [claudeCodeMode, setClaudeCodeMode] = useState<'api' | 'cli'>('api');
 
-  function baseStatus(pid: string): ConnStatus {
-    const p = getProvider(pid)!;
-    const row = rowFor(pid);
-    const cfg = row?.configData || {};
-    const configured = p.keyless ? !!row : !!cfg.apiKey;
-    if (!row || !configured) return 'not-configured';
-    if (cfg.enabled === false) return 'disabled';
-    return 'configured';
-  }
-  const statusOf = (pid: string): ConnStatus => liveStatus[pid]?.status ?? baseStatus(pid);
+  // Reasoning effort + extended ("ultra") thinking (Anthropic). Empty effort = provider default.
+  const [effort, setEffort] = useState<'' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>('');
+  const [extendedThinking, setExtendedThinking] = useState(false);
 
-  const configuredProviders = useMemo(
-    () => LLM_PROVIDERS.filter((p) => ['configured', 'disabled'].includes(baseStatus(p.id))),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [configs, env],
-  );
-
-  /* ── Persistence helpers ── */
-
-  async function saveSettings(patch: Record<string, any>, action?: string, provider?: string) {
-    const nextHistory = action
-      ? [{ at: new Date().toISOString(), by: actor, action, provider: provider || '', env }, ...history].slice(0, 25)
-      : history;
-    await connectIntegration(LLM_SETTINGS_ID, {
-      ...settings,
-      activeEnvironment: env,
-      defaults,
-      ...patch,
-      history: nextHistory,
+  // Set/clear a per-agent model override (empty value = use the default model).
+  const setAgentModel = (stage: string, value: string) =>
+    setAgentModels((prev) => {
+      const next = { ...prev };
+      if (value) next[stage] = value;
+      else delete next[stage];
+      return next;
     });
-  }
 
-  function buildKeyField(): string {
-    if (selectedProvider.keyless) return '';
-    if (keyDirty && form.apiKey) return form.apiKey;
-    return hasKey ? KEEP_SECRET : '';
-  }
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; status: ConnStatus; message: string } | null>(null);
+  const [models, setModels] = useState<string[]>([]);
 
-  async function handleSave() {
-    setValidationError(null);
-    if (!selectedProvider.keyless && !form.apiKey && !hasKey) {
-      setValidationError(`${selectedProvider.apiKeyLabel} is required to save this provider.`);
-      return;
+  const [saving, setSaving] = useState(false);
+  const [savedFlash, setSavedFlash] = useState(false);
+  const [busyAction, setBusyAction] = useState(false);
+
+  const current = providers.find((p) => p.provider === selected);
+  const meta = PROVIDER_META.find((p) => p.value === selected)!;
+  const liveStatus: ConnStatus = testResult ? testResult.status : (current?.status ?? 'not_configured');
+  const isAnthropic = selected === 'anthropic';
+  const isClaudeCode = isAnthropic && authMethod === 'claude_code';
+  const keyChanged = apiKey.trim().length > 0;
+  const tokenChanged = oauthToken.trim().length > 0;
+  // Enough to run a Test: a new credential entered, or one already saved.
+  const canTest = isClaudeCode ? (tokenChanged || !!current?.configured) : (keyChanged || !!current?.configured);
+  // Save when a credential is present (new or already saved) and a model is
+  // chosen. A passing Test Connection is recommended but NOT required — a
+  // transient/credential test failure must not block saving the config.
+  const canSave = canTest && !!model;
+
+  /** Reset the editor fields for a provider (used on load + provider switch). */
+  const resetEditor = useCallback((p?: LlmProviderConfig) => {
+    const provider = (p?.provider ?? 'anthropic') as ProviderId;
+    const list = modelsFor(provider, p?.model);
+    setApiKey('');
+    setShowKey(false);
+    setOauthToken('');
+    setShowToken(false);
+    setAuthMethod(provider === 'anthropic' && p?.authMethod === 'claude_code' ? 'claude_code' : 'api_key');
+    setClaudeCodeMode(p?.claudeCodeMode === 'cli' ? 'cli' : 'api');
+    setEffort((p?.effort as any) || '');
+    setExtendedThinking(!!p?.extendedThinking);
+    setBaseUrl(p?.baseUrl || PROVIDER_META.find((m) => m.value === provider)?.endpoint || '');
+    setModel(p?.model || list[0] || '');
+    setAgentModels(p?.agentModels && typeof p.agentModels === 'object' ? { ...p.agentModels } : {});
+    setModels(list);
+    setTestResult(null);
+  }, []);
+
+  const load = useCallback(async (keepSelection?: ProviderId) => {
+    setLoading(true);
+    setLoadError('');
+    try {
+      const data = await getLlmConfig();
+      setProviders(data.providers);
+      setDefaultProvider(data.defaultProvider);
+      const next: ProviderId =
+        keepSelection ||
+        (data.defaultProvider as ProviderId) ||
+        (data.providers.find((p) => p.configured)?.provider as ProviderId) ||
+        'anthropic';
+      setSelected(next);
+      const cur = data.providers.find((p) => p.provider === next);
+      setMode(cur?.configured ? 'view' : 'edit');
+      resetEditor(cur);
+    } catch (err: any) {
+      setLoadError(err?.response?.data?.error || err.message || 'Failed to load LLM configuration.');
+    } finally {
+      setLoading(false);
     }
-    for (const f of selectedProvider.fields) {
-      if (f.required && !(form as any)[f.key]) {
-        setValidationError(`${f.label} is required.`);
-        return;
+  }, [resetEditor]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const selectProvider = (p: ProviderId) => {
+    setSelected(p);
+    const cur = providers.find((x) => x.provider === p);
+    setMode(cur?.configured ? 'view' : 'edit');
+    resetEditor(cur);
+  };
+
+  const enterEdit = () => {
+    setMode('edit');
+    resetEditor(current);
+  };
+
+  const cancelEdit = () => {
+    if (current?.configured) { setMode('view'); resetEditor(current); }
+  };
+
+  const handleTest = async (testMode?: 'api' | 'cli') => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await testLlmConnection(selected, {
+        apiKey: !isClaudeCode && keyChanged ? apiKey.trim() : undefined,
+        oauthToken: isClaudeCode && tokenChanged ? oauthToken.trim() : undefined,
+        authMethod: isAnthropic ? authMethod : undefined,
+        mode: isClaudeCode ? (testMode || 'api') : undefined,
+        baseUrl: baseUrl.trim() || meta.endpoint,
+      });
+      const label = isClaudeCode ? (testMode === 'cli' ? 'CLI: ' : 'API: ') : '';
+      setTestResult({ ok: res.ok, status: (res.status as ConnStatus) || (res.ok ? 'connected' : 'connection_failed'), message: label + res.message });
+      if (res.ok) {
+        // Merge live models on top of the curated list (live first, deduped).
+        const merged = [...new Set([...(res.models || []), ...modelsFor(selected, model)])];
+        setModels(merged);
+        if (!model || !merged.includes(model)) setModel(merged[0] || '');
       }
+    } catch (err: any) {
+      const label = isClaudeCode ? (testMode === 'cli' ? 'CLI: ' : 'API: ') : '';
+      setTestResult({ ok: false, status: 'connection_failed', message: label + (err?.response?.data?.message || err.message || 'Connection test failed.') });
+    } finally {
+      setTesting(false);
     }
+  };
+
+  const handleSave = async () => {
     setSaving(true);
     try {
-      await connectIntegration(providerRowId(selectedId, env), {
-        provider: selectedId,
-        environment: env,
-        apiKey: buildKeyField(),
-        endpoint: form.endpoint,
-        model: form.model,
-        orgId: form.orgId,
-        projectId: form.projectId,
-        enabled: form.enabled,
+      await saveLlmConfig(selected, {
+        apiKey: !isClaudeCode && keyChanged ? apiKey.trim() : undefined,
+        oauthToken: isClaudeCode && tokenChanged ? oauthToken.trim() : undefined,
+        authMethod: isAnthropic ? authMethod : undefined,
+        claudeCodeMode: isClaudeCode ? claudeCodeMode : undefined,
+        effort: isAnthropic && effort ? effort : undefined,
+        extendedThinking: isAnthropic ? extendedThinking : undefined,
+        baseUrl: baseUrl.trim() || meta.endpoint,
+        model: model || null,
+        agentModels,
       });
-      // First configured provider for this environment becomes the default.
-      const patch = !defaults[env] ? { defaults: { ...defaults, [env]: selectedId } } : {};
-      await saveSettings(patch, 'Saved configuration', selectedId);
       setSavedFlash(true);
-      setTimeout(() => setSavedFlash(false), 2500);
-      onRefresh();
-    } catch {
-      setValidationError('Failed to save configuration. Please try again.');
+      setTimeout(() => setSavedFlash(false), 3000);
+      toast.success('Saved successfully');
+      await load(selected);
+    } catch (err: any) {
+      setTestResult({ ok: false, status: 'connection_failed', message: err?.response?.data?.error || 'Failed to save configuration.' });
     } finally {
       setSaving(false);
     }
-  }
+  };
 
-  async function handleRemove() {
-    if (!selectedRow) return;
-    setRemoving(true);
+  const handleSetDefault = async () => {
+    setBusyAction(true);
     try {
-      await disconnectIntegration(providerRowId(selectedId, env));
-      const nextDefaults = { ...defaults };
-      if (nextDefaults[env] === selectedId) nextDefaults[env] = '';
-      await saveSettings({ defaults: nextDefaults }, 'Removed configuration', selectedId);
-      setLiveStatus((s) => { const n = { ...s }; delete n[selectedId]; return n; });
-      onRefresh();
+      await setDefaultLlmProvider(selected);
+      toast.success('Default updated');
+      await load(selected);
+    } catch (err: any) {
+      setLoadError(err?.response?.data?.error || 'Failed to set default provider.');
     } finally {
-      setRemoving(false);
+      setBusyAction(false);
     }
-  }
+  };
 
-  async function handleSetDefault(pid: string) {
-    if (!isAdmin) return;
-    setBusyProvider(pid);
+  const handleDelete = async () => {
+    if (!window.confirm(`Delete the ${meta.label} configuration? This removes the stored API key.`)) return;
+    setBusyAction(true);
     try {
-      await saveSettings({ defaults: { ...defaults, [env]: pid } }, 'Set as default', pid);
-      onRefresh();
+      await deleteLlmConfig(selected);
+      toast.success('Deleted successfully');
+      await load(selected);
+    } catch (err: any) {
+      setLoadError(err?.response?.data?.error || 'Failed to delete configuration.');
     } finally {
-      setBusyProvider(null);
+      setBusyAction(false);
     }
-  }
+  };
 
-  async function handleToggleEnabled(pid: string) {
-    const row = rowFor(pid);
-    if (!row) return; // can't enable an unconfigured provider
-    setBusyProvider(pid);
-    try {
-      await connectIntegration(providerRowId(pid, env), {
-        ...row.configData,
-        apiKey: KEEP_SECRET, // preserve stored key
-        enabled: !(row.configData.enabled !== false),
-      });
-      await saveSettings({}, (row.configData.enabled !== false) ? 'Disabled provider' : 'Enabled provider', pid);
-      onRefresh();
-    } finally {
-      setBusyProvider(null);
-    }
-  }
-
-  async function handleTest() {
-    setTesting(true);
-    setValidationError(null);
-    const payload: Parameters<typeof testLLMConnection>[0] = {
-      provider: selectedId,
-      model: form.model,
-      baseUrl: form.endpoint,
-      orgId: form.orgId,
-      projectId: form.projectId,
-    };
-    if (keyDirty && form.apiKey) payload.apiKey = form.apiKey;
-    else (payload as any).integrationId = providerRowId(selectedId, env);
-    const res = await testLLMConnection(payload);
-    setLiveStatus((s) => ({ ...s, [selectedId]: { status: res.status, message: res.message || res.error } }));
-    setTesting(false);
-    if (res.ok) handleFetchModels();
-  }
-
-  async function handleFetchModels() {
-    setLoadingModels(true);
-    const payload: Parameters<typeof listLLMModels>[0] = { provider: selectedId, baseUrl: form.endpoint };
-    if (keyDirty && form.apiKey) payload.apiKey = form.apiKey;
-    else payload.integrationId = providerRowId(selectedId, env);
-    const { models: list, source } = await listLLMModels(payload);
-    if (list.length) {
-      setModels(list);
-      setModelSource(source);
-      setForm((f) => ({ ...f, model: list.includes(f.model) ? f.model : list[0] }));
-    }
-    setLoadingModels(false);
-  }
-
-  /* ── Non-admin gate ── */
-  if (!isAdmin) {
+  if (loading) {
     return (
-      <div className="max-w-lg mx-auto py-16 text-center">
-        <div className="w-14 h-14 rounded-2xl bg-[#F5F3FF] flex items-center justify-center mx-auto mb-4">
-          <Lock className="w-7 h-7 text-[#7C3AED]" />
-        </div>
-        <h3 className="text-lg font-semibold text-[#1E1B4B]">Administrator access required</h3>
-        <p className="text-sm text-[#6B7280] mt-2">
-          LLM provider credentials and defaults can only be viewed and managed by platform administrators.
-          Contact your administrator to make changes.
-        </p>
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="w-7 h-7 text-[#7C3AED] animate-spin" />
+        <span className="ml-3 text-sm text-[#6B7280]">Loading LLM configuration…</span>
       </div>
     );
   }
 
-  const selectedStatus = statusOf(selectedId);
-  const liveMsg = liveStatus[selectedId]?.message;
-  const defaultProvider = defaultProviderId ? getProvider(defaultProviderId) : undefined;
-  const defaultStatus = defaultProviderId ? statusOf(defaultProviderId) : 'not-configured';
+  const activeProvider = providers.find((p) => p.provider === defaultProvider);
 
   return (
-    <div className="space-y-5">
+    <div className="max-w-3xl space-y-5">
       {/* ── Header ── */}
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#7C3AED] to-[#6366F1] flex items-center justify-center shadow-sm">
-          <Sparkles className="w-5 h-5 text-white" />
+      <div className="flex items-start gap-3">
+        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#7C3AED] to-[#6366F1] flex items-center justify-center shadow-md shadow-purple-500/20">
+          <BrainCircuit className="w-5 h-5 text-white" />
         </div>
-        <h2 className="text-lg font-semibold text-[#1E1B4B] leading-tight">LLM Configuration</h2>
-      </div>
-
-      {/* ── Default Provider + Status summary ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="rounded-2xl border border-[#EDE9FE] bg-gradient-to-br from-[#FAFAFE] to-white p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <Star className="w-4 h-4 text-[#7C3AED]" />
-            <h3 className="text-sm font-semibold text-[#1E1B4B]">Default Provider</h3>
-          </div>
-          <select
-            value={defaultProviderId}
-            onChange={(e) => handleSetDefault(e.target.value)}
-            className={INPUT_CLASS}
-          >
-            <option value="">— Select default LLM —</option>
-            {configuredProviders.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
-          <p className="text-[11px] text-[#6B7280] mt-2">
-            The platform-wide engine all AI agents use by default.
+        <div>
+          <h2 className="text-lg font-semibold text-[#1E1B4B]">LLM Configuration</h2>
+          <p className="text-sm text-[#6B7280] mt-0.5">
+            Connect a Large Language Model provider. This configuration powers every AI capability —
+            Planner, Test Generator, Healer, Test Data Generator, and more.
           </p>
         </div>
+      </div>
 
-        <div className="rounded-2xl border border-[#EDE9FE] bg-white p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <Server className="w-4 h-4 text-[#7C3AED]" />
-            <h3 className="text-sm font-semibold text-[#1E1B4B]">Provider Status</h3>
+      {loadError && (
+        <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" /> {loadError}
+        </div>
+      )}
+
+      {/* ── Provider + Status ── */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-end">
+          <div>
+            <label className={LABEL_CLASS}>LLM Provider</label>
+            <select value={selected} onChange={(e) => selectProvider(e.target.value as ProviderId)} className={INPUT_CLASS}>
+              {PROVIDER_META.map((p) => {
+                const cfg = providers.find((x) => x.provider === p.value);
+                return (
+                  <option key={p.value} value={p.value}>
+                    {p.label}{cfg?.isDefault ? '  ·  Default' : cfg?.configured ? '  ·  Configured' : ''}
+                  </option>
+                );
+              })}
+            </select>
           </div>
-          {defaultProvider ? (
-            <div className="flex items-center gap-3">
-              <ProviderAvatar provider={defaultProvider} />
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-[#1E1B4B] truncate">{defaultProvider.name}</p>
-                <p className="text-xs text-[#6B7280] truncate">{defaultProvider.tagline}</p>
-              </div>
-              <div className="ml-auto"><StatusBadge status={defaultStatus} /></div>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 text-sm text-[#6B7280]">
-              <AlertTriangle className="w-4 h-4 text-amber-500" />
-              No default provider selected. Configure one below.
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ── Available Providers ── */}
-      <div className="rounded-2xl border border-[#EDE9FE] bg-white p-5">
-        <div className="flex items-center gap-2 mb-4">
-          <h3 className="text-sm font-semibold text-[#1E1B4B]">Available Providers</h3>
-          <span className="text-xs text-[#6B7280]">· {configuredProviders.length} configured</span>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-          {LLM_PROVIDERS.map((p) => {
-            const status = statusOf(p.id);
-            const isSelected = p.id === selectedId;
-            const isDefault = defaults[env] === p.id;
-            const configured = ['configured', 'disabled', 'connected'].includes(baseStatus(p.id)) || baseStatus(p.id) === 'connected';
-            const row = rowFor(p.id);
-            return (
-              <button
-                key={p.id}
-                onClick={() => setSelectedId(p.id)}
-                className={`text-left rounded-xl border p-3 transition-all ${
-                  isSelected
-                    ? 'border-[#7C3AED] ring-1 ring-[#7C3AED]/30 bg-[#FAFAFE]'
-                    : 'border-[#E5E7EB] hover:border-[#DDD6FE] hover:bg-[#FAFAFE]'
-                }`}
-              >
-                <div className="flex items-start gap-3">
-                  <ProviderAvatar provider={p} size={36} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-sm font-semibold text-[#1E1B4B] truncate">{p.name}</span>
-                      {isDefault && <Star className="w-3.5 h-3.5 text-[#7C3AED] fill-[#7C3AED] flex-shrink-0" />}
-                    </div>
-                    <p className="text-[11px] text-[#6B7280] line-clamp-2 leading-snug mt-0.5">{p.tagline}</p>
-                  </div>
-                  {p.status === 'coming-soon' && (
-                    <span className="text-[9px] font-semibold uppercase tracking-wide text-[#6B7280] bg-gray-100 px-1.5 py-0.5 rounded flex-shrink-0">
-                      Soon
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center justify-between mt-3 pt-2 border-t border-[#F1F0FB]">
-                  <span className="inline-flex items-center gap-1.5 text-xs">
-                    <StatusDot status={status} />
-                    <span className="text-[#6B7280]">{STATUS_META[status].label}</span>
-                  </span>
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    onClick={(e) => { e.stopPropagation(); if (row) handleToggleEnabled(p.id); }}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); if (row) handleToggleEnabled(p.id); } }}
-                    className="flex items-center gap-1.5"
-                    title={row ? 'Enable / disable provider' : 'Configure the provider to enable it'}
-                  >
-                    {busyProvider === p.id
-                      ? <Loader2 className="w-4 h-4 animate-spin text-[#7C3AED]" />
-                      : <Toggle checked={!!row && row.configData.enabled !== false} onChange={() => {}} disabled={!row} />}
-                  </span>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ── Configuration card (selected provider) ── */}
-      <div className="rounded-2xl border border-[#EDE9FE] bg-white overflow-hidden">
-        <div className="flex flex-wrap items-center gap-3 px-5 py-4 border-b border-[#F1F0FB] bg-[#FAFAFE]">
-          <ProviderAvatar provider={selectedProvider} />
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-semibold text-[#1E1B4B]">{selectedProvider.name}</h3>
-              {selectedProvider.docsUrl && (
-                <a href={selectedProvider.docsUrl} target="_blank" rel="noreferrer"
-                   className="text-[11px] text-[#7C3AED] hover:underline inline-flex items-center">
-                  Docs <ChevronRight className="w-3 h-3" />
-                </a>
+          <div>
+            <label className={LABEL_CLASS}>Connection Status</label>
+            <div className="flex items-center gap-3 h-[42px]">
+              <StatusBadge status={liveStatus} />
+              {current?.isDefault && (
+                <span className="inline-flex items-center gap-1 text-xs font-medium text-[#7C3AED]">
+                  <Star className="w-3.5 h-3.5 fill-[#7C3AED]" /> Default
+                </span>
               )}
             </div>
-            <p className="text-[11px] text-[#6B7280]">Provider configuration</p>
           </div>
-          <div className="ml-auto flex items-center gap-2">
-            <StatusBadge status={selectedStatus} />
-            {defaults[env] !== selectedId && (
-              <button
-                onClick={() => handleSetDefault(selectedId)}
-                disabled={baseStatus(selectedId) === 'not-configured'}
-                className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-[#7C3AED] border border-[#DDD6FE] hover:bg-[#F5F3FF] transition-all disabled:opacity-40 inline-flex items-center gap-1"
-              >
-                <Star className="w-3.5 h-3.5" /> Set default
+        </div>
+      </div>
+
+      {/* ── Configuration ── */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100 bg-gray-50/50">
+          <h3 className="text-sm font-semibold text-[#1E1B4B] flex items-center gap-2">
+            <Cpu className="w-4 h-4 text-[#7C3AED]" /> Configuration
+          </h3>
+          {mode === 'view' && current?.configured && (
+            <div className="flex items-center gap-2">
+              <button onClick={enterEdit} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#7C3AED] border border-[#DDD6FE] rounded-lg hover:bg-[#F5F3FF] transition-colors">
+                <Pencil className="w-3.5 h-3.5" /> Edit
               </button>
-            )}
-          </div>
+              <button onClick={handleDelete} disabled={busyAction} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50">
+                <Trash2 className="w-3.5 h-3.5" /> Delete
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="p-5 space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* API Key */}
-            <Field label={selectedProvider.apiKeyLabel} required={!selectedProvider.keyless} help={selectedProvider.apiKeyHelp}>
-              <div className="relative">
-                <input
-                  type={showKey ? 'text' : 'password'}
-                  value={form.apiKey}
-                  disabled={selectedProvider.keyless}
-                  onChange={(e) => { setForm((f) => ({ ...f, apiKey: e.target.value })); setKeyDirty(true); }}
-                  placeholder={selectedProvider.keyless
-                    ? 'Not required for self-hosted'
-                    : (hasKey ? '•••••••••••••• — saved (leave blank to keep)' : selectedProvider.apiKeyPlaceholder)}
-                  autoComplete="off"
-                  className={`${INPUT_CLASS} pr-10`}
-                />
-                {!selectedProvider.keyless && (
-                  <button type="button" onClick={() => setShowKey((v) => !v)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#7C3AED]">
-                    {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          {mode === 'view' && current?.configured ? (
+            /* ── Read-only summary ── */
+            <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
+              {isAnthropic && (
+                <div>
+                  <dt className={LABEL_CLASS}>Auth Method</dt>
+                  <dd className="text-sm font-medium text-[#1E1B4B]">
+                    {current.authMethod === 'claude_code' ? 'Claude Code (subscription)' : 'API Key (credits)'}
+                  </dd>
+                </div>
+              )}
+              <div>
+                <dt className={LABEL_CLASS}>{current.authMethod === 'claude_code' ? 'OAuth Token' : 'API Key'}</dt>
+                <dd className="flex items-center gap-2 text-sm font-mono text-[#1E1B4B]">
+                  <KeyRound className="w-4 h-4 text-[#A5B4FC]" />
+                  {current.authMethod === 'claude_code'
+                    ? (current.maskedToken || 'local Claude CLI')
+                    : (current.maskedKey || '••••••')}
+                </dd>
+              </div>
+              <div>
+                <dt className={LABEL_CLASS}>Endpoint</dt>
+                <dd className="flex items-center gap-2 text-sm text-[#1E1B4B] truncate">
+                  <Link2 className="w-4 h-4 text-[#A5B4FC] flex-shrink-0" /> <span className="truncate">{current.baseUrl}</span>
+                </dd>
+              </div>
+              <div>
+                <dt className={LABEL_CLASS}>Default Model</dt>
+                <dd className="text-sm font-medium text-[#1E1B4B]">{current.model || '—'}</dd>
+              </div>
+              {isAnthropic && (
+                <div>
+                  <dt className={LABEL_CLASS}>Effort / Thinking</dt>
+                  <dd className="text-sm font-medium text-[#1E1B4B]">
+                    {(current.effort || 'high')}{current.extendedThinking ? ' · ultra think on' : ''}
+                  </dd>
+                </div>
+              )}
+              <div className="sm:col-span-2">
+                <dt className={LABEL_CLASS}>Per-Agent Models</dt>
+                <dd className="text-sm text-[#1E1B4B]">
+                  {AGENT_STAGES.some((s) => current.agentModels?.[s.key]) ? (
+                    <ul className="space-y-1 mt-0.5">
+                      {AGENT_STAGES.map((s) => (
+                        <li key={s.key} className="flex items-center justify-between gap-3">
+                          <span className="text-[#6B7280]">{s.label}</span>
+                          <span className="font-medium">
+                            {current.agentModels?.[s.key] || `default (${current.model || '—'})`}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <span className="text-[#6B7280]">All agents use the default model</span>
+                  )}
+                </dd>
+              </div>
+            </dl>
+          ) : (
+            /* ── Editable form ── */
+            <>
+              {/* Authentication method — Anthropic supports a subscription path
+                  (Claude Code) as a fallback for when API credits run out. */}
+              {isAnthropic && (
+                <div>
+                  <label className={LABEL_CLASS}>Authentication Method</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {([
+                      { v: 'api_key', label: 'API Key', hint: 'Uses API credits' },
+                      { v: 'claude_code', label: 'Claude Code', hint: 'Uses your Claude subscription' },
+                    ] as const).map((opt) => (
+                      <button
+                        key={opt.v}
+                        type="button"
+                        onClick={() => { setAuthMethod(opt.v); setTestResult(null); }}
+                        className={`flex flex-col items-start px-3 py-2.5 rounded-xl border text-left transition-all ${
+                          authMethod === opt.v
+                            ? 'border-[#7C3AED] bg-[#F5F3FF] ring-2 ring-[#7C3AED]/20'
+                            : 'border-[#DDD6FE] bg-white hover:bg-[#F5F3FF]'
+                        }`}
+                      >
+                        <span className="text-sm font-semibold text-[#1E1B4B]">{opt.label}</span>
+                        <span className="text-[11px] text-[#6B7280]">{opt.hint}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {isClaudeCode ? (
+                <div>
+                  <label className={LABEL_CLASS}>Claude Code OAuth Token</label>
+                  <div className="relative">
+                    <input
+                      type={showToken ? 'text' : 'password'}
+                      value={oauthToken}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setTestResult(null);
+                        // Pasted an API key here? Switch to API Key mode so it's sent correctly.
+                        if (/^sk-ant-api/i.test(v.trim())) { setAuthMethod('api_key'); setApiKey(v); setOauthToken(''); }
+                        else setOauthToken(v);
+                      }}
+                      placeholder={current?.maskedToken ? `Saved — ${current.maskedToken} (leave blank to keep)` : 'sk-ant-oat…'}
+                      autoComplete="off"
+                      className={`${INPUT_CLASS} pr-10 font-mono`}
+                    />
+                    <button type="button" onClick={() => setShowToken((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#7C3AED] transition-colors">
+                      {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-[#6B7280] mt-1 flex items-center gap-1">
+                    <ShieldCheck className="w-3 h-3" /> Run <code className="px-1 bg-[#F5F3FF] rounded">claude setup-token</code> in a terminal, then paste the token. Uses your Claude subscription, not API credits. Encrypted at rest.
+                  </p>
+
+                  {/* Transport — API (OAuth token) vs local CLI. The pipeline uses
+                      exactly what's selected here. CLI is for local testing on a
+                      machine with the `claude` CLI installed (no API cost). */}
+                  <label className={`${LABEL_CLASS} mt-3`}>Connection Method</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {([
+                      { v: 'api', label: 'API', hint: 'OAuth token → Anthropic API' },
+                      { v: 'cli', label: 'Claude CLI', hint: 'Local claude CLI — no API cost' },
+                    ] as const).map((opt) => (
+                      <button
+                        key={opt.v}
+                        type="button"
+                        onClick={() => { setClaudeCodeMode(opt.v); setTestResult(null); }}
+                        className={`flex flex-col items-start px-3 py-2 rounded-xl border text-left transition-all ${
+                          claudeCodeMode === opt.v
+                            ? 'border-[#7C3AED] bg-[#F5F3FF] ring-2 ring-[#7C3AED]/20'
+                            : 'border-[#DDD6FE] bg-white hover:bg-[#F5F3FF]'
+                        }`}
+                      >
+                        <span className="text-sm font-semibold text-[#1E1B4B]">{opt.label}</span>
+                        <span className="text-[11px] text-[#6B7280]">{opt.hint}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label className={LABEL_CLASS}>API Key</label>
+                  <div className="relative">
+                    <input
+                      type={showKey ? 'text' : 'password'}
+                      value={apiKey}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setTestResult(null);
+                        // Pasted a Claude Code OAuth token here? Switch to Claude Code mode.
+                        if (isAnthropic && /^sk-ant-oat/i.test(v.trim())) { setAuthMethod('claude_code'); setOauthToken(v); setApiKey(''); }
+                        else setApiKey(v);
+                      }}
+                      placeholder={current?.configured ? `Saved — ${current.maskedKey} (leave blank to keep)` : meta.keyHint}
+                      autoComplete="off"
+                      className={`${INPUT_CLASS} pr-10 font-mono`}
+                    />
+                    <button type="button" onClick={() => setShowKey((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#7C3AED] transition-colors">
+                      {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-[#6B7280] mt-1 flex items-center gap-1">
+                    <ShieldCheck className="w-3 h-3" /> Encrypted at rest. The stored key is never shown in plain text.
+                  </p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className={LABEL_CLASS}>API Endpoint</label>
+                  <input
+                    type="text"
+                    value={baseUrl}
+                    onChange={(e) => { setBaseUrl(e.target.value); setTestResult(null); }}
+                    placeholder={meta.endpoint}
+                    className={INPUT_CLASS}
+                  />
+                </div>
+                <div>
+                  <label className={LABEL_CLASS}>Default Model</label>
+                  <select
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    className={INPUT_CLASS}
+                  >
+                    {models.length === 0
+                      ? <option value="">Select a model…</option>
+                      : models.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Reasoning effort + extended ("ultra") thinking — Anthropic only */}
+              {isAnthropic && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                  <div>
+                    <label className={LABEL_CLASS}>Reasoning Effort</label>
+                    <select
+                      value={effort}
+                      onChange={(e) => setEffort(e.target.value as any)}
+                      className={INPUT_CLASS}
+                    >
+                      <option value="">Provider default (high)</option>
+                      <option value="low">Low — fastest, cheapest</option>
+                      <option value="medium">Medium — balanced</option>
+                      <option value="high">High — recommended</option>
+                      <option value="xhigh">X-High — Opus 4.7/4.8 only</option>
+                      <option value="max">Max — most thorough</option>
+                    </select>
+                    <p className="text-[11px] text-[#6B7280] mt-1">
+                      Applied per model — automatically skipped for models that don't support it (e.g. Haiku 4.5).
+                    </p>
+                  </div>
+                  <div>
+                    <label className={LABEL_CLASS}>Extended Thinking</label>
+                    <label className="flex items-center gap-2.5 mt-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={extendedThinking}
+                        onChange={(e) => setExtendedThinking(e.target.checked)}
+                        className="w-4 h-4 rounded border-[#DDD6FE] text-[#7C3AED] focus:ring-[#7C3AED]/20"
+                      />
+                      <span className="text-sm text-[#1E1B4B]">Enable “ultra think” (adaptive thinking)</span>
+                    </label>
+                    <p className="text-[11px] text-[#6B7280] mt-1">
+                      Lets the model reason more deeply before answering. Used only on models that support adaptive thinking (Opus 4.6+, Sonnet 4.6, Fable 5).
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Per-agent model overrides */}
+              <div className="pt-1">
+                <label className={LABEL_CLASS}>Per-Agent Models</label>
+                <p className="text-[11px] text-[#6B7280] -mt-1 mb-2.5">
+                  Pick a model for each pipeline agent, or leave as <span className="font-medium">Use default</span> to use the Default Model above.
+                  Lighter models (e.g. Haiku) make the early stages faster; stronger models improve generation quality.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {AGENT_STAGES.map((stage) => (
+                    <div key={stage.key} className="flex flex-col">
+                      <label className="text-xs font-semibold text-[#1E1B4B]">{stage.label}</label>
+                      <span className="text-[10px] text-[#9CA3AF] mb-1">{stage.hint}</span>
+                      <select
+                        value={agentModels[stage.key] || ''}
+                        onChange={(e) => setAgentModel(stage.key, e.target.value)}
+                        className={INPUT_CLASS}
+                      >
+                        <option value="">Use default{model ? ` (${model})` : ''}</option>
+                        {models.map((m) => <option key={m} value={m}>{m}</option>)}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex flex-wrap items-center gap-4 pt-3 mt-1 border-t border-gray-100">
+                {isClaudeCode ? (
+                  <>
+                    {/* Two explicit tests so it's unambiguous which path is checked. */}
+                    <button
+                      onClick={() => handleTest('api')}
+                      disabled={testing || !canTest}
+                      title="Validate the OAuth token against the Anthropic Messages API (Bearer)"
+                      className="inline-flex items-center gap-2 px-4 py-2 border border-[#7C3AED] text-[#7C3AED] rounded-lg text-sm font-medium hover:bg-[#F5F3FF] transition-all disabled:opacity-50"
+                    >
+                      {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                      Test API
+                    </button>
+                    <button
+                      onClick={() => handleTest('cli')}
+                      disabled={testing}
+                      title="Run the local `claude` CLI (passes your token via CLAUDE_CODE_OAUTH_TOKEN)"
+                      className="inline-flex items-center gap-2 px-4 py-2 border border-[#7C3AED] text-[#7C3AED] rounded-lg text-sm font-medium hover:bg-[#F5F3FF] transition-all disabled:opacity-50"
+                    >
+                      {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                      Test CLI
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => handleTest()}
+                    disabled={testing || !canTest}
+                    className="inline-flex items-center gap-2 px-4 py-2 border border-[#7C3AED] text-[#7C3AED] rounded-lg text-sm font-medium hover:bg-[#F5F3FF] transition-all disabled:opacity-50"
+                  >
+                    {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                    {testing ? 'Testing…' : 'Test Connection'}
                   </button>
                 )}
-              </div>
-              {hasKey && !keyDirty && !selectedProvider.keyless && (
-                <p className="text-[11px] text-emerald-600 mt-1 inline-flex items-center gap-1">
-                  <ShieldCheck className="w-3.5 h-3.5" /> Stored &amp; encrypted at rest (AES-256)
-                </p>
-              )}
-            </Field>
-
-            {/* Endpoint */}
-            <Field label="API Endpoint" help="Override only for gateways or private deployments.">
-              <input
-                type="text"
-                value={form.endpoint}
-                onChange={(e) => setForm((f) => ({ ...f, endpoint: e.target.value }))}
-                placeholder={selectedProvider.defaultEndpoint}
-                className={INPUT_CLASS}
-              />
-            </Field>
-
-            {/* Provider-specific extra fields */}
-            {selectedProvider.fields.map((f) => (
-              <Field key={f.key} label={f.label} required={f.required} help={f.help}>
-                <input
-                  type="text"
-                  value={(form as any)[f.key]}
-                  onChange={(e) => setForm((prev) => ({ ...prev, [f.key]: e.target.value }))}
-                  placeholder={f.placeholder}
-                  className={INPUT_CLASS}
-                />
-              </Field>
-            ))}
-
-            {/* Model */}
-            <Field label="Model" help={modelSource === 'live' ? 'Retrieved live from the provider.' : 'Default list — test the connection to load live models.'}>
-              <div className="flex gap-2">
-                <select
-                  value={form.model}
-                  onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
-                  className={INPUT_CLASS}
-                >
-                  {models.map((m) => <option key={m} value={m}>{m}</option>)}
-                  {form.model && !models.includes(form.model) && <option value={form.model}>{form.model}</option>}
-                </select>
                 <button
-                  type="button"
-                  onClick={handleFetchModels}
-                  disabled={loadingModels}
-                  title="Fetch available models"
-                  className="px-3 rounded-xl border border-[#DDD6FE] text-[#7C3AED] hover:bg-[#F5F3FF] transition-all disabled:opacity-50 flex-shrink-0"
+                  onClick={handleSave}
+                  disabled={saving || !canSave}
+                  title={!canSave ? 'Enter an API key/token and choose a model to save' : undefined}
+                  className="inline-flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white rounded-lg text-sm font-medium hover:from-[#6D28D9] hover:to-[#4F46E5] shadow-md shadow-purple-500/20 transition-all disabled:opacity-50"
                 >
-                  {loadingModels ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {saving ? 'Saving…' : 'Save Configuration'}
                 </button>
+                {current?.configured && (
+                  <button onClick={cancelEdit} className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-[#6B7280] hover:text-[#1E1B4B] transition-colors">
+                    <X className="w-4 h-4" /> Cancel
+                  </button>
+                )}
+                {savedFlash && (
+                  <span className="inline-flex items-center gap-1.5 text-xs text-emerald-600 font-medium">
+                    <CheckCircle2 className="w-4 h-4" /> Saved
+                  </span>
+                )}
               </div>
-            </Field>
-          </div>
 
-          {/* Enabled toggle */}
-          <div className="flex items-center justify-between rounded-xl border border-[#F1F0FB] bg-[#FAFAFE] px-4 py-3">
-            <div>
-              <span className="text-sm font-medium text-[#1E1B4B]">Enable provider</span>
-              <p className="text-[11px] text-[#6B7280]">Disabled providers stay configured but are not used by agents.</p>
-            </div>
-            <Toggle checked={form.enabled} onChange={() => setForm((f) => ({ ...f, enabled: !f.enabled }))} />
-          </div>
-
-          {/* Validation / connection status */}
-          {validationError && (
-            <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-              <AlertTriangle className="w-4 h-4 flex-shrink-0" /> {validationError}
-            </div>
+              {testResult && (
+                <div className={`flex items-start gap-2 px-3 py-2.5 rounded-xl border text-sm ${testResult.ok ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+                  {testResult.ok ? <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5" /> : <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />}
+                  <span className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed">{testResult.message}</span>
+                </div>
+              )}
+            </>
           )}
-          {liveStatus[selectedId] && (
-            <div className={`flex items-center gap-2 text-xs rounded-lg px-3 py-2 border ${STATUS_META[selectedStatus].cls}`}>
-              {(() => { const I = STATUS_META[selectedStatus].Icon; return <I className="w-4 h-4 flex-shrink-0" />; })()}
-              <span className="font-medium">{STATUS_META[selectedStatus].label}</span>
-              {liveMsg && <span className="opacity-80">— {liveMsg}</span>}
-            </div>
-          )}
-
-          {/* Actions */}
-          <div className="flex flex-wrap items-center gap-2 pt-1">
-            <button
-              onClick={handleTest}
-              disabled={testing || selectedProvider.status !== 'available'}
-              title={selectedProvider.status !== 'available' ? 'Live validation available once this provider is enabled on your plan' : undefined}
-              className="px-4 py-2 rounded-lg text-sm font-medium border border-[#7C3AED] text-[#7C3AED] hover:bg-[#F5F3FF] transition-all disabled:opacity-50 inline-flex items-center gap-2"
-            >
-              {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-              {testing ? 'Testing…' : 'Test Connection'}
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="px-5 py-2 rounded-lg text-sm font-medium text-white bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:from-[#6D28D9] hover:to-[#4F46E5] shadow-sm transition-all disabled:opacity-50 inline-flex items-center gap-2"
-            >
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-              {saving ? 'Saving…' : 'Save Configuration'}
-            </button>
-            {selectedRow && (
-              <button
-                onClick={handleRemove}
-                disabled={removing}
-                className="px-3 py-2 rounded-lg text-sm font-medium text-red-600 border border-red-200 hover:bg-red-50 transition-all disabled:opacity-50 inline-flex items-center gap-2"
-              >
-                {removing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                Remove
-              </button>
-            )}
-            {savedFlash && (
-              <span className="text-xs text-emerald-600 font-medium inline-flex items-center gap-1">
-                <CheckCircle2 className="w-4 h-4" /> Configuration saved
-              </span>
-            )}
-            <span className="ml-auto text-[11px] text-[#9CA3AF] inline-flex items-center gap-1">
-              <Lock className="w-3 h-3" /> Credentials encrypted at rest
-            </span>
-          </div>
         </div>
       </div>
 
-      {/* ── Audit Information ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="rounded-2xl border border-[#EDE9FE] bg-white p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <ShieldAlert className="w-4 h-4 text-[#7C3AED]" />
-            <h3 className="text-sm font-semibold text-[#1E1B4B]">Audit Information</h3>
+      {/* ── Configuration Details ── */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+        <h3 className="text-sm font-semibold text-[#1E1B4B] mb-4 flex items-center gap-2">
+          <ShieldCheck className="w-4 h-4 text-[#7C3AED]" /> Configuration Details
+        </h3>
+        <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
+          <div className="flex items-center justify-between sm:block">
+            <dt className={LABEL_CLASS}>Default Provider</dt>
+            <dd className="text-sm">
+              {current?.isDefault ? (
+                <span className="inline-flex items-center gap-1.5 font-medium text-emerald-600">
+                  <CheckCircle2 className="w-4 h-4" /> Yes
+                </span>
+              ) : current?.configured ? (
+                <button onClick={handleSetDefault} disabled={busyAction} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#7C3AED] border border-[#DDD6FE] rounded-lg hover:bg-[#F5F3FF] transition-colors disabled:opacity-50">
+                  {busyAction ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Star className="w-3.5 h-3.5" />} Set as Default
+                </button>
+              ) : (
+                <span className="text-sm text-[#6B7280]">—</span>
+              )}
+            </dd>
           </div>
-          <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-sm">
-            <div>
-              <dt className="text-[11px] uppercase tracking-wide text-[#9CA3AF]">Last Updated</dt>
-              <dd className="text-[#1E1B4B] font-medium">{formatDateTime(selectedRow?.lastSyncAt || selectedRow?.connectedAt || null)}</dd>
-            </div>
-            <div>
-              <dt className="text-[11px] uppercase tracking-wide text-[#9CA3AF]">Updated By</dt>
-              <dd className="text-[#1E1B4B] font-medium">{selectedRow?.connectedBy || '—'}</dd>
-            </div>
-            <div>
-              <dt className="text-[11px] uppercase tracking-wide text-[#9CA3AF]">Status</dt>
-              <dd className="mt-0.5"><StatusBadge status={selectedStatus} /></dd>
-            </div>
-          </dl>
-        </div>
+          <div>
+            <dt className={LABEL_CLASS}>Selected Model</dt>
+            <dd className="text-sm font-medium text-[#1E1B4B]">{current?.model || '—'}</dd>
+          </div>
+          <div>
+            <dt className={LABEL_CLASS}>Last Updated</dt>
+            <dd className="text-sm text-[#1E1B4B]">{formatDate(current?.updatedAt ?? null)}</dd>
+          </div>
+          <div>
+            <dt className={LABEL_CLASS}>Updated By</dt>
+            <dd className="text-sm text-[#1E1B4B]">{current?.updatedBy || '—'}</dd>
+          </div>
+        </dl>
 
-        {/* ── Configuration History ── */}
-        <div className="rounded-2xl border border-[#EDE9FE] bg-white p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <HistoryIcon className="w-4 h-4 text-[#7C3AED]" />
-            <h3 className="text-sm font-semibold text-[#1E1B4B]">Configuration History</h3>
-          </div>
-          {history.length === 0 ? (
-            <p className="text-sm text-[#9CA3AF]">No configuration changes recorded yet.</p>
-          ) : (
-            <ul className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
-              {history.slice(0, 12).map((h, i) => {
-                const p = getProvider(h.provider);
-                return (
-                  <li key={i} className="flex items-start gap-2.5 text-sm">
-                    <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-[#7C3AED] flex-shrink-0" />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[#1E1B4B]">
-                        <span className="font-medium">{h.action}</span>
-                        {p && <span className="text-[#6B7280]"> · {p.name}</span>}
-                      </p>
-                      <p className="text-[11px] text-[#9CA3AF]">{h.by} · {timeAgo(h.at)}</p>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+        <div className="mt-4 pt-4 border-t border-gray-100 text-xs text-[#6B7280] flex items-center gap-1.5">
+          <Star className="w-3.5 h-3.5 text-[#A5B4FC]" />
+          Active platform provider:&nbsp;
+          <span className="font-medium text-[#1E1B4B]">
+            {activeProvider ? `${activeProvider.label} (${activeProvider.model || 'no model'})` : 'None selected'}
+          </span>
         </div>
       </div>
     </div>
   );
-}
-
-/* Build initial form state for a provider from its saved row (if any). */
-function initForm(provider: LLMProviderDef, row?: DbConfig): ProviderForm {
-  const cfg = row?.configData || {};
-  return {
-    apiKey: '',
-    endpoint: cfg.endpoint || provider.defaultEndpoint,
-    model: cfg.model || provider.fallbackModels[0] || '',
-    orgId: cfg.orgId || '',
-    projectId: cfg.projectId || '',
-    enabled: cfg.enabled !== undefined ? !!cfg.enabled : true,
-  };
 }

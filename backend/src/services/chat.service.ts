@@ -61,6 +61,26 @@ export async function getConversationsByTenant(tenantId: string, isPlatform: boo
   return rows;
 }
 
+/**
+ * Return the conversation row iff it belongs to the given tenant (platform
+ * tenants may access any). Used to authorize per-conversation reads/writes so
+ * one tenant can't reach another tenant's messages by guessing an id.
+ */
+export async function getConversationForTenant(
+  conversationId: string,
+  tenantId: string,
+  isPlatform: boolean,
+) {
+  const filter = isPlatform ? '' : ' AND tenant_id = $2';
+  const params: any[] = [conversationId];
+  if (!isPlatform) params.push(tenantId);
+  const { rows } = await pool.query(
+    `SELECT id, tenant_id FROM conversations WHERE id = $1${filter}`,
+    params,
+  );
+  return rows[0] || null;
+}
+
 export async function getMessagesByConversation(conversationId: string) {
   const { rows } = await pool.query(
     `SELECT id, role, content, metadata, created_at

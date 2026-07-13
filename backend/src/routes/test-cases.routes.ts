@@ -169,18 +169,28 @@ router.get('/facets', async (req: Request, res: Response) => {
         ORDER BY module, submodule`,
       [user.tenantId]
     );
-    const tagsRes = await pool.query(
-      `SELECT DISTINCT UNNEST(tc.tags) AS tag
-         FROM "JBSTestOpsAI".test_cases tc
-         JOIN "JBSTestOpsAI".test_runs r ON r.id = tc.test_run_id
-        WHERE r.tenant_id = $1
-        ORDER BY tag`,
-      [user.tenantId]
-    );
+    // tags is stored as a JSON array string in Azure SQL — UNNEST is Postgres-only
+    // and 500s here. Use OPENJSON (the T-SQL equivalent), and keep it NON-FATAL so
+    // a bad/empty tags value never blanks the whole Generated Test Cases page.
+    let tags: string[] = [];
+    try {
+      const tagsRes = await pool.query(
+        `SELECT DISTINCT jt.value AS tag
+           FROM "JBSTestOpsAI".test_cases tc
+           JOIN "JBSTestOpsAI".test_runs r ON r.id = tc.test_run_id
+           CROSS APPLY OPENJSON(tc.tags) jt
+          WHERE r.tenant_id = $1 AND tc.tags IS NOT NULL AND tc.tags <> ''
+          ORDER BY tag`,
+        [user.tenantId]
+      );
+      tags = tagsRes.rows.map((r) => r.tag).filter(Boolean);
+    } catch (e: any) {
+      console.warn('[facets] tags query failed (non-fatal):', e.message);
+    }
     res.json({
       modules: modulesRes.rows.map((r) => r.module),
       submodules: submodulesRes.rows.map((r) => ({ module: r.module, name: r.submodule })),
-      tags: tagsRes.rows.map((r) => r.tag),
+      tags,
     });
   } catch (err: any) {
     console.error('Facets error:', err.message);
@@ -357,8 +367,18 @@ router.get('/:testRunId', async (req: Request, res: Response) => {
    ─────────────────────────────────────────── */
 router.get('/:testRunId/export', async (req: Request, res: Response) => {
   try {
+    const user = req.user!;
     const { testRunId } = req.params;
     const format = (req.query.format as string || 'csv').toLowerCase();
+
+    // Verify the test run belongs to this tenant before exporting its cases
+    // (platform admin sees all). Without this, any authenticated user could
+    // export another tenant's test cases by supplying their run id.
+    const runFilter = user.isPlatform ? '' : ' AND tenant_id = $2';
+    const runParams: any[] = [testRunId];
+    if (!user.isPlatform) runParams.push(user.tenantId);
+    const runRes = await pool.query(`SELECT id FROM test_runs WHERE id = $1${runFilter}`, runParams);
+    if (runRes.rows.length === 0) { res.status(404).json({ error: 'Test run not found' }); return; }
 
     const casesRes = await pool.query(
       `SELECT * FROM test_cases WHERE test_run_id = $1 ORDER BY sort_order`,
@@ -445,13 +465,17 @@ router.get('/:testRunId/test-data', async (req: Request, res: Response) => {
     const user = req.user!;
     const { testRunId } = req.params;
 
-    // Verify ownership via qa_pipeline_runs (test data is linked to pipeline runs)
+    // Verify ownership. Test data can hang off an orchestrator run
+    // (qa_pipeline_runs) OR a chat-flow run (test_runs) — accept either, since
+    // the Generated Tests page passes test_runs ids.
     const tenantFilter = user.isPlatform ? '' : ' AND tenant_id = $2';
     const params: any[] = [testRunId];
     if (!user.isPlatform) params.push(user.tenantId);
 
     const runRes = await pool.query(`SELECT id FROM "JBSTestOpsAI".qa_pipeline_runs WHERE id = $1${tenantFilter}`, params);
-    if (runRes.rows.length === 0) { res.status(404).json({ error: 'Pipeline run not found' }); return; }
+    const owned = runRes.rows.length > 0
+      || (await pool.query(`SELECT id FROM "JBSTestOpsAI".test_runs WHERE id = $1${tenantFilter}`, params)).rows.length > 0;
+    if (!owned) { res.status(404).json({ error: 'Run not found' }); return; }
 
     const [datasetsRes, fieldDataRes, mappingsRes, validationsRes] = await Promise.all([
       pool.query(`SELECT * FROM "JBSTestOpsAI".test_datasets WHERE test_run_id = $1 ORDER BY dataset_id`, [testRunId]),
@@ -482,13 +506,15 @@ router.post('/:testRunId/test-data', async (req: Request, res: Response) => {
     const { testRunId } = req.params;
     const { datasets, fieldData, mappings, validations } = req.body;
 
-    // Verify ownership
+    // Verify ownership — same dual-table check as the GET above.
     const tenantFilter = user.isPlatform ? '' : ' AND tenant_id = $2';
     const params: any[] = [testRunId];
     if (!user.isPlatform) params.push(user.tenantId);
 
     const runRes = await pool.query(`SELECT id FROM "JBSTestOpsAI".qa_pipeline_runs WHERE id = $1${tenantFilter}`, params);
-    if (runRes.rows.length === 0) { res.status(404).json({ error: 'Pipeline run not found' }); return; }
+    const owned = runRes.rows.length > 0
+      || (await pool.query(`SELECT id FROM "JBSTestOpsAI".test_runs WHERE id = $1${tenantFilter}`, params)).rows.length > 0;
+    if (!owned) { res.status(404).json({ error: 'Run not found' }); return; }
 
     let insertedCount = 0;
 

@@ -12,11 +12,54 @@
  * All API calls flow through a single Octokit instance so retries and
  * rate-limiting behave consistently.
  */
-import type { GitFile, GitProvider, GitProviderConfig, PublishResult } from './git.types.js';
+import type { GitFile, GitProvider, GitProviderConfig, GitTestResult, PublishResult } from './git.types.js';
 import { parseRepoUrl } from './git.types.js';
 
 export const githubProvider: GitProvider = {
   id: 'github',
+
+  async test(config): Promise<GitTestResult> {
+    const { Octokit } = await import('@octokit/rest');
+    const coords = parseRepoUrl(config.repoUrl);
+    if (coords.provider !== 'github') {
+      throw new Error(`Expected a GitHub URL but got ${coords.provider}: ${config.repoUrl}`);
+    }
+    const octokit = new Octokit({
+      auth: config.accessToken,
+      ...(coords.host !== 'github.com' ? { baseUrl: `https://${coords.host}/api/v3` } : {}),
+    });
+    const { owner, repo } = coords;
+
+    // 1. Repo reachable + token valid (also tells us push permission).
+    let canPush = false;
+    try {
+      const r = await octokit.repos.get({ owner, repo });
+      canPush = !!r.data.permissions?.push;
+    } catch (err: any) {
+      if (err.status === 401) throw new Error('Authentication failed — the access token is invalid or expired.');
+      if (err.status === 404) throw new Error(`Repository ${owner}/${repo} not found, or the token has no access to it.`);
+      throw new Error(`Could not reach ${owner}/${repo}: ${err.message || err}`);
+    }
+
+    // 2. Default branch (the PR target) must exist.
+    try {
+      await octokit.git.getRef({ owner, repo, ref: `heads/${config.defaultBranch}` });
+    } catch (err: any) {
+      if (err.status === 404) {
+        throw new Error(`Default branch '${config.defaultBranch}' does not exist on ${owner}/${repo}. Set "Default Branch" to an existing branch (e.g. main).`);
+      }
+      throw new Error(`Could not read default branch '${config.defaultBranch}': ${err.message || err}`);
+    }
+
+    return {
+      ok: true,
+      canPush,
+      message: canPush
+        ? `Connected to ${owner}/${repo}. Default branch '${config.defaultBranch}' found and the token can push. Ready to raise PRs.`
+        : `Connected to ${owner}/${repo} and branch '${config.defaultBranch}' found, but the token cannot push to this repo. Grant Contents + Pull requests write access.`,
+    };
+  },
+
   async publish(config, files, opts): Promise<PublishResult> {
     const { Octokit } = await import('@octokit/rest');
     const coords = parseRepoUrl(config.repoUrl);
@@ -62,12 +105,29 @@ export const githubProvider: GitProvider = {
     let committed = 0;
     for (const file of files) {
       try {
+        // The new branch is cut from the default-branch tip, so a path that
+        // already exists there is already present on this branch. GitHub's
+        // Contents API rejects an update to an existing path with HTTP 422
+        // ("sha wasn't supplied") unless the current blob sha is passed. Look
+        // it up (absent for new files) so re-publishes / non-empty repos work.
+        let sha: string | undefined;
+        try {
+          const existing = await octokit.repos.getContent({
+            owner, repo, path: file.path, ref: opts.branch,
+          });
+          if (!Array.isArray(existing.data) && 'sha' in existing.data) {
+            sha = existing.data.sha;
+          }
+        } catch (e: any) {
+          if (e?.status !== 404) throw e; // 404 = new file, no sha needed
+        }
         await octokit.repos.createOrUpdateFileContents({
           owner, repo,
           path: file.path,
           message: opts.commitMessage,
           content: Buffer.from(file.content, 'utf-8').toString('base64'),
           branch: opts.branch,
+          ...(sha ? { sha } : {}),
         });
         committed++;
       } catch (err: any) {

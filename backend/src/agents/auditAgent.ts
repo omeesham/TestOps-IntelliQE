@@ -1,12 +1,12 @@
 import type { TestOpsState } from './state.js';
-import { runClaudeJson } from './claude-runner.js';
+import { runLLM, parseJsonFromResponse, llmForStage } from './claude-runner.js';
 
 export async function auditAgent(state: TestOpsState): Promise<TestOpsState> {
   if (!state.parsedRequirements) return state;
 
   const { features, flows, edgeCases } = state.parsedRequirements;
 
-  const prompt = `You are a QA security and edge-case auditor. Given these features and flows, identify additional edge cases, security concerns, and boundary conditions that should be tested.
+  const prompt = `You are a QA edge-case auditor. Given these features and flows, identify ONLY genuinely high-value, in-scope edge cases or concerns that a tester would actually run for THIS functionality — and that aren't already covered.
 
 Features: ${features.join(', ')}
 Flows: ${flows.join(', ')}
@@ -20,22 +20,19 @@ Return ONLY valid JSON (no markdown):
   "additionalDataRules": ["rule 1", "rule 2", ...]
 }
 
-Focus on: XSS, SQL injection, CSRF, session management, input validation, boundary values, concurrent access, error recovery, accessibility.`;
+STRICT RELEVANCE RULES:
+- Add ONLY items that genuinely apply to the features above. Do NOT add a generic battery.
+- Include a security concern (XSS, SQL injection, CSRF, brute-force, etc.) ONLY if the feature actually processes untrusted input in a way that makes it materially relevant AND it isn't already covered. For a basic login form, at most note credential-handling basics — do not enumerate every attack class.
+- Do NOT add concurrency, network-failure, accessibility, or performance items unless the functionality clearly involves them.
+- Quality over quantity: a few sharp, relevant items — or EMPTY arrays — is the correct answer when nothing material is missing. Do not pad.`;
 
-  // The audit only ENRICHES the requirements with extra edge/security cases — it
-  // is not on the critical path. If Claude returns unparseable/truncated JSON,
-  // degrade gracefully and proceed with the un-enriched requirements rather than
-  // failing the whole generation (this used to crash the pipeline intermittently).
-  let parsed: {
-    additionalEdgeCases?: string[];
-    securityConcerns?: string[];
-    additionalDataRules?: string[];
-  };
+  let parsed: { additionalEdgeCases?: string[]; securityConcerns?: string[]; additionalDataRules?: string[] };
   try {
-    parsed = await runClaudeJson(prompt, { maxTokens: 4096, model: 'claude-sonnet-4-6', attempts: 2 });
+    const response = await runLLM(prompt, { maxTokens: 6000, llm: llmForStage(state.llm, 'audit') });
+    parsed = parseJsonFromResponse(response);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn('[auditAgent] enrichment failed, proceeding without extra cases:', (err as Error).message);
+    // Audit is an enhancement pass — never let it abort the pipeline.
+    console.warn('[auditAgent] skipped (LLM/parse failed):', (err as Error).message);
     return state;
   }
 

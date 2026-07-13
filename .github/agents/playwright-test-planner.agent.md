@@ -321,5 +321,5 @@ Before setting `stage: "pending_generation"`, verify ALL artifacts exist:
 Set: `stage: "pending_generation"`, `lockedBy: null`, artifacts: `testCaseFile` + `testPlanFile`, history: `planner/completed/N test cases`
 
 ## Checklist
-- [ ] Explored every field + mapped disabled triggers + 15-25 TCs + test plan + selectors verified on DOM
+- [ ] Explored every field + mapped disabled triggers + test plan + selectors verified on DOM
 - [ ] Queue unlocked, artifacts set, REQUIREMENTS.md NOT modified, self-audit passed (§8)

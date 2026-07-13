@@ -1,0 +1,558 @@
+import { Router } from 'express';
+import type { Request, Response } from 'express';
+import pool from '../db.js';
+import { registerSSEConnection, broadcastSSE } from '../services/sse-manager.js';
+import {
+  getCredsForTenant as getAdoCreds,
+  getConnectionStatus as getAdoStatus,
+  createBug as createAdoBug,
+  deleteWorkItem as deleteAdoWorkItem,
+} from '../services/azure-devops.service.js';
+
+const router = Router();
+
+const SEVERITIES = ['critical', 'high', 'medium', 'low'];
+const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
+const STATUSES = ['open', 'in_progress', 'resolved', 'closed', 'revoked'];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Editable columns shared by create/update. tags is JSON (auto-parsed on read via db.ts JSON_COLUMNS).
+const EDITABLE_FIELDS = [
+  'title', 'description', 'severity', 'priority', 'status', 'environment',
+  'module', 'steps_to_reproduce', 'expected_result', 'actual_result',
+  'tags', 'test_run_id', 'test_case_id', 'assigned_to', 'resolution_notes',
+] as const;
+
+// T-SQL LIKE treats [ % _ as metacharacters (unlike Postgres); bracket-escape
+// them so search filters match the text literally.
+const escapeLike = (s: string) => s.replace(/[[%_]/g, (c) => `[${c}]`);
+
+// Column bounds from the bugs DDL in db.ts — reject early with a 400 instead
+// of letting SQL Server fail the insert with a truncation error.
+const MAX_LENGTHS: Record<string, number> = {
+  title: 400, environment: 100, module: 100, test_case_id: 100, assigned_to: 100,
+};
+
+function validateLengths(body: Record<string, any>): string | null {
+  for (const [field, max] of Object.entries(MAX_LENGTHS)) {
+    const value = body[field];
+    if (typeof value === 'string' && value.trim().length > max) {
+      return `${field} must be at most ${max} characters`;
+    }
+  }
+  return null;
+}
+
+const bugChannel = (tenantId: string) => `bugs:${tenantId}`;
+
+function emitBugEvent(tenantId: string, type: string, payload: Record<string, any>): void {
+  // Bug events are not part of the pipeline SSEEvent union; the manager treats
+  // events opaquely (JSON.stringify), so a cast is safe here.
+  broadcastSSE(bugChannel(tenantId), {
+    type,
+    ...payload,
+    timestamp: new Date().toISOString(),
+  } as any);
+}
+
+async function logActivity(
+  bugId: string,
+  tenantId: string,
+  action: string,
+  details: Record<string, any> | null,
+  performedBy: string,
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO bug_activity (bug_id, tenant_id, action, details, performed_by)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [bugId, tenantId, action, details ? JSON.stringify(details) : null, performedBy],
+  );
+}
+
+function validateEnums(body: Record<string, any>): string | null {
+  if (body.severity !== undefined && !SEVERITIES.includes(body.severity)) {
+    return `severity must be one of: ${SEVERITIES.join(', ')}`;
+  }
+  if (body.priority !== undefined && !PRIORITIES.includes(body.priority)) {
+    return `priority must be one of: ${PRIORITIES.join(', ')}`;
+  }
+  if (body.status !== undefined && !STATUSES.includes(body.status)) {
+    return `status must be one of: ${STATUSES.join(', ')}`;
+  }
+  if (body.test_run_id !== undefined && body.test_run_id !== null && body.test_run_id !== ''
+      && !UUID_RE.test(String(body.test_run_id))) {
+    return 'test_run_id must be a valid UUID';
+  }
+  if (body.tags !== undefined && body.tags !== null && !Array.isArray(body.tags)) {
+    return 'tags must be an array of strings';
+  }
+  return null;
+}
+
+async function findBug(bugId: string, tenantId: string) {
+  const result = await pool.query(
+    `SELECT * FROM bugs WHERE id = $1 AND tenant_id = $2`,
+    [bugId, tenantId],
+  );
+  return result.rows[0] || null;
+}
+
+// GET / — paginated list with filters
+router.get('/', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(50, Math.max(5, parseInt(req.query.limit as string) || 10));
+    const offset = (page - 1) * limit;
+
+    const params: any[] = [user.tenantId];
+    let where = ` WHERE tenant_id = $1`;
+
+    const search = (req.query.search as string || '').trim();
+    if (search) {
+      params.push(`%${escapeLike(search)}%`);
+      where += ` AND (title LIKE $${params.length} OR description LIKE $${params.length}` +
+               ` OR module LIKE $${params.length} OR test_case_id LIKE $${params.length}` +
+               ` OR assigned_to LIKE $${params.length} OR reported_by LIKE $${params.length})`;
+    }
+    const status = req.query.status as string;
+    if (status && STATUSES.includes(status)) {
+      params.push(status);
+      where += ` AND status = $${params.length}`;
+    }
+    const severity = req.query.severity as string;
+    if (severity && SEVERITIES.includes(severity)) {
+      params.push(severity);
+      where += ` AND severity = $${params.length}`;
+    }
+    const priority = req.query.priority as string;
+    if (priority && PRIORITIES.includes(priority)) {
+      params.push(priority);
+      where += ` AND priority = $${params.length}`;
+    }
+    const assignee = (req.query.assignee as string || '').trim();
+    if (assignee) {
+      params.push(`%${escapeLike(assignee)}%`);
+      where += ` AND assigned_to LIKE $${params.length}`;
+    }
+
+    const countRes = await pool.query(`SELECT COUNT(*) AS count FROM bugs${where}`, params);
+    const total = parseInt(countRes.rows[0].count);
+
+    const dataRes = await pool.query(
+      `SELECT * FROM bugs${where}
+       ORDER BY created_at DESC
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset],
+    );
+
+    res.json({
+      bugs: dataRes.rows,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
+  } catch (err: any) {
+    console.error('List bugs error:', err.message);
+    res.status(500).json({ error: 'Failed to list bugs' });
+  }
+});
+
+// GET /stats — dashboard counts by status and severity
+router.get('/stats', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const result = await pool.query(
+      `SELECT status, severity, COUNT(*) AS count FROM bugs
+       WHERE tenant_id = $1 GROUP BY status, severity`,
+      [user.tenantId],
+    );
+
+    const byStatus: Record<string, number> = {};
+    const bySeverity: Record<string, number> = {};
+    let total = 0;
+    for (const row of result.rows) {
+      const count = parseInt(row.count);
+      byStatus[row.status] = (byStatus[row.status] || 0) + count;
+      bySeverity[row.severity] = (bySeverity[row.severity] || 0) + count;
+      total += count;
+    }
+    res.json({ total, byStatus, bySeverity });
+  } catch (err: any) {
+    console.error('Bug stats error:', err.message);
+    res.status(500).json({ error: 'Failed to load bug stats' });
+  }
+});
+
+// GET /events — live SSE stream, channel derived server-side from the caller's tenant
+router.get('/events', (req: Request, res: Response) => {
+  const user = req.user!;
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  res.write(`data: ${JSON.stringify({ type: 'connected', timestamp: new Date().toISOString() })}\n\n`);
+  registerSSEConnection(bugChannel(user.tenantId), res);
+
+  const keepalive = setInterval(() => {
+    try { res.write(`: keepalive\n\n`); } catch { clearInterval(keepalive); }
+  }, 30000);
+  req.on('close', () => clearInterval(keepalive));
+});
+
+// GET /ado/status — is Azure DevOps connected for this tenant? (drives the
+// "Raise in Azure DevOps" UI in the Bug Tracker)
+router.get('/ado/status', async (req: Request, res: Response) => {
+  try {
+    const status = await getAdoStatus(req.user!.tenantId);
+    res.json(status);
+  } catch (err: any) {
+    console.error('Bug ADO status error:', err.message);
+    res.status(500).json({ error: 'Failed to check Azure DevOps status' });
+  }
+});
+
+// POST /ado/push — raise the selected bug(s) in Azure DevOps as Bug work items.
+// Body: { ids: string[] }. Returns a per-bug result so the UI can report
+// exactly which succeeded / failed. Already-pushed bugs are skipped.
+router.post('/ado/push', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter((x: any) => UUID_RE.test(String(x))) : [];
+    if (ids.length === 0) { res.status(400).json({ error: 'ids (array of bug UUIDs) is required' }); return; }
+
+    const creds = await getAdoCreds(user.tenantId);
+    if (!creds) {
+      res.status(400).json({ error: 'Not connected to Azure DevOps. Connect it in System Configuration → Requirement Sources first.' });
+      return;
+    }
+
+    const results: { id: string; ok: boolean; adoId?: number; adoUrl?: string; error?: string }[] = [];
+    for (const id of ids) {
+      const bug = await findBug(id, user.tenantId);
+      if (!bug) { results.push({ id, ok: false, error: 'Bug not found' }); continue; }
+      if (bug.ado_work_item_id) {
+        results.push({ id, ok: true, adoId: bug.ado_work_item_id, adoUrl: bug.ado_url, error: 'Already raised' });
+        continue;
+      }
+      try {
+        const created = await createAdoBug(creds, {
+          title: bug.title,
+          description: bug.description || undefined,
+          stepsToReproduce: bug.steps_to_reproduce || undefined,
+          expectedResult: bug.expected_result || undefined,
+          actualResult: bug.actual_result || undefined,
+          environment: bug.environment || undefined,
+          priority: bug.priority,
+          severity: bug.severity,
+          tags: Array.isArray(bug.tags) ? bug.tags : [],
+        });
+        const upd = await pool.query(
+          `UPDATE bugs SET ado_work_item_id = $1, ado_url = $2, ado_pushed_at = now(), updated_at = now()
+           WHERE id = $3 AND tenant_id = $4 RETURNING *`,
+          [created.id, created.url, id, user.tenantId],
+        );
+        await logActivity(id, user.tenantId, 'ado_raised', { adoId: created.id, adoUrl: created.url }, user.displayName || user.username);
+        emitBugEvent(user.tenantId, 'bug_updated', { bugId: id, bug: upd.rows[0] });
+        results.push({ id, ok: true, adoId: created.id, adoUrl: created.url });
+      } catch (e: any) {
+        const detail = e?.response?.data?.message || e?.message || 'Failed to create Azure DevOps work item';
+        console.error(`Bug ADO push error [${id}]:`, detail);
+        results.push({ id, ok: false, error: detail });
+      }
+    }
+
+    const raised = results.filter((r) => r.ok && r.error !== 'Already raised').length;
+    res.json({ ok: true, raised, results, project: creds.project, org: creds.org });
+  } catch (err: any) {
+    console.error('Bug ADO push error:', err.message);
+    res.status(500).json({ error: 'Failed to raise bugs in Azure DevOps' });
+  }
+});
+
+// DELETE /:id/ado — delete just the Azure DevOps work item a bug was raised as
+// (moves it to the ADO Recycle Bin) and clear the link locally. The IntelliQE
+// bug itself stays and becomes raisable again. If someone already deleted the
+// work item in ADO (404), the link is still cleared.
+router.delete('/:id/ado', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const bugId = req.params.id as string;
+    if (!UUID_RE.test(bugId)) { res.status(404).json({ error: 'Bug not found' }); return; }
+
+    const existing = await findBug(bugId, user.tenantId);
+    if (!existing) { res.status(404).json({ error: 'Bug not found' }); return; }
+    if (!existing.ado_work_item_id) {
+      res.status(400).json({ error: 'This bug has not been raised in Azure DevOps' });
+      return;
+    }
+
+    const creds = await getAdoCreds(user.tenantId);
+    if (!creds) {
+      res.status(400).json({ error: 'Not connected to Azure DevOps. Connect it in System Configuration → Requirement Sources first.' });
+      return;
+    }
+
+    const adoId = Number(existing.ado_work_item_id);
+    let alreadyGone = false;
+    try {
+      await deleteAdoWorkItem(creds, adoId);
+    } catch (e: any) {
+      if (e?.response?.status === 404) {
+        alreadyGone = true;
+      } else {
+        const detail = e?.response?.data?.message || e?.message || 'Failed to delete the Azure DevOps work item';
+        console.error(`Bug ADO remove error [${bugId} → #${adoId}]:`, detail);
+        res.status(502).json({ error: detail });
+        return;
+      }
+    }
+
+    const upd = await pool.query(
+      `UPDATE bugs SET ado_work_item_id = NULL, ado_url = NULL, ado_pushed_at = NULL, updated_at = now()
+       WHERE id = $1 AND tenant_id = $2 RETURNING *`,
+      [bugId, user.tenantId],
+    );
+    await logActivity(
+      bugId, user.tenantId, 'ado_removed',
+      { adoId, ...(alreadyGone ? { note: 'work item was already deleted in Azure DevOps' } : {}) },
+      user.displayName || user.username,
+    );
+    emitBugEvent(user.tenantId, 'bug_updated', { bugId, bug: upd.rows[0] });
+
+    res.json({ ok: true, adoId, alreadyGone });
+  } catch (err: any) {
+    console.error('Bug ADO remove error:', err.message);
+    res.status(500).json({ error: 'Failed to delete the Azure DevOps work item' });
+  }
+});
+
+// GET /:id — full bug detail + activity timeline
+router.get('/:id', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const bugId = req.params.id as string;
+    if (!UUID_RE.test(bugId)) { res.status(404).json({ error: 'Bug not found' }); return; }
+
+    const bug = await findBug(bugId, user.tenantId);
+    if (!bug) { res.status(404).json({ error: 'Bug not found' }); return; }
+
+    const activityRes = await pool.query(
+      `SELECT * FROM bug_activity WHERE bug_id = $1 ORDER BY created_at DESC`,
+      [bugId],
+    );
+    res.json({ bug, activity: activityRes.rows });
+  } catch (err: any) {
+    console.error('Get bug error:', err.message);
+    res.status(500).json({ error: 'Failed to load bug' });
+  }
+});
+
+// POST / — report a new bug
+router.post('/', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const body = req.body || {};
+
+    const title = String(body.title || '').trim();
+    if (!title) { res.status(400).json({ error: 'title is required' }); return; }
+    const enumError = validateEnums(body);
+    if (enumError) { res.status(400).json({ error: enumError }); return; }
+    const lengthError = validateLengths(body);
+    if (lengthError) { res.status(400).json({ error: lengthError }); return; }
+
+    const tags = Array.isArray(body.tags)
+      ? body.tags.map((t: any) => String(t).trim()).filter(Boolean)
+      : [];
+
+    const result = await pool.query(
+      `INSERT INTO bugs (
+         tenant_id, title, description, severity, priority, status,
+         environment, module, steps_to_reproduce, expected_result, actual_result,
+         tags, test_run_id, test_case_id, reported_by, assigned_to
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       RETURNING *`,
+      [
+        user.tenantId,
+        title,
+        body.description || null,
+        body.severity || 'medium',
+        body.priority || 'P2',
+        body.status && STATUSES.includes(body.status) ? body.status : 'open',
+        body.environment || null,
+        body.module || null,
+        body.steps_to_reproduce || null,
+        body.expected_result || null,
+        body.actual_result || null,
+        JSON.stringify(tags),
+        body.test_run_id || null,
+        body.test_case_id || null,
+        user.displayName || user.username,
+        body.assigned_to || null,
+      ],
+    );
+    const bug = result.rows[0];
+
+    await logActivity(bug.id, user.tenantId, 'created', null, user.displayName || user.username);
+    emitBugEvent(user.tenantId, 'bug_created', { bugId: bug.id, bug });
+
+    res.json({ ok: true, bug });
+  } catch (err: any) {
+    console.error('Create bug error:', err.message);
+    res.status(500).json({ error: 'Failed to create bug' });
+  }
+});
+
+// PUT /:id — edit fields (also used to reopen / change status)
+router.put('/:id', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const bugId = req.params.id as string;
+    if (!UUID_RE.test(bugId)) { res.status(404).json({ error: 'Bug not found' }); return; }
+
+    const existing = await findBug(bugId, user.tenantId);
+    if (!existing) { res.status(404).json({ error: 'Bug not found' }); return; }
+
+    const body = req.body || {};
+    const enumError = validateEnums(body);
+    if (enumError) { res.status(400).json({ error: enumError }); return; }
+    const lengthError = validateLengths(body);
+    if (lengthError) { res.status(400).json({ error: lengthError }); return; }
+    if (body.title !== undefined && !String(body.title).trim()) {
+      res.status(400).json({ error: 'title cannot be empty' }); return;
+    }
+
+    // Optimistic concurrency: the editor sends the updated_at it loaded; if the
+    // bug changed underneath it, reject rather than silently overwrite.
+    if (body.expected_updated_at && existing.updated_at !== body.expected_updated_at) {
+      res.status(409).json({ error: 'This bug was modified by someone else. Close and reopen the editor to get the latest version.' });
+      return;
+    }
+
+    const sets: string[] = [];
+    const params: any[] = [];
+    const changes: Record<string, { from: any; to: any }> = {};
+
+    for (const field of EDITABLE_FIELDS) {
+      if (body[field] === undefined) continue;
+      let value = body[field];
+      if (field === 'title') value = String(value).trim();
+      if (field === 'tags') {
+        value = JSON.stringify(
+          (value || []).map((t: any) => String(t).trim()).filter(Boolean),
+        );
+      }
+      if (value === '') value = null;
+
+      const before = field === 'tags' ? JSON.stringify(existing.tags || []) : existing[field];
+      if (before !== value) changes[field] = { from: existing[field], to: body[field] };
+
+      params.push(value);
+      sets.push(`${field} = $${params.length}`);
+    }
+
+    if (sets.length === 0) { res.status(400).json({ error: 'No fields to update' }); return; }
+
+    // Clear the revoke reason when a revoked bug is moved back to an active status
+    if (body.status && body.status !== 'revoked' && existing.status === 'revoked') {
+      sets.push(`revoke_reason = NULL`);
+    }
+
+    params.push(bugId, user.tenantId);
+    const result = await pool.query(
+      `UPDATE bugs SET ${sets.join(', ')}, updated_at = now()
+       WHERE id = $${params.length - 1} AND tenant_id = $${params.length}
+       RETURNING *`,
+      params,
+    );
+    const bug = result.rows[0];
+
+    if (Object.keys(changes).length > 0) {
+      const action = changes.status ? 'status_changed' : 'updated';
+      await logActivity(bugId, user.tenantId, action, { changes }, user.displayName || user.username);
+    }
+    emitBugEvent(user.tenantId, 'bug_updated', { bugId, bug });
+
+    res.json({ ok: true, bug });
+  } catch (err: any) {
+    console.error('Update bug error:', err.message);
+    res.status(500).json({ error: 'Failed to update bug' });
+  }
+});
+
+// POST /:id/revoke — withdraw a bug (kept in history, excluded from active work)
+router.post('/:id/revoke', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const bugId = req.params.id as string;
+    if (!UUID_RE.test(bugId)) { res.status(404).json({ error: 'Bug not found' }); return; }
+
+    const existing = await findBug(bugId, user.tenantId);
+    if (!existing) { res.status(404).json({ error: 'Bug not found' }); return; }
+    if (existing.status === 'revoked') {
+      res.status(400).json({ error: 'Bug is already revoked' }); return;
+    }
+
+    const reason = String(req.body?.reason || '').trim().slice(0, 500) || null;
+    const result = await pool.query(
+      `UPDATE bugs SET status = 'revoked', revoke_reason = $1, updated_at = now()
+       WHERE id = $2 AND tenant_id = $3
+       RETURNING *`,
+      [reason, bugId, user.tenantId],
+    );
+    const bug = result.rows[0];
+
+    await logActivity(bugId, user.tenantId, 'revoked', reason ? { reason } : null,
+      user.displayName || user.username);
+    emitBugEvent(user.tenantId, 'bug_updated', { bugId, bug });
+
+    res.json({ ok: true, bug });
+  } catch (err: any) {
+    console.error('Revoke bug error:', err.message);
+    res.status(500).json({ error: 'Failed to revoke bug' });
+  }
+});
+
+// DELETE /:id — permanently remove a bug (activity rows cascade)
+router.delete('/:id', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const bugId = req.params.id as string;
+    if (!UUID_RE.test(bugId)) { res.status(404).json({ error: 'Bug not found' }); return; }
+
+    const existing = await findBug(bugId, user.tenantId);
+    if (!existing) { res.status(404).json({ error: 'Bug not found' }); return; }
+
+    // Cascade the delete to Azure DevOps when the bug was raised there — move the
+    // linked work item to the ADO Recycle Bin. Best-effort: a failure here (perms,
+    // already deleted, disconnected) must NOT block removing the local bug; we
+    // report it back so the UI can warn.
+    let adoDeleted = false;
+    let adoError: string | undefined;
+    if (existing.ado_work_item_id) {
+      try {
+        const creds = await getAdoCreds(user.tenantId);
+        if (!creds) {
+          adoError = 'Azure DevOps is not connected — the local bug was deleted but its work item remains.';
+        } else {
+          await deleteAdoWorkItem(creds, Number(existing.ado_work_item_id));
+          adoDeleted = true;
+        }
+      } catch (e: any) {
+        adoError = e?.response?.data?.message || e?.message || 'Failed to delete the Azure DevOps work item.';
+        console.error(`Bug ADO delete error [${bugId} → #${existing.ado_work_item_id}]:`, adoError);
+      }
+    }
+
+    await pool.query(`DELETE FROM bugs WHERE id = $1 AND tenant_id = $2`, [bugId, user.tenantId]);
+    emitBugEvent(user.tenantId, 'bug_deleted', { bugId });
+
+    res.json({ ok: true, adoDeleted, adoError, adoId: existing.ado_work_item_id || undefined });
+  } catch (err: any) {
+    console.error('Delete bug error:', err.message);
+    res.status(500).json({ error: 'Failed to delete bug' });
+  }
+});
+
+export default router;

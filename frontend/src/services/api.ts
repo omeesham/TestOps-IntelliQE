@@ -1,5 +1,7 @@
 import axios from 'axios';
 import { encryptField, encryptSensitiveFields } from '@/utils/crypto';
+import { log, newId } from '@/utils/logger';
+import { normalizeError } from '@/utils/apiError';
 
 const api = axios.create({
   baseURL: '/api',
@@ -7,22 +9,80 @@ const api = axios.create({
   timeout: 120_000, // 2 min — generous; UI shows TIMEOUT classification past this
 });
 
-// Attach auth token to every request
+// Long timeout for the AI pipeline stages. A single stage chains several
+// sequential LLM calls (and Playwright for execution/heal) and is driven by the
+// functionality, not a fixed size — so the default 2-min cap is far too short.
+const PIPELINE_TIMEOUT_MS = 900_000; // 15 min
+
+// Per-request tracing metadata is stashed on the axios config so the response
+// interceptor can compute latency and echo the correlation id.
+interface TraceMeta { start: number; requestId: string; }
+function meta(config: any): TraceMeta | undefined { return config?.metadata; }
+
+// ─────────────────────────────────────────────────────────────────
+// Request interceptor
+//   - attach the bearer token
+//   - mint an X-Request-Id (a UUID) and send it; the backend reuses this exact
+//     id (request-context.middleware) so a client log lines up 1:1 with the
+//     server log + audit_log for that call
+//   - stamp a start time for latency measurement + drop a breadcrumb
+// ─────────────────────────────────────────────────────────────────
 api.interceptors.request.use((config) => {
   const token = sessionStorage.getItem('intelliqe_token');
   if (token) config.headers.Authorization = `Bearer ${token}`;
+
+  const requestId = newId();
+  config.headers['X-Request-Id'] = requestId;
+  (config as any).metadata = { start: Date.now(), requestId } satisfies TraceMeta;
+
+  log.debug('api', `→ ${config.method?.toUpperCase() || 'GET'} ${config.url}`, {
+    requestId,
+    method: config.method,
+    url: config.url,
+  });
   return config;
 });
 
 // ─────────────────────────────────────────────────────────────────
 // Response interceptor — global handling that every page benefits from
+//   - success: log the resolved call with status + latency + requestId
 //   - 401: session expired -> clear and bounce to /login (preserves return path)
-//   - everything else: pass through to be normalized at the call site
+//   - everything else: log the failure (reason + correlation id) then pass
+//     through to be normalized at the call site
 // ─────────────────────────────────────────────────────────────────
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    const m = meta(res.config);
+    const requestId = (res.headers?.['x-request-id'] as string) || m?.requestId;
+    const durationMs = m ? Date.now() - m.start : undefined;
+    log.debug('api', `← ${res.status} ${res.config.method?.toUpperCase() || 'GET'} ${res.config.url}`, {
+      requestId,
+      status: res.status,
+      durationMs,
+      url: res.config.url,
+    });
+    return res;
+  },
   (err) => {
     const status = err?.response?.status;
+    const m = meta(err?.config);
+    const norm = normalizeError(err);
+    const requestId = norm.requestId || m?.requestId;
+    const durationMs = m ? Date.now() - m.start : undefined;
+
+    // A failed network/API call is the single most useful thing to capture:
+    // what was called, why it failed (normalized code + message), the backend
+    // correlation id, and how long it took. 5xx/network → error; 4xx → warn.
+    const level = !status || status >= 500 ? 'error' : 'warn';
+    log[level]('api', `✗ ${status || 'ERR'} ${err?.config?.method?.toUpperCase() || 'GET'} ${err?.config?.url} — ${norm.code}`, {
+      requestId,
+      status,
+      durationMs,
+      code: norm.code,
+      reason: norm.message,
+      url: err?.config?.url,
+      method: err?.config?.method,
+    });
 
     if (status === 401) {
       // Skip auto-redirect on the login endpoint itself — let the form show
@@ -62,11 +122,6 @@ export async function loginUser(username: string, password: string) {
     username,
     password: encryptField(password),
   });
-  return data;
-}
-
-export async function ssoCallback(code: string, redirectUri: string) {
-  const { data } = await api.post('/auth/sso/callback', { code, redirectUri });
   return data;
 }
 
@@ -158,7 +213,9 @@ export interface GitPublishResult {
 }
 
 export async function publishToGit(payload: {
-  scripts: { fileName: string; code: string }[];
+  scripts: { fileName: string; code: string; path?: string }[];
+  pageObjects?: { path: string; code: string }[];
+  testCases?: any[];
   branch?: string;
   title?: string;
   description?: string;
@@ -168,6 +225,20 @@ export async function publishToGit(payload: {
   integrationId?: 'github' | 'gitlab' | 'bitbucket';
 }): Promise<GitPublishResult> {
   const { data } = await api.post('/git/publish', payload, { timeout: 120_000 });
+  return data;
+}
+
+/** Read-only connectivity check for a git-repo integration — verifies the token
+ *  can reach the repo and the default branch exists, without creating a PR.
+ *  Pass form values to test before saving, or just `integrationId` for a saved one. */
+export async function testGitConnection(payload: {
+  integrationId?: string;
+  repo_url?: string;
+  branch?: string;
+  access_token?: string;
+  username?: string;
+}): Promise<{ ok: boolean; message?: string; error?: string; canPush?: boolean }> {
+  const { data } = await api.post('/git/test', payload, { timeout: 30_000 });
   return data;
 }
 
@@ -197,44 +268,9 @@ export async function extractDocumentText(file: File): Promise<ExtractedDocument
 }
 
 /* ─────────────────────────────────────────────────────────────
-   Mobile app metadata (APK/IPA) — used by the Mobile Automation path
-   ───────────────────────────────────────────────────────────── */
-export interface MobileAppMetadata {
-  platform: 'android' | 'ios';
-  fileName: string;
-  sizeBytes: number;
-  appName?: string;
-  packageName?: string;
-  mainActivity?: string;
-  bundleId?: string;
-  versionName?: string;
-  versionCode?: string;
-  permissions?: string[];
-  warning?: string;
-}
-
-export async function extractMobileAppMetadata(file: File): Promise<MobileAppMetadata> {
-  const form = new FormData();
-  form.append('file', file);
-  const { data } = await api.post('/mobile/extract', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-    // Mobile builds are large; allow generous time to upload + parse.
-    timeout: 180_000,
-  });
-  return data;
-}
-
-/* ─────────────────────────────────────────────────────────────
    Test generation (chat wizard core)
    ───────────────────────────────────────────────────────────── */
-/**
- * Start a generation run. The backend now runs the multi-stage Claude pipeline
- * as a BACKGROUND job and returns `{ runId }` immediately (202) — no long-held
- * request, so this can never hit an axios timeout. Progress + the final result
- * stream over SSE (subscribeToPipelineEvents); the result is also fetchable via
- * getGenerationResult (used as a poll fallback).
- */
-export async function startGeneration(
+export async function generateTests(
   requirements: string,
   testType?: string,
   options?: {
@@ -245,26 +281,9 @@ export async function startGeneration(
     exploreMode?: boolean;
     /** Optional credentials so the explore agent can log in. */
     roles?: { roleName?: string; username: string; password: string }[];
-    /**
-     * Application Setup integration id (e.g. "app-acme-portal"). When provided,
-     * the backend loads the saved URL + credentials for this app and fills in
-     * any details the client didn't send — notably the role password, which is
-     * never exposed to the browser. Client-supplied values take precedence.
-     */
-    appId?: string;
-    /** Mobile Application Automation — native platform + uploaded build metadata. */
-    platform?: 'android' | 'ios';
-    appMetadata?: {
-      packageName?: string;
-      bundleId?: string;
-      mainActivity?: string;
-      versionName?: string;
-      permissions?: string[];
-      fileName?: string;
-    };
   },
-): Promise<{ runId: string }> {
-  const { data } = await api.post('/generate', {
+) {
+  const body = {
     requirements,
     testType,
     targetUrl: options?.targetUrl,
@@ -272,31 +291,26 @@ export async function startGeneration(
     appName: options?.appName,
     exploreMode: options?.exploreMode,
     roles: options?.roles,
-    appId: options?.appId,
-    platform: options?.platform,
-    appMetadata: options?.appMetadata,
-  });
-  return data;
-}
+  };
+  const post = () => api.post('/generate', body, { timeout: PIPELINE_TIMEOUT_MS });
 
-export interface GenerationResult {
-  status: 'running' | 'done' | 'error' | 'unknown';
-  stage?: string;
-  detail?: string;
-  result?: any;
-  error?: string;
-  code?: string;
-}
-
-/** Fetch a generation job's status/result by runId. Returns the 404 body (status:'unknown') rather than throwing if the job has expired. */
-export async function getGenerationResult(runId: string): Promise<GenerationResult> {
+  // A connection that drops EARLY — the dev backend restarting, or a brief
+  // network blip — surfaces to the user as "Test generation failed: Network
+  // Error", losing the whole flow. Retry ONCE, but only when the socket failed
+  // FAST (< 15s): a quick failure means no long generation had started, so
+  // re-issuing is safe and never runs two generations at once. A real timeout
+  // (ECONNABORTED after the full window) or an HTTP error is NOT retried.
+  const startedAt = Date.now();
   try {
-    const { data } = await api.get(`/generate/result/${runId}`);
+    const { data } = await post();
     return data;
   } catch (err: any) {
-    const data = err?.response?.data;
-    if (data && typeof data === 'object') return data as GenerationResult;
-    throw err;
+    const fastConnDrop =
+      !err?.response && err?.code !== 'ECONNABORTED' && Date.now() - startedAt < 15_000;
+    if (!fastConnDrop) throw err;
+    await new Promise((r) => setTimeout(r, 1500));
+    const { data } = await post();
+    return data;
   }
 }
 
@@ -308,8 +322,76 @@ export async function executeTests(
     requirements,
     targetUrl: options?.targetUrl,
     module: options?.module,
-  });
+  }, { timeout: PIPELINE_TIMEOUT_MS });
   return data;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Stateless pipeline-flow stages (chat wizard).
+   Each stage operates on the artifacts produced by the previous one, so
+   test-case ids / scripts / results stay aligned end-to-end. The target
+   application + credentials are resolved server-side from
+   System Configuration → Application Setup.
+   ───────────────────────────────────────────────────────────── */
+
+/** A generated Page Object (POM). Shared across specs; carried alongside scripts. */
+export interface GeneratedPageObject { path: string; className: string; module: string; methods: string[]; code: string; }
+/** A generated spec, with its POM destination path + the page objects it imports. */
+export interface GeneratedScript { testCaseId: string; fileName: string; code: string; path?: string; uses?: string[]; }
+
+/** An inline target-application override for runs when no Application is
+ *  configured under System Configuration. The URL/credentials the user types in
+ *  the chat flow are used instead of a saved app. Password is encrypted in transit. */
+export interface TargetOverride { targetUrl: string; username?: string; password?: string }
+function targetBody(t?: TargetOverride): Record<string, any> {
+  if (!t?.targetUrl?.trim()) return {};
+  return {
+    targetUrl: t.targetUrl.trim(),
+    ...(t.username ? { username: t.username } : {}),
+    ...(t.password ? { password: encryptField(t.password) } : {}),
+  };
+}
+
+/** Stage 3 — generate POM page objects + specs for the given (possibly edited) test cases. */
+export async function generateScripts(testCases: any[], appId?: string, target?: TargetOverride) {
+  const { data } = await api.post('/pipeline-flow/scripts', { testCases, appId, ...targetBody(target) }, { timeout: PIPELINE_TIMEOUT_MS });
+  return data as { scripts: GeneratedScript[]; pageObjects: GeneratedPageObject[] };
+}
+
+/** Stage 4 — execute the given scripts (+ page objects) against the configured app.
+ *  Pass testRunId (the saved run) so the Allure report is built for that run and
+ *  shows up on the Reports page. `target` supplies an inline URL when no app is configured. */
+export async function executePipeline(testCases: any[], scripts: any[], pageObjects: any[] = [], appId?: string, testRunId?: string, target?: TargetOverride) {
+  const { data } = await api.post('/pipeline-flow/execute', { testCases, scripts, pageObjects, appId, testRunId, ...targetBody(target) }, { timeout: PIPELINE_TIMEOUT_MS });
+  return data as {
+    executionDetails: { testCaseId: string; scenario: string; status: string; durationMs?: number; error?: string }[];
+    failureReason: string | null;
+    reportUrl?: string;
+    app: { name: string; targetUrl?: string } | null;
+    summary: { total: number; passed: number; failed: number; executed: boolean; reason?: string };
+  };
+}
+
+/** Stage 5 — heal failing tests then re-execute the suite. */
+export async function healPipeline(
+  testCases: any[],
+  scripts: any[],
+  executionDetails: { testCaseId: string; status: string; error?: string }[],
+  pageObjects: any[] = [],
+  appId?: string,
+  testRunId?: string,
+  target?: TargetOverride,
+) {
+  const { data } = await api.post('/pipeline-flow/heal', { testCases, scripts, executionDetails, pageObjects, appId, testRunId, ...targetBody(target) }, { timeout: PIPELINE_TIMEOUT_MS });
+  return data as {
+    scripts: GeneratedScript[];
+    pageObjects: GeneratedPageObject[];
+    executionDetails: { testCaseId: string; scenario: string; status: string; durationMs?: number; error?: string }[];
+    healingLog: { testCaseId: string; error: string; fix: string; result: 'fixed' | 'unchanged' | 'unknown' }[];
+    reportUrl?: string;
+    app: { name: string; targetUrl?: string } | null;
+    summary: { total: number; passed: number; failed: number; executed: boolean; reason?: string };
+  };
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -322,16 +404,6 @@ export async function saveTestCases(payload: {
   source?: string;
   columns: string[];
   testCases: any[];
-  /** Mobile Application Automation — marks the run so scripts/execution use Appium. */
-  platform?: 'android' | 'ios';
-  appMetadata?: {
-    packageName?: string;
-    bundleId?: string;
-    mainActivity?: string;
-    versionName?: string;
-    permissions?: string[];
-    fileName?: string;
-  };
 }) {
   const { data } = await api.post('/test-cases/save', payload);
   return data;
@@ -463,43 +535,13 @@ export async function deleteAutomationScript(id: string) {
   return data;
 }
 
-export async function generateScriptsForRun(testRunId: string, regenerate = false) {
-  // POM script generation runs several batched Claude calls server-side; allow
-  // up to 6 min so the default 2-min client timeout doesn't abort it.
-  const { data } = await api.post(
-    `/automation-scripts/generate/${testRunId}`,
-    { regenerate },
-    { timeout: 360_000 },
-  );
+export async function generateScriptsForRun(testRunId: string) {
+  const { data } = await api.post(`/automation-scripts/generate/${testRunId}`);
   return data;
 }
 
 export async function getScriptsByRun(testRunId: string) {
   const { data } = await api.get(`/automation-scripts/by-run/${testRunId}`);
-  return data;
-}
-
-// Actually run the saved Playwright scripts for a run and return per-test
-// pass/fail. Real browser execution can take a few minutes for a full suite.
-export async function executeScriptsForRun(testRunId: string) {
-  const { data } = await api.post(`/automation-scripts/execute/${testRunId}`, {}, { timeout: 600_000 });
-  return data;
-}
-
-// Auto-heal the failing scripts for a run: the backend AI-fixes each failing
-// script (using its real code + real error + intent), saves the fix, re-runs the
-// healed subset, and returns per-test results keyed by testCaseId (each detail
-// carries a `healFix` description and `healed` flag). AI + browser re-run can
-// take a few minutes, so use the long timeout.
-export async function healScriptsForRun(
-  testRunId: string,
-  failures: { testCaseId: string; error?: string }[],
-) {
-  const { data } = await api.post(
-    `/automation-scripts/heal/${testRunId}`,
-    { failures },
-    { timeout: 600_000 },
-  );
   return data;
 }
 
@@ -511,74 +553,8 @@ export async function getReportsSummary() {
   return data;
 }
 
-export interface CoverageReport {
-  range: { from: string | null; to: string | null; granularity: 'day' | 'month' };
-  summary: {
-    total: number; scripted: number; executed: number; passed: number; failed: number;
-    notRun: number; totalRuns: number; automationCoverage: number; passRate: number;
-  };
-  byStatus: { name: string; value: number }[];
-  byType: { name: string; value: number }[];
-  byPriority: { name: string; value: number }[];
-  byFeature: { name: string; value: number }[];
-  trend: { bucket: string; total: number; passed: number; failed: number }[];
-  runs: {
-    id: string; storyKey: string | null; storyTitle: string | null; source: string | null;
-    platform: string | null; createdAt: string; total: number; passed: number; failed: number; notRun: number;
-  }[];
-}
-
-export async function getCoverageReport(range?: { from?: string; to?: string }): Promise<CoverageReport> {
-  const params: Record<string, string> = {};
-  if (range?.from) params.from = range.from;
-  if (range?.to) params.to = range.to;
-  const { data } = await api.get('/reports/coverage', { params });
-  return data;
-}
-
-/* ─────────────────────────────────────────────────────────────
-   TestRail integration (TestRail = data source, IntelliQE = viz)
-   ───────────────────────────────────────────────────────────── */
-export interface TestRailStatus {
-  connected: boolean; baseUrl: string | null; email: string | null;
-  lastSyncedAt: string | null; syncStatus: string | null; projectsCount: number; runsCount: number;
-}
-export interface TestRailDashboardData {
-  projects: { id: number; name: string; isCompleted: boolean }[];
-  lastSyncedAt: string | null;
-  summary: { runs: number; total: number; passed: number; failed: number; blocked: number; retest: number; untested: number; executed: number; passRate: number };
-  byStatus: { name: string; value: number }[];
-  perRun: { id: number; name: string; passed: number; failed: number; blocked: number; untested: number; total: number; createdOn: string | null }[];
-  trend: { bucket: string; passed: number; failed: number; blocked: number }[];
-  milestones: { id: number; name: string; isCompleted: boolean; startedOn: string | null; dueOn: string | null }[];
-}
-
-export async function getTestRailStatus(): Promise<TestRailStatus> {
-  const { data } = await api.get('/testrail/status');
-  return data;
-}
-export async function connectTestRail(baseUrl: string, email: string, apiKey: string) {
-  const { data } = await api.post('/testrail/connect', { baseUrl, email, apiKey: encryptField(apiKey) }, { timeout: 120_000 });
-  return data;
-}
-export async function syncTestRail() {
-  const { data } = await api.post('/testrail/sync', {}, { timeout: 180_000 });
-  return data;
-}
-export async function getTestRailDashboard(projectId?: number): Promise<TestRailDashboardData> {
-  const { data } = await api.get('/testrail/dashboard', { params: projectId ? { projectId } : {} });
-  return data;
-}
-export async function disconnectTestRail() {
-  const { data } = await api.delete('/testrail/disconnect');
-  return data;
-}
-
 export async function generateAllureReport(runId?: string) {
-  // Building the report normally reuses allure-results captured during the run
-  // (fast, ~3s). Worst case it re-executes the saved scripts, so allow up to
-  // 6 min rather than the default 2-min client timeout.
-  const { data } = await api.post('/allure/generate', { runId }, { timeout: 360_000 });
+  const { data } = await api.post('/allure/generate', { runId });
   return data;
 }
 
@@ -589,111 +565,61 @@ export async function getAllureReportStatus(runId?: string) {
   return data;
 }
 
-/* Custom branded HTML report — symmetric with the Allure functions above. */
-export async function generateHtmlReport(runId?: string) {
-  const { data } = await api.post('/html-report/generate', { runId }, { timeout: 120_000 });
-  return data;
-}
-
-export async function getHtmlReportStatus(runId?: string) {
-  const params: Record<string, string> = {};
-  if (runId) params.runId = runId;
-  const { data } = await api.get('/html-report/status', { params });
-  return data;
+/** The most recently generated report across all runs (used to show the latest by default). */
+export async function getLatestAllureReport() {
+  const { data } = await api.get('/allure/latest');
+  return data as { exists: boolean; runId?: string; generatedAt?: string; reportUrl?: string };
 }
 
 /* ─────────────────────────────────────────────────────────────
-   Execution Recordings (CDP screen capture of test runs + timing)
+   Reports history + export
    ───────────────────────────────────────────────────────────── */
-export interface RecordedTest {
-  testCaseId: string | null;
-  tcNumber: string | null;
-  title: string;
-  status: 'passed' | 'failed' | 'not_run';
-  durationMs: number;
-  /** Frame-bundle file name (fetch via getRecordingFrames), or null if none captured. */
-  framesFile: string | null;
-  frameCount: number;
-  /** First frame as base64 JPEG, for an instant poster without loading the bundle. */
-  posterJpg: string | null;
-  error?: string;
-}
-
-export interface ExecutionRecording {
+export interface ReportHistoryItem {
   runId: string;
-  recordedAt: string;
-  mode: 'frames';
-  totalDurationMs: number;
-  sumTestDurationMs: number;
-  passed: number;
-  failed: number;
-  total: number;
-  tests: RecordedTest[];
-  /** Set when no frames could be captured (non-Chromium host) — timing is still valid. */
-  captureUnavailable?: boolean;
-  note?: string;
-}
-
-/** A test's playable frames: each `jpg` is base64, shown at offset `tMs`. */
-export interface FrameBundle {
-  durationMs: number;
-  frames: { tMs: number; jpg: string }[];
-}
-
-export interface RecordingRun {
-  id: string;
+  generatedAt: string;
+  hasBasic: boolean;
+  hasAllure: boolean;
+  reportType: 'allure' | 'basic';
+  stats: { passed: number; failed: number; broken: number; skipped: number; total: number; passRate: number; durationMs: number } | null;
+  source: string;
+  story: string | null;
   storyKey: string | null;
-  storyTitle: string | null;
-  source: string | null;
-  createdAt: string;
-  scriptCount: number;
-  hasRecording: boolean;
-  recordedAt: string | null;
+  module: string | null;
+  submodule: string | null;
+  createdBy: string | null;
+  origin: string;
+}
+export interface ReportHistoryResponse {
+  items: ReportHistoryItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  facets: { sources: string[] };
 }
 
-export async function getRecordingRuns(): Promise<{ runs: RecordingRun[] }> {
-  const { data } = await api.get('/recordings/runs');
-  return data;
+export async function getReportsHistory(params: { page?: number; pageSize?: number; source?: string; type?: string; search?: string } = {}) {
+  const { data } = await api.get('/reports/history', { params });
+  return data as ReportHistoryResponse;
 }
 
-export async function getRecordingForRun(
-  testRunId: string,
-): Promise<{ exists: boolean; recording?: ExecutionRecording }> {
-  const { data } = await api.get(`/recordings/by-run/${testRunId}`);
-  return data;
-}
-
-// Fetch one test's frame bundle on demand (lazy — bundles can be large).
-export async function getRecordingFrames(
-  testRunId: string,
-  framesFile: string,
-): Promise<FrameBundle> {
-  const { data } = await api.get(`/recordings/frames/${testRunId}/${encodeURIComponent(framesFile)}`);
-  return data;
-}
-
-// Run the saved scripts with CDP screen recording on. Real browser execution can
-// take several minutes for a full suite, so allow a long timeout.
-// Pass `only` (test_case_ids / tc_numbers) to re-record just a subset — e.g. only
-// the failed tests — which merges into the existing recording.
-export async function recordExecutionForRun(
-  testRunId: string,
-  only?: string[],
-): Promise<{ ok: boolean; recording: ExecutionRecording }> {
-  const body = only && only.length ? { only } : {};
-  const { data } = await api.post(`/recordings/run/${testRunId}`, body, { timeout: 900_000 });
-  return data;
-}
-
-// Delete one test's recording from a run. `id` is the test's stable key
-// (testCaseId, tcNumber, or title). Returns the updated recording, or
-// exists:false when that was the last recording for the run.
-export async function deleteRecordingEntry(
-  testRunId: string,
-  id: string,
-): Promise<{ deleted: boolean; exists: boolean; recording: ExecutionRecording | null }> {
-  const { data } = await api.delete(`/recordings/${testRunId}`, { data: { id } });
-  return data;
+/** Download a report as Excel or PDF; triggers a browser download. */
+export async function downloadReportExport(runId: string, format: 'xlsx' | 'pdf') {
+  const res = await api.get(`/reports/${encodeURIComponent(runId)}/export`, {
+    params: { format },
+    responseType: 'blob',
+  });
+  const disposition = res.headers['content-disposition'] || '';
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = match?.[1] || `report.${format}`;
+  const url = window.URL.createObjectURL(new Blob([res.data]));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -750,6 +676,52 @@ export async function disconnectJira(username: string) {
 }
 
 /* ─────────────────────────────────────────────────────────────
+   Azure DevOps (PAT is encrypted in transit)
+   ───────────────────────────────────────────────────────────── */
+export async function connectAzureDevops(orgUrl: string, project: string, pat: string, areaPath?: string) {
+  const { data } = await api.post('/azure-devops/connect', {
+    orgUrl,
+    project,
+    pat: encryptField(pat),
+    areaPath: areaPath || undefined,
+  });
+  return data;
+}
+
+export async function getAzureDevopsStatus() {
+  const { data } = await api.get('/azure-devops/status');
+  return data;
+}
+
+/** Requirement-type work items (User Story, Bug, Feature, Epic, …). */
+export async function getAzureDevopsStories() {
+  const { data } = await api.get('/azure-devops/stories');
+  return data as { key: string; summary: string; type: string; state?: string }[];
+}
+
+/** All work items, or one type via `?type=`. */
+export async function getAzureDevopsWorkItems(type?: string) {
+  const { data } = await api.get('/azure-devops/work-items', { params: type ? { type } : undefined });
+  return data as { key: string; summary: string; type: string; state?: string }[];
+}
+
+/** Authored Test Case work items, with parsed steps. */
+export async function getAzureDevopsTestCases() {
+  const { data } = await api.get('/azure-devops/test-cases');
+  return data as { key: string; title: string; state?: string; steps: { step: number; action: string; expected: string }[] }[];
+}
+
+export async function getAzureDevopsStoryDetails(id: string) {
+  const { data } = await api.get(`/azure-devops/story/${encodeURIComponent(id)}`);
+  return data as { key: string; title: string; description?: string; acceptanceCriteria?: string; type?: string };
+}
+
+export async function disconnectAzureDevops() {
+  const { data } = await api.delete('/azure-devops/disconnect');
+  return data;
+}
+
+/* ─────────────────────────────────────────────────────────────
    Tenant-scoped integration configurations
    ───────────────────────────────────────────────────────────── */
 export async function getConfigurations() {
@@ -768,78 +740,117 @@ export async function connectIntegration(integrationId: string, configData: Reco
   return data;
 }
 
+/** Soft-disconnect — keeps the saved config so it can be reconnected later. */
 export async function disconnectIntegration(integrationId: string) {
+  const { data } = await api.post(`/configurations/${integrationId}/disconnect`);
+  return data;
+}
+
+/** Reactivate a previously-disconnected integration (reuses its stored config). */
+export async function reconnectIntegration(integrationId: string) {
+  const { data } = await api.post(`/configurations/${integrationId}/reconnect`);
+  return data;
+}
+
+/** Permanently remove an integration configuration. */
+export async function deleteIntegration(integrationId: string) {
   const { data } = await api.delete(`/configurations/${integrationId}`);
   return data;
 }
 
+export async function testNotificationIntegration(
+  integrationId: string,
+  config?: { webhook_url?: string },
+) {
+  const body: Record<string, any> = {};
+  // Ad-hoc test (before saving): send the entered webhook URL, encrypted in transit.
+  if (config?.webhook_url) body.webhook_url = encryptField(config.webhook_url);
+  const { data } = await api.post(`/configurations/${integrationId}/test`, body);
+  return data;
+}
+
 /* ─────────────────────────────────────────────────────────────
-   LLM provider configuration — connection test + model discovery
+   LLM Configuration — centralized provider connectivity
    ───────────────────────────────────────────────────────────── */
-export type LLMConnectionStatus =
-  | 'connected' | 'invalid-key' | 'failed' | 'timeout' | 'not-configured';
-
-export interface LLMTestResult {
-  ok: boolean;
-  status: LLMConnectionStatus;
-  message?: string;
-  error?: string;
+export interface LlmProviderConfig {
+  provider: 'anthropic' | 'gemini' | 'openai';
+  label: string;
+  configured: boolean;
+  status: 'connected' | 'not_configured' | 'invalid_credentials' | 'connection_failed';
+  /** Anthropic only: 'api_key' (API credits) or 'claude_code' (subscription). */
+  authMethod?: 'api_key' | 'claude_code';
+  /** Claude Code transport: 'api' (OAuth→API) or 'cli' (local claude CLI). */
+  claudeCodeMode?: 'api' | 'cli';
+  model: string | null;
+  /** Per-agent model overrides (stage → model). Empty object when unset. */
+  agentModels?: Record<string, string>;
+  /** Reasoning effort (low|medium|high|xhigh|max). Null = provider default. */
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
+  /** Extended ("ultra") thinking toggle. */
+  extendedThinking?: boolean;
+  baseUrl: string;
+  maskedKey: string | null;
+  /** Masked Claude Code OAuth token (Anthropic + claude_code). */
+  maskedToken?: string | null;
+  isDefault: boolean;
+  updatedBy: string | null;
+  updatedAt: string | null;
 }
 
-/** Validate a provider's credentials live. Never throws — returns a typed result. */
-export async function testLLMConnection(payload: {
-  provider: string;
-  apiKey?: string;
-  model?: string;
-  baseUrl?: string;
-  orgId?: string;
-  projectId?: string;
-}): Promise<LLMTestResult> {
-  try {
-    const { data } = await api.post('/pipeline-admin/test-ai-connection', {
-      authMethod: 'api-key',
-      ...payload,
-    });
-    return { ok: !!data.ok, status: data.status || 'connected', message: data.message };
-  } catch (err: any) {
-    const body = err?.response?.data || {};
-    return {
-      ok: false,
-      status: body.status || 'failed',
-      error: body.error || err?.message || 'Connection failed',
-    };
-  }
+export async function getLlmConfig(): Promise<{ providers: LlmProviderConfig[]; defaultProvider: string | null }> {
+  const { data } = await api.get('/llm-config');
+  return data;
 }
 
-/** Retrieve a provider's available models (live after a successful connection,
- *  curated fallback otherwise). */
-export async function listLLMModels(payload: {
-  provider: string;
-  apiKey?: string;
-  baseUrl?: string;
-  integrationId?: string;
-}): Promise<{ models: string[]; source: 'live' | 'fallback' }> {
-  try {
-    const { data } = await api.post('/pipeline-admin/list-models', payload);
-    return { models: data.models || [], source: data.source || 'fallback' };
-  } catch {
-    return { models: [], source: 'fallback' };
-  }
+export async function testLlmConnection(
+  provider: string,
+  payload: { apiKey?: string; baseUrl?: string; authMethod?: 'api_key' | 'claude_code'; oauthToken?: string; mode?: 'api' | 'cli' },
+): Promise<{ ok: boolean; status: string; message: string; models: string[]; raw?: string }> {
+  const body: Record<string, any> = { baseUrl: payload.baseUrl };
+  if (payload.authMethod) body.authMethod = payload.authMethod;
+  if (payload.mode) body.mode = payload.mode;
+  if (payload.apiKey) body.apiKey = encryptField(payload.apiKey);
+  if (payload.oauthToken) body.oauthToken = encryptField(payload.oauthToken);
+  const { data } = await api.post(`/llm-config/${provider}/test`, body);
+  return data;
 }
 
-export async function testNotificationIntegration(integrationId: string) {
-  const { data } = await api.post(`/configurations/${integrationId}/test`);
+export async function saveLlmConfig(
+  provider: string,
+  payload: {
+    apiKey?: string; baseUrl?: string; model?: string | null;
+    agentModels?: Record<string, string>;
+    authMethod?: 'api_key' | 'claude_code'; oauthToken?: string;
+    claudeCodeMode?: 'api' | 'cli';
+    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+    extendedThinking?: boolean;
+  },
+) {
+  const body: Record<string, any> = { baseUrl: payload.baseUrl, model: payload.model };
+  if (payload.authMethod) body.authMethod = payload.authMethod;
+  if (payload.claudeCodeMode) body.claudeCodeMode = payload.claudeCodeMode;
+  if (payload.agentModels) body.agentModels = payload.agentModels;
+  if (payload.effort) body.effort = payload.effort;
+  if (typeof payload.extendedThinking === 'boolean') body.extendedThinking = payload.extendedThinking;
+  if (payload.apiKey) body.apiKey = encryptField(payload.apiKey);
+  if (payload.oauthToken) body.oauthToken = encryptField(payload.oauthToken);
+  const { data } = await api.put(`/llm-config/${provider}`, body);
+  return data;
+}
+
+export async function setDefaultLlmProvider(provider: string) {
+  const { data } = await api.post(`/llm-config/${provider}/default`);
+  return data;
+}
+
+export async function deleteLlmConfig(provider: string) {
+  const { data } = await api.delete(`/llm-config/${provider}`);
   return data;
 }
 
 /* ─────────────────────────────────────────────────────────────
    AI orchestrator — pipeline runs, stages, pages
    ───────────────────────────────────────────────────────────── */
-export async function getAgentStatus() {
-  const { data } = await api.get('/agents/status');
-  return data;
-}
-
 export async function createPipelineRun(payload: {
   feature: string;
   module: string;
@@ -940,21 +951,59 @@ export async function getPipelineUsage() {
 export function subscribeToPipelineEvents(
   runId: string,
   onEvent: (event: any) => void,
-): EventSource {
-  const token = sessionStorage.getItem('intelliqe_token') || '';
-  const es = new EventSource(`/api/pipeline-events/${runId}?token=${encodeURIComponent(token)}`);
+  onStatusChange?: (connected: boolean) => void,
+): () => void {
+  // Native EventSource cannot send the Authorization header that authMiddleware
+  // requires (a ?token= query param is NOT read server-side and yields 401), so
+  // stream via fetch with the Bearer header — same pattern as subscribeToBugEvents.
+  const controller = new AbortController();
+  let stopped = false;
 
-  es.onmessage = (e) => {
-    try {
-      onEvent(JSON.parse(e.data));
-    } catch {
-      // keepalive — ignore
+  async function connect() {
+    while (!stopped) {
+      try {
+        const token = sessionStorage.getItem('intelliqe_token') || '';
+        const resp = await fetch(`/api/pipeline-events/${encodeURIComponent(runId)}`, {
+          headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
+          signal: controller.signal,
+        });
+        if (!resp.ok || !resp.body) throw new Error(`SSE connect failed: ${resp.status}`);
+        onStatusChange?.(true);
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const frames = buffer.split('\n\n');
+          buffer = frames.pop() || '';
+          for (const frame of frames) {
+            const dataLine = frame.split('\n').find((l) => l.startsWith('data: '));
+            if (!dataLine) continue; // keepalive comment
+            try {
+              onEvent(JSON.parse(dataLine.slice(6)));
+            } catch {
+              // malformed frame — ignore
+            }
+          }
+        }
+      } catch {
+        // fall through to reconnect
+      }
+      onStatusChange?.(false);
+      if (stopped) return;
+      await new Promise((resolve) => setTimeout(resolve, 5000));
     }
+  }
+
+  connect();
+  return () => {
+    stopped = true;
+    controller.abort();
+    onStatusChange?.(false);
   };
-  es.onerror = () => {
-    // EventSource auto-reconnects
-  };
-  return es;
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -962,19 +1011,6 @@ export function subscribeToPipelineEvents(
    ───────────────────────────────────────────────────────────── */
 export async function getMenuConfig() {
   const { data } = await api.get('/users/menu-config');
-  return data;
-}
-
-/* ─────────────────────────────────────────────────────────────
-   Feature flags (per-tenant on/off switchboard)
-   ───────────────────────────────────────────────────────────── */
-export async function getFeatureFlags(): Promise<{ flags: Record<string, boolean> }> {
-  const { data } = await api.get('/users/feature-flags');
-  return data;
-}
-
-export async function saveFeatureFlags(flags: Record<string, boolean>): Promise<{ ok: boolean; flags: Record<string, boolean> }> {
-  const { data } = await api.put('/users/feature-flags', { flags });
   return data;
 }
 
@@ -1021,4 +1057,133 @@ export async function deleteTenantUser(userId: string) {
 export async function setTenantUserStatus(userId: string, isActive: boolean) {
   const { data } = await api.put(`/users/${userId}/status`, { isActive });
   return data;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Bug tracker
+   ───────────────────────────────────────────────────────────── */
+export async function listBugs(opts?: {
+  page?: number;
+  limit?: number;
+  search?: string;
+  status?: string;
+  severity?: string;
+  priority?: string;
+  assignee?: string;
+}) {
+  const { data } = await api.get('/bugs', { params: opts });
+  return data;
+}
+
+export async function getBugStats() {
+  const { data } = await api.get('/bugs/stats');
+  return data;
+}
+
+export async function getBug(bugId: string) {
+  const { data } = await api.get(`/bugs/${bugId}`);
+  return data;
+}
+
+export async function createBug(payload: Record<string, any>) {
+  const { data } = await api.post('/bugs', payload);
+  return data;
+}
+
+export async function updateBug(bugId: string, fields: Record<string, any>) {
+  const { data } = await api.put(`/bugs/${bugId}`, fields);
+  return data;
+}
+
+export async function revokeBug(bugId: string, reason: string) {
+  const { data } = await api.post(`/bugs/${bugId}/revoke`, { reason });
+  return data;
+}
+
+export async function deleteBug(bugId: string) {
+  const { data } = await api.delete(`/bugs/${bugId}`);
+  return data;
+}
+
+/** Is Azure DevOps connected for this tenant? (drives the "Raise in Azure DevOps" UI) */
+export async function getBugAdoStatus() {
+  const { data } = await api.get('/bugs/ado/status');
+  return data as { connected: boolean; orgUrl?: string; project?: string };
+}
+
+/** Raise the selected bug(s) in Azure DevOps as Bug work items. */
+export async function pushBugsToAdo(ids: string[]) {
+  const { data } = await api.post('/bugs/ado/push', { ids });
+  return data as {
+    ok: boolean;
+    raised: number;
+    project?: string;
+    org?: string;
+    results: { id: string; ok: boolean; adoId?: number; adoUrl?: string; error?: string }[];
+  };
+}
+
+/** Delete just the Azure DevOps work item a bug was raised as (the IntelliQE bug stays and can be raised again). */
+export async function removeBugFromAdo(bugId: string) {
+  const { data } = await api.delete(`/bugs/${bugId}/ado`);
+  return data as { ok: boolean; adoId: number; alreadyGone?: boolean };
+}
+
+/**
+ * Live bug events over SSE. Native EventSource cannot send the Authorization
+ * header the backend requires, so this streams via fetch and reconnects with
+ * a fixed backoff. Returns an unsubscribe function.
+ */
+export function subscribeToBugEvents(
+  onEvent: (event: any) => void,
+  onStatusChange?: (connected: boolean) => void,
+): () => void {
+  const controller = new AbortController();
+  let stopped = false;
+
+  async function connect() {
+    while (!stopped) {
+      try {
+        const token = sessionStorage.getItem('intelliqe_token') || '';
+        const resp = await fetch('/api/bugs/events', {
+          headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
+          signal: controller.signal,
+        });
+        if (!resp.ok || !resp.body) throw new Error(`SSE connect failed: ${resp.status}`);
+        onStatusChange?.(true);
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const frames = buffer.split('\n\n');
+          buffer = frames.pop() || '';
+          for (const frame of frames) {
+            const dataLine = frame.split('\n').find((l) => l.startsWith('data: '));
+            if (!dataLine) continue; // keepalive comment
+            try {
+              onEvent(JSON.parse(dataLine.slice(6)));
+            } catch {
+              // malformed frame — ignore
+            }
+          }
+        }
+      } catch {
+        // fall through to reconnect
+      }
+      onStatusChange?.(false);
+      if (stopped) return;
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+  }
+
+  connect();
+  return () => {
+    stopped = true;
+    controller.abort();
+    onStatusChange?.(false);
+  };
 }

@@ -111,6 +111,31 @@ export interface AutomationScript {
   testCaseId: string;
   fileName: string;
   code: string;
+  /**
+   * Repo-relative destination for the spec in the POM layout, e.g.
+   * `tests/auth/login.spec.ts`. Optional for back-compat; when absent,
+   * consumers fall back to `tests/<fileName>`.
+   */
+  path?: string;
+  /** Repo-relative paths of the page objects this spec imports. */
+  uses?: string[];
+}
+
+/**
+ * A generated Page Object (POM). Shared across specs — NOT 1:1 with test cases.
+ * The generator sets `path` deterministically so specs' relative imports always
+ * resolve (in the execution workspace and the published repo alike).
+ */
+export interface PageObjectFile {
+  /** Repo-relative path, e.g. `src/pages/auth/login.page.ts`. */
+  path: string;
+  /** Exported class name, e.g. `LoginPage` — fed into the spec prompt. */
+  className: string;
+  /** Module slug grouping the page object, e.g. `auth`. */
+  module: string;
+  /** Public method signatures, surfaced to the spec generator. */
+  methods: string[];
+  code: string;
 }
 
 export interface AppContext {
@@ -118,6 +143,53 @@ export interface AppContext {
   appName?: string;
   environment?: string;
   roles?: { roleName: string; username: string; password: string }[];
+}
+
+/**
+ * Per-tenant LLM credentials, resolved from the DB (System Configuration →
+ * LLM Configuration). Threaded through the pipeline so every agent calls the
+ * Anthropic Messages API with the admin-saved key — not an env var or a local
+ * `claude` CLI login. See services/llm.service.ts and agents/claude-runner.ts.
+ */
+export interface LlmConfig {
+  /**
+   * How the tenant authenticates to Anthropic:
+   *   - 'api_key'     → standard API key (x-api-key), consumes API credits.
+   *   - 'claude_code' → Claude Code OAuth token (from `claude setup-token`),
+   *                     using the Claude subscription instead of API credits.
+   *                     Falls back to a logged-in local `claude` CLI when no
+   *                     token is set (local dev).
+   * Defaults to 'api_key' when omitted.
+   */
+  authMethod?: 'api_key' | 'claude_code';
+  apiKey?: string;
+  /** Claude Code OAuth token (sk-ant-oat…) — used when authMethod is 'claude_code'. */
+  oauthToken?: string;
+  /**
+   * Claude Code transport, chosen by the admin when authMethod is 'claude_code':
+   *   - 'api' → OAuth token against the Anthropic Messages API (Bearer).
+   *   - 'cli' → the logged-in local `claude` CLI (subscription, no API cost).
+   * Defaults to 'api'. Used to run local testing through the CLI while Azure
+   * uses the API key/token — the two run against separate databases.
+   */
+  claudeCodeMode?: 'api' | 'cli';
+  /** Default model, used for any stage without a specific override. */
+  model?: string;
+  baseUrl?: string;
+  /** Per-agent model overrides, keyed by stage (requirement, generator, …). */
+  agentModels?: Record<string, string>;
+  /**
+   * Reasoning effort (output_config.effort): low | medium | high | xhigh | max.
+   * Applied only to models that support it (gated in claude-runner) — Haiku 4.5
+   * and Sonnet 4.5 reject it, so it's dropped there. Default high when unset.
+   */
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /**
+   * Extended ("ultra") thinking. When true, sends thinking:{type:'adaptive'} on
+   * models that support adaptive thinking (Opus 4.6+/Sonnet 4.6/Fable). Gated in
+   * claude-runner so unsupported models are never sent the param.
+   */
+  extendedThinking?: boolean;
 }
 
 export interface GenerationOptions {
@@ -182,6 +254,8 @@ export interface ExploredApp {
 export interface TestOpsState {
   requirements: string;
   appContext: AppContext | null;
+  /** Resolved per-tenant LLM credentials (DB-backed). Null = none configured. */
+  llm?: LlmConfig | null;
   generationOptions?: GenerationOptions;
   /** Populated by exploreAgent when only a URL is provided */
   exploredApp?: ExploredApp | null;
@@ -203,6 +277,8 @@ export interface TestOpsState {
   extendedTestPlan?: unknown;
   testCases: TestCase[];
   automationScripts: AutomationScript[];
+  /** Generated page objects (POM). Shared support files imported by the specs. */
+  pageObjects?: PageObjectFile[];
   executionResults: {
     passed: number;
     failed: number;
@@ -222,17 +298,21 @@ export interface TestOpsState {
   testData: TestDataPayload | null;
   failureReason: string | null;
   healingAttempted: boolean;
+  /** Per-test healing outcome notes (why a heal was skipped or failed) for the UI log. */
+  healingNotes?: Record<string, string>;
 }
 
-export function createInitialState(requirements: string, appContext?: AppContext): TestOpsState {
+export function createInitialState(requirements: string, appContext?: AppContext, llm?: LlmConfig | null): TestOpsState {
   return {
     requirements,
     appContext: appContext || null,
+    llm: llm || null,
     exploredApp: null,
     parsedRequirements: null,
     testPlan: null,
     testCases: [],
     automationScripts: [],
+    pageObjects: [],
     executionResults: null,
     testData: null,
     failureReason: null,

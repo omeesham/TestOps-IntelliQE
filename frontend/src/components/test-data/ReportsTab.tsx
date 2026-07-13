@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Download, Loader2, BarChart3, Database, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { getExecutionReport, downloadArtifactZip } from '../../services/api';
+import { useToast } from '@/components/feedback/ToastProvider';
 import type { RunReport } from '../../types';
 
 interface ReportsTabProps {
@@ -8,6 +9,7 @@ interface ReportsTabProps {
 }
 
 export default function ReportsTab({ runId }: ReportsTabProps) {
+  const toast = useToast();
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +36,7 @@ export default function ReportsTab({ runId }: ReportsTabProps) {
     setDownloading(true);
     try {
       await downloadArtifactZip(runId);
+      toast.success('Download started');
     } catch {
       alert('Failed to download artifacts. Please try again.');
     } finally {
@@ -158,7 +161,7 @@ export default function ReportsTab({ runId }: ReportsTabProps) {
             <div className="flex gap-2">
               {Object.entries(dataReport.datasets_by_role).map(([role, count]) => (
                 <span key={role} className="px-2 py-1 bg-gray-800 rounded text-xs text-gray-300">
-                  {role}: <span className="text-blue-300">{count}</span>
+                  {role}: <span className="text-purple-300">{count}</span>
                 </span>
               ))}
             </div>
@@ -220,7 +223,7 @@ function StatCard({ label, value, color }: { label: string; value: number | stri
     green: 'bg-green-900/30 border-green-800 text-green-300',
     red: 'bg-red-900/30 border-red-800 text-red-300',
     yellow: 'bg-yellow-900/30 border-yellow-800 text-yellow-300',
-    purple: 'bg-blue-900/30 border-blue-800 text-blue-300',
+    purple: 'bg-purple-900/30 border-purple-800 text-purple-300',
   };
 
   return (

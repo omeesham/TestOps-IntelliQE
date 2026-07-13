@@ -25,7 +25,6 @@ npm run preview  # Preview production build
 ### Prerequisites
 - Azure SQL Database (Basic 5 DTU in prod). Local dev uses SQL Server in Docker (`docker-compose.yml`) on localhost:1433 — database `JBSTestOpsAI`, schema `JBSTestOpsAI`. Set `DB_BOOTSTRAP=true` locally to auto-create the database.
 - Backend must be running before frontend (frontend proxies `/api` → `http://localhost:3001`)
-- **AI auth:** the Anthropic API key is configured in the app UI (**System Configuration → LLM Configuration**) and stored AES-encrypted in `client_configurations` (row `llm-<provider>-<env>`). `services/llm-config.service.ts` resolves + decrypts it and hydrates `process.env.ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL` at startup, on config save, and as a generate-route preflight; the pipeline then calls the Anthropic API directly via the official SDK. Setting `ANTHROPIC_API_KEY` in `backend/.env` is an optional override (e.g. CI). The legacy `claude` **CLI fallback is disabled** (commented out in `claude-runner.ts`, 2026-06-27) — it expired periodically and caused the recurring "AI engine not connected" failure.
 - Worker requires env vars: `ANTHROPIC_API_KEY`, `WORKER_SECRET`, `BACKEND_URL`
 
 ## Architecture Overview
@@ -55,7 +54,7 @@ Frontend (React SPA) → Backend (Express API, port 3001) → Azure SQL Database
   6. `auditAgent.ts` → quality review
   - `pipeline.ts` — orchestrates the full pipeline with healing loop
   - `state.ts` — `TestOpsState` interface shared across agents
-  - `claude-runner.ts` — `runClaudePrompt` (async) runs a prompt through the **Anthropic API via the official `@anthropic-ai/sdk`** (API-key only; the `claude` CLI path is commented out/disabled). `runClaudeJson<T>` wraps it with parse-failure retries so a flaky/truncated reply doesn't sink a run. All agents `await` these. Also exposes `isClaudeCliAuthenticated` (now simply: an `ANTHROPIC_API_KEY` is present in the env, hydrated from LLM Configuration) and `parseJsonFromResponse`.
+  - `claude-runner.ts` — wraps Claude CLI calls with fallback
 - **`orchestrator/`** — Advanced pipeline management:
   - `orchestrator.ts` — loads pipeline definition, processes stage completion, routes next stage
   - `dependency-engine.ts` — page readiness checks, cascade planning
@@ -74,7 +73,7 @@ Frontend (React SPA) → Backend (Express API, port 3001) → Azure SQL Database
 - **`App.tsx`** — Route definitions. Public: `/`, `/login`. Protected routes wrapped in `Layout` with `AuthProvider`.
 - **`services/api.ts`** — Centralized axios client with Bearer token interceptor. All backend API calls (~150 functions).
 - **`components/layout/`** — `Layout.tsx` (sidebar+header+outlet), `Sidebar.tsx` (role-based nav from server config), `Header.tsx`
-- **`pages/`** — 20+ pages: ChatPage (main wizard flow), DashboardPage, ReportsPage, SystemConfigurationPage, etc.
+- **`pages/`** — 20+ pages: ChatPage (main wizard flow), ReportsPage, SystemConfigurationPage, etc.
 - **`types/index.ts`** — Core interfaces: TestCase, TestConfiguration, ExecutionResult, AgentInfo, etc.
 - **`utils/tts.ts`** — Tessa voice assistant (Web Speech API)
 - Path alias: `@` → `frontend/src/`

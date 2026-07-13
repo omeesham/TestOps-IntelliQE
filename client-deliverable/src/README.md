@@ -1,6 +1,6 @@
-# QE Playwright Tests — Source Build
+# QE Playwright Tests — Page Object Model
 
-Human-readable TypeScript Playwright test suite. Environment-agnostic, no hardcoded credentials, no external framework dependencies.
+Human-readable TypeScript Playwright test suite in a standard Page Object Model layout. Environment-agnostic, no hardcoded credentials, no external framework dependencies.
 
 ## Prerequisites
 
@@ -26,15 +26,26 @@ npm run test:chromium    # chromium only
 npm run report           # open last HTML report
 ```
 
-## Layout
+## Layout (Page Object Model)
 
 ```
+playwright.config.ts        # Playwright config (testDir ./tests)
+package.json  tsconfig.json  .env.example
 src/
-├── tests/    # .spec.ts test files
-├── config/   # playwright.config.ts + env.ts
-├── utils/    # test-data loader
-└── data/     # JSON fixtures (non-sensitive)
+├── pages/                  # page objects
+│   ├── base.page.ts        # BasePage every page object extends
+│   ├── <module>/           # e.g. auth/login.page.ts
+│   └── components/         # shared mixins/components
+├── fixtures/               # pages.fixture.ts (test/expect), matchers.ts
+├── utils/                  # env.ts (config), test-data.ts (loader)
+├── data/                   # JSON fixtures (non-sensitive)
+└── types/                  # shared TypeScript types
+tests/
+└── <module>/<name>.spec.ts # specs drive scenarios through page objects
 ```
+
+Specs talk to **page objects**, never to raw selectors. When the UI changes,
+fix the page object under `src/pages/`, not the tests.
 
 ## Configuration
 

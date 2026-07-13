@@ -21,7 +21,7 @@
  *    string that requirementAgent treats as if it were a functional spec.
  */
 import type { TestOpsState, ExploredApp, AppContext } from './state.js';
-import { runClaudePrompt, parseJsonFromResponse, isClaudeCliAuthenticated } from './claude-runner.js';
+import { runLLM, parseJsonFromResponse, isClaudeCliAvailable, llmForStage } from './claude-runner.js';
 
 // Lazy import so unit tests that don't touch this agent don't drag in a
 // 100 MB browser binary on require().
@@ -101,9 +101,10 @@ export async function exploreAgent(state: TestOpsState): Promise<TestOpsState> {
   };
 
   // Hand the UI map to Claude — produce a natural-language requirements
-  // document that mimics what a BA would have written for this app.
-  const synthesized = isClaudeCliAuthenticated()
-    ? await synthesizeRequirements(exploredApp)
+  // document that mimics what a BA would have written for this app. Use the
+  // DB-configured LLM key when present; fall back to the CLI, else a naive map.
+  const synthesized = (state.llm?.apiKey || state.llm?.oauthToken || isClaudeCliAvailable())
+    ? await synthesizeRequirements(exploredApp, llmForStage(state.llm, 'explore'))
     : naiveRequirementsFromMap(exploredApp);
 
   return {
@@ -114,6 +115,69 @@ export async function exploreAgent(state: TestOpsState): Promise<TestOpsState> {
     // user did provide is preserved.
     requirements: [state.requirements?.trim(), synthesized].filter(Boolean).join('\n\n'),
   };
+}
+
+/**
+ * Crawl-only entry point: return the structured UI map (selectors, forms,
+ * buttons, pages) for a target app WITHOUT the LLM requirements synthesis.
+ * Used by the script generator to ground Playwright selectors in the real DOM.
+ * Logs in with the first role's credentials when a login screen is detected.
+ */
+export async function crawlAppMap(targetUrl: string, appContext?: AppContext): Promise<ExploredApp> {
+  const { snapshots, authDetected, notes } = await crawlApp(targetUrl, appContext);
+  return {
+    appName: appContext?.appName,
+    baseUrl: targetUrl,
+    pages: snapshots,
+    detectedFeatures: deriveFeatures(snapshots),
+    authDetected,
+    notes,
+  };
+}
+
+/**
+ * Lightweight alternative to the full crawl for memory-constrained paths
+ * (the /heal route): snapshot ONLY the entry page — plus the post-login page
+ * when a login form is detected and credentials are available. One short-lived
+ * browser, no BFS, so it won't OOM a small container the way a full crawl can.
+ */
+export async function snapshotEntryPage(targetUrl: string, appContext?: AppContext): Promise<ExploredApp> {
+  const chromium = await loadChromium();
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext({
+      ignoreHTTPSErrors: true,
+      viewport: { width: 1280, height: 800 },
+    });
+    await context.addInitScript({ content: 'window.__name = window.__name || function (f) { return f; };' });
+    const page = await context.newPage();
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT_MS });
+    await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => { /* SPAs sometimes never idle */ });
+
+    const snapshots: PageSnapshot[] = [await snapshotPage(page)];
+    const authDetected = looksLikeLogin(snapshots[0]);
+    const role = appContext?.roles?.[0];
+    if (authDetected && role?.username && role?.password) {
+      const ok = await tryLogin(page, role.username, role.password);
+      if (ok) {
+        await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => { /* SPA */ });
+        // SPAs keep rendering after network idle — give the shell a moment.
+        await page.waitForTimeout(3000);
+        snapshots.push(await snapshotPage(page));
+      }
+    }
+
+    return {
+      appName: appContext?.appName,
+      baseUrl: targetUrl,
+      pages: snapshots,
+      detectedFeatures: deriveFeatures(snapshots),
+      authDetected,
+      notes: [],
+    };
+  } finally {
+    await browser.close();
+  }
 }
 
 /* ───────────────────────────────────────────────────────────────────
@@ -134,6 +198,11 @@ async function crawlApp(
       ignoreHTTPSErrors: true,
       viewport: { width: 1280, height: 800 },
     });
+    // tsx/esbuild injects a `__name` helper into functions; when Playwright
+    // serializes a page.evaluate() callback into the browser, that reference is
+    // undefined there. Define a no-op shim before any page script runs so the
+    // DOM-extraction evaluate works under tsx (harmless no-op under tsc/prod).
+    await context.addInitScript({ content: 'window.__name = window.__name || function (f) { return f; };' });
     const page = await context.newPage();
 
     // Same-origin gate
@@ -146,6 +215,9 @@ async function crawlApp(
     // Heuristic: if landing page looks like a login screen and we have
     // credentials, try to authenticate.
     const landingSnap = await snapshotPage(page);
+    // ALWAYS keep the landing/login page — its form selectors (username,
+    // password, submit) are what most generated tests need.
+    const snapshots: PageSnapshot[] = [landingSnap];
     const isLoginLike = looksLikeLogin(landingSnap);
     if (isLoginLike) {
       authDetected = true;
@@ -153,18 +225,22 @@ async function crawlApp(
       if (role?.username && role?.password) {
         const ok = await tryLogin(page, role.username, role.password);
         notes.push(ok ? `Logged in as ${role.username}` : `Login attempt with ${role.username} failed`);
+        if (ok) {
+          // Let the post-login SPA render, then capture the authenticated page.
+          await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => { /* SPA */ });
+          // SPAs keep rendering after network idle — give the shell a moment.
+          await page.waitForTimeout(3000);
+          snapshots.push(await snapshotPage(page));
+        }
       } else {
         notes.push('Login screen detected but no credentials supplied — crawling as anonymous');
       }
     }
 
-    // BFS crawl, bounded.
+    // BFS crawl, bounded — seed from the CURRENT page (post-login if we logged in).
     const visited = new Set<string>([normaliseUrl(startUrl)]);
-    const snapshots: PageSnapshot[] = [];
-    snapshots.push(await snapshotPage(page));
-
     const queue: { url: string; depth: number }[] = [];
-    for (const link of snapshots[0].links) {
+    for (const link of snapshots[snapshots.length - 1].links) {
       if (snapshots.length + queue.length >= MAX_PAGES) break;
       const abs = resolveSameOrigin(link.href, startOrigin);
       if (abs && !visited.has(normaliseUrl(abs))) {
@@ -271,40 +347,82 @@ function looksLikeLogin(snap: PageSnapshot): boolean {
   return /\b(sign in|log in|login|signin)\b/.test(t);
 }
 
+// Hosts that indicate we're parked on an external identity provider.
+const IDP_HOST_RE = /login\.microsoftonline|okta|auth0|accounts\.google|login\.windows|\.b2clogin\.|adfs/i;
+
 async function tryLogin(
   page: import('@playwright/test').Page,
   username: string,
   password: string,
 ): Promise<boolean> {
   try {
-    // Find password input first — it's the most reliable anchor.
+    // ── Path 1: classic form login — password input lives on this page. ──
     const pwInput = page.locator('input[type="password"]').first();
-    if (await pwInput.count() === 0) return false;
+    if (await pwInput.count() > 0) {
+      // Find a likely username field nearby. Try common heuristics.
+      const userInput = page.locator(
+        'input[type="email"], input[name*="user" i], input[name*="email" i], input[id*="user" i], input[id*="email" i], input[type="text"]',
+      ).first();
+      if (await userInput.count() === 0) return false;
 
-    // Find a likely username field nearby. Try common heuristics.
-    const userInput = page.locator(
-      'input[type="email"], input[name*="user" i], input[name*="email" i], input[id*="user" i], input[id*="email" i], input[type="text"]',
-    ).first();
-    if (await userInput.count() === 0) return false;
+      await userInput.fill(username);
+      await pwInput.fill(password);
 
-    await userInput.fill(username);
-    await pwInput.fill(password);
+      // Submit: prefer the form's own submit button, else Enter key.
+      const submit = page.locator('button[type="submit"], input[type="submit"], button:has-text("Sign in"), button:has-text("Log in"), button:has-text("Login")').first();
+      if (await submit.count() > 0) {
+        await Promise.all([
+          page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => { /* tolerate SPA */ }),
+          submit.click(),
+        ]);
+      } else {
+        await pwInput.press('Enter');
+        await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => { /* tolerate */ });
+      }
 
-    // Submit: prefer the form's own submit button, else Enter key.
-    const submit = page.locator('button[type="submit"], input[type="submit"], button:has-text("Sign in"), button:has-text("Log in"), button:has-text("Login")').first();
-    if (await submit.count() > 0) {
-      await Promise.all([
-        page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => { /* tolerate SPA */ }),
-        submit.click(),
-      ]);
-    } else {
-      await pwInput.press('Enter');
-      await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => { /* tolerate */ });
+      // Heuristic for success: no password input visible any more.
+      return (await page.locator('input[type="password"]').count()) === 0;
     }
 
-    // Heuristic for success: URL changed AND no password input visible.
-    const stillHasPw = (await page.locator('input[type="password"]').count()) > 0;
-    return !stillHasPw;
+    // ── Path 2: federated / SSO entry page — no credential inputs here, just
+    // a sign-in button that hops to an external IdP (Microsoft Entra, Okta…).
+    // Same recipe as the generated specs' LOGIN_CONTRACT: without this, the
+    // crawler stalls on the entry page and the script agent never sees the
+    // real post-login DOM. ──
+    const offIdp = (u: URL | string) => !IDP_HOST_RE.test(u.toString());
+    const ssoBtn = page
+      .getByRole('button', { name: /continue|sign ?in|log ?in|sso/i })
+      .or(page.getByRole('link', { name: /continue|sign ?in|log ?in|sso/i }))
+      .first();
+    if (await ssoBtn.count() === 0) return false;
+    await ssoBtn.click();
+
+    // IdP hop 1 — identifier (email/username).
+    const emailField = page.locator('input[name="loginfmt"], input[type="email"], input[name*="user" i], input[type="text"]').first();
+    await emailField.waitFor({ state: 'visible', timeout: 30000 });
+    await emailField.fill(username);
+    await page.locator('input[type="submit"], button[type="submit"], #idSIButton9').first().click();
+
+    // IdP hop 2 — password.
+    const idpPw = page.locator('input[name="passwd"], input[type="password"]').first();
+    await idpPw.waitFor({ state: 'visible', timeout: 30000 });
+    await idpPw.fill(password);
+    await page.locator('input[type="submit"], button[type="submit"], #idSIButton9').first().click();
+
+    // Optional "Stay signed in?" interstitial — identify by TEXT, never by a
+    // generic still-visible submit button.
+    await Promise.race([
+      page.waitForURL(offIdp, { timeout: 45000 }).catch(() => { /* raced */ }),
+      page.getByText(/stay signed in\?/i).waitFor({ state: 'visible', timeout: 45000 }).catch(() => { /* raced */ }),
+    ]);
+    if (!offIdp(page.url()) && (await page.getByText(/stay signed in\?/i).isVisible().catch(() => false))) {
+      await page.locator('#idSIButton9, input[type="submit"], button[type="submit"]').first().click();
+    }
+
+    // Finish: back on the app, no password field in sight.
+    await page.waitForURL(offIdp, { timeout: 45000 });
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => { /* SPA */ });
+    return (await page.locator('input[type="password"]').count()) === 0;
   } catch {
     return false;
   }
@@ -339,7 +457,7 @@ function deriveFeatures(snaps: PageSnapshot[]): string[] {
  * Claude is instructed to write as if it were a BA who had just shadowed
  * the application, NOT to invent features the crawler did not observe.
  */
-async function synthesizeRequirements(app: ExploredApp): Promise<string> {
+async function synthesizeRequirements(app: ExploredApp, llm?: import('./state.js').LlmConfig | null): Promise<string> {
   const uiMap = JSON.stringify(
     {
       baseUrl: app.baseUrl,
@@ -382,7 +500,7 @@ Rules:
 - Output markdown only, no commentary.`;
 
   try {
-    const response = await runClaudePrompt(prompt, { maxTokens: 6000 });
+    const response = await runLLM(prompt, { maxTokens: 6000, llm: llm || undefined });
     return response.trim();
   } catch (err) {
     // eslint-disable-next-line no-console

@@ -29,7 +29,7 @@
  *   3. Titles must be unique and follow the "Verify …" convention.
  */
 import type { TestOpsState, TestCase, TestStep } from './state.js';
-import { runClaudePrompt, runClaudeJson, parseJsonFromResponse } from './claude-runner.js';
+import { runLLM, parseJsonFromResponse, llmForStage } from './claude-runner.js';
 import type { ExtendedTestPlan } from './plannerAgent.js';
 
 let counter = 0;
@@ -117,20 +117,21 @@ function buildPrompt(state: TestOpsState, excludeTitles: string[] = []): string 
     ? `Application: ${state.appContext.appName || 'Web App'}\nURL: ${state.appContext.targetUrl || 'Not specified'}\nEnvironment: ${state.appContext.environment || 'staging'}`
     : '';
 
-  const requestedMax = state.generationOptions?.maxTestCases;
-  const countInstruction = requestedMax && requestedMax > 0
-    ? `- Generate AT MOST ${requestedMax} test cases — this is a HARD CEILING, do not exceed it. Spend the budget on the HIGHEST-VALUE cases: prioritise by business risk (happy path, then the most likely failure modes, then critical edge/security cases). Return ONLY the most important ${requestedMax}.`
-    : `- There is NO ceiling on test count. Generate every case needed to fully certify the functionality. Stopping early because the list is long is unacceptable.`;
+  // Count is driven by RELEVANCE, not exhaustiveness. No fixed target, but no
+  // padding either: a simple page yields a small, focused suite.
+  const countInstruction =
+    `- The number of test cases is driven by what the functionality GENUINELY warrants — there is no target count and no minimum. A simple login page is a handful of cases (~6–12), not dozens. Do NOT pad to look thorough; a smaller, sharply relevant suite is better than a long one full of marginal scenarios. Any counts in the TEST PLAN are rough estimates, NOT quotas to fill.`;
 
   const exclusionBlock = excludeTitles.length > 0
     ? `\n\nALREADY GENERATED — DO NOT REPEAT THESE TITLES (case-insensitive):\n${excludeTitles.map((s) => `- ${s}`).join('\n')}\nGenerate only NEW scenarios not in the above list.`
     : '';
 
-  // Plan summary — gives the LLM something concrete to anchor counts and types to.
+  // Plan summary — strategy + risk context only. Counts are deliberately framed
+  // as non-binding estimates so they never cap the functionality-driven output.
   const planSummary = plan
-    ? `\n\nTEST PLAN:
+    ? `\n\nTEST PLAN (strategy & risk context — counts are rough estimates, NOT limits):
 - Strategy: ${plan.testStrategy}
-- Counts: UI=${plan.uiTests}, API=${plan.apiTests}, Data=${plan.dataTests}, E2E=${plan.e2eTests}, Security=${plan.securityTests}, Accessibility=${plan.accessibilityTests}, Performance=${plan.performanceTests}
+- Estimated effort (non-binding): UI≈${plan.uiTests}, API≈${plan.apiTests}, Data≈${plan.dataTests}, E2E≈${plan.e2eTests}, Security≈${plan.securityTests}, Accessibility≈${plan.accessibilityTests}, Performance≈${plan.performanceTests}
 - High-risk modules: ${plan.moduleStrategy.filter((m) => m.riskLevel === 'High').map((m) => m.module).join(', ') || 'none flagged'}
 - Browsers: ${plan.environmentMatrix.browsers.join(', ')}`
     : '';
@@ -178,16 +179,16 @@ OUTPUT — Return ONLY a valid JSON array (no markdown, no commentary):
 ]
 
 ═══════════════════════════════════════════════════════════════
-COVERAGE MANDATE (NON-NEGOTIABLE):
+SCOPE & RELEVANCE (generate ONLY what the functionality genuinely warrants):
 ═══════════════════════════════════════════════════════════════
 ${countInstruction}
-- Cover EVERY feature in parsedRequirements.features.
-- For EACH feature, generate at minimum: 1 happy-path test, 1 alternate-path test, 2-4 negative tests (one per realistic failure mode), 1-2 edge case tests, 1 authorization test per relevant actor, and (where relevant) 1 accessibility and 1 security test.
-- For EACH user flow in parsedRequirements.flows: at least one full end-to-end test (type: "e2e") that walks the flow start to finish.
-- For EACH edge case listed: at least one dedicated test.
-- For EACH non-functional requirement (security, accessibility, performance): at least one test that explicitly verifies it.
-- For EVERY persona x feature pair in personaMatrix where the actor is DENIED: a negative authorization test confirming the denial is enforced.
-- Do NOT merge multiple scenarios into one case. Each test verifies ONE behaviour.${exclusionBlock}
+- Test ONLY behaviors that are described in the requirements or actually present in the application. Do NOT invent scenarios for features, fields, or protections that aren't there.
+- NO speculative security cases (XSS, SQL injection, brute-force, rate-limiting, CSRF) and NO cross-browser, responsive, performance, or accessibility cases UNLESS parsedRequirements explicitly lists that as a requirement. If it isn't an explicit requirement, skip it entirely — do not add it "to be safe".
+- For EACH real feature: ONE happy-path test, plus ONE test per DISTINCT validation/failure rule that actually exists. MERGE near-duplicates — write a single representative case per rule (e.g. one "login fails with wrong password", NOT separate cases for wrong-password variant A, B, C). Combining a couple of closely-related checks into one case is encouraged, not penalized.
+- Add an end-to-end (type "e2e") test ONLY for genuine multi-step journeys. A single login form is NOT an e2e flow — do not create one for it.
+- Authorization/RBAC tests ONLY when multiple roles with genuinely different access are defined for the feature. For a single-actor page, skip them.
+- Skip edge cases that don't apply to the real fields/behaviors (no concurrency, network-failure, or partial-write cases unless the feature actually involves them).
+- Prefer P0/P1 coverage of core behavior over a long tail of P3 trivia. If a case feels marginal or speculative, leave it out.${exclusionBlock}
 
 ═══════════════════════════════════════════════════════════════
 QUALITY RULES (every case must satisfy these — incomplete cases will be rejected):
@@ -195,7 +196,7 @@ QUALITY RULES (every case must satisfy these — incomplete cases will be reject
 1. TITLE: Start with "Verify ". Be specific. "Verify login" is bad. "Verify login fails with locked account after 5 failed attempts" is good. Each title must be unique.
 2. DESCRIPTION: 1-3 sentences explaining the purpose, the risk being mitigated, and why this case matters. Do not restate the title.
 3. PRECONDITION: Full sentences. Include data state ("Cart contains 2 items totalling $50"), user state ("User is logged in as 'admin'"), and system state ("Stripe is in sandbox mode") where relevant.
-4. TEST DATA: Use CONCRETE, REALISTIC values — "alice@example.com", "Test@1234", "ORDER-2024-0042". Never placeholders like "<email>" or "{password}". For negative tests, the invalid value must be specific (e.g., "alice@" not "invalid email").
+4. TEST DATA: Use CONCRETE, REALISTIC values — "alice@example.com", "Test@1234", "ORDER-2024-0042". Never placeholders like "<email>" or "{password}". For negative tests, the invalid value must be specific (e.g., "alice@" not "invalid email"). For very long / boundary values, write a SHORT plain-string DESCRIPTION of the value (e.g. "a 10000-character string of 'a'") — do NOT inline the full literal.
 5. TEST STEPS: Use the testSteps array. Each step:
    • Numbered, in order
    • Action in imperative present tense ("Click 'Save'", not "User should click Save")
@@ -208,6 +209,7 @@ QUALITY RULES (every case must satisfy these — incomplete cases will be reject
 9. SEVERITY: Critical | Major | Moderate | Minor — describes the impact IF this test failed in production.
 10. TAGS: Pick from {smoke, regression, sanity, auth, ui, api, security, accessibility, e2e, data-validation} — at least one tag per case.
 11. TRACEABILITY: If a story key or REQ-ID is present in the source, use it. Otherwise fabricate one of the form REQ-<MODULE>-<NN>.
+12. STRICT JSON: Output MUST be valid JSON. Every value is a literal string, number, boolean, array, or object. NEVER use code expressions (no "a" * 10000, no "x".repeat(n), no string concatenation with +, no comments, no trailing commas). Escape quotes inside strings.
 
 GENERATE NOW. Return the JSON array directly.`;
 }
@@ -216,63 +218,16 @@ export async function generatorAgent(state: TestOpsState): Promise<TestOpsState>
   if (!state.parsedRequirements) return state;
   counter = 0;
 
-  const pr = state.parsedRequirements;
-  const plan = state.extendedTestPlan as ExtendedTestPlan | undefined;
+  // SINGLE pass — no retry, no top-up. The model decides how many cases the
+  // functionality needs (see the coverage mandate in buildPrompt). We give it
+  // the model's full output window so a comprehensive set is never truncated.
+  const response = await runLLM(buildPrompt(state), { maxTokens: 64000, llm: llmForStage(state.llm, 'generator') });
+  const parsed = parseJsonFromResponse<RawTestCase[]>(response);
 
-  // First pass. Retry on a flaky/truncated reply so one bad sample doesn't sink
-  // the run (this is the stage that actually produces the test cases).
-  const firstParsed = await runClaudeJson<RawTestCase[]>(buildPrompt(state), {
-    maxTokens: 16384,
-    model: 'claude-sonnet-4-6',
-    attempts: 2,
-  });
-
-  if (!Array.isArray(firstParsed) || firstParsed.length === 0) {
-    throw new Error('Claude returned no test cases in first pass');
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error('Claude returned no test cases');
   }
 
-  let testCases = firstParsed.map(coerceTestCase);
-
-  // Retry pass — sparse coverage. Drive the floor from the plan if we have one.
-  const plannedTotal = plan
-    ? plan.uiTests + plan.apiTests + plan.dataTests + plan.e2eTests + plan.securityTests + plan.accessibilityTests + plan.performanceTests
-    : pr.features.length * Math.max(pr.flows.length, 3) + pr.edgeCases.length;
-
-  let minimumExpected = Math.max(
-    pr.features.length * 3,            // never accept fewer than 3 per feature
-    Math.round(plannedTotal * 0.7),    // 70 % of plan, to allow LLM rounding
-  );
-
-  // When the caller asked for a specific count (the chat wizard always does),
-  // treat it as the floor. Otherwise a small request like "3 cases" still drags
-  // in a second full 16k-token generation pass and blows the request timeout.
-  const requestedMax = state.generationOptions?.maxTestCases;
-  if (requestedMax && requestedMax > 0) {
-    minimumExpected = Math.min(minimumExpected, requestedMax);
-  }
-
-  if (testCases.length < minimumExpected) {
-    const existingTitles = testCases.map((tc) => tc.title);
-    const needed = minimumExpected - testCases.length;
-
-    const retryPrompt = `${buildPrompt(state, existingTitles)}
-
-You returned only ${testCases.length} test cases. With ${pr.features.length} features, ${pr.flows.length} flows, ${pr.actors.length} actors, and ${pr.edgeCases.length} edge cases, the plan calls for at least ${minimumExpected} cases. Generate the missing ${needed}+ test cases for scenarios you have NOT yet covered.`;
-
-    try {
-      const retryResponse = await runClaudePrompt(retryPrompt, { maxTokens: 16384, model: 'claude-sonnet-4-6' });
-      const retryParsed = parseJsonFromResponse<RawTestCase[]>(retryResponse);
-      if (Array.isArray(retryParsed) && retryParsed.length > 0) {
-        const existingSet = new Set(existingTitles.map((s) => s.toLowerCase().trim()));
-        const newCases = retryParsed
-          .map(coerceTestCase)
-          .filter((tc) => !existingSet.has(tc.title.toLowerCase().trim()));
-        testCases = [...testCases, ...newCases];
-      }
-    } catch {
-      // Retry failed — proceed with whatever we have rather than block the pipeline
-    }
-  }
-
+  const testCases = parsed.map(coerceTestCase);
   return { ...state, testCases };
 }

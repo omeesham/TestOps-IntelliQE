@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, type ReactNode } from 'react';
-import { loginUser, ssoCallback } from '@/services/api';
+import { loginUser } from '@/services/api';
 
 export type UserRole = 'admin' | 'qa_engineer' | 'data_analyst';
 
@@ -16,7 +16,6 @@ interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
   login: (username: string, password: string) => Promise<boolean>;
-  ssoLogin: (code: string, redirectUri: string) => Promise<boolean>;
   logout: () => void;
 }
 
@@ -28,38 +27,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return saved ? JSON.parse(saved) : null;
   });
 
-  const applyAuthResult = (result: any): boolean => {
-    if (!result?.success) return false;
-    const u: User = {
-      username: result.user.username,
-      role: result.user.role as UserRole,
-      displayName: result.user.displayName,
-      tenantId: result.user.tenantId,
-      tenantName: result.user.tenantName,
-      isPlatform: result.user.isPlatform,
-    };
-    setUser(u);
-    sessionStorage.setItem('intelliqe_user', JSON.stringify(u));
-    if (result.token) {
-      sessionStorage.setItem('intelliqe_token', result.token);
-    }
-    return true;
-  };
-
+  // NOTE: we deliberately do NOT swallow errors here. A network failure, a 500
+  // (e.g. backend can't reach the DB), and a real 401 are very different things;
+  // the caller must be able to tell them apart and show the true reason. Only a
+  // clean { success: false } resolves to `false`; everything else throws.
   const login = async (username: string, password: string): Promise<boolean> => {
-    try {
-      return applyAuthResult(await loginUser(username, password));
-    } catch {
-      return false;
+    const result = await loginUser(username, password);
+    if (result.success) {
+      const u: User = {
+        username: result.user.username,
+        role: result.user.role as UserRole,
+        displayName: result.user.displayName,
+        tenantId: result.user.tenantId,
+        tenantName: result.user.tenantName,
+        isPlatform: result.user.isPlatform,
+      };
+      setUser(u);
+      sessionStorage.setItem('intelliqe_user', JSON.stringify(u));
+      if (result.token) {
+        sessionStorage.setItem('intelliqe_token', result.token);
+      }
+      return true;
     }
-  };
-
-  const ssoLogin = async (code: string, redirectUri: string): Promise<boolean> => {
-    try {
-      return applyAuthResult(await ssoCallback(code, redirectUri));
-    } catch {
-      return false;
-    }
+    return false;
   };
 
   const logout = () => {
@@ -69,7 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, ssoLogin, logout }}>
+    <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

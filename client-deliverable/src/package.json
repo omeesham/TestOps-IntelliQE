@@ -2,12 +2,12 @@
   "name": "qe-playwright-tests",
   "version": "1.0.0",
   "private": true,
-  "description": "Playwright end-to-end test package (source build).",
+  "description": "Playwright end-to-end test package (Page Object Model).",
   "scripts": {
-    "test": "playwright test -c config/playwright.config.ts",
-    "test:headed": "playwright test -c config/playwright.config.ts --headed",
-    "test:ui": "playwright test -c config/playwright.config.ts --ui",
-    "test:chromium": "playwright test -c config/playwright.config.ts --project=chromium",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "test:chromium": "playwright test --project=chromium",
     "report": "playwright show-report ./reports/html",
     "install:browsers": "playwright install"
   },

@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react';
 import { Plus, Trash2, Eye, EyeOff, Save, Loader2 } from 'lucide-react';
-import { connectIntegration, disconnectIntegration } from '@/services/api';
+import { connectIntegration, deleteIntegration } from '@/services/api';
 import { encryptSensitiveFields } from '@/utils/crypto';
+import { useToast } from '@/components/feedback/ToastProvider';
 
 interface DbConfig {
   integrationId: string;
@@ -31,7 +32,7 @@ interface AppFormData {
 }
 
 const INPUT_CLASS =
-  'w-full px-3 py-2.5 rounded-xl border border-[#C5D6FF] bg-[#EEF4FF] text-sm outline-none focus:ring-2 focus:ring-[#3366FF]/20 focus:border-[#3366FF] transition-all';
+  'w-full px-3 py-2.5 rounded-xl border border-[#DDD6FE] bg-[#F5F3FF] text-sm outline-none focus:ring-2 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED] transition-all';
 
 function slugify(name: string): string {
   return name
@@ -49,6 +50,7 @@ const EMPTY_FORM: AppFormData = {
 };
 
 export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
+  const toast = useToast();
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
   const [formData, setFormData] = useState<AppFormData>({ ...EMPTY_FORM });
   const [saving, setSaving] = useState(false);
@@ -156,6 +158,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
       setSelectedAppId(integrationId);
       setIsNewApp(false);
       onRefresh();
+      toast.success('Saved successfully');
     } catch (err: any) {
       setError(err?.response?.data?.error || err?.message || 'Failed to save application');
     } finally {
@@ -163,16 +166,19 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
     }
   };
 
-  // Delete
+  // Delete — the trash button is a real "Delete application" action, so remove
+  // the config outright (a soft-disconnect would leave the card in the list,
+  // making the click look like it did nothing).
   const handleDelete = async (integrationId: string) => {
     try {
-      await disconnectIntegration(integrationId);
+      await deleteIntegration(integrationId);
       if (selectedAppId === integrationId) {
         setSelectedAppId(null);
         setIsNewApp(false);
         setFormData({ ...EMPTY_FORM });
       }
       onRefresh();
+      toast.success('Deleted successfully');
     } catch (err: any) {
       setError(err?.response?.data?.error || err?.message || 'Failed to delete application');
     }
@@ -181,9 +187,9 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
   const showForm = isNewApp || selectedAppId !== null;
 
   return (
-    <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-[#C5D6FF]/60 p-6">
+    <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-[#DDD6FE]/60 p-6">
       <div className="mb-4">
-        <h3 className="text-sm font-semibold text-[#1E3A8A] mb-1">Applications Under Test</h3>
+        <h3 className="text-sm font-semibold text-[#1E1B4B] mb-1">Applications Under Test</h3>
         <p className="text-xs text-[#6B7280]">
           Manage your applications, environments, and test user credentials
         </p>
@@ -200,14 +206,14 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
         <div className="space-y-3">
           <button
             onClick={startNewApp}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-[#3366FF] to-[#2645D6] text-white rounded-lg text-sm font-medium hover:from-[#2A55D6] hover:to-[#2645D6] shadow-md shadow-purple-500/20 transition-all"
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white rounded-lg text-sm font-medium hover:from-[#6D28D9] hover:to-[#4F46E5] shadow-md shadow-purple-500/20 transition-all"
           >
             <Plus className="w-4 h-4" />
             Add Application
           </button>
 
           {appConfigs.length === 0 && !isNewApp ? (
-            <div className="p-4 bg-[#EEF4FF] border border-[#C5D6FF]/60 rounded-xl text-center">
+            <div className="p-4 bg-[#F5F3FF] border border-[#DDD6FE]/60 rounded-xl text-center">
               <p className="text-xs text-[#6B7280]">
                 No applications configured. Add your first application to get started.
               </p>
@@ -221,14 +227,14 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
                   key={cfg.integrationId}
                   className={`p-3 rounded-xl border cursor-pointer transition-all ${
                     isSelected
-                      ? 'border-[#3366FF] bg-[#EEF4FF] shadow-sm'
-                      : 'border-[#C5D6FF]/60 bg-white hover:border-[#3366FF]/40'
+                      ? 'border-[#7C3AED] bg-[#F5F3FF] shadow-sm'
+                      : 'border-[#DDD6FE]/60 bg-white hover:border-[#7C3AED]/40'
                   }`}
                   onClick={() => selectApp(cfg)}
                 >
                   <div className="flex items-center justify-between">
                     <div className="min-w-0">
-                      <p className="text-sm font-medium text-[#1E3A8A] truncate">{d.appName || cfg.integrationId}</p>
+                      <p className="text-sm font-medium text-[#1E1B4B] truncate">{d.appName || cfg.integrationId}</p>
                       <p className="text-xs text-[#6B7280] truncate">{d.baseUrl || 'No URL set'}</p>
                     </div>
                     <button
@@ -236,14 +242,14 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
                         e.stopPropagation();
                         handleDelete(cfg.integrationId);
                       }}
-                      className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0"
+                      className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-red-100 text-red-500 hover:bg-red-600 hover:text-white shadow-sm transition-all flex-shrink-0"
                       title="Delete application"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
                   {d.environment && (
-                    <span className="inline-block mt-1.5 px-2 py-0.5 bg-[#DCE7FF] text-[#2143A8] text-[10px] font-medium rounded-full">
+                    <span className="inline-block mt-1.5 px-2 py-0.5 bg-[#EDE9FE] text-[#7C3AED] text-[10px] font-medium rounded-full">
                       {d.environment}
                     </span>
                   )}
@@ -260,7 +266,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* App Name */}
                 <div>
-                  <label className="block text-sm font-medium text-[#1E3A8A] mb-1">App Name</label>
+                  <label className="block text-sm font-medium text-[#1E1B4B] mb-1">App Name</label>
                   <input
                     type="text"
                     value={formData.appName}
@@ -272,7 +278,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
 
                 {/* Base URL */}
                 <div>
-                  <label className="block text-sm font-medium text-[#1E3A8A] mb-1">Base URL</label>
+                  <label className="block text-sm font-medium text-[#1E1B4B] mb-1">Base URL</label>
                   <input
                     type="text"
                     value={formData.baseUrl}
@@ -284,7 +290,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
 
                 {/* Environment */}
                 <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-[#1E3A8A] mb-1">Environment</label>
+                  <label className="block text-sm font-medium text-[#1E1B4B] mb-1">Environment</label>
                   <select
                     value={formData.environment}
                     onChange={(e) => setFormData((prev) => ({ ...prev, environment: e.target.value }))}
@@ -299,12 +305,12 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
               </div>
 
               {/* Roles Section */}
-              <div className="border-t border-[#DCE7FF] pt-4">
+              <div className="border-t border-[#EDE9FE] pt-4">
                 <div className="flex items-center justify-between mb-3">
-                  <label className="text-sm font-medium text-[#1E3A8A]">Test User Roles</label>
+                  <label className="text-sm font-medium text-[#1E1B4B]">Test User Roles</label>
                   <button
                     onClick={addRole}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#2143A8] bg-[#EEF4FF] hover:bg-[#DCE7FF] rounded-lg border border-[#C5D6FF]/60 transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#7C3AED] bg-[#F5F3FF] hover:bg-[#EDE9FE] rounded-lg border border-[#DDD6FE]/60 transition-colors"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     Add Role
@@ -320,7 +326,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
                     {formData.roles.map((role, idx) => (
                       <div
                         key={idx}
-                        className="p-3 bg-[#EEF4FF]/50 border border-[#C5D6FF]/40 rounded-xl"
+                        className="p-3 bg-[#F5F3FF]/50 border border-[#DDD6FE]/40 rounded-xl"
                       >
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                           {/* Role Name */}
@@ -369,7 +375,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
                                 <button
                                   type="button"
                                   onClick={() => togglePasswordVisibility(idx)}
-                                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#2143A8] transition-colors"
+                                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#7C3AED] transition-colors"
                                 >
                                   {visiblePasswords.has(idx) ? (
                                     <EyeOff className="w-4 h-4" />
@@ -380,7 +386,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
                               </div>
                               <button
                                 onClick={() => removeRole(idx)}
-                                className="p-2.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl border border-[#C5D6FF]/60 transition-colors flex-shrink-0"
+                                className="p-2.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl border border-[#DDD6FE]/60 transition-colors flex-shrink-0"
                                 title="Remove role"
                               >
                                 <Trash2 className="w-4 h-4" />
@@ -399,7 +405,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
                 <button
                   onClick={handleSave}
                   disabled={saving}
-                  className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-[#3366FF] to-[#2645D6] text-white rounded-lg text-sm font-medium hover:from-[#2A55D6] hover:to-[#2645D6] shadow-md shadow-purple-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white rounded-lg text-sm font-medium hover:from-[#6D28D9] hover:to-[#4F46E5] shadow-md shadow-purple-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                   {saving ? 'Saving...' : 'Save Application'}
@@ -409,8 +415,8 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
           ) : (
             <div className="flex items-center justify-center h-full min-h-[200px]">
               <div className="text-center">
-                <div className="w-12 h-12 bg-[#EEF4FF] rounded-xl flex items-center justify-center mx-auto mb-3 border border-[#C5D6FF]/60">
-                  <Plus className="w-5 h-5 text-[#2143A8]" />
+                <div className="w-12 h-12 bg-[#F5F3FF] rounded-xl flex items-center justify-center mx-auto mb-3 border border-[#DDD6FE]/60">
+                  <Plus className="w-5 h-5 text-[#7C3AED]" />
                 </div>
                 <p className="text-sm text-[#6B7280]">
                   Select an application from the list or add a new one

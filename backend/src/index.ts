@@ -23,9 +23,11 @@ import rateLimit from 'express-rate-limit';
 import bcrypt from 'bcrypt';
 import generateRoutes from './routes/generate.routes.js';
 import executeRoutes from './routes/execute.routes.js';
+import pipelineFlowRoutes from './routes/pipeline-flow.routes.js';
 import agentsRoutes from './routes/agents.routes.js';
 import chatRoutes from './routes/chat.routes.js';
 import jiraRoutes from './routes/jira.routes.js';
+import azureDevopsRoutes from './routes/azure-devops.routes.js';
 import documentRoutes from './routes/document.routes.js';
 import gitRoutes from './routes/git.routes.js';
 import confluenceRoutes from './routes/confluence.routes.js';
@@ -38,17 +40,17 @@ import pipelineEventsRoutes from './routes/pipeline-events.routes.js';
 import pipelineWorkerRoutes from './routes/pipeline-worker.routes.js';
 import pipelineAdminRoutes from './routes/pipeline-admin.routes.js';
 import pipelinePagesRoutes from './routes/pipeline-pages.routes.js';
-import automationScriptsRoutes from './routes/automation-scripts.routes.js';
 import artifactsRoutes from './routes/artifacts.routes.js';
 import userManagementRoutes from './routes/user-management.routes.js';
 import allureRoutes from './routes/allure.routes.js';
-import htmlReportRoutes from './routes/html-report.routes.js';
 import tenantSettingsRoutes from './routes/tenant-settings.routes.js';
+import llmConfigRoutes from './routes/llm-config.routes.js';
 import publicApiRoutes from './routes/public/public-api.routes.js';
+import clientLogsRoutes from './routes/client-logs.routes.js';
+import bugsRoutes from './routes/bugs.routes.js';
 import { initDb } from './db.js';
 import pool from './db.js';
 import { decryptField } from './utils/crypto.js';
-import { hydrateAnthropicEnv, describeResolved } from './services/llm-config.service.js';
 import { signToken } from './utils/jwt.js';
 import { authMiddleware } from './middleware/auth.middleware.js';
 import { requestContext } from './middleware/request-context.middleware.js';
@@ -116,6 +118,20 @@ const authLimiter = rateLimit({
   standardHeaders: 'draft-7',
   legacyHeaders: false,
 });
+// Client diagnostics get their own (looser) budget so a noisy browser tab
+// reporting errors can't exhaust the app's general request allowance.
+const clientLogLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: Number(process.env.RATE_LIMIT_CLIENT_LOGS || 300),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+});
+
+/* ─────────────────────────────────────────────────────────────
+   Client log ingest (no auth, own rate limit) — mounted before the
+   general limiter so browser error bursts don't starve real traffic.
+   ───────────────────────────────────────────────────────────── */
+app.use('/api/client-logs', clientLogLimiter, clientLogsRoutes);
 
 app.use('/api/', generalLimiter);
 
@@ -125,14 +141,6 @@ app.use('/api/', generalLimiter);
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), version: '1.0.0' });
 });
-
-/** Decode the payload claims of a JWT/ID-token without verifying its signature. */
-function decodeJwtClaims(idToken: string): Record<string, any> {
-  const payload = idToken.split('.')[1];
-  if (!payload) return {};
-  const json = Buffer.from(payload.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
-  return JSON.parse(json);
-}
 
 app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {
@@ -241,149 +249,34 @@ app.post('/api/auth/signup', authLimiter, async (req, res) => {
 });
 
 /* ─────────────────────────────────────────────────────────────
-   Microsoft Entra ID (Azure AD) SSO — authorization-code callback.
-   The frontend redirects the browser to Entra's /authorize endpoint;
-   Entra redirects back to /login?code=..., and the SPA POSTs the code
-   here. We exchange it server-side (client secret never leaves the
-   backend), read the verified ID-token claims, then look up or
-   provision the user and mint our normal JWT.
-   ───────────────────────────────────────────────────────────── */
-app.post('/api/auth/sso/callback', authLimiter, async (req, res) => {
-  try {
-    const { code, redirectUri } = req.body || {};
-    const tenant = process.env.AZURE_TENANT_ID;
-    const clientId = process.env.AZURE_CLIENT_ID;
-    const clientSecret = process.env.AZURE_CLIENT_SECRET;
-
-    if (!tenant || !clientId || !clientSecret) {
-      res.status(503).json({ success: false, error: 'SSO is not configured on the server' });
-      return;
-    }
-    if (!code || !redirectUri) {
-      res.status(400).json({ success: false, error: 'Missing authorization code' });
-      return;
-    }
-
-    // Exchange the authorization code for tokens.
-    const tokenResp = await fetch(
-      `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          client_id: clientId,
-          client_secret: clientSecret,
-          grant_type: 'authorization_code',
-          code,
-          redirect_uri: redirectUri,
-          scope: 'openid profile email',
-        }),
-      },
-    );
-
-    if (!tokenResp.ok) {
-      const detail = await tokenResp.text();
-      logger.warn('SSO token exchange failed', { status: tokenResp.status, detail });
-      res.status(401).json({ success: false, error: 'SSO token exchange failed' });
-      return;
-    }
-
-    const tokens = (await tokenResp.json()) as { id_token?: string };
-    if (!tokens.id_token) {
-      res.status(401).json({ success: false, error: 'No ID token returned by identity provider' });
-      return;
-    }
-
-    // Decode ID-token claims. The token came directly from Entra's token
-    // endpoint over TLS, so the auth-code flow guarantees its integrity.
-    // (Hardening follow-up: verify the JWS signature against the tenant JWKS.)
-    const claims = decodeJwtClaims(tokens.id_token);
-    const email: string | undefined =
-      claims.preferred_username || claims.email || claims.upn;
-
-    if (!email) {
-      res.status(401).json({ success: false, error: 'Identity provider did not return an email' });
-      return;
-    }
-
-    // Look up the user by username (email). SSO authenticates identity but
-    // does not grant access — the user must already exist (created via signup
-    // or user management). Unknown emails are rejected.
-    const { rows } = await pool.query(
-      `SELECT u.id, u.username, u.full_name, u.role, u.is_active,
-              t.id AS tenant_id, t.name AS tenant_name, t.is_platform
-       FROM users u
-       JOIN tenants t ON t.id = u.tenant_id
-       WHERE u.username = $1`,
-      [email],
-    );
-
-    if (rows.length === 0) {
-      logger.warn('SSO sign-in for unprovisioned user', { email });
-      res.status(403).json({ success: false, error: 'No account found for this user. Contact your administrator.' });
-      return;
-    }
-
-    const row = rows[0];
-    if (!row.is_active) {
-      res.status(401).json({ success: false, error: 'Account is deactivated. Contact your administrator.' });
-      return;
-    }
-
-    const token = signToken({
-      sub: row.username,
-      uid: row.id,
-      role: row.role,
-      tid: row.tenant_id,
-      tn: row.tenant_name,
-      pf: row.is_platform,
-    });
-
-    res.json({
-      success: true,
-      user: {
-        username: row.username,
-        role: row.role,
-        displayName: row.full_name,
-        tenantId: row.tenant_id,
-        tenantName: row.tenant_name,
-        isPlatform: row.is_platform,
-      },
-      token,
-    });
-  } catch (err: any) {
-    logger.error('SSO callback error', { err: err.message });
-    res.status(500).json({ success: false, error: 'SSO sign-in failed' });
-  }
-});
-
-/* ─────────────────────────────────────────────────────────────
    Internal admin / UI routes (user JWT required)
    ───────────────────────────────────────────────────────────── */
 app.use('/api/generate', authMiddleware, generateRoutes);
 app.use('/api/execute', authMiddleware, executeRoutes);
+app.use('/api/pipeline-flow', authMiddleware, pipelineFlowRoutes);
 app.use('/api/agents', authMiddleware, agentsRoutes);
 app.use('/api/chat', authMiddleware, chatRoutes);
 app.use('/api/jira', authMiddleware, jiraRoutes);
+app.use('/api/azure-devops', authMiddleware, azureDevopsRoutes);
 app.use('/api/document', authMiddleware, documentRoutes);
 app.use('/api/git', authMiddleware, gitRoutes);
 app.use('/api/confluence', authMiddleware, confluenceRoutes);
 app.use('/api/sharepoint', authMiddleware, sharepointRoutes);
 app.use('/api/test-cases', authMiddleware, testCasesRoutes);
+app.use('/api/bugs', authMiddleware, bugsRoutes);
 app.use('/api/configurations', authMiddleware, configurationsRoutes);
 app.use('/api/reports', authMiddleware, reportsRoutes);
 app.use('/api/tenant-settings', authMiddleware, tenantSettingsRoutes);
+app.use('/api/llm-config', authMiddleware, llmConfigRoutes);
 
 app.use('/api/pipeline', authMiddleware, pipelineRoutes);
 app.use('/api/pipeline-events', authMiddleware, pipelineEventsRoutes);
 app.use('/api/pipeline-pages', authMiddleware, pipelinePagesRoutes);
 app.use('/api/pipeline-admin', authMiddleware, pipelineAdminRoutes);
 app.use('/api/pipeline-worker', pipelineWorkerRoutes);  // worker secret auth
-app.use('/api/automation-scripts', authMiddleware, automationScriptsRoutes);
 app.use('/api/artifacts', authMiddleware, artifactsRoutes);
 app.use('/api/users', authMiddleware, userManagementRoutes);
 app.use('/api/allure', allureRoutes);
-app.use('/api/html-report', htmlReportRoutes);
 
 /* ─────────────────────────────────────────────────────────────
    Public business-capability API (HIPAA boundary)
@@ -403,12 +296,7 @@ app.use(errorHandler);
 setEventCallback((runId, event) => broadcastSSE(runId, event));
 
 initDb()
-  .then(async () => {
-    // Load the Anthropic API key configured in the LLM Configuration page into
-    // the environment so the generation pipeline (and worker) can talk to the
-    // Anthropic API directly — the durable path that replaced the `claude` CLI.
-    const resolved = await hydrateAnthropicEnv(null);
-    logger.info('AI engine (Anthropic) configuration', { key: describeResolved(resolved) });
+  .then(() => {
     app.listen(PORT, () => {
       logger.info(`JBS IntelliQE API listening`, { port: PORT, env: NODE_ENV });
     });
