@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import {
   listBugs, getBugStats, getBug, createBug, updateBug, revokeBug, deleteBug,
-  subscribeToBugEvents, getBugAdoStatus, pushBugsToAdo, removeBugFromAdo,
+  subscribeToBugEvents, getBugAdoStatus, pushBugsToAdo,
 } from '@/services/api';
 import { useToast } from '@/components/feedback/ToastProvider';
 import ActionIcon from '@/components/ui/ActionIcon';
@@ -178,8 +178,6 @@ export default function BugTrackerPage() {
   const [adoStatus, setAdoStatus] = useState<{ connected: boolean; project?: string; orgUrl?: string } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [pushingAdo, setPushingAdo] = useState(false);
-  const [confirmAdoRemove, setConfirmAdoRemove] = useState<BugRow | null>(null);
-  const [removingAdo, setRemovingAdo] = useState(false);
 
   // Bugs on the current page that can still be raised (not already in ADO).
   const selectableBugs = bugs.filter((b) => !b.ado_work_item_id);
@@ -302,33 +300,6 @@ export default function BugTrackerPage() {
     }
   };
 
-  const handleRemoveFromAdo = async () => {
-    if (!confirmAdoRemove) return;
-    setRemovingAdo(true);
-    try {
-      const res = await removeBugFromAdo(confirmAdoRemove.id);
-      toast.success(
-        'Deleted in Azure DevOps',
-        res.alreadyGone
-          ? `Work item #${res.adoId} was already deleted in Azure DevOps — the link has been cleared.`
-          : `Work item #${res.adoId} was deleted. BUG-${confirmAdoRemove.bug_number} stays in IntelliQE and can be raised again.`,
-      );
-      setConfirmAdoRemove(null);
-      fetchBugsRef.current(paginationRef.current.page, paginationRef.current.limit, { silent: true });
-      const openId = detailIdRef.current;
-      if (openId === confirmAdoRemove.id) {
-        getBug(openId)
-          .then((d) => setDetail((prev) => (prev && prev.bug.id === openId ? d : prev)))
-          .catch(() => {});
-      }
-    } catch (err) {
-      console.error('Remove from ADO error:', err);
-      toast.fromError(err);
-    } finally {
-      setRemovingAdo(false);
-    }
-  };
-
   // Live updates: refetch the current page + stats whenever another session mutates bugs
   useEffect(() => {
     const unsubscribe = subscribeToBugEvents((event) => {
@@ -344,7 +315,6 @@ export default function BugTrackerPage() {
           const n = new Set(prev); n.delete(deletedId); return n;
         });
         setConfirmDelete((prev) => (prev && prev.id === deletedId ? null : prev));
-        setConfirmAdoRemove((prev) => (prev && prev.id === deletedId ? null : prev));
       }
       const openId = detailIdRef.current;
       if (!openId || event.bugId !== openId) return;
@@ -751,20 +721,15 @@ export default function BugTrackerPage() {
                   <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{bug.assigned_to || <span className="text-gray-400">Unassigned</span>}</td>
                   <td className="px-3 py-1.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                     {bug.ado_work_item_id ? (
-                      <span className="inline-flex items-center gap-1">
-                        <a
-                          href={bug.ado_url || '#'}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-50 text-sky-700 border border-sky-200 text-xs font-medium hover:bg-sky-100 transition-colors"
-                          title="Open the Azure DevOps work item"
-                        >
-                          ADO #{bug.ado_work_item_id} <ExternalLink className="w-3 h-3" />
-                        </a>
-                        <ActionIcon tone="delete" title="Delete this work item in Azure DevOps" onClick={() => setConfirmAdoRemove(bug)}>
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </ActionIcon>
-                      </span>
+                      <a
+                        href={bug.ado_url || '#'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-50 text-sky-700 border border-sky-200 text-xs font-medium hover:bg-sky-100 transition-colors"
+                        title="Open the Azure DevOps work item"
+                      >
+                        ADO #{bug.ado_work_item_id} <ExternalLink className="w-3 h-3" />
+                      </a>
                     ) : (
                       <span className="text-gray-300 text-xs">—</span>
                     )}
@@ -1186,39 +1151,6 @@ export default function BugTrackerPage() {
         </div>
       )}
 
-      {/* Delete-in-Azure-DevOps confirmation (keeps the IntelliQE bug) */}
-      {confirmAdoRemove && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center" onClick={() => setConfirmAdoRemove(null)}>
-          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full mx-4" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-full bg-sky-100 flex items-center justify-center">
-                <AlertTriangle className="w-5 h-5 text-sky-600" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-gray-900">Delete in Azure DevOps</h3>
-                <p className="text-sm text-gray-500">
-                  This deletes work item <span className="font-mono">#{confirmAdoRemove.ado_work_item_id}</span> from
-                  Azure DevOps (moved to its Recycle Bin).{' '}
-                  <span className="font-mono">BUG-{confirmAdoRemove.bug_number}</span> stays in IntelliQE and can be
-                  raised again later.
-                </p>
-              </div>
-            </div>
-            <div className="flex justify-end gap-2">
-              <button onClick={() => setConfirmAdoRemove(null)} className="px-4 py-2 text-sm text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200">
-                Cancel
-              </button>
-              <button
-                onClick={handleRemoveFromAdo}
-                disabled={removingAdo}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:bg-red-300"
-              >
-                {removingAdo && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Delete in Azure DevOps
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
