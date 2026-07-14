@@ -1014,6 +1014,22 @@ export async function getMenuConfig() {
   return data;
 }
 
+// ─── Feature Toggles (per-tenant, per-role UI permissions) ───────────────────
+
+/** Get the current tenant's feature-toggle map: { features: { key: { role: bool } } } */
+export async function getFeatureToggles() {
+  const { data } = await api.get('/feature-toggles');
+  return data as { features: Record<string, Record<string, boolean>> };
+}
+
+/** Replace the tenant's feature-toggle map (admin only). */
+export async function updateFeatureToggles(
+  features: Record<string, Record<string, boolean>>,
+) {
+  const { data } = await api.put('/feature-toggles', { features });
+  return data as { success: boolean; features: Record<string, Record<string, boolean>> };
+}
+
 export async function listTenantUsers() {
   const { data } = await api.get('/users');
   return data;

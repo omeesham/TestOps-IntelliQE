@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth, type UserRole } from '@/contexts/AuthContext';
+import { useFeatureToggles } from '@/contexts/FeatureToggleContext';
+import { PATH_TO_FEATURE } from '@/config/featureCatalog';
 import { getMenuConfig } from '@/services/api';
 import {
   Home, ClipboardList, BarChart3, Users, Settings,
-  ChevronLeft, ChevronRight, Bug,
+  ChevronLeft, ChevronRight, Bug, ToggleRight,
 } from 'lucide-react';
 
 interface NavItem {
@@ -27,10 +29,12 @@ const navItems: NavItem[] = [
   { name: 'Bug Tracker',           path: '/bug-tracker',          icon: Bug,             roles: ALL },
   { name: 'User Management',       path: '/user-management',      icon: Users,           roles: ['admin', 'qa_engineer'] },
   { name: 'System Configuration',  path: '/system-configuration', icon: Settings,        roles: ['admin', 'qa_engineer'] },
+  { name: 'Feature Toggles',       path: '/feature-toggles',      icon: ToggleRight,     roles: ['admin'] },
 ];
 
 export default function Sidebar() {
   const { user } = useAuth();
+  const { isEnabled } = useFeatureToggles();
   const role: UserRole = (user?.role as UserRole) || 'admin';
   const [allowedPaths, setAllowedPaths] = useState<string[] | null>(null);
   const [, setMenuLoaded] = useState(false);
@@ -56,6 +60,10 @@ export default function Sidebar() {
   const visibleItems = navItems.filter((item) => {
     if (!item.roles.includes(role)) return false;
     if (allowedPaths && !allowedPaths.includes(item.path)) return false;
+    // Feature toggle gating: hide nav items whose feature is disabled for this role.
+    // (Items without a catalog feature — e.g. the Feature Toggles panel — always show.)
+    const featureKey = PATH_TO_FEATURE[item.path];
+    if (featureKey && !isEnabled(featureKey)) return false;
     return true;
   });
 

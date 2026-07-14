@@ -48,6 +48,7 @@ import llmConfigRoutes from './routes/llm-config.routes.js';
 import publicApiRoutes from './routes/public/public-api.routes.js';
 import clientLogsRoutes from './routes/client-logs.routes.js';
 import bugsRoutes from './routes/bugs.routes.js';
+import featureTogglesRoutes from './routes/feature-toggles.routes.js';
 import { initDb } from './db.js';
 import pool from './db.js';
 import { decryptField } from './utils/crypto.js';
@@ -276,6 +277,7 @@ app.use('/api/pipeline-admin', authMiddleware, pipelineAdminRoutes);
 app.use('/api/pipeline-worker', pipelineWorkerRoutes);  // worker secret auth
 app.use('/api/artifacts', authMiddleware, artifactsRoutes);
 app.use('/api/users', authMiddleware, userManagementRoutes);
+app.use('/api/feature-toggles', authMiddleware, featureTogglesRoutes);
 app.use('/api/allure', allureRoutes);
 
 /* ─────────────────────────────────────────────────────────────
