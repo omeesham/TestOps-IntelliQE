@@ -352,27 +352,66 @@ function targetBody(t?: TargetOverride): Record<string, any> {
   };
 }
 
-/** Stage 3 — generate POM page objects + specs for the given (possibly edited) test cases. */
+/** Stage 3 — generate automation scripts for the given (possibly edited) test
+ *  cases. Runs as a detached server job + polling: the default LIVE generator
+ *  drives a real browser through every test case (verifying each locator by
+ *  executing it), which takes well past any single-request ingress timeout. */
 export async function generateScripts(testCases: any[], appId?: string, target?: TargetOverride) {
-  const { data } = await api.post('/pipeline-flow/scripts', { testCases, appId, ...targetBody(target) }, { timeout: PIPELINE_TIMEOUT_MS });
-  return data as { scripts: GeneratedScript[]; pageObjects: GeneratedPageObject[] };
+  const body = { testCases, appId, ...targetBody(target) };
+  const { data: started } = await api.post('/pipeline-flow/scripts/start', body, { timeout: 60_000 });
+  // Live generation is slower than batch — allow up to 30 minutes of polling.
+  return pollPipelineJob<{ scripts: GeneratedScript[]; pageObjects: GeneratedPageObject[]; mode?: string }>(started.jobId, 30 * 60_000);
+}
+
+/**
+ * Poll a started pipeline-flow job until it settles, then return its result.
+ * Execution/healing run as detached server-side jobs because a single long
+ * HTTP request gets killed by the hosting ingress (~240s on Azure Container
+ * Apps) long before Playwright finishes — the run continued server-side but
+ * the results never reached the UI. Short poll requests are immune to that.
+ * A few consecutive poll failures (network blips, brief backend restarts
+ * during dev) are tolerated before giving up.
+ */
+async function pollPipelineJob<T>(jobId: string, deadlineMs: number = PIPELINE_TIMEOUT_MS): Promise<T> {
+  const deadline = Date.now() + deadlineMs;
+  let consecutiveErrors = 0;
+  for (;;) {
+    if (Date.now() > deadline) throw new Error('Timed out waiting for the stage to finish.');
+    await new Promise((r) => setTimeout(r, 4_000));
+    let data: any;
+    try {
+      ({ data } = await api.get(`/pipeline-flow/jobs/${encodeURIComponent(jobId)}`, { timeout: 30_000 }));
+      consecutiveErrors = 0;
+    } catch (err: any) {
+      // 404 = the job is gone (server restarted) — more polling can't recover it.
+      if (err?.response?.status === 404) {
+        throw new Error(err?.response?.data?.error || 'The job was lost (server restarted). Re-run the stage.');
+      }
+      if (++consecutiveErrors >= 5) throw err;
+      continue;
+    }
+    if (data.status === 'completed') return data.result as T;
+    if (data.status === 'failed') throw new Error(data.error || 'The pipeline stage failed on the server.');
+  }
 }
 
 /** Stage 4 — execute the given scripts (+ page objects) against the configured app.
  *  Pass testRunId (the saved run) so the Allure report is built for that run and
- *  shows up on the Reports page. `target` supplies an inline URL when no app is configured. */
+ *  shows up on the Reports page. `target` supplies an inline URL when no app is configured.
+ *  Runs as a detached server job + polling so long Playwright runs survive ingress timeouts. */
 export async function executePipeline(testCases: any[], scripts: any[], pageObjects: any[] = [], appId?: string, testRunId?: string, target?: TargetOverride) {
-  const { data } = await api.post('/pipeline-flow/execute', { testCases, scripts, pageObjects, appId, testRunId, ...targetBody(target) }, { timeout: PIPELINE_TIMEOUT_MS });
-  return data as {
+  const body = { testCases, scripts, pageObjects, appId, testRunId, ...targetBody(target) };
+  const { data: started } = await api.post('/pipeline-flow/execute/start', body, { timeout: 60_000 });
+  return pollPipelineJob<{
     executionDetails: { testCaseId: string; scenario: string; status: string; durationMs?: number; error?: string }[];
     failureReason: string | null;
     reportUrl?: string;
     app: { name: string; targetUrl?: string } | null;
     summary: { total: number; passed: number; failed: number; executed: boolean; reason?: string };
-  };
+  }>(started.jobId);
 }
 
-/** Stage 5 — heal failing tests then re-execute the suite. */
+/** Stage 5 — heal failing tests then re-execute the suite (detached job + polling). */
 export async function healPipeline(
   testCases: any[],
   scripts: any[],
@@ -382,8 +421,11 @@ export async function healPipeline(
   testRunId?: string,
   target?: TargetOverride,
 ) {
-  const { data } = await api.post('/pipeline-flow/heal', { testCases, scripts, executionDetails, pageObjects, appId, testRunId, ...targetBody(target) }, { timeout: PIPELINE_TIMEOUT_MS });
-  return data as {
+  const body = { testCases, scripts, executionDetails, pageObjects, appId, testRunId, ...targetBody(target) };
+  const { data: started } = await api.post('/pipeline-flow/heal/start', body, { timeout: 60_000 });
+  // Live healing replays each failing scenario in a real browser and then
+  // re-executes the suite — allow up to 30 minutes of polling.
+  return pollPipelineJob<{
     scripts: GeneratedScript[];
     pageObjects: GeneratedPageObject[];
     executionDetails: { testCaseId: string; scenario: string; status: string; durationMs?: number; error?: string }[];
@@ -391,7 +433,7 @@ export async function healPipeline(
     reportUrl?: string;
     app: { name: string; targetUrl?: string } | null;
     summary: { total: number; passed: number; failed: number; executed: boolean; reason?: string };
-  };
+  }>(started.jobId, 30 * 60_000);
 }
 
 /* ─────────────────────────────────────────────────────────────

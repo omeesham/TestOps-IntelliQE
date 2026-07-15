@@ -37,6 +37,8 @@ async function loadChromium(): Promise<ChromiumModule> {
 const MAX_PAGES = 12;       // Hard cap so a giant site doesn't crash the worker
 const MAX_DEPTH = 2;        // 0 = landing only, 2 = landing + 2 hops
 const PAGE_TIMEOUT_MS = 20_000;
+const CRAWL_CACHE_TTL_MS = 15 * 60_000; // reuse a crawl across pipeline stages
+const crawlCache = new Map<string, { at: number; promise: Promise<ExploredApp> }>();
 
 /** Internal — a single extracted page snapshot before consolidation. */
 interface PageSnapshot {
@@ -124,15 +126,32 @@ export async function exploreAgent(state: TestOpsState): Promise<TestOpsState> {
  * Logs in with the first role's credentials when a login screen is detected.
  */
 export async function crawlAppMap(targetUrl: string, appContext?: AppContext): Promise<ExploredApp> {
-  const { snapshots, authDetected, notes } = await crawlApp(targetUrl, appContext);
-  return {
-    appName: appContext?.appName,
-    baseUrl: targetUrl,
-    pages: snapshots,
-    detectedFeatures: deriveFeatures(snapshots),
-    authDetected,
-    notes,
-  };
+  // A full BFS crawl of a login-protected SPA can take minutes, and within one
+  // process the app's DOM doesn't change between pipeline stages (generate →
+  // scripts → heal → retry). Serve a recent crawl from cache; share a single
+  // in-flight crawl between concurrent callers. Keyed by URL + login role so a
+  // credential change invalidates naturally.
+  const key = `${targetUrl}::${appContext?.roles?.[0]?.username || ''}`;
+  const hit = crawlCache.get(key);
+  if (hit && Date.now() - hit.at < CRAWL_CACHE_TTL_MS) {
+    console.log(`[exploreAgent] crawl cache hit for ${targetUrl}`);
+    return hit.promise;
+  }
+  const promise = (async (): Promise<ExploredApp> => {
+    const { snapshots, authDetected, notes } = await crawlApp(targetUrl, appContext);
+    return {
+      appName: appContext?.appName,
+      baseUrl: targetUrl,
+      pages: snapshots,
+      detectedFeatures: deriveFeatures(snapshots),
+      authDetected,
+      notes,
+    };
+  })();
+  crawlCache.set(key, { at: Date.now(), promise });
+  // Never cache a failed crawl — the next caller should retry.
+  promise.catch(() => crawlCache.delete(key));
+  return promise;
 }
 
 /**

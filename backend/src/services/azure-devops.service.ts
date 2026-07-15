@@ -18,17 +18,23 @@ import { encryptConfigData, decryptConfigData } from '../utils/crypto.js';
 
 const API_VERSION = '7.0';
 
-// Work item types treated as "requirements" (stories) across the common Azure
-// DevOps process templates (Agile = User Story, Scrum = Product Backlog Item,
-// CMMI = Requirement, Basic = Issue). Bugs are deliberately EXCLUDED — they are
-// defects, not requirements, and live in the Bug Tracker instead.
-const STORY_TYPES = [
-  'User Story', 'Product Backlog Item', 'Requirement',
-  'Feature', 'Epic', 'Issue',
-];
+// Work item types offered when generating tests from board items: ONLY
+// Epic, User Story and Task (per product decision — no backlog items,
+// features, or bugs in the picker). Bugs live in the Bug Tracker flow and
+// Test Case has its own dedicated import mode; everything else stays
+// reachable through the "all work items" browse.
+const STORY_TYPES = ['Epic', 'User Story', 'Task'];
 
 // Everything a user might have in Boards, for the "all work items" browse mode.
-const ALL_TYPES = [...STORY_TYPES, 'Bug', 'Task', 'Test Case'];
+const ALL_TYPES = [
+  ...STORY_TYPES, 'Product Backlog Item', 'Requirement',
+  'Feature', 'Issue', 'Bug', 'Test Case',
+];
+
+// Board cards in a terminal column are finished work — not candidates for test
+// generation. Filter them in WIQL so the picker only offers open cards.
+// ('Removed' is Azure's soft-delete state and must never surface.)
+const DONE_STATES_CLAUSE = `[System.State] NOT IN ('Closed', 'Done', 'Removed')`;
 
 export type AdoCreds = {
   /** Normalized org API base, e.g. https://dev.azure.com/my-org */
@@ -199,7 +205,7 @@ export async function testConnection(creds: AdoCreds): Promise<{ id: string; nam
 }
 
 export async function getStories(creds: AdoCreds): Promise<WorkItemSummary[]> {
-  const ids = await wiqlIds(creds, typesClause(STORY_TYPES), 100);
+  const ids = await wiqlIds(creds, `${typesClause(STORY_TYPES)} AND ${DONE_STATES_CLAUSE}`, 500);
   const items = await batchFields(creds, ids, ['System.Id', 'System.Title', 'System.WorkItemType', 'System.State']);
   return items.map((w) => ({
     key: String(w.id),
@@ -226,7 +232,13 @@ export async function getStory(creds: AdoCreds, id: string): Promise<StoryDetail
   const resp = await axios.get(url, { headers: authHeaders(creds) });
   const f = resp.data?.fields || {};
   const title = f['System.Title'] ?? id;
-  const description = htmlToPlain(f['System.Description'] || '');
+  // Bugs carry their detail in Repro Steps rather than Description — include
+  // it so a Bug selected as a requirement source doesn't come back empty.
+  const reproSteps = htmlToPlain(f['Microsoft.VSTS.TCM.ReproSteps'] || '');
+  const description = [
+    htmlToPlain(f['System.Description'] || ''),
+    reproSteps ? `Steps to Reproduce:\n${reproSteps}` : '',
+  ].filter(Boolean).join('\n\n');
   const acceptanceCriteria = htmlToPlain(f['Microsoft.VSTS.Common.AcceptanceCriteria'] || '');
   return { key: String(id), title, description, acceptanceCriteria, type: f['System.WorkItemType'] };
 }

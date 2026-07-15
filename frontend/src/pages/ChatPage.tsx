@@ -30,7 +30,7 @@ import {
   Plus, Trash2, Download, Clipboard, Cpu, Code, Search, Zap,
   BarChart3, Activity, Workflow, Box, Pencil, Save, ChevronLeft, ChevronRight,
   Play, Heart, GitBranch, Terminal, AlertTriangle, Wrench, ExternalLink, Copy, Package,
-  SkipForward, XCircle, Volume2, VolumeX, Settings,
+  SkipForward, XCircle, Volume2, VolumeX, Settings, MoreHorizontal,
 } from 'lucide-react';
 import { initTTS, speak, speakAsync, waitForSpeech, waitForVoices, stopSpeaking, isTTSEnabled, toggleTTS } from '@/utils/tts';
 import { useToast } from '@/components/feedback/ToastProvider';
@@ -107,6 +107,68 @@ const REQ_SOURCES: { id: ReqSource; title: string; icon: React.ElementType; desc
 
 /* CONNECT_FIELDS removed — all connection configuration now lives in System Configuration page */
 
+/* ── Failure diagnostics ─────────────────────────────────────────
+   Translate a raw Playwright error into a plain-English diagnosis (what broke)
+   plus an actionable hint (how to fix it). The full raw error stays available
+   behind the per-row ⋯ expander for whoever needs the technical detail. */
+interface FailureDiagnosis { title: string; hint: string }
+
+/** Pull the element the test was looking for out of a Playwright error/call log. */
+function extractFailedTarget(err: string): string | undefined {
+  const m =
+    err.match(/waiting for (getBy[A-Za-z]+\(.*?\))/) ||
+    err.match(/waiting for locator\((['"].*?['"])\)/) ||
+    err.match(/locator\((['"].*?['"])\)/) ||
+    err.match(/(getBy[A-Za-z]+\(.*?\))/);
+  const t = m?.[1]?.trim();
+  return t ? (t.length > 70 ? `${t.slice(0, 70)}…` : t) : undefined;
+}
+
+function diagnoseFailure(raw?: string): FailureDiagnosis {
+  const err = raw || '';
+  if (!err) return { title: 'Test failed', hint: 'No error detail was returned for this test.' };
+  const target = extractFailedTarget(err);
+
+  if (/Missing page object/i.test(err)) return {
+    title: 'Generated script is incomplete — a page object file is missing',
+    hint: 'The spec imports a page object that was never created (a generation desync). Regenerate the automation scripts for this test case.',
+  };
+  if (/could not be generated/i.test(err)) return {
+    title: 'No automation script could be generated for this test case',
+    hint: 'The AI did not produce a runnable script for these steps. Regenerate the scripts, or simplify/clarify the test steps.',
+  };
+  if (/ERR_NAME_NOT_RESOLVED|ERR_CONNECTION_REFUSED|ERR_CONNECTION_TIMED_OUT|ERR_CERT|ECONNREFUSED|net::ERR/i.test(err)) return {
+    title: 'Could not reach the application under test',
+    hint: 'The target URL did not respond. Verify the Base URL in System Configuration → Application Setup and confirm the app is up and reachable from the server.',
+  };
+  if (/waitForURL/i.test(err) && /Timeout|exceeded/i.test(err)) return {
+    title: 'Login or navigation never completed',
+    hint: 'The app stayed on the same page after signing in / navigating — usually wrong credentials, an unexpected login flow (e.g. SSO), or a very slow redirect. Check the credentials in Application Setup.',
+  };
+  if (/strict mode violation/i.test(err)) return {
+    title: `Selector matched more than one element${target ? `: ${target}` : ''}`,
+    hint: 'The selector is ambiguous on this page — several elements match it. Auto-Heal can usually narrow it to the right one.',
+  };
+  if (/Timeout|exceeded|waiting for/i.test(err) && (/toBeVisible|toBeHidden|waiting for|not found/i.test(err))) return {
+    title: `Element not found on the page${target ? `: ${target}` : ''}`,
+    hint: 'The generated selector does not match the app’s actual DOM (or the element only appears after an earlier step that failed). Auto-Heal re-inspects the live page and fixes selectors like this.',
+  };
+  if (/expect\(|toBe|toHave|toContain|toEqual|Expected|Received/i.test(err)) return {
+    title: 'Assertion failed — the app behaved differently than expected',
+    hint: 'The steps ran, but what appeared on screen did not match the expected result. Review this test case’s expected result, or run Auto-Heal to adjust the assertion.',
+  };
+  if (/SyntaxError|Cannot find module|failed to load|Unexpected token|TS\d{4}/i.test(err)) return {
+    title: 'The generated script has a code error',
+    hint: 'The spec failed to compile/load, so it never ran. Regenerate the scripts or run Auto-Heal to rewrite it.',
+  };
+  if (/Timeout|exceeded/i.test(err)) return {
+    title: `Timed out waiting for the page${target ? ` (${target})` : ''}`,
+    hint: 'The app did not reach the expected state in time — slow environment, or the flow differs from the test’s assumption. Auto-Heal may adapt the wait/selector.',
+  };
+  const first = err.split('\n').map((l) => l.trim()).find(Boolean) || 'Test failed';
+  return { title: first.length > 140 ? `${first.slice(0, 140)}…` : first, hint: 'See the full error below for details.' };
+}
+
 const AGENTS: { name: string; detail: string }[] = [
   { name: 'Requirement Analyst', detail: 'Parsing requirements & identifying test scenarios' },
   { name: 'Test Case Generator', detail: 'Generating detailed test cases' },
@@ -160,14 +222,17 @@ interface PipelineStageState {
   durationMs?: number;
 }
 
-/** Format a millisecond duration as a standard 00h00m00s clock. */
+/** Format a millisecond duration adaptively: `45s`, `2m 35s`, `1h 02m 10s`.
+ *  (The old fixed 00h00m00s clock read as "no timing" for sub-hour runs.) */
 function formatHMS(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000));
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
   const s = total % 60;
   const p = (n: number) => String(n).padStart(2, '0');
-  return `${p(h)}h${p(m)}m${p(s)}s`;
+  if (h > 0) return `${h}h ${p(m)}m ${p(s)}s`;
+  if (m > 0) return `${m}m ${p(s)}s`;
+  return `${s}s`;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -280,6 +345,13 @@ export default function ChatPage() {
   // produced). Surfacing it honestly beats faking a pass or a fail.
   const [executionResults, setExecutionResults] = useState<{ testCaseId: string; testName: string; status: 'pending' | 'running' | 'passed' | 'failed' | 'not_run'; duration: string; error?: string }[]>([]);
   const [executionSummary, setExecutionSummary] = useState<{ total: number; passed: number; failed: number; duration: string; durationMs: number } | null>(null);
+  // Rows whose ⋯ expander is open (full raw error + fix hint). Reset per run.
+  const [expandedResults, setExpandedResults] = useState<Set<number>>(new Set());
+  const toggleResultExpanded = (i: number) => setExpandedResults((prev) => {
+    const next = new Set(prev);
+    if (next.has(i)) next.delete(i); else next.add(i);
+    return next;
+  });
 
   // Healing state
   const [healingAttempt, setHealingAttempt] = useState(0);
@@ -289,7 +361,7 @@ export default function ChatPage() {
   const [healingLog, setHealingLog] = useState<{ testCaseId: string; error: string; fix: string; result: 'fixed' | 'unchanged' | 'unknown' | 'still-failing' }[]>([]);
 
   // Report state
-  const [reportData, setReportData] = useState<{ totalTests: number; passed: number; failed: number; healed: number; passRate: number; executionTime: string; healingRequired: boolean } | null>(null);
+  const [reportData, setReportData] = useState<{ totalTests: number; passed: number; failed: number; notRun: number; healed: number; passRate: number; executionTime: string; healingRequired: boolean } | null>(null);
 
   // Pipeline run tracking
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
@@ -431,7 +503,7 @@ export default function ChatPage() {
     if (hasSavedSession) return;
 
     waitForVoices().then(() => {
-      push('tessa', `Hello ${user?.username || 'there'}! I'm Tessa, your IntelliQE TestOps Assistant.\n\nI can help you design, generate, and execute intelligent test validations across your platform.\n\nWhat would you like to test today?`);
+      push('tessa', `Hello ${user?.username || 'there'}! I'm Tessa, your IntelliQE TestOps Assistant.\n\nI can help you design, generate, and run intelligent tests for your applications.\n\nWhat would you like to test today?`);
     });
   }, []);
 
@@ -439,7 +511,7 @@ export default function ChatPage() {
   const pickCategory = (c: typeof CATEGORIES[number]) => {
     if (c.comingSoon) {
       push('user', c.title);
-      push('tessa', `${c.title} is coming soon. We're actively building this — stay tuned!`);
+      push('tessa', `${c.title} is coming soon — we're actively working on it. Stay tuned!`);
       return;
     }
     push('user', c.title);
@@ -447,10 +519,10 @@ export default function ChatPage() {
     setSubCategory(c.title);
 
     if (c.id === 'api') {
-      push('tessa', 'Please provide the API details below.');
+      push('tessa', 'Please provide your API details below.');
       setStep('api-form');
     } else {
-      push('tessa', 'How would you like to provide the requirements?');
+      push('tessa', 'How would you like to provide your requirements?');
       setStep('source-select');
     }
   };
@@ -467,13 +539,13 @@ export default function ChatPage() {
     setFormValues({});
     setConnectError('');
     if (s === 'upload') {
-      push('tessa', 'Upload your BRD or Functional Specification document.');
+      push('tessa', 'Please upload your BRD or functional specification document.');
       setStep('upload-doc');
     } else if (s === 'text') {
-      push('tessa', 'Paste or type your requirements below.');
+      push('tessa', 'Please paste or type your requirements below.');
       setStep('paste-text');
     } else if (s === 'explore') {
-      push('tessa', "No problem — give me the application URL (and credentials if it's behind a login) and I'll explore it to figure out what to test.");
+      push('tessa', "No problem! Please share the application URL (and login credentials if it's behind a login), and I'll explore the app to work out what to test.");
       setStep('explore-form');
     } else {
       const label = REQ_SOURCES.find((r) => r.id === s)?.title || String(s);
@@ -488,19 +560,19 @@ export default function ChatPage() {
               const storiesArr = await getJiraStories(user?.username || 'admin');
               const list = Array.isArray(storiesArr) ? storiesArr : (storiesArr?.stories || storiesArr?.issues || []);
               setStories(list);
-              push('tessa', `${label} is connected — found ${list.length} stories/tasks. Select one to generate test cases.`);
+              push('tessa', `${label} is connected. I found ${list.length} stories/tasks — please select one to generate test cases.`);
               setStep('content-select');
             } catch (err: any) {
               console.error('JIRA stories fetch failed:', err?.response?.data || err);
               const data = err?.response?.data;
               const status = data?.status ?? err?.response?.status;
               const msg = data?.error || err?.message || 'Could not fetch stories';
-              push('tessa', `JIRA error${status ? ` (${status})` : ''}: ${msg}`);
+              push('tessa', `I couldn't fetch items from JIRA${status ? ` (error ${status})` : ''}: ${msg}. Please try again.`);
             }
           } else if (s === 'azure-devops') {
             // ADO offers TWO modes: generate from stories, or import existing
             // Test Cases authored in Azure DevOps. Let the user choose.
-            push('tessa', `${label} is connected. Would you like to generate tests from stories, or import the test cases already authored in Azure DevOps?`);
+            push('tessa', `${label} is connected. Would you like me to generate new test cases from your stories, or import the test cases already authored in Azure DevOps?`);
             setStep('ado-mode');
           } else if (s === 'confluence') {
             // Real Confluence fetch — list pages from the connected wiki.
@@ -516,15 +588,15 @@ export default function ChatPage() {
                 description: '',
               }));
               setStories(list);
-              push('tessa', `Found ${list.length} page(s). Pick one and I'll pull its content.`);
+              push('tessa', `I found ${list.length} page(s). Please select one and I'll retrieve its content.`);
               setStep('content-select');
             } catch (err: any) {
               const msg = err?.response?.data?.error || err?.message || 'Could not fetch Confluence pages';
-              push('tessa', `Confluence error: ${msg}`);
+              push('tessa', `I couldn't fetch pages from Confluence: ${msg}. Please try again.`);
             }
           } else if (s === 'sharepoint') {
             // Real SharePoint fetch — list documents from the default library.
-            push('tessa', `${label} is connected. Listing documents...`);
+            push('tessa', `${label} is connected. Fetching your documents...`);
             try {
               const docs = await getSharePointDocuments();
               const list = docs.map((d) => ({
@@ -534,52 +606,56 @@ export default function ChatPage() {
                 description: '',
               }));
               setStories(list);
-              push('tessa', `Found ${list.length} document(s). Select one to extract requirements.`);
+              push('tessa', `I found ${list.length} document(s). Please select one to extract requirements.`);
               setStep('content-select');
             } catch (err: any) {
               const msg = err?.response?.data?.error || err?.message || 'Could not list SharePoint documents';
-              push('tessa', `SharePoint error: ${msg}`);
+              push('tessa', `I couldn't fetch documents from SharePoint: ${msg}. Please try again.`);
             }
           }
           return;
         }
       } catch {}
       // Not connected — redirect to System Configuration
-      push('tessa', `${label} is not configured yet. Please go to System Configuration to set up this connection first.`);
+      push('tessa', `${label} isn't configured yet. Please set up the connection under System Configuration first.`);
     }
     } finally {
       pickInFlight.current = false;
     }
   };
 
-  /* --- Azure DevOps: fetch stories (→ generate) --- */
+  /* --- Azure DevOps: fetch open stories/tasks (→ generate) --- */
   const adoFetchStories = async () => {
     try {
       const storiesArr = await getAzureDevopsStories();
       const list = (Array.isArray(storiesArr) ? storiesArr : []).map((w: any) => ({
         key: w.key,
-        summary: w.type ? `[${w.type}] ${w.summary}` : w.summary,
+        summary: w.type ? `${w.type}: ${w.summary}` : w.summary,
         title: w.summary,
         description: '',
       }));
       setStories(list);
-      push('tessa', `Found ${list.length} work item(s). Select one to generate test cases.`);
+      if (list.length === 0) {
+        push('tessa', "I couldn't find any open stories or tasks on your Azure DevOps board. Items that are done or closed aren't shown here.");
+        return;
+      }
+      push('tessa', `I found ${list.length} open ${list.length === 1 ? 'work item' : 'work items'} on your Azure DevOps board. Please select one to generate test cases.`);
       setStep('content-select');
     } catch (err: any) {
       const data = err?.response?.data;
       const status = data?.status ?? err?.response?.status;
       const msg = data?.error || err?.message || 'Could not fetch work items';
-      push('tessa', `Azure DevOps error${status ? ` (${status})` : ''}: ${msg}`);
+      push('tessa', `I couldn't reach Azure DevOps${status ? ` (error ${status})` : ''}: ${msg}. Please try again.`);
     }
   };
 
   /* --- Azure DevOps: import existing Test Case work items (with their steps) --- */
   const adoImportTestCases = async () => {
-    push('tessa', 'Importing test cases from Azure DevOps…');
+    push('tessa', 'Importing test cases from Azure DevOps...');
     try {
       const tcs = await getAzureDevopsTestCases();
       if (!Array.isArray(tcs) || tcs.length === 0) {
-        push('tessa', 'No Test Case work items were found in Azure DevOps. Try the Stories option instead, or check the project/area path.');
+        push('tessa', "I couldn't find any Test Case work items in Azure DevOps. Please try the Stories option instead, or check the project/area path.");
         return;
       }
       const mapped = tcs.map((t, i) => {
@@ -614,13 +690,13 @@ export default function ChatPage() {
       setGeneratedPageObjects([]);
       updatePipeline('requirements', 'completed', 'Imported from Azure DevOps');
       updatePipeline('test-design', 'completed', `${mapped.length} test cases imported`);
-      push('tessa', `Imported ${mapped.length} test case(s) from Azure DevOps. Review them, then click "Save" and generate automation scripts.`);
+      push('tessa', `I imported ${mapped.length} test ${mapped.length === 1 ? 'case' : 'cases'} from Azure DevOps. Please review them, then click Save to continue to automation script generation.`);
       setStep('results');
     } catch (err: any) {
       const data = err?.response?.data;
       const status = data?.status ?? err?.response?.status;
       const msg = data?.error || err?.message || 'Could not import test cases';
-      push('tessa', `Azure DevOps error${status ? ` (${status})` : ''}: ${msg}`);
+      push('tessa', `I couldn't reach Azure DevOps${status ? ` (error ${status})` : ''}: ${msg}. Please try again.`);
     }
   };
 
@@ -640,10 +716,10 @@ export default function ChatPage() {
         // Backend returns StorySummary[] directly: [{key, summary}, ...]
         const list = Array.isArray(storiesArr) ? storiesArr : (storiesArr?.stories || storiesArr?.issues || []);
         setStories(list);
-        push('tessa', `Connected successfully! Logged in as "${jiraName}". Found ${list.length} stories/tasks. Select one to generate test cases.`);
+        push('tessa', `Connected successfully as "${jiraName}". I found ${list.length} stories/tasks — please select one to generate test cases.`);
         setStep('content-select');
       } else if (source === 'confluence' || source === 'sharepoint') {
-        push('tessa', `${source === 'confluence' ? 'Confluence' : 'SharePoint'} document fetching is not yet integrated. Please use JIRA, upload a document, or paste requirements directly.`);
+        push('tessa', `${source === 'confluence' ? 'Confluence' : 'SharePoint'} document fetching isn't available yet. Please use JIRA, upload a document, or paste your requirements instead.`);
       }
     } catch (err: any) {
       setConnectError(err?.response?.data?.error || err?.message || 'Connection failed. Check credentials and try again.');
@@ -695,17 +771,17 @@ export default function ChatPage() {
         const meta: string[] = [];
         if (doc.pageCount) meta.push(`${doc.pageCount} pages`);
         meta.push(`${doc.text.length.toLocaleString()} characters`);
-        push('tessa', `Extracted ${meta.join(', ')} from ${doc.name}.`);
+        push('tessa', `I extracted ${meta.join(', ')} from ${doc.name}.`);
         requirements = [doc.name, doc.text].filter(Boolean).join('\n\n');
       }
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.message || 'Could not fetch details';
-      push('tessa', `Couldn't load that item: ${msg}. Please pick a different one or use another source.`);
+      push('tessa', `I couldn't load that item: ${msg}. Please select a different one or try another source.`);
       return;
     }
 
     setPendingRequirements(requirements);
-    push('tessa', 'Great! Now choose which columns you want in your test cases, then click Generate.');
+    push('tessa', "Great! Please choose the columns you'd like in your test cases, then click Generate.");
     setStep('column-select');
   };
 
@@ -744,12 +820,12 @@ export default function ChatPage() {
         result.pageCount ? `${result.pageCount} pages` : null,
       ].filter(Boolean).join(', ');
       const warn = result.warning ? ` (Note: ${result.warning})` : '';
-      push('tessa', `Got it — extracted ${stats} from ${file.name}.${warn} Pick the columns you want and I'll generate the test cases.`);
+      push('tessa', `Got it! I extracted ${stats} from ${file.name}.${warn} Please choose the columns you'd like, then click Generate.`);
       setStep('column-select');
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.message || 'Upload failed';
       setUploadError(msg);
-      push('tessa', `I couldn't read that file: ${msg}`);
+      push('tessa', `I couldn't read that file: ${msg}. Please try a different file.`);
     } finally {
       setUploadInProgress(false);
     }
@@ -760,7 +836,7 @@ export default function ChatPage() {
     if (!pasteText.trim()) return;
     push('user', pasteText.trim().length > 100 ? pasteText.trim().slice(0, 100) + '...' : pasteText.trim());
     setPendingRequirements(pasteText.trim());
-    push('tessa', 'Requirements received! Choose which columns you want in your test cases.');
+    push('tessa', "Requirements received! Please choose the columns you'd like in your test cases, then click Generate.");
     setStep('column-select');
   };
 
@@ -778,7 +854,7 @@ export default function ChatPage() {
     // The literal placeholder is what we'll show in the column-select UI;
     // the real backend call uses exploreMode + roles, not this text.
     setPendingRequirements(`__EXPLORE__:${exploreUrl}`);
-    push('tessa', "Got it. I'll crawl the application, infer the features, then generate the test cases. Pick the columns you want and I'll start.");
+    push('tessa', "Got it! I'll explore the application, identify its features, and generate test cases. Please choose the columns you'd like, then click Generate.");
     setStep('column-select');
   };
 
@@ -788,7 +864,7 @@ export default function ChatPage() {
     const summary = `${apiMethod} ${apiUrl}`;
     push('user', summary);
     setPendingRequirements(`API Testing: ${apiMethod} ${apiUrl} - ${subCategory}`);
-    push('tessa', 'API details received. Choose which columns you want in your test cases.');
+    push('tessa', "API details received! Please choose the columns you'd like in your test cases, then click Generate.");
     setStep('column-select');
   };
 
@@ -911,7 +987,7 @@ export default function ChatPage() {
       const warn = res?.warning === 'no_test_cases_generated' ? ' (backend returned no_test_cases_generated)' : '';
       push(
         'tessa',
-        `Pipeline returned no test cases${warn}.${detail} Try a more specific requirement or a different JIRA story.`
+        `The pipeline didn't return any test cases${warn}.${detail} Please try a more specific requirement or a different story.`
       );
       updatePipeline('test-design', 'skipped', 'No test cases generated');
       setStep('welcome');
@@ -944,7 +1020,7 @@ export default function ChatPage() {
     // Pipeline: Stage 2 → completed with count
     updatePipeline('test-design', 'completed', `${testCases.length} test cases generated`);
 
-    push('tessa', `Generated ${testCases.length} test cases from the AI pipeline (${res?.mode === 'async' ? 'Claude AI' : 'local agents'}). Review, edit, or delete as needed. Click Save when satisfied.`);
+    push('tessa', `I generated ${testCases.length} test cases using the AI pipeline (${res?.mode === 'async' ? 'Claude AI' : 'local agents'}). Please review, edit, or delete them as needed, then click Save when you're ready.`);
     setStep('results');
   };
 
@@ -962,12 +1038,12 @@ export default function ChatPage() {
         testCases: results.testCases,
       });
       setSavedTestRunId(res.testRunId);
-      push('tessa', `${results.testCases.length} test cases saved successfully! You can now export them or proceed to automation script generation.`);
+      push('tessa', `${results.testCases.length} test cases saved successfully! You can now export them or continue to automation script generation.`);
       toast.success('Saved successfully');
       setStep('saved');
     } catch (err) {
       console.error('Save failed:', err);
-      push('tessa', 'Failed to save test cases. Please try again.');
+      push('tessa', "I couldn't save the test cases. Please try again.");
     } finally {
       setIsSaving(false);
     }
@@ -1049,7 +1125,7 @@ export default function ChatPage() {
         console.error('Script generation API failed:', err);
         updatePipeline('script-gen', 'skipped', msg);
         setAgentSteps([{ name: 'Script Writer', status: 'completed', detail: `Failed: ${msg}` }]);
-        push('tessa', `Script generation failed: ${msg}`);
+        push('tessa', `Script generation failed: ${msg}. Please try again.`);
         setStep('results');
         return;
       }
@@ -1061,7 +1137,7 @@ export default function ChatPage() {
       const msg = 'No automation scripts were produced for these test cases.';
       updatePipeline('script-gen', 'skipped', msg);
       setAgentSteps([{ name: 'Script Writer', status: 'completed', detail: msg }]);
-      push('tessa', `${msg} Please try again, or check the backend logs for the cause.`);
+      push('tessa', `${msg} Please try again, or check the backend logs for details.`);
       setStep('results');
       return;
     }
@@ -1074,7 +1150,7 @@ export default function ChatPage() {
     setAgentSteps([{ name: 'Script Writer', status: 'completed', detail: 'Automation scripts generated' }]);
     updatePipeline('script-gen', 'completed', `${scripts.length} scripts created`);
 
-    push('tessa', `Generated ${scripts.length} test scripts. Review the code below, then click "Execute Test Suite" to run them.`);
+    push('tessa', `I generated ${scripts.length} automation scripts. Please review the code below, then click "Execute Test Suite" to run them.`);
     setStep('script-review');
   };
 
@@ -1084,7 +1160,7 @@ export default function ChatPage() {
     // Runs against the Application configured in System Configuration → Application
     // Setup (resolved server-side). If none is configured, the backend reports
     // executed:false and we surface that gracefully — no blocking URL prompt.
-    push('tessa', 'Executing test suite across staging environment...');
+    push('tessa', 'Executing your test suite in the staging environment...');
     await waitForSpeech();
     if (flowId !== flowIdRef.current) return; // flow discarded while speaking
     setStep('executing');
@@ -1101,10 +1177,15 @@ export default function ChatPage() {
       error: undefined as string | undefined,
     }));
     setExecutionResults([...initialResults]);
+    setExpandedResults(new Set());
 
     // Execute the SAME scripts the user reviewed against the application
     // configured in System Configuration → Application Setup (resolved
     // server-side). Details come back keyed to these exact testCaseIds.
+    // Wall-clock the execution stage. The per-test duration sum undercounts
+    // badly (tests run in parallel workers, and tests with no result contribute
+    // 0), which showed "0s" execution time for minutes-long runs.
+    const execStartedAt = Date.now();
     let execRes: Awaited<ReturnType<typeof executePipeline>> | null = null;
     try {
       // Pass the saved run id so the Allure report is built for that run and
@@ -1113,6 +1194,7 @@ export default function ChatPage() {
     } catch (err) {
       console.error('Execute tests failed:', err);
     }
+    const execWallMs = Date.now() - execStartedAt;
     if (flowId !== flowIdRef.current) return; // flow discarded while executing
 
     // When no application is configured (or no URL), the backend runs nothing
@@ -1124,15 +1206,15 @@ export default function ChatPage() {
         ...row, status: 'not_run' as const, duration: '', error: reason,
       }));
       setExecutionResults(allNotRun);
-      setExecutionSummary({ total: allNotRun.length, passed: 0, failed: 0, duration: formatHMS(0), durationMs: 0 });
+      setExecutionSummary({ total: allNotRun.length, passed: 0, failed: 0, duration: formatHMS(execWallMs), durationMs: execWallMs });
       updatePipeline('execution', 'skipped', 'Not run — no target app');
-      push('tessa', `I couldn't run the tests: ${reason} Add your application's Base URL under System Configuration → Application Setup, or proceed to generate the report from the generated suite.`);
+      push('tessa', `I couldn't run the tests: ${reason} Please add your application's Base URL under System Configuration → Application Setup, or continue to the report with the generated suite.`);
       setStep('execution-results');
       return;
     }
 
     if (execRes?.app?.name) {
-      push('tessa', `Running the suite against "${execRes.app.name}"${execRes.app.targetUrl ? ` (${execRes.app.targetUrl})` : ''}...`);
+      push('tessa', `Running the test suite against "${execRes.app.name}"${execRes.app.targetUrl ? ` (${execRes.app.targetUrl})` : ''}...`);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -1173,23 +1255,23 @@ export default function ChatPage() {
     });
     setExecutionResults(finalResults);
 
-    // Sum real durations only. Tests with no duration contribute 0 — we
-    // do NOT pad the total with random numbers.
-    const totalMs = backendDetails.reduce((sum, d) => sum + (typeof d.durationMs === 'number' ? d.durationMs : 0), 0);
-    setExecutionSummary({ total: finalResults.length, passed, failed, duration: formatHMS(totalMs), durationMs: totalMs });
+    // Report the REAL wall-clock time of the execution stage. Summing per-test
+    // durations is wrong twice over: parallel workers overlap (sum ≠ elapsed),
+    // and tests without a result sum to 0s even after a minutes-long run.
+    setExecutionSummary({ total: finalResults.length, passed, failed, duration: formatHMS(execWallMs), durationMs: execWallMs });
 
     // Pipeline: Stage 4 → completed
     updatePipeline('execution', 'completed', `${passed}/${finalResults.length} passed`);
 
     if (failed > 0) {
-      push('tessa', `Execution complete: ${passed} passed, ${failed} failed out of ${finalResults.length} tests. You can auto-heal failing tests or skip to report.`);
+      push('tessa', `Execution complete: ${passed} of ${finalResults.length} tests passed and ${failed} failed. You can auto-heal the failing tests or continue to the report.`);
     } else if (passed === 0) {
       // Nothing actually ran (e.g. backend returned no details). Don't pretend
       // a green run — tell the user honestly so they can investigate.
       const reason = execRes?.failureReason ? ` ${execRes.failureReason}` : '';
-      push('tessa', `No tests were executed — ${notRun} of ${finalResults.length} could not be run.${reason} Check the target app configuration and the generated scripts, then try again.`);
+      push('tessa', `No tests were executed — ${notRun} of ${finalResults.length} couldn't run.${reason} Please check the target application configuration and the generated scripts, then try again.`);
     } else {
-      push('tessa', `All ${passed} tests passed! Proceed to generate the execution report.`);
+      push('tessa', `All ${passed} tests passed! You can now generate the execution report.`);
     }
     setStep('execution-results');
   };
@@ -1204,7 +1286,7 @@ export default function ChatPage() {
     setHealingAttempt(attempt);
     setStep('healing');
 
-    push('tessa', `Auto-healing attempt ${attempt}: Fixing ${failedTests.length} failing test(s)...`);
+    push('tessa', `Auto-healing attempt ${attempt}: fixing ${failedTests.length} failing test(s)...`);
     await waitForSpeech(); // Let Tessa finish speaking before starting healing
     if (flowId !== flowIdRef.current) return; // flow discarded while speaking
 
@@ -1215,6 +1297,7 @@ export default function ChatPage() {
     // and scripts. The backend heals the failing scripts, re-runs the whole
     // suite, and returns fresh results aligned to these testCaseIds — no
     // fabricated "all healed" outcomes.
+    const healStartedAt = Date.now();
     let healRes: Awaited<ReturnType<typeof healPipeline>> | null = null;
     let healErr = '';
     try {
@@ -1238,7 +1321,7 @@ export default function ChatPage() {
 
     if (!healRes) {
       updatePipeline('auto-healing', 'completed', 'Healing unavailable');
-      push('tessa', `Auto-healing could not complete${healErr ? `: ${healErr}` : ' — the healing service could not be reached'}. You can retry or proceed to the report with the current results.`);
+      push('tessa', `Auto-healing couldn't complete${healErr ? `: ${healErr.replace(/\.+$/, '')}` : ' — the healing service could not be reached'}. You can retry, or continue to the report with the current results.`);
       setStep('execution-results');
       return;
     }
@@ -1256,7 +1339,7 @@ export default function ChatPage() {
     const healedCount = healLog.filter((l) => l.result === 'fixed').length;
     updatePipeline('auto-healing', 'completed', `Healed ${healedCount}/${failedTests.length}`);
 
-    push('tessa', 'Backend re-executed the healed tests; recording real results...');
+    push('tessa', 'Re-running the healed tests and recording the results...');
     updatePipeline('execution', 'running', 'Recording healed results...');
 
     // Rebuild the execution table from the re-execution details (aligned by id).
@@ -1270,6 +1353,7 @@ export default function ChatPage() {
       return { ...row, status: 'not_run' as const, duration };
     });
     setExecutionResults(updatedResults);
+    setExpandedResults(new Set());
 
     const newPassed = healRes.summary?.passed ?? updatedResults.filter((r) => r.status === 'passed').length;
     const newFailed = healRes.summary?.failed ?? updatedResults.filter((r) => r.status === 'failed').length;
@@ -1277,15 +1361,19 @@ export default function ChatPage() {
       const v = parseFloat(r.duration || '0');
       return sum + (Number.isFinite(v) ? v : 0);
     }, 0);
-    setExecutionSummary({ total: updatedResults.length, passed: newPassed, failed: newFailed, duration: formatHMS(totalSec * 1000), durationMs: totalSec * 1000 });
+    // Prefer the per-test sum from the re-run; when no test reported a duration
+    // (nothing executed), fall back to the heal stage's real wall-clock time so
+    // the report never shows a bogus 0s.
+    const healMs = totalSec > 0 ? totalSec * 1000 : Date.now() - healStartedAt;
+    setExecutionSummary({ total: updatedResults.length, passed: newPassed, failed: newFailed, duration: formatHMS(healMs), durationMs: healMs });
     updatePipeline('execution', 'completed', `${newPassed}/${updatedResults.length} passed`);
 
     if (newFailed > 0 && attempt < 2) {
-      push('tessa', `Re-execution complete: ${newFailed} test(s) still failing. You can attempt another healing cycle or proceed to report.`);
+      push('tessa', `Re-execution complete: ${newFailed} test(s) are still failing. You can run another auto-healing cycle or continue to the report.`);
     } else if (newFailed > 0) {
-      push('tessa', `Maximum healing attempts reached. ${newFailed} test(s) remain failing. Proceed to report.`);
+      push('tessa', `Maximum auto-healing attempts reached — ${newFailed} test(s) are still failing. Please continue to the report.`);
     } else {
-      push('tessa', 'All tests passing after auto-healing! Proceed to generate the execution report.');
+      push('tessa', 'All tests are passing after auto-healing! You can now generate the execution report.');
     }
     setStep('execution-results');
   };
@@ -1299,7 +1387,7 @@ export default function ChatPage() {
 
     // Pipeline: Stage 6 → running
     updatePipeline('report-gen', 'running', 'Generating report...');
-    push('tessa', 'Generating test execution report...');
+    push('tessa', 'Generating your test execution report...');
     await waitForSpeech(); // Let Tessa finish speaking before generating report
     setStep('report');
 
@@ -1307,22 +1395,27 @@ export default function ChatPage() {
     const passRate = executionSummary && executionSummary.total > 0
       ? Math.round((executionSummary.passed / executionSummary.total) * 100)
       : 0;
+    const notRun = executionResults.filter((r) => r.status === 'not_run').length;
+    const failedCount = executionSummary?.failed || 0;
 
     setReportData({
       totalTests: executionSummary?.total || 0,
       passed: executionSummary?.passed || 0,
-      failed: executionSummary?.failed || 0,
+      failed: failedCount,
+      notRun,
       healed: healingLog.filter(l => l.result === 'fixed').length,
       passRate,
       executionTime: executionSummary?.duration || '0s',
-      healingRequired: healingAttempt > 0,
+      // "Needed" is about the RESULTS, not just whether healing already ran:
+      // failing (or unrunnable) tests still need attention.
+      healingRequired: healingAttempt > 0 || failedCount > 0 || notRun > 0,
     });
 
     // Pipeline: Stage 6 → completed. This stage assembles the report from
     // existing state in ~0ms, so show the real test-run duration instead of
     // its own (near-zero) elapsed time.
     updatePipeline('report-gen', 'completed', `Report ready — ${passRate}% pass rate`, executionSummary?.durationMs);
-    push('tessa', `Report generated. Pass rate: ${passRate}%. ${healingAttempt > 0 ? `${healingLog.filter(l => l.result === 'fixed').length} test(s) were auto-healed.` : 'No auto-healing was needed.'}`);
+    push('tessa', `Your test execution report is ready. Pass rate: ${passRate}%. ${healingAttempt > 0 ? `${healingLog.filter(l => l.result === 'fixed').length} test(s) were auto-healed.` : 'No auto-healing was needed.'}`);
   };
 
   /* --- Auto-populate git repo from System Configuration when entering publish step --- */
@@ -1371,12 +1464,12 @@ export default function ChatPage() {
       return;
     }
     if (!selectedRepoId) {
-      push('tessa', 'Select a connected repository first, or connect one under System Configuration → Code Repositories.');
+      push('tessa', 'Please select a connected repository first, or connect one under System Configuration → Code Repositories.');
       return;
     }
     setIsPublishing(true);
     setPublishedPrUrl('');
-    push('tessa', `Pushing ${generatedScripts.length} test script(s) to your git repository...`);
+    push('tessa', `Pushing ${generatedScripts.length} test script(s) to your Git repository...`);
     await waitForSpeech();
     try {
       const result = await publishToGit({
@@ -1395,12 +1488,12 @@ export default function ChatPage() {
       toast.success('Published successfully');
       push(
         'tessa',
-        `Done — opened ${result.provider === 'gitlab' ? 'MR' : 'PR'} #${result.prNumber} on ${result.provider} with ${result.fileCount} file(s). View it at ${result.prUrl}`,
+        `Done! I opened ${result.provider === 'gitlab' ? 'MR' : 'PR'} #${result.prNumber} on ${result.provider} with ${result.fileCount} file(s). You can view it at ${result.prUrl}`,
       );
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.message || 'Git publish failed';
       setPublishResult('error');
-      push('tessa', `Couldn't publish to git: ${msg}. Your scripts are still available below for manual download.`);
+      push('tessa', `I couldn't publish to Git: ${msg}. Your scripts are still available below for manual download.`);
     } finally {
       setIsPublishing(false);
     }
@@ -1521,7 +1614,7 @@ export default function ChatPage() {
     setIsPublishing(false);
     setPublishResult(null);
     clearSession(); // clear persisted session on explicit reset
-    setTimeout(() => push('tessa', `Welcome back! What would you like to test?`), 100);
+    setTimeout(() => push('tessa', `Welcome back! What would you like to test today?`), 100);
   };
 
   /* ═══════════════════════════════════════════════════════════════
@@ -1699,7 +1792,7 @@ export default function ChatPage() {
             <span className="text-xs font-medium text-emerald-700">Connected successfully</span>
           </div>
           <label className="block text-xs font-medium text-gray-600 mb-2">
-            {source === 'jira' || source === 'azure-devops' ? 'Select a Story' : 'Select a Document'}
+            {source === 'azure-devops' ? 'Select a Card' : source === 'jira' ? 'Select a Story' : 'Select a Document'}
           </label>
           <select value={selectedStory} onChange={e => setSelectedStory(e.target.value)} className={inputCls + ' appearance-none'}>
             <option value="">-- Choose --</option>
@@ -2380,7 +2473,7 @@ export default function ChatPage() {
                   <div className="flex-1 min-w-0">
                     <p className={`text-xs font-medium ${r.status === 'running' ? 'text-violet-700' : 'text-gray-800'}`}>{r.testName}.spec.ts</p>
                     {r.status === 'failed' && r.error && (
-                      <p className="text-[11px] text-red-500 mt-0.5 truncate">{r.error}</p>
+                      <p className="text-[11px] text-red-500 mt-0.5 truncate">{diagnoseFailure(r.error).title}</p>
                     )}
                   </div>
                   {(r.status === 'passed' || r.status === 'failed') && (
@@ -2418,20 +2511,48 @@ export default function ChatPage() {
             </div>
           </div>
 
-          {/* Test Result List */}
+          {/* Test Result List — failed rows show a plain-English diagnosis; the
+              ⋯ button expands the fix hint + full raw Playwright error. */}
           <div className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm space-y-2 max-h-[300px] overflow-y-auto">
-            {executionResults.map((r, i) => (
-              <div key={i} className={`flex items-start gap-3 p-2 rounded-lg ${r.status === 'failed' ? 'bg-red-50/50' : ''}`}>
-                <div className="flex-shrink-0 mt-0.5">
-                  {r.status === 'passed' ? <CheckCircle className="w-4 h-4 text-emerald-500" /> : <XCircle className="w-4 h-4 text-red-500" />}
+            {executionResults.map((r, i) => {
+              const diag = r.status === 'failed' ? diagnoseFailure(r.error) : null;
+              const expanded = expandedResults.has(i);
+              return (
+                <div key={i} className={`p-2 rounded-lg ${r.status === 'failed' ? 'bg-red-50/50' : r.status === 'not_run' ? 'bg-gray-50/70' : ''}`}>
+                  <div className="flex items-start gap-3">
+                    <div className="flex-shrink-0 mt-0.5">
+                      {r.status === 'passed' ? <CheckCircle className="w-4 h-4 text-emerald-500" /> :
+                       r.status === 'not_run' ? <SkipForward className="w-4 h-4 text-gray-400" /> :
+                       <XCircle className="w-4 h-4 text-red-500" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-gray-800">{r.testName}.spec.ts</p>
+                      {diag && <p className="text-[11px] text-red-600 mt-0.5">{diag.title}</p>}
+                      {r.status === 'not_run' && (
+                        <p className="text-[11px] text-gray-500 mt-0.5">Not run{r.error ? ` — ${r.error}` : ''}</p>
+                      )}
+                    </div>
+                    <span className="text-[11px] text-gray-400 flex-shrink-0">{r.duration}</span>
+                    {diag && r.error && (
+                      <button
+                        onClick={() => toggleResultExpanded(i)}
+                        title={expanded ? 'Hide error details' : 'Show error details'}
+                        aria-expanded={expanded}
+                        className={`flex-shrink-0 p-1 rounded-md transition-colors ${expanded ? 'bg-red-100 text-red-600' : 'text-gray-400 hover:bg-red-100 hover:text-red-600'}`}
+                      >
+                        <MoreHorizontal className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                  {diag && r.error && expanded && (
+                    <div className="mt-2 ml-7 mr-1 space-y-1.5">
+                      <p className="text-[11px] text-gray-600"><span className="font-medium text-gray-700">How to fix:</span> {diag.hint}</p>
+                      <pre className="text-[10px] leading-relaxed text-red-700/90 bg-red-50 border border-red-100 rounded-md p-2 max-h-40 overflow-auto whitespace-pre-wrap break-words">{r.error}</pre>
+                    </div>
+                  )}
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-gray-800">{r.testName}.spec.ts</p>
-                  {r.status === 'failed' && r.error && <p className="text-[11px] text-red-500 mt-0.5">{r.error}</p>}
-                </div>
-                <span className="text-[11px] text-gray-400">{r.duration}</span>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* Decision Buttons */}
@@ -2521,7 +2642,7 @@ export default function ChatPage() {
             <div className="grid grid-cols-3 gap-px bg-gray-100">
               {[
                 { label: 'Total Tests', value: reportData.totalTests, color: 'text-gray-800' },
-                { label: 'Passed', value: reportData.passed, color: 'text-emerald-600' },
+                { label: 'Passed', value: reportData.passed, color: reportData.passed > 0 ? 'text-emerald-600' : 'text-gray-400' },
                 { label: 'Failed', value: reportData.failed, color: reportData.failed > 0 ? 'text-red-600' : 'text-gray-400' },
                 { label: 'Auto-Healed', value: reportData.healed, color: reportData.healed > 0 ? 'text-amber-600' : 'text-gray-400' },
                 { label: 'Execution Time', value: reportData.executionTime, color: 'text-gray-800' },
@@ -2533,6 +2654,16 @@ export default function ChatPage() {
                 </div>
               ))}
             </div>
+            {/* Not-run callout — without this, "0 failed" next to "0 passed"
+                reads as a healthy run when in fact nothing executed. */}
+            {(reportData.notRun ?? 0) > 0 && (
+              <div className="px-5 py-2.5 border-t border-amber-100 bg-amber-50/60 flex items-center gap-2">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                <p className="text-[11px] text-amber-700">
+                  {reportData.notRun} of {reportData.totalTests} test(s) could not be run — open the execution results above for the reason on each test.
+                </p>
+              </div>
+            )}
             {/* Healing summary if applicable */}
             {healingLog.length > 0 && (
               <div className="px-5 py-3 border-t border-gray-100">

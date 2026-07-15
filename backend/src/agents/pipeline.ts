@@ -6,8 +6,8 @@ import { generatorAgent } from './generatorAgent.js';
 import { scriptAgent } from './scriptAgent.js';
 import { executionAgent } from './executionAgent.js';
 import { healingAgent } from './healingAgent.js';
-import { exploreAgent } from './exploreAgent.js';
-import type { TestOpsState, AppContext, LlmConfig } from './state.js';
+import { exploreAgent, crawlAppMap } from './exploreAgent.js';
+import type { TestOpsState, AppContext, LlmConfig, ExploredApp } from './state.js';
 
 /**
  * Decide if the explore agent should run. We trigger it when:
@@ -57,6 +57,18 @@ export async function runPipeline(
     state = s0.result; stages.push({ ...s0.stage, name: 'requirement' });
   }
 
+  // Grounding crawl for the scripting stage (story/spec-driven runs, where
+  // exploration is skipped). Kick it off NOW so the minutes of crawling
+  // overlap the LLM stages (requirement → audit/planning → generation)
+  // instead of stalling the pipeline right before scripting. Awaited below.
+  const groundingCrawl: Promise<ExploredApp | null> | null =
+    !state.exploredApp && state.appContext?.targetUrl
+      ? crawlAppMap(state.appContext.targetUrl, state.appContext).catch((e) => {
+          console.warn('[pipeline] grounding crawl failed — scripting will use UNVERIFIED selectors:', (e as Error).message);
+          return null;
+        })
+      : null;
+
   const s1 = await runStage('requirement', () => requirementAgent(state));
   state = s1.result; stages.push(s1.stage);
 
@@ -76,6 +88,18 @@ export async function runPipeline(
 
   const s4 = await runStage('generation', () => generatorAgent(state));
   state = s4.result; stages.push(s4.stage);
+
+  // Ground the scripting stage in the real DOM: collect the crawl started
+  // before the LLM stages (usually finished by now, so this await is ~free).
+  // Ungrounded selectors invented from requirement text are the #1 cause of
+  // every test timing out on its first toBeVisible().
+  if (groundingCrawl && !state.exploredApp) {
+    const exploredApp = await groundingCrawl;
+    if (exploredApp) {
+      console.log(`[pipeline] grounding crawl captured ${exploredApp.pages.length} page(s) from ${state.appContext!.targetUrl}`);
+      state = { ...state, exploredApp };
+    }
+  }
 
   const s5 = await runStage('scripting', () => scriptAgent(state));
   state = s5.result; stages.push(s5.stage);

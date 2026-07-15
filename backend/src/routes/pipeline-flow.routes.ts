@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { createInitialState } from '../agents/state.js';
 import type { TestOpsState, TestCase, AutomationScript, AppContext, PageObjectFile } from '../agents/state.js';
 import { scriptAgent } from '../agents/scriptAgent.js';
+import { liveScriptAgent, liveHealingAgent } from '../agents/liveScriptAgent.js';
 import { executionAgent } from '../agents/executionAgent.js';
 import { healingAgent } from '../agents/healingAgent.js';
 import { crawlAppMap, snapshotEntryPage } from '../agents/exploreAgent.js';
@@ -12,6 +13,7 @@ import { decryptStored, decryptField } from '../utils/crypto.js';
 import { dispatchTestRunNotification } from '../services/notification-dispatcher.service.js';
 import type { TestRunEmailPayload } from '../services/email.service.js';
 import { generateAllureHtml, REPORTS_ROOT } from '../services/allure-report.service.js';
+import { startJob, getJob } from '../services/async-jobs.service.js';
 import { logger } from '../utils/logger.js';
 import path from 'path';
 import fs from 'fs/promises';
@@ -285,57 +287,83 @@ function normalizePageObject(p: any): PageObjectFile | null {
  * Stage 3 — generate Playwright scripts for the (possibly edited) test cases
  * the user is looking at. Returns scripts aligned to the same testCaseIds.
  */
+async function scriptsStage(tenantId: string, body: any): Promise<any> {
+  const { testCases, appId } = body || {};
+
+  const llm = await getTenantLlm(tenantId);
+  if (!llm) {
+    throw new Error('No LLM configured. Add an Anthropic API key in System Configuration → LLM Configuration.');
+  }
+  const { ctx } = applyManualTarget(await resolveAppContext(tenantId, appId), body);
+
+  const state: TestOpsState = {
+    ...createInitialState('', ctx || undefined, llm),
+    testCases: (testCases as any[]).map(normalizeTestCase),
+    exploredApp: null,
+  };
+
+  // LIVE mode (default when a target URL exists): drive a real browser per
+  // test case — observe the page, act, verify each locator by executing it,
+  // and emit specs only from proven steps (Playwright codegen-style).
+  // Set SCRIPT_GEN_MODE=batch to force the crawl-once batch generator.
+  const live = !!ctx?.targetUrl && process.env.SCRIPT_GEN_MODE !== 'batch';
+  let exploredApp = null;
+  if (!live && ctx?.targetUrl) {
+    // Batch mode grounding: crawl once for real selectors. Best-effort — a
+    // crawl failure falls back to semantic-locator generation.
+    try {
+      console.log(`[pipeline-flow/scripts] crawling ${ctx.targetUrl} for real selectors…`);
+      exploredApp = await crawlAppMap(ctx.targetUrl, ctx);
+      console.log(`[pipeline-flow/scripts] crawled ${exploredApp.pages.length} page(s)`);
+      state.exploredApp = exploredApp;
+    } catch (e) {
+      console.warn('[pipeline-flow/scripts] crawl failed, scripting without DOM:', (e as Error).message);
+    }
+  }
+
+  const next = live ? await liveScriptAgent(state) : await scriptAgent(state);
+  console.log(
+    `[pipeline-flow/scripts] (${live ? 'live' : 'batch'}) produced ${next.automationScripts.length} script(s), ` +
+    `${(next.pageObjects || []).length} page object(s) for ${state.testCases.length} test case(s)`,
+  );
+  return {
+    scripts: next.automationScripts,
+    pageObjects: next.pageObjects || [],
+    crawledPages: exploredApp?.pages.length || 0,
+    mode: live ? 'live' : 'batch',
+  };
+}
+
 router.post('/scripts', async (req: Request, res: Response) => {
   try {
-    const tenantId = req.user!.tenantId;
-    const { testCases, appId } = req.body || {};
+    const { testCases } = req.body || {};
     if (!Array.isArray(testCases) || testCases.length === 0) {
       res.status(400).json({ error: 'testCases array is required' });
       return;
     }
-
-    const llm = await getTenantLlm(tenantId);
-    if (!llm) {
-      res.status(400).json({ error: 'No LLM configured. Add an Anthropic API key in System Configuration → LLM Configuration.' });
-      return;
-    }
-    const { ctx } = applyManualTarget(await resolveAppContext(tenantId, appId), req.body);
-
-    // Ground the scripts in the REAL app: crawl it for actual selectors so the
-    // generated Playwright matches the live DOM instead of guessing. Best-effort
-    // — a crawl failure falls back to semantic-locator generation.
-    let exploredApp = null;
-    if (ctx?.targetUrl) {
-      try {
-        console.log(`[pipeline-flow/scripts] crawling ${ctx.targetUrl} for real selectors…`);
-        exploredApp = await crawlAppMap(ctx.targetUrl, ctx);
-        console.log(`[pipeline-flow/scripts] crawled ${exploredApp.pages.length} page(s)`);
-      } catch (e) {
-        console.warn('[pipeline-flow/scripts] crawl failed, scripting without DOM:', (e as Error).message);
-      }
-    }
-
-    const state: TestOpsState = {
-      ...createInitialState('', ctx || undefined, llm),
-      testCases: testCases.map(normalizeTestCase),
-      exploredApp,
-    };
-
-    const next = await scriptAgent(state);
-    console.log(
-      `[pipeline-flow/scripts] produced ${next.automationScripts.length} script(s), ` +
-      `${(next.pageObjects || []).length} page object(s) for ${state.testCases.length} test case(s)`,
-    );
-    res.json({
-      scripts: next.automationScripts,
-      pageObjects: next.pageObjects || [],
-      crawledPages: exploredApp?.pages.length || 0,
-    });
+    res.json(await scriptsStage(req.user!.tenantId, req.body));
   } catch (err) {
     const message = (err as Error).message || 'Script generation failed';
     console.error('[pipeline-flow/scripts] error:', message);
     res.status(500).json({ error: message });
   }
+});
+
+/**
+ * POST /api/pipeline-flow/scripts/start
+ * Async variant of /scripts — live generation drives a real browser through
+ * every test case and routinely outlives the ~240s ingress cap on a single
+ * request. Returns { jobId }; poll GET /jobs/:jobId for the result.
+ */
+router.post('/scripts/start', (req: Request, res: Response) => {
+  const { testCases } = req.body || {};
+  if (!Array.isArray(testCases) || testCases.length === 0) {
+    res.status(400).json({ error: 'testCases array is required' });
+    return;
+  }
+  const tenantId = req.user!.tenantId;
+  const jobId = startJob(tenantId, () => scriptsStage(tenantId, req.body));
+  res.json({ jobId });
 });
 
 /**
@@ -346,74 +374,78 @@ router.post('/scripts', async (req: Request, res: Response) => {
  * `summary.executed` is false with a human-readable reason — the flow then
  * continues gracefully to the report rather than stalling.
  */
+async function executeStage(tenantId: string, body: any): Promise<any> {
+  const { testCases, scripts, pageObjects, appId, testRunId } = body || {};
+
+  const { ctx, appName } = applyManualTarget(await resolveAppContext(tenantId, appId), body);
+  const normalizedScripts = (Array.isArray(scripts) ? scripts : [])
+    .map(normalizeScript)
+    .filter((s): s is AutomationScript => s !== null);
+  const normalizedPageObjects = (Array.isArray(pageObjects) ? pageObjects : [])
+    .map(normalizePageObject)
+    .filter((p): p is PageObjectFile => p !== null);
+
+  const state: TestOpsState = {
+    ...createInitialState('', ctx || undefined),
+    testCases: testCases.map(normalizeTestCase),
+    automationScripts: normalizedScripts,
+    pageObjects: normalizedPageObjects,
+  };
+
+  // Run once, capturing allure-results, then build the Allure report under the
+  // SAVED run id (so the Reports page finds it) or an ephemeral chat run id.
+  const reportScope = (testRunId && String(testRunId)) || makeRunId();
+  const allureResultsDir = path.join(os.tmpdir(), `jbs-allure-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  // Playwright HTML report → run root (served as the "Basic Report").
+  // Allure results → tmp, then built into the run's /allure subfolder below.
+  const next = await executionAgent(state, { htmlReportDir: reportDirFor(tenantId, reportScope), allureResultsDir });
+  const executed = next.executionResults !== null;
+  const details = next.executionResults?.details || [];
+  const passed = next.executionResults?.passed || 0;
+  const failed = next.executionResults?.failed || 0;
+  const total = next.testCases.length;
+  const durationMs = details.reduce((s, d) => s + (typeof d.durationMs === 'number' ? d.durationMs : 0), 0);
+
+  let reportUrl: string | undefined;
+  if (executed) {
+    const built = await buildAllureReport(tenantId, reportScope, allureResultsDir);
+    reportUrl = built ? reportUrlFor(tenantId, reportScope) : undefined;
+  }
+  await fs.rm(allureResultsDir, { recursive: true, force: true }).catch(() => {});
+
+  // After a real execution, push status + report to the tenant's channels
+  // (email / Slack / Teams). Fire-and-forget so the UI isn't blocked.
+  if (executed) {
+    notifyRun(tenantId, reportScope, {
+      testCases: next.testCases, details, passed, failed, total,
+      durationSeconds: Math.round(durationMs / 1000), reportUrl,
+    });
+  }
+
+  return {
+    executionDetails: details,
+    failureReason: next.failureReason,
+    reportUrl,
+    app: appName ? { name: appName, targetUrl: ctx?.targetUrl } : null,
+    summary: {
+      total,
+      passed,
+      failed,
+      executed,
+      // Surface WHY nothing ran so the UI can guide the user.
+      reason: executed ? undefined : (next.failureReason || 'No application configured'),
+    },
+  };
+}
+
 router.post('/execute', async (req: Request, res: Response) => {
   try {
-    const tenantId = req.user!.tenantId;
-    const { testCases, scripts, pageObjects, appId, testRunId } = req.body || {};
+    const { testCases } = req.body || {};
     if (!Array.isArray(testCases) || testCases.length === 0) {
       res.status(400).json({ error: 'testCases array is required' });
       return;
     }
-
-    const { ctx, appName } = applyManualTarget(await resolveAppContext(tenantId, appId), req.body);
-    const normalizedScripts = (Array.isArray(scripts) ? scripts : [])
-      .map(normalizeScript)
-      .filter((s): s is AutomationScript => s !== null);
-    const normalizedPageObjects = (Array.isArray(pageObjects) ? pageObjects : [])
-      .map(normalizePageObject)
-      .filter((p): p is PageObjectFile => p !== null);
-
-    const state: TestOpsState = {
-      ...createInitialState('', ctx || undefined),
-      testCases: testCases.map(normalizeTestCase),
-      automationScripts: normalizedScripts,
-      pageObjects: normalizedPageObjects,
-    };
-
-    // Run once, capturing allure-results, then build the Allure report under the
-    // SAVED run id (so the Reports page finds it) or an ephemeral chat run id.
-    const reportScope = (testRunId && String(testRunId)) || makeRunId();
-    const allureResultsDir = path.join(os.tmpdir(), `jbs-allure-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-    // Playwright HTML report → run root (served as the "Basic Report").
-    // Allure results → tmp, then built into the run's /allure subfolder below.
-    const next = await executionAgent(state, { htmlReportDir: reportDirFor(tenantId, reportScope), allureResultsDir });
-    const executed = next.executionResults !== null;
-    const details = next.executionResults?.details || [];
-    const passed = next.executionResults?.passed || 0;
-    const failed = next.executionResults?.failed || 0;
-    const total = next.testCases.length;
-    const durationMs = details.reduce((s, d) => s + (typeof d.durationMs === 'number' ? d.durationMs : 0), 0);
-
-    let reportUrl: string | undefined;
-    if (executed) {
-      const built = await buildAllureReport(tenantId, reportScope, allureResultsDir);
-      reportUrl = built ? reportUrlFor(tenantId, reportScope) : undefined;
-    }
-    await fs.rm(allureResultsDir, { recursive: true, force: true }).catch(() => {});
-
-    // After a real execution, push status + report to the tenant's channels
-    // (email / Slack / Teams). Fire-and-forget so the UI isn't blocked.
-    if (executed) {
-      notifyRun(tenantId, reportScope, {
-        testCases: next.testCases, details, passed, failed, total,
-        durationSeconds: Math.round(durationMs / 1000), reportUrl,
-      });
-    }
-
-    res.json({
-      executionDetails: details,
-      failureReason: next.failureReason,
-      reportUrl,
-      app: appName ? { name: appName, targetUrl: ctx?.targetUrl } : null,
-      summary: {
-        total,
-        passed,
-        failed,
-        executed,
-        // Surface WHY nothing ran so the UI can guide the user.
-        reason: executed ? undefined : (next.failureReason || 'No application configured'),
-      },
-    });
+    res.json(await executeStage(req.user!.tenantId, req.body));
   } catch (err) {
     const message = (err as Error).message || 'Execution failed';
     console.error('[pipeline-flow/execute] error:', message);
@@ -422,21 +454,45 @@ router.post('/execute', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/pipeline-flow/execute/start
+ * Async variant of /execute: a Playwright run can far outlive the ~240s Azure
+ * Container Apps ingress cap on a single request, which killed the synchronous
+ * call mid-run and made every test show "could not be run" even though real
+ * results existed server-side. Starts the run detached and returns { jobId };
+ * poll GET /jobs/:jobId for the same payload /execute would have returned.
+ */
+router.post('/execute/start', (req: Request, res: Response) => {
+  const { testCases } = req.body || {};
+  if (!Array.isArray(testCases) || testCases.length === 0) {
+    res.status(400).json({ error: 'testCases array is required' });
+    return;
+  }
+  const tenantId = req.user!.tenantId;
+  const jobId = startJob(tenantId, () => executeStage(tenantId, req.body));
+  res.json({ jobId });
+});
+
+/** GET /api/pipeline-flow/jobs/:jobId — poll a started stage for its result. */
+router.get('/jobs/:jobId', (req: Request, res: Response) => {
+  const job = getJob(req.user!.tenantId, req.params.jobId as string);
+  if (!job) {
+    res.status(404).json({ error: 'Job not found (it may have expired or the server restarted). Re-run the stage.' });
+    return;
+  }
+  res.json(job);
+});
+
+/**
  * POST /api/pipeline-flow/heal
  * Stage 5 — heal the tests that failed, then re-execute the full suite so the
  * caller gets fresh, real pass/fail. Returns the updated scripts, new execution
  * details and a per-test healing log.
  */
-router.post('/heal', async (req: Request, res: Response) => {
-  try {
-    const tenantId = req.user!.tenantId;
-    const { testCases, scripts, pageObjects, executionDetails, appId, testRunId } = req.body || {};
-    if (!Array.isArray(testCases) || testCases.length === 0) {
-      res.status(400).json({ error: 'testCases array is required' });
-      return;
-    }
+async function healStage(tenantId: string, body: any): Promise<any> {
+  const { testCases, scripts, pageObjects, executionDetails, appId, testRunId } = body || {};
 
-    const { ctx, appName } = applyManualTarget(await resolveAppContext(tenantId, appId), req.body);
+  {
+    const { ctx, appName } = applyManualTarget(await resolveAppContext(tenantId, appId), body);
     const normalizedScripts = (Array.isArray(scripts) ? scripts : [])
       .map(normalizeScript)
       .filter((s): s is AutomationScript => s !== null);
@@ -452,25 +508,23 @@ router.post('/heal', async (req: Request, res: Response) => {
       if (d?.testCaseId && d.status === 'failed') failedById.set(d.testCaseId, d);
     }
 
-    const cases = testCases.map(normalizeTestCase).map((tc) =>
+    const cases = (testCases as any[]).map(normalizeTestCase).map((tc: TestCase) =>
       failedById.has(tc.id) ? { ...tc, status: 'failed' as const } : tc,
     );
     const failedCount = failedById.size;
     if (failedCount === 0) {
-      res.json({
+      return {
         scripts: normalizedScripts,
         pageObjects: normalizedPageObjects,
         executionDetails: details,
         healingLog: [],
         summary: { total: cases.length, passed: details.filter((d) => d.status === 'passed').length, failed: 0, executed: true },
-      });
-      return;
+      };
     }
 
     const llm = await getTenantLlm(tenantId);
     if (!llm) {
-      res.status(400).json({ error: 'No LLM configured. Add an Anthropic API key in System Configuration → LLM Configuration.' });
-      return;
+      throw new Error('No LLM configured. Add an Anthropic API key in System Configuration → LLM Configuration.');
     }
 
     const firstError = [...failedById.values()][0]?.error || 'Some tests failed';
@@ -479,19 +533,26 @@ router.post('/heal', async (req: Request, res: Response) => {
     const failuresByTc: Record<string, string> = {};
     for (const [id, d] of failedById) failuresByTc[id] = String(d?.error || firstError);
 
-    // Wall-clock budget for the whole heal request. Azure's ingress kills the
-    // connection at ~240s, so pass 1 always runs but later passes only start
-    // while the budget allows. Counted from BEFORE the entry-page snapshot.
+    // Wall-clock budget for the whole heal run. Heals execute as detached jobs
+    // (poll-based), so the old ~240s ingress ceiling no longer applies — the
+    // budget now just caps runaway multi-pass loops. Counted from BEFORE the
+    // entry-page snapshot.
     const healStart = Date.now();
-    const timeBudgetMs = Math.max(60_000, parseInt(process.env.HEAL_TIME_BUDGET_MS || '', 10) || 150_000);
+    const timeBudgetMs = Math.max(60_000, parseInt(process.env.HEAL_TIME_BUDGET_MS || '', 10) || 600_000);
 
-    // Give the healer a real DOM inventory of the app's ENTRY page. A full
-    // crawl here OOM-killed the memory-limited Azure container (second
-    // Chromium on top of re-execution → 504), so this is a single-page
-    // snapshot, sequential (before any re-execution run), and fails soft —
+    // LIVE healing (default when a target URL exists): replay each failing
+    // scenario in a real browser and only accept heals that verified live —
+    // Playwright test-healer style. SCRIPT_GEN_MODE=batch forces the text
+    // healer instead.
+    const liveHeal = !!ctx?.targetUrl && process.env.SCRIPT_GEN_MODE !== 'batch';
+
+    // Text-healer grounding only: a real DOM inventory of the app's ENTRY
+    // page. (The live healer observes pages itself, so the snapshot would be
+    // wasted memory there.) A full crawl here OOM-killed the memory-limited
+    // Azure container, so this is a single-page snapshot that fails soft —
     // set HEAL_LIGHT_CRAWL=false to disable entirely.
     let exploredApp: TestOpsState['exploredApp'] = null;
-    if (ctx?.targetUrl && process.env.HEAL_LIGHT_CRAWL !== 'false') {
+    if (!liveHeal && ctx?.targetUrl && process.env.HEAL_LIGHT_CRAWL !== 'false') {
       try {
         exploredApp = await snapshotEntryPage(ctx.targetUrl, ctx || undefined);
       } catch (err) {
@@ -540,7 +601,9 @@ router.post('/heal', async (req: Request, res: Response) => {
         break;
       }
       passesRun = pass;
-      const healed = await healingAgent(workingState, { failuresByTc: currentFailures });
+      const healed = liveHeal
+        ? await liveHealingAgent(workingState, { failuresByTc: currentFailures })
+        : await healingAgent(workingState, { failuresByTc: currentFailures });
       Object.assign(allNotes, healed.healingNotes || {});
       // Fresh Allure results per pass so the final report reflects the last run.
       await fs.rm(allureResultsDir, { recursive: true, force: true }).catch(() => {});
@@ -614,7 +677,7 @@ router.post('/heal', async (req: Request, res: Response) => {
       });
     }
 
-    res.json({
+    return {
       scripts: reExecuted.automationScripts,
       pageObjects: reExecuted.pageObjects || normalizedPageObjects,
       executionDetails: newDetails,
@@ -628,12 +691,40 @@ router.post('/heal', async (req: Request, res: Response) => {
         executed,
         reason: executed ? undefined : (reExecuted.failureReason || 'No application configured'),
       },
-    });
+    };
+  }
+}
+
+router.post('/heal', async (req: Request, res: Response) => {
+  try {
+    const { testCases } = req.body || {};
+    if (!Array.isArray(testCases) || testCases.length === 0) {
+      res.status(400).json({ error: 'testCases array is required' });
+      return;
+    }
+    res.json(await healStage(req.user!.tenantId, req.body));
   } catch (err) {
     const message = (err as Error).message || 'Healing failed';
     console.error('[pipeline-flow/heal] error:', message);
     res.status(500).json({ error: message });
   }
+});
+
+/**
+ * POST /api/pipeline-flow/heal/start
+ * Async variant of /heal — heal passes chain LLM calls + full Playwright
+ * re-runs and routinely outlive the ~240s ingress cap (the same failure mode
+ * as /execute). Returns { jobId }; poll GET /jobs/:jobId for the result.
+ */
+router.post('/heal/start', (req: Request, res: Response) => {
+  const { testCases } = req.body || {};
+  if (!Array.isArray(testCases) || testCases.length === 0) {
+    res.status(400).json({ error: 'testCases array is required' });
+    return;
+  }
+  const tenantId = req.user!.tenantId;
+  const jobId = startJob(tenantId, () => healStage(tenantId, req.body));
+  res.json({ jobId });
 });
 
 export default router;

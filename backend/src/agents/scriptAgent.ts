@@ -46,12 +46,12 @@ function moduleSlug(s: string | undefined): string {
   return slug || 'app';
 }
 
-function safeFileName(scenario: string): string {
+export function safeFileName(scenario: string): string {
   return `${kebab(scenario)}.spec.ts`;
 }
 
 /** Spec destination, e.g. tests/auth/verify-login-fails.spec.ts */
-function specPathFor(tc: TestCase): string {
+export function specPathFor(tc: TestCase): string {
   return `tests/${moduleSlug(tc.module || tc.feature)}/${safeFileName(tc.scenario)}`;
 }
 
@@ -289,7 +289,7 @@ export function sanitizeLoginFlow(code: string): string {
   return out.join('\n');
 }
 
-function templateSpec(tc: TestCase): AutomationScript {
+export function templateSpec(tc: TestCase): AutomationScript {
   // A placeholder emitted only when real spec generation for this case failed.
   // It imports nothing but @playwright/test (so it always LOADS — never a
   // "Cannot find module" that aborts the whole suite) and FAILS honestly with a
@@ -391,9 +391,42 @@ ${usageRules}
 
 /* ─────────────────────────── orchestration ─────────────────────── */
 
+/**
+ * Two test cases with the same (or similar) scenario title slug to the same
+ * spec path — when written to the execution workspace one file would overwrite
+ * the other and that test case would silently never run. Suffix duplicates so
+ * every test case keeps its own spec file.
+ */
+export function ensureUniqueSpecPaths(scripts: AutomationScript[]): AutomationScript[] {
+  const seen = new Map<string, number>();
+  return scripts.map((s) => {
+    const key = s.path || `tests/${s.fileName}`;
+    const n = seen.get(key) || 0;
+    seen.set(key, n + 1);
+    if (n === 0) return s;
+    const suffix = (p: string) => p.replace(/\.spec\.ts$/, `-${n + 1}.spec.ts`);
+    return { ...s, path: s.path ? suffix(s.path) : s.path, fileName: suffix(s.fileName) };
+  });
+}
+
 export async function scriptAgent(state: TestOpsState): Promise<TestOpsState> {
-  const eligible = state.testCases.filter((tc) => tc.type !== 'data');
+  // Every test case gets a spec — including 'data' (data-validation) cases,
+  // which are automatable like any other. Skipping a type here makes the
+  // "scripts created" count diverge from "test cases generated" in the UI.
+  const eligible = state.testCases;
   if (eligible.length === 0) return { ...state, automationScripts: [], pageObjects: [] };
+
+  // A target URL without crawl data means every selector below is a guess
+  // from requirement text — expect toBeVisible timeouts at run time. The
+  // callers (pipeline, liveScriptAgent, pipeline-flow/scripts) all try to
+  // crawl first, so reaching this warning means the crawl failed or was
+  // skipped — surface it instead of failing silently at execution.
+  if (state.appContext?.targetUrl && !state.exploredApp?.pages?.length) {
+    console.warn(
+      `[scriptAgent] UNGROUNDED generation: no crawl data for ${state.appContext.targetUrl} — ` +
+      'selectors will be invented from requirement text and are likely to fail against the live app.',
+    );
+  }
 
   // Phase 1 — page objects (shared), grounded in the crawl.
   const pageObjects = await generatePageObjects(state, derivePageTargets(state));
@@ -406,5 +439,5 @@ export async function scriptAgent(state: TestOpsState): Promise<TestOpsState> {
     return batch.map(templateSpec);
   })));
 
-  return { ...state, pageObjects, automationScripts: specBatches.flat() };
+  return { ...state, pageObjects, automationScripts: ensureUniqueSpecPaths(specBatches.flat()) };
 }

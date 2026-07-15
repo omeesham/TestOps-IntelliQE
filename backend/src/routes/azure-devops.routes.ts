@@ -75,7 +75,9 @@ router.get('/status', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/azure-devops/stories — requirement-type work items
+// GET /api/azure-devops/stories — open board cards usable as requirements:
+// ONLY Epic, User Story and Task work items, excluding any card in a
+// Done/Closed/Removed state.
 router.get('/stories', async (req: Request, res: Response) => {
   try {
     const creds = await getCredsForTenant(req.user!.tenantId);
