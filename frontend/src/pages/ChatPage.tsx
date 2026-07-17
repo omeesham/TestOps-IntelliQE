@@ -527,6 +527,23 @@ export default function ChatPage() {
     }
   };
 
+  /* --- application-configured guard ---
+     Requirement Analysis / test generation always needs a target application
+     under test. Shared by the JIRA story-pick guard (checked as soon as a
+     story/task is picked) and the Generate-time guard, so both agree on what
+     "configured" means: a connected `app-*` integration with a base URL. */
+  const isApplicationConfigured = async (): Promise<boolean> => {
+    try {
+      const { configs } = await getConfigurations();
+      return (configs || []).some(
+        (c: any) => c.integrationId?.startsWith('app-') && c.status === 'connected' && c.configData?.baseUrl,
+      );
+    } catch {
+      // Couldn't verify (network/API) — don't block here; the backend guard still enforces it.
+      return true;
+    }
+  };
+
   const pickInFlight = useRef(false);
   const pickSource = async (s: ReqSource) => {
     // Guard against a double-fire (double-click / re-render) replaying the whole
@@ -741,6 +758,18 @@ export default function ChatPage() {
     push('user', `${item?.key}: ${item?.title || item?.summary || selectedStory}`);
     setStoryMeta({ key: item?.key, title: item?.title || item?.summary || selectedStory });
 
+    // GUARD: a story/task picked from JIRA or Azure DevOps needs an application
+    // under test already set up in System Configuration → Application Setup.
+    // Check right here, as soon as the story is picked, instead of waiting until
+    // the user has also chosen columns and clicked Generate.
+    if (source === 'jira' || source === 'azure-devops') {
+      const configured = await isApplicationConfigured();
+      if (!configured) {
+        push('tessa', `I've noted "${item?.key}", but the application under test isn't configured yet. Please go to System Configuration → Application Setup, add your application (name + base URL), save it, then come back and pick this story again.`);
+        return;
+      }
+    }
+
     // Default: use whatever lightweight info we already have in `item`.
     let requirements = `${item?.title || item?.summary || ''}\n${item?.description || ''}`.trim();
 
@@ -873,6 +902,22 @@ export default function ChatPage() {
     // Starting a generation begins a new logical flow — bump the id so any
     // previous still-running generation becomes stale, and remember ours.
     const flowId = ++flowIdRef.current;
+
+    // GUARD: Requirement Analysis must target a configured application. Explore
+    // mode supplies the app URL inline; every other source (JIRA, upload,
+    // manual, API) requires an application set up in System Configuration →
+    // Application Setup. Check BEFORE any pipeline work so the user gets a clear
+    // message instead of a failed run. The backend enforces the same rule.
+    const isExploreFlow = source === 'explore' || requirements.startsWith('__EXPLORE__:');
+    if (!isExploreFlow) {
+      const configured = await isApplicationConfigured();
+      if (!configured) {
+        push('tessa', 'Before I can start Requirement Analysis, please configure your application under test in System Configuration → Application Setup (application name, base URL, and test-user roles). Once it’s saved, come back and click Generate again.');
+        setStep('column-select');
+        return;
+      }
+    }
+
     const steps: AgentStep[] = AGENTS.map(a => ({ name: a.name, status: 'pending' as const, detail: a.detail }));
     setAgentSteps(steps);
 

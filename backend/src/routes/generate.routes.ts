@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { runGenerationOnly } from '../agents/pipeline.js';
 import { getTenantLlm } from '../services/llm.service.js';
+import { getConfiguredApplication } from '../services/configurations.service.js';
 
 const router = Router();
 
@@ -43,6 +44,22 @@ router.post('/', async (req: Request, res: Response) => {
           : undefined,
       }
     : undefined;
+
+  // Requirement Analysis must target a known application. Block generation
+  // unless the tenant has a properly-configured application under test in
+  // System Configuration → Application Setup — mirrors the LLM guard below.
+  // Explore mode / an explicit target URL supplies the application inline, so
+  // it satisfies the requirement without a saved Application Setup entry.
+  const hasExplicitTarget = Boolean(targetUrl && String(targetUrl).trim());
+  if (req.user && !hasExplicitTarget) {
+    const configuredApp = await getConfiguredApplication(req.user.tenantId);
+    if (!configuredApp) {
+      res.status(400).json({
+        error: 'No application configured. Add your application under test in System Configuration → Application Setup before starting requirement analysis.',
+      });
+      return;
+    }
+  }
 
   // Resolve the tenant's LLM (key + model) from the DB — saved by the admin in
   // System Configuration → LLM Configuration. No env var, no local CLI login.

@@ -64,6 +64,26 @@ export async function getConfigsForTenantByCategory(tenantId: string, category: 
 }
 
 /**
+ * Return the tenant's first properly-configured application under test, or null.
+ *
+ * "Properly configured" (System Configuration → Application Setup) means a
+ * connected `app-*` integration that carries a non-empty base URL — the same
+ * shape the UI requires before it lets the config be saved. Requirement
+ * Analysis / test generation is gated on this: without a target application,
+ * generated tests have nothing to run against.
+ */
+export async function getConfiguredApplication(tenantId: string): Promise<ConfigRow | null> {
+  const configs = await getConfigsForTenant(tenantId);
+  const ready = configs.find(
+    (c) =>
+      c.integrationId.startsWith('app-') &&
+      c.status === 'connected' &&
+      !!(c.configData?.baseUrl && String(c.configData.baseUrl).trim()),
+  );
+  return ready || null;
+}
+
+/**
  * Upsert an integration configuration for a tenant.
  */
 /** Derive category from integration_id */
