@@ -49,6 +49,7 @@ type Step =
   | 'source-select'
   | 'connect-form'
   | 'ado-mode'
+  | 'app-select'
   | 'content-select'
   | 'upload-doc'
   | 'paste-text'
@@ -296,6 +297,15 @@ export default function ChatPage() {
   const [agentSteps, setAgentSteps] = useState<AgentStep[]>([]);
   const [storyMeta, setStoryMeta] = useState<{ key?: string; title?: string }>({});
 
+  // Application selection — which Application Setup entry the current
+  // requirements/test cases target. Required whenever the tenant has more
+  // than one configured application, so generation/scripts/execution/healing
+  // all ground themselves in the SAME application instead of the server
+  // silently defaulting to "whichever app happens to be configured".
+  const [appOptions, setAppOptions] = useState<{ integrationId: string; appName: string; baseUrl: string }[]>([]);
+  const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
+  const [pendingGenRequirements, setPendingGenRequirements] = useState<string>('');
+
   // Pipeline progress sidebar
   const [pipelineStages, setPipelineStages] = useState<PipelineStageState[]>(
     PIPELINE_STAGES.map(s => ({ key: s.key, status: 'pending' as const, detail: 'Pending' }))
@@ -533,14 +543,31 @@ export default function ChatPage() {
      story/task is picked) and the Generate-time guard, so both agree on what
      "configured" means: a connected `app-*` integration with a base URL. */
   const isApplicationConfigured = async (): Promise<boolean> => {
+    const apps = await getReadyApps();
+    // null = couldn't verify (network/API) — don't block here; the backend guard still enforces it.
+    return apps === null || apps.length > 0;
+  };
+
+  /* --- ready applications ---
+     Returns every properly-configured application (connected app-* with a
+     base URL), or null when the check itself failed (network/API — the
+     backend guard still enforces it, so we don't block on our own error).
+     Used by runGeneration to ground generation in ONE specific application:
+     picking "just any configured app" let one application's stories
+     (e.g. OrangeHRM) silently run against a DIFFERENT application's URL
+     whenever more than one was configured. */
+  const getReadyApps = async (): Promise<{ integrationId: string; appName: string; baseUrl: string }[] | null> => {
     try {
       const { configs } = await getConfigurations();
-      return (configs || []).some(
-        (c: any) => c.integrationId?.startsWith('app-') && c.status === 'connected' && c.configData?.baseUrl,
-      );
+      return (configs || [])
+        .filter((c: any) => c.integrationId?.startsWith('app-') && c.status === 'connected' && c.configData?.baseUrl)
+        .map((c: any) => ({
+          integrationId: c.integrationId,
+          appName: c.configData?.appName || c.integrationId,
+          baseUrl: c.configData?.baseUrl,
+        }));
     } catch {
-      // Couldn't verify (network/API) — don't block here; the backend guard still enforces it.
-      return true;
+      return null;
     }
   };
 
@@ -898,7 +925,7 @@ export default function ChatPage() {
   };
 
   /* --- generation pipeline (only TC generation, not full pipeline) --- */
-  const runGeneration = async (requirements: string) => {
+  const runGeneration = async (requirements: string, explicitAppId?: string) => {
     // Starting a generation begins a new logical flow — bump the id so any
     // previous still-running generation becomes stale, and remember ours.
     const flowId = ++flowIdRef.current;
@@ -908,13 +935,35 @@ export default function ChatPage() {
     // manual, API) requires an application set up in System Configuration →
     // Application Setup. Check BEFORE any pipeline work so the user gets a clear
     // message instead of a failed run. The backend enforces the same rule.
+    //
+    // When more than one application is configured, "any application exists"
+    // is not enough — the SPECIFIC application these requirements target must
+    // be identified, or generation/scripts/execution silently ground
+    // themselves in whichever application the server happens to pick. If we
+    // don't already know which one (explicitAppId from a just-completed
+    // app-select pick, or a previously selected one), ask before proceeding.
     const isExploreFlow = source === 'explore' || requirements.startsWith('__EXPLORE__:');
+    let appIdToUse = explicitAppId || selectedAppId || undefined;
     if (!isExploreFlow) {
-      const configured = await isApplicationConfigured();
-      if (!configured) {
-        push('tessa', 'Before I can start Requirement Analysis, please configure your application under test in System Configuration → Application Setup (application name, base URL, and test-user roles). Once it’s saved, come back and click Generate again.');
-        setStep('column-select');
-        return;
+      const apps = await getReadyApps();
+      if (apps !== null) {
+        if (apps.length === 0) {
+          push('tessa', 'Before I can start Requirement Analysis, please configure your application under test in System Configuration → Application Setup (application name, base URL, and test-user roles). Once it’s saved, come back and click Generate again.');
+          setStep('column-select');
+          return;
+        }
+        if (!appIdToUse) {
+          if (apps.length === 1) {
+            appIdToUse = apps[0].integrationId;
+            setSelectedAppId(appIdToUse);
+          } else {
+            setAppOptions(apps);
+            setPendingGenRequirements(requirements);
+            push('tessa', 'You have more than one application configured under System Configuration → Application Setup. Which application are these test cases for?');
+            setStep('app-select');
+            return;
+          }
+        }
       }
     }
 
@@ -944,7 +993,7 @@ export default function ChatPage() {
           roles,
         });
       } else {
-        res = await generateTests(requirements, subCategory || undefined);
+        res = await generateTests(requirements, subCategory || undefined, { appId: appIdToUse });
       }
     } catch (err) {
       console.error('Generate tests failed:', err);
@@ -1069,6 +1118,17 @@ export default function ChatPage() {
     setStep('results');
   };
 
+  /* --- application pick (only shown when >1 application is configured) ---
+     Resumes the generation that paused in runGeneration() waiting for the
+     user to say which configured application these requirements are for. */
+  const handleAppSelected = (integrationId: string) => {
+    const app = appOptions.find(a => a.integrationId === integrationId);
+    push('user', app?.appName || integrationId);
+    setSelectedAppId(integrationId);
+    setStep('generating');
+    runGeneration(pendingGenRequirements, integrationId);
+  };
+
   /* --- Save test cases to DB --- */
   const handleSaveTestCases = async () => {
     if (!results?.testCases?.length) return;
@@ -1151,7 +1211,7 @@ export default function ChatPage() {
     let pageObjects: any[] = generatedPageObjects;
     if (!covered) {
       try {
-        const scriptRes = await generateScripts(testCases);
+        const scriptRes = await generateScripts(testCases, selectedAppId || undefined);
         if (flowId !== flowIdRef.current) return; // flow discarded while generating
         scripts = (scriptRes?.scripts || []).map((s: any) => ({
           testCaseId: s.testCaseId,
@@ -1235,7 +1295,7 @@ export default function ChatPage() {
     try {
       // Pass the saved run id so the Allure report is built for that run and
       // appears on the Reports page.
-      execRes = await executePipeline(results?.testCases || [], generatedScripts, generatedPageObjects, undefined, savedTestRunId || undefined);
+      execRes = await executePipeline(results?.testCases || [], generatedScripts, generatedPageObjects, selectedAppId || undefined, savedTestRunId || undefined);
     } catch (err) {
       console.error('Execute tests failed:', err);
     }
@@ -1351,7 +1411,7 @@ export default function ChatPage() {
         status: r.status,
         error: r.error,
       }));
-      healRes = await healPipeline(results?.testCases || [], generatedScripts, detailsPayload, generatedPageObjects, undefined, savedTestRunId || undefined);
+      healRes = await healPipeline(results?.testCases || [], generatedScripts, detailsPayload, generatedPageObjects, selectedAppId || undefined, savedTestRunId || undefined);
     } catch (err: any) {
       // Surface the REAL reason instead of a generic "could not be reached".
       // The backend also logs it as "[pipeline-flow/heal] error: …".
@@ -1646,6 +1706,9 @@ export default function ChatPage() {
     setSavedTestRunId(null);
     setIsExporting(false);
     setStoryMeta({});
+    setAppOptions([]);
+    setSelectedAppId(null);
+    setPendingGenRequirements('');
     setPipelineStages(PIPELINE_STAGES.map(s => ({ key: s.key, status: 'pending' as const, detail: 'Pending' })));
     setGeneratedScripts([]);
     setSelectedScriptIdx(0);
@@ -1803,6 +1866,41 @@ export default function ChatPage() {
               </div>
             </div>
           </button>
+        </div>
+      );
+    }
+
+    /* ── APPLICATION PICK — shown only when >1 application is configured ── */
+    if (step === 'app-select') {
+      return (
+        <div className="max-w-md ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm space-y-3">
+          <p className="text-xs text-gray-600">Select the application these test cases are for:</p>
+          {appOptions.map((app) => (
+            <button
+              key={app.integrationId}
+              onClick={runOnce(() => handleAppSelected(app.integrationId))}
+              disabled={busy}
+              className="w-full text-left p-3.5 bg-white border border-gray-100 rounded-xl hover:border-violet-300 hover:shadow-md transition-all disabled:opacity-50"
+            >
+              <div className="flex items-center gap-2.5">
+                <Monitor className="w-4 h-4 text-violet-500 flex-shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-gray-800 truncate">{app.appName}</p>
+                  <p className="text-[11px] text-gray-400 truncate">{app.baseUrl}</p>
+                </div>
+              </div>
+            </button>
+          ))}
+          <p className="text-[11px] text-gray-400">
+            Don't see it? Add it under{' '}
+            <button
+              onClick={() => window.location.href = '/system-configuration'}
+              className="text-violet-500 hover:underline"
+            >
+              System Configuration → Application Setup
+            </button>
+            , then come back and click Generate again.
+          </p>
         </div>
       );
     }

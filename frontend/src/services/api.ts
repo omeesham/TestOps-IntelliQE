@@ -281,6 +281,10 @@ export async function generateTests(
     exploreMode?: boolean;
     /** Optional credentials so the explore agent can log in. */
     roles?: { roleName?: string; username: string; password: string }[];
+    /** The specific Application Setup entry (`app-<slug>` integrationId) these
+     *  requirements target. Required whenever the tenant has more than one
+     *  application configured, so generation is grounded in the right one. */
+    appId?: string;
   },
 ) {
   const body = {
@@ -291,6 +295,7 @@ export async function generateTests(
     appName: options?.appName,
     exploreMode: options?.exploreMode,
     roles: options?.roles,
+    appId: options?.appId,
   };
   const post = () => api.post('/generate', body, { timeout: PIPELINE_TIMEOUT_MS });
 

@@ -64,23 +64,59 @@ export async function getConfigsForTenantByCategory(tenantId: string, category: 
 }
 
 /**
- * Return the tenant's first properly-configured application under test, or null.
+ * Return every properly-configured ("ready") application under test for a
+ * tenant — a connected `app-*` integration carrying a non-empty base URL, the
+ * same shape the UI requires before it lets the config be saved.
  *
- * "Properly configured" (System Configuration → Application Setup) means a
- * connected `app-*` integration that carries a non-empty base URL — the same
- * shape the UI requires before it lets the config be saved. Requirement
- * Analysis / test generation is gated on this: without a target application,
- * generated tests have nothing to run against.
+ * When a tenant has MORE THAN ONE application configured (e.g. "OrangeHRM"
+ * and "encoreglobal"), callers must pick a specific one by integrationId
+ * rather than defaulting to "the first" — silently running one application's
+ * stories against a different application's URL is the bug this replaces.
  */
-export async function getConfiguredApplication(tenantId: string): Promise<ConfigRow | null> {
+export async function getReadyApplications(tenantId: string): Promise<ConfigRow[]> {
   const configs = await getConfigsForTenant(tenantId);
-  const ready = configs.find(
+  return configs.filter(
     (c) =>
       c.integrationId.startsWith('app-') &&
       c.status === 'connected' &&
       !!(c.configData?.baseUrl && String(c.configData.baseUrl).trim()),
   );
-  return ready || null;
+}
+
+/**
+ * Return the tenant's first properly-configured application under test, or
+ * null. Only safe to use where the caller genuinely has no specific
+ * application in mind (e.g. a bare "is anything configured at all?" gate) —
+ * prefer resolveAppConfig()/getReadyApplications() when a specific
+ * application matters.
+ */
+export async function getConfiguredApplication(tenantId: string): Promise<ConfigRow | null> {
+  const ready = await getReadyApplications(tenantId);
+  return ready[0] || null;
+}
+
+/**
+ * Resolve exactly one application by its integrationId (the `app-<slug>` id
+ * Application Setup assigns). Returns null when that specific application
+ * isn't configured/connected/missing a base URL — callers MUST treat that as
+ * an error rather than falling back to a different application.
+ */
+export async function resolveAppConfig(tenantId: string, appId: string): Promise<ConfigRow | null> {
+  const ready = await getReadyApplications(tenantId);
+  return ready.find((c) => c.integrationId === appId) || null;
+}
+
+/**
+ * Look up an application's display name even if it isn't (yet) properly
+ * configured — used to produce a human-readable error like
+ * "OrangeHRM isn't fully configured yet" instead of a bare integrationId.
+ */
+export async function getApplicationDisplayName(tenantId: string, appId: string): Promise<string> {
+  const configs = await getConfigsForTenant(tenantId);
+  const match = configs.find((c) => c.integrationId === appId);
+  const name = match?.configData?.appName;
+  if (name && String(name).trim()) return String(name).trim();
+  return appId.replace(/^app-/, '').replace(/-/g, ' ');
 }
 
 /**

@@ -167,8 +167,24 @@ async function resolveAppContext(tenantId: string, appId?: string): Promise<{ ct
   const apps = configs.filter((c) => c.integrationId.startsWith('app-'));
   if (apps.length === 0) return { ctx: null };
 
-  let chosen = appId ? apps.find((c) => c.integrationId === appId) : undefined;
-  if (!chosen) chosen = apps.find((c) => (c.configData?.baseUrl || '').trim()) || apps[0];
+  const isReady = (c: (typeof apps)[number]) =>
+    c.status === 'connected' && !!(c.configData?.baseUrl && String(c.configData.baseUrl).trim());
+
+  let chosen;
+  if (appId) {
+    // A SPECIFIC application was requested (the chat wizard's selected app) —
+    // it must resolve to a properly-configured entry, or we report "not
+    // configured" rather than silently substituting a DIFFERENT application's
+    // URL. That silent substitution was the bug: with multiple applications
+    // configured, an unresolvable/misconfigured appId used to fall through to
+    // "whichever app happens to be ready", running the wrong app's tests
+    // against the wrong app's URL.
+    chosen = apps.find((c) => c.integrationId === appId && isReady(c));
+    if (!chosen) return { ctx: null };
+  } else {
+    chosen = apps.find(isReady);
+    if (!chosen) return { ctx: null };
+  }
 
   const d = chosen.configData || {};
   const roles = Array.isArray(d.roles)
