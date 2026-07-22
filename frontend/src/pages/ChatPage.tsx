@@ -4,6 +4,11 @@ import {
   connectJira,
   getJiraStories,
   getJiraStoryDetails,
+  getJiraCurrentUser,
+  getJiraAssignableUsers,
+  assignJiraStory,
+  unassignJiraStory,
+  type JiraUser,
   getAzureDevopsStories,
   getAzureDevopsStoryDetails,
   getAzureDevopsTestCases,
@@ -51,6 +56,7 @@ type Step =
   | 'ado-mode'
   | 'app-select'
   | 'content-select'
+  | 'jira-stories'
   | 'upload-doc'
   | 'paste-text'
   | 'explore-form'
@@ -270,6 +276,21 @@ export default function ChatPage() {
   const [connectError, setConnectError] = useState('');
   const [stories, setStories] = useState<any[]>([]);
   const [selectedStory, setSelectedStory] = useState<string>('');
+  // JIRA assignee view state (step === 'jira-stories')
+  const [jiraTab, setJiraTab] = useState<'assigned' | 'unassigned'>('assigned');
+  const [personFilter, setPersonFilter] = useState<string>('');       // '' = all people
+  const [assigningKey, setAssigningKey] = useState<string>('');       // story key currently being assigned (row spinner)
+  const [assignableUsers, setAssignableUsers] = useState<JiraUser[]>([]);
+  const [assignLoading, setAssignLoading] = useState(false);          // an assign action is in flight
+  const [peopleLoading, setPeopleLoading] = useState(false);          // one-time fetch of the Jira people list
+  // Pending assignment awaiting user confirmation (popup before the ticket is changed).
+  // action: 'assign-start' = assign an unassigned story then start analysis;
+  //         'reassign' = change assignee of an assigned story (no auto-start);
+  //         'unassign' = clear the assignee (story moves to the Unassigned tab).
+  const [assignConfirm, setAssignConfirm] = useState<{ key: string; accountId: string; displayName: string; isMe?: boolean; action: 'assign-start' | 'reassign' | 'unassign' } | null>(null);
+  // Configured application(s) under test — shown on the Jira card so it's clear
+  // which app these stories will be tested against. null = not yet loaded.
+  const [readyApps, setReadyApps] = useState<{ integrationId: string; appName: string; baseUrl: string }[] | null>(null);
   const [pasteText, setPasteText] = useState('');
   const [results, setResults] = useState<any>(null);
   const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
@@ -407,6 +428,30 @@ export default function ChatPage() {
 
   /* --- TTS init --- */
   useEffect(() => { initTTS(); }, []);
+
+  // Preload the Jira people list when the assignee view opens, so both the
+  // "Assign to" (unassigned) and "Reassign / unassign" (assigned) dropdowns are
+  // ready. Assignable users are project-scoped, so any story key works.
+  useEffect(() => {
+    if (step !== 'jira-stories') return;
+    const anyStory = stories[0];
+    if (!anyStory) return;
+    loadAssignablePeople(anyStory.key);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, stories]);
+
+  // Load the configured application(s) under test so the Jira card can show
+  // which app these stories map to (from System Configuration → Application Setup).
+  useEffect(() => {
+    if (step !== 'jira-stories') return;
+    let cancelled = false;
+    (async () => {
+      const apps = await getReadyApps();
+      if (!cancelled) setReadyApps(apps);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
 
   /* ─── Session persistence — save critical state to sessionStorage ─── */
   const SESSION_KEY = `qurify_chat_${user?.username || 'guest'}`;
@@ -604,8 +649,10 @@ export default function ChatPage() {
               const storiesArr = await getJiraStories(user?.username || 'admin');
               const list = Array.isArray(storiesArr) ? storiesArr : (storiesArr?.stories || storiesArr?.issues || []);
               setStories(list);
-              push('tessa', `${label} is connected. I found ${list.length} stories/tasks — please select one to generate test cases.`);
-              setStep('content-select');
+              const assignedCount = list.filter((s: any) => s.assignee).length;
+              setJiraTab(assignedCount > 0 ? 'assigned' : 'unassigned');
+              push('tessa', `${label} is connected. I found ${list.length} stories/tasks (${assignedCount} assigned, ${list.length - assignedCount} unassigned). Pick one from the Assigned tab, or assign an Unassigned one to get started.`);
+              setStep('jira-stories');
             } catch (err: any) {
               console.error('JIRA stories fetch failed:', err?.response?.data || err);
               const data = err?.response?.data;
@@ -757,11 +804,13 @@ export default function ChatPage() {
         const connectRes = await connectJira(user?.username || 'admin', formValues.url, formValues.email, formValues.apiKey);
         const jiraName = connectRes?.displayName || 'JIRA';
         const storiesArr = await getJiraStories(user?.username || 'admin');
-        // Backend returns StorySummary[] directly: [{key, summary}, ...]
+        // Backend returns StorySummary[] directly: [{key, summary, assignee}, ...]
         const list = Array.isArray(storiesArr) ? storiesArr : (storiesArr?.stories || storiesArr?.issues || []);
         setStories(list);
-        push('tessa', `Connected successfully as "${jiraName}". I found ${list.length} stories/tasks — please select one to generate test cases.`);
-        setStep('content-select');
+        const assignedCount = list.filter((s: any) => s.assignee).length;
+        setJiraTab(assignedCount > 0 ? 'assigned' : 'unassigned');
+        push('tessa', `Connected successfully as "${jiraName}". I found ${list.length} stories/tasks (${assignedCount} assigned, ${list.length - assignedCount} unassigned). Pick one from the Assigned tab, or assign an Unassigned one to get started.`);
+        setStep('jira-stories');
       } else if (source === 'confluence' || source === 'sharepoint') {
         push('tessa', `${source === 'confluence' ? 'Confluence' : 'SharePoint'} document fetching isn't available yet. Please use JIRA, upload a document, or paste your requirements instead.`);
       }
@@ -779,11 +828,14 @@ export default function ChatPage() {
        sharepoint → getSharePointDocument — server-side extracted text from PDF/DOCX
      Whatever each returns is stitched into pendingRequirements and the
      wizard proceeds to column-select exactly like the existing flow. */
-  const handleStorySelect = async () => {
-    if (!selectedStory) return;
-    const item = stories.find(s => s.key === selectedStory);
-    push('user', `${item?.key}: ${item?.title || item?.summary || selectedStory}`);
-    setStoryMeta({ key: item?.key, title: item?.title || item?.summary || selectedStory });
+  const handleStorySelect = async (storyKeyArg?: string) => {
+    // Accept an explicit key (used by the post-assign auto-start, where the
+    // selectedStory state hasn't flushed yet) or fall back to selectedStory.
+    const key = storyKeyArg || selectedStory;
+    if (!key) return;
+    const item = stories.find(s => s.key === key);
+    push('user', `${item?.key || key}: ${item?.title || item?.summary || key}`);
+    setStoryMeta({ key: item?.key || key, title: item?.title || item?.summary || key });
 
     // GUARD: a story/task picked from JIRA or Azure DevOps needs an application
     // under test already set up in System Configuration → Application Setup.
@@ -802,25 +854,25 @@ export default function ChatPage() {
 
     try {
       if (source === 'jira') {
-        const details = await getJiraStoryDetails(user?.username || 'admin', selectedStory);
+        const details = await getJiraStoryDetails(user?.username || 'admin', key);
         const title = details.title || details.summary || item?.summary || '';
         const desc = details.description || '';
         const ac = details.acceptanceCriteria || '';
         requirements = [title, desc, ac ? `Acceptance Criteria:\n${ac}` : ''].filter(Boolean).join('\n\n');
       } else if (source === 'azure-devops') {
-        const details = await getAzureDevopsStoryDetails(selectedStory);
+        const details = await getAzureDevopsStoryDetails(key);
         const title = details.title || item?.title || item?.summary || '';
         const desc = details.description || '';
         const ac = details.acceptanceCriteria || '';
         requirements = [title, desc, ac ? `Acceptance Criteria:\n${ac}` : ''].filter(Boolean).join('\n\n');
       } else if (source === 'confluence') {
-        const page = await getConfluencePage(selectedStory);
+        const page = await getConfluencePage(key);
         if (!page.body || page.body.trim().length < 20) {
           throw new Error('Page is empty or too short to generate tests from.');
         }
         requirements = [page.title, page.body].filter(Boolean).join('\n\n');
       } else if (source === 'sharepoint') {
-        const doc = await getSharePointDocument(selectedStory);
+        const doc = await getSharePointDocument(key);
         if (!doc.text || doc.text.trim().length < 20) {
           throw new Error('Document parsed but contained no extractable text.');
         }
@@ -839,6 +891,114 @@ export default function ChatPage() {
     setPendingRequirements(requirements);
     push('tessa', "Great! Please choose the columns you'd like in your test cases, then click Generate.");
     setStep('column-select');
+  };
+
+  /* --- JIRA: load the list of people once (shown as the per-row dropdown) --- */
+  const loadAssignablePeople = async (issueKey?: string) => {
+    if (assignableUsers.length > 0 || peopleLoading) return;
+    setPeopleLoading(true);
+    try {
+      const users = await getJiraAssignableUsers(user?.username || 'admin', issueKey || '');
+      setAssignableUsers(users);
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || 'Could not load Jira users';
+      push('tessa', `I couldn't load the list of Jira people: ${msg}. You can still use "Assign to me".`);
+    } finally {
+      setPeopleLoading(false);
+    }
+  };
+
+  /* --- JIRA: assign an unassigned story to a user → moves it to the Assigned tab
+     (no auto-start; the user selects it and clicks Proceed when ready). --- */
+  const assignStory = async (key: string, accountId: string, displayName?: string) => {
+    if (!key || !accountId) return;
+    setAssigningKey(key);
+    setAssignLoading(true);
+    try {
+      const res = await assignJiraStory(user?.username || 'admin', key, accountId);
+      const assignee = res.assignee || { accountId, displayName: displayName || accountId };
+      // Move the story into the Assigned group locally (no full refetch) and
+      // surface it: switch to the Assigned tab, clear any filter, and select it.
+      setStories(prev => prev.map(s => (s.key === key ? { ...s, assignee } : s)));
+      setJiraTab('assigned');
+      setPersonFilter('');
+      setSelectedStory(key);
+      push('tessa', `Assigned ${key} to ${assignee.displayName}. It's now in the Assigned tab — select it and click Proceed to start automation.`);
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || 'Could not assign the story';
+      push('tessa', `I couldn't assign ${key}: ${msg}. Please check your JIRA "Assign issues" permission and try again.`);
+    } finally {
+      setAssignLoading(false);
+      setAssigningKey('');
+    }
+  };
+
+  /* --- JIRA: "Assign to me" shortcut (unassigned → assign, moves to Assigned) --- */
+  const assignToMe = async (key: string) => {
+    setAssigningKey(key);
+    setAssignLoading(true);
+    try {
+      const me = await getJiraCurrentUser(user?.username || 'admin');
+      await assignStory(key, me.accountId, me.displayName);
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || 'Could not resolve your JIRA account';
+      push('tessa', `I couldn't assign ${key} to you: ${msg}.`);
+      setAssignLoading(false);
+      setAssigningKey('');
+    }
+  };
+
+  /* --- JIRA: reassign an already-assigned story to a different user (no auto-start) --- */
+  const reassignStory = async (key: string, accountId: string, displayName?: string) => {
+    if (!key || !accountId) return;
+    setAssigningKey(key);
+    setAssignLoading(true);
+    try {
+      const res = await assignJiraStory(user?.username || 'admin', key, accountId);
+      const assignee = res.assignee || { accountId, displayName: displayName || accountId };
+      setStories(prev => prev.map(s => (s.key === key ? { ...s, assignee } : s)));
+      push('tessa', `Reassigned ${key} to ${assignee.displayName}.`);
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || 'Could not reassign the story';
+      push('tessa', `I couldn't reassign ${key}: ${msg}. Please check your JIRA "Assign issues" permission and try again.`);
+    } finally {
+      setAssignLoading(false);
+      setAssigningKey('');
+    }
+  };
+
+  /* --- JIRA: reassign to me (no auto-start) --- */
+  const reassignToMe = async (key: string) => {
+    setAssigningKey(key);
+    setAssignLoading(true);
+    try {
+      const me = await getJiraCurrentUser(user?.username || 'admin');
+      await reassignStory(key, me.accountId, me.displayName);
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || 'Could not resolve your JIRA account';
+      push('tessa', `I couldn't reassign ${key} to you: ${msg}.`);
+      setAssignLoading(false);
+      setAssigningKey('');
+    }
+  };
+
+  /* --- JIRA: unassign a story completely → moves it to the Unassigned tab --- */
+  const unassignStoryFn = async (key: string) => {
+    if (!key) return;
+    setAssigningKey(key);
+    setAssignLoading(true);
+    try {
+      await unassignJiraStory(user?.username || 'admin', key);
+      setStories(prev => prev.map(s => (s.key === key ? { ...s, assignee: null } : s)));
+      if (selectedStory === key) setSelectedStory('');
+      push('tessa', `Unassigned ${key}. It's now in the Unassigned tab.`);
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || 'Could not unassign the story';
+      push('tessa', `I couldn't unassign ${key}: ${msg}. Please check your JIRA "Assign issues" permission and try again.`);
+    } finally {
+      setAssignLoading(false);
+      setAssigningKey('');
+    }
   };
 
   /* --- file upload (real) ---
@@ -1684,6 +1844,14 @@ export default function ChatPage() {
     setFormValues({});
     setStories([]);
     setSelectedStory('');
+    setJiraTab('assigned');
+    setPersonFilter('');
+    setAssigningKey('');
+    setAssignableUsers([]);
+    setAssignLoading(false);
+    setPeopleLoading(false);
+    setAssignConfirm(null);
+    setReadyApps(null);
     setPasteText('');
     setAgentSteps([]);
     setResults(null);
@@ -1923,6 +2091,285 @@ export default function ChatPage() {
             Go to System Configuration
           </button>
         </div>
+      );
+    }
+
+    /* ── JIRA STORIES (Assigned / Unassigned tabs, assign + auto-start) ── */
+    if (step === 'jira-stories') {
+      const assigned = stories.filter(s => s.assignee);
+      const unassigned = stories.filter(s => !s.assignee);
+      // Unique people present among assigned stories → filter dropdown options.
+      const people = Array.from(new Map(assigned.map(s => [s.assignee.accountId, s.assignee])).values());
+      const visibleAssigned = personFilter ? assigned.filter(s => s.assignee.accountId === personFilter) : assigned;
+      const truncate = (t: string, n = 44) => (t.length > n ? t.slice(0, n).trimEnd() + '…' : t);
+      const titleOf = (s: any) => (s.title || s.summary || s.key || '').trim();
+
+      // Map a story to a configured application. With one app, every story maps
+      // to it. With several, infer by matching the app's name (or its base-URL
+      // host label) against the story key/title/summary. null = couldn't map.
+      const appForStory = (s: any): { integrationId: string; appName: string; baseUrl: string } | null => {
+        if (!readyApps || readyApps.length === 0) return null;
+        if (readyApps.length === 1) return readyApps[0];
+        const hay = `${s.key || ''} ${s.title || ''} ${s.summary || ''}`.toLowerCase();
+        for (const app of readyApps) {
+          const name = (app.appName || '').toLowerCase().trim();
+          if (name && hay.includes(name)) return app;
+          try {
+            const label = new URL(app.baseUrl).host.replace(/^www\./, '').split('.')[0].toLowerCase();
+            if (label.length > 2 && hay.includes(label)) return app;
+          } catch { /* ignore bad URL */ }
+        }
+        return null;
+      };
+
+      // Small application badge rendered inside each story card.
+      const AppBadge = ({ s }: { s: any }) => {
+        if (!readyApps) return null;                       // still loading
+        if (readyApps.length === 0)
+          return <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-amber-100 text-amber-700"><AlertTriangle className="w-2.5 h-2.5" />No app configured</span>;
+        const app = appForStory(s);
+        if (app)
+          return <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-violet-100 text-violet-700" title={app.baseUrl}><Box className="w-2.5 h-2.5" />{app.appName}</span>;
+        // Multiple apps and no keyword match — user resolves at generation time.
+        return <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-gray-100 text-gray-500" title="No configured app name matched this story — you'll choose when generating"><Box className="w-2.5 h-2.5" />Choose at generation</span>;
+      };
+
+      const Avatar = ({ u }: { u: JiraUser }) =>
+        u.avatarUrl
+          ? <img src={u.avatarUrl} alt="" className="w-5 h-5 rounded-full flex-shrink-0" />
+          : <span className="w-5 h-5 rounded-full bg-violet-100 text-violet-700 text-[10px] font-semibold flex items-center justify-center flex-shrink-0">{(u.displayName || '?').charAt(0).toUpperCase()}</span>;
+
+      const tabBtn = (tab: 'assigned' | 'unassigned', label: string, count: number) => (
+        <button
+          onClick={() => setJiraTab(tab)}
+          className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-all ${jiraTab === tab ? 'bg-white text-violet-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+        >
+          {label}
+          <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${jiraTab === tab ? 'bg-violet-100 text-violet-700' : 'bg-gray-200 text-gray-600'}`}>{count}</span>
+        </button>
+      );
+
+      const confirmStory = assignConfirm ? stories.find(s => s.key === assignConfirm.key) : null;
+
+      return (
+        <>
+        <div className="max-w-md ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm">
+          <div className="flex items-center gap-2 mb-3 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+            <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+            <span className="text-xs font-medium text-emerald-700">Connected to JIRA</span>
+          </div>
+
+          {/* One-time setup warning only — per-story app is shown on each card below */}
+          {readyApps && readyApps.length === 0 && (
+            <div className="flex items-start gap-2 mb-4 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+              <span className="text-[11px] text-amber-700">No application configured yet. Add one under System Configuration → Application Setup so these stories have an app to test against.</span>
+            </div>
+          )}
+
+          {stories.length === 0 ? (
+            <p className="text-xs text-gray-500">No stories or tasks were found in this project.</p>
+          ) : (
+            <>
+              {/* Tabs */}
+              <div className="flex gap-1 mb-4 bg-gray-100 rounded-lg p-1">
+                {tabBtn('assigned', 'Assigned', assigned.length)}
+                {tabBtn('unassigned', 'Unassigned', unassigned.length)}
+              </div>
+
+              {jiraTab === 'assigned' ? (
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-2">Filter by assignee</label>
+                  <select value={personFilter} onChange={e => { setPersonFilter(e.target.value); setSelectedStory(''); }} className={inputCls + ' appearance-none mb-3'}>
+                    <option value="">All people ({assigned.length})</option>
+                    {people.map(p => (
+                      <option key={p.accountId} value={p.accountId}>
+                        {p.displayName} ({assigned.filter(s => s.assignee.accountId === p.accountId).length})
+                      </option>
+                    ))}
+                  </select>
+
+                  {visibleAssigned.length === 0 ? (
+                    <p className="text-xs text-gray-500 py-2">No assigned stories to show.</p>
+                  ) : (
+                    <ul className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+                      {visibleAssigned.map(s => {
+                        const active = selectedStory === s.key;
+                        const rowBusy = assignLoading && assigningKey === s.key;
+                        return (
+                          <li key={s.key} className={`rounded-lg border transition-all ${active ? 'border-violet-400 bg-violet-50 ring-2 ring-violet-500/20' : 'border-gray-200 hover:border-violet-300'}`}>
+                            <button
+                              onClick={() => setSelectedStory(s.key)}
+                              className="w-full text-left px-3 pt-2 pb-1.5 rounded-t-lg hover:bg-gray-50/60"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-semibold text-violet-700">{s.key}</span>
+                                <div className="flex items-center gap-1.5 flex-shrink-0">
+                                  <AppBadge s={s} />
+                                  {active && <Check className="w-3.5 h-3.5 text-violet-600" />}
+                                </div>
+                              </div>
+                              <div className="text-xs text-gray-700 mt-0.5" title={titleOf(s)}>{truncate(titleOf(s))}</div>
+                              <div className="flex items-center gap-1.5 mt-1.5">
+                                <Avatar u={s.assignee} />
+                                <span className="text-[11px] text-gray-500">{s.assignee.displayName}</span>
+                              </div>
+                            </button>
+                            {/* Reassign to another user, or unassign completely */}
+                            <div className="px-3 pb-2 pt-1.5 border-t border-gray-100 flex items-center gap-2">
+                              <select
+                                value=""
+                                disabled={assignLoading}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  if (!val) return;
+                                  if (val === '__unassign__') { setAssignConfirm({ key: s.key, accountId: '', displayName: '(no assignee)', action: 'unassign' }); return; }
+                                  if (val === '__me__') { setAssignConfirm({ key: s.key, accountId: '__me__', displayName: 'you (your connected Jira account)', isMe: true, action: 'reassign' }); return; }
+                                  const u = assignableUsers.find(x => x.accountId === val);
+                                  if (u) setAssignConfirm({ key: s.key, accountId: u.accountId, displayName: u.displayName, action: 'reassign' });
+                                }}
+                                className={inputCls + ' appearance-none py-1.5 text-[11px] disabled:opacity-50'}
+                                title="Reassign to another user or unassign"
+                              >
+                                <option value="">Reassign / unassign…</option>
+                                <option value="__me__">⭐ Assign to me</option>
+                                <option value="__unassign__">🚫 Unassign (move to Unassigned)</option>
+                                {assignableUsers.filter(u => u.accountId !== s.assignee.accountId).map(u => (
+                                  <option key={u.accountId} value={u.accountId}>{u.displayName}{u.emailAddress ? ` — ${u.emailAddress}` : ''}</option>
+                                ))}
+                              </select>
+                              {rowBusy && <Loader2 className="w-4 h-4 animate-spin text-violet-600 flex-shrink-0" />}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+
+                  <button onClick={runOnce(() => handleStorySelect())} disabled={busy || !selectedStory} className="mt-3 w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2">
+                    <ArrowRight className="w-4 h-4" />Proceed
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  {unassigned.length === 0 ? (
+                    <p className="text-xs text-gray-500 py-2">Every story is already assigned. 🎉</p>
+                  ) : (
+                    <ul className="space-y-1.5 max-h-80 overflow-y-auto pr-1">
+                      {unassigned.map(s => {
+                        const rowBusy = assignLoading && assigningKey === s.key;
+                        return (
+                          <li key={s.key} className="px-3 py-2 rounded-lg border border-gray-200">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-semibold text-violet-700">{s.key}</span>
+                              <div className="flex items-center gap-1.5 flex-shrink-0">
+                                <AppBadge s={s} />
+                                <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-amber-100 text-amber-700">Unassigned</span>
+                              </div>
+                            </div>
+                            <div className="text-xs text-gray-700 mt-0.5" title={titleOf(s)}>{truncate(titleOf(s))}</div>
+
+                            <div className="mt-2">
+                              <label className="block text-[11px] font-medium text-gray-600 mb-1">Assign to</label>
+                              {peopleLoading && assignableUsers.length === 0 ? (
+                                <div className="flex items-center gap-2 text-[11px] text-gray-500"><Loader2 className="w-3.5 h-3.5 animate-spin" />Loading Jira people…</div>
+                              ) : (
+                                <div className="flex items-center gap-2">
+                                  <select
+                                    value=""
+                                    disabled={assignLoading}
+                                    onChange={e => {
+                                      const val = e.target.value;
+                                      if (!val) return;
+                                      // Ask for confirmation before mutating the Jira ticket.
+                                      if (val === '__me__') { setAssignConfirm({ key: s.key, accountId: '__me__', displayName: 'you (your connected Jira account)', isMe: true, action: 'assign-start' }); return; }
+                                      const u = assignableUsers.find(x => x.accountId === val);
+                                      if (u) setAssignConfirm({ key: s.key, accountId: u.accountId, displayName: u.displayName, action: 'assign-start' });
+                                    }}
+                                    className={inputCls + ' appearance-none py-2 text-xs disabled:opacity-50'}
+                                  >
+                                    <option value="">-- choose a person --</option>
+                                    <option value="__me__">⭐ Assign to me</option>
+                                    {assignableUsers.map(u => (
+                                      <option key={u.accountId} value={u.accountId}>{u.displayName}{u.emailAddress ? ` — ${u.emailAddress}` : ''}</option>
+                                    ))}
+                                  </select>
+                                  {rowBusy && <Loader2 className="w-4 h-4 animate-spin text-violet-600 flex-shrink-0" />}
+                                </div>
+                              )}
+                              <p className="text-[10px] text-gray-400 mt-1">You'll confirm, then {s.key} moves to the Assigned tab.</p>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Assignment confirmation popup — user sees exactly what will change */}
+        {assignConfirm && (() => {
+          const isUnassign = assignConfirm.action === 'unassign';
+          const isReassign = assignConfirm.action === 'reassign';
+          const title = isUnassign ? 'Confirm unassign' : isReassign ? 'Confirm reassignment' : 'Confirm assignment';
+          const subtitle = isUnassign
+            ? 'This removes the assignee. The story moves to the Unassigned tab.'
+            : isReassign
+              ? 'This changes who the Jira ticket is assigned to.'
+              : 'This assigns the Jira ticket. It will move to the Assigned tab.';
+          const confirmLabel = isUnassign ? 'Unassign' : isReassign ? 'Reassign' : 'Assign';
+          const confirmClasses = isUnassign
+            ? 'flex-1 py-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-1.5'
+            : 'flex-1 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-1.5';
+          return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={() => !assignLoading && setAssignConfirm(null)}>
+            <div className="w-full max-w-sm bg-white rounded-xl shadow-xl p-5" onClick={e => e.stopPropagation()}>
+              <div className="flex items-start gap-3 mb-3">
+                <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 ${isUnassign ? 'bg-amber-100 text-amber-600' : 'bg-violet-100 text-violet-600'}`}>
+                  {isUnassign ? <X className="w-5 h-5" /> : <Check className="w-5 h-5" />}
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-800">{title}</h3>
+                  <p className="text-xs text-gray-500 mt-0.5">{subtitle}</p>
+                </div>
+              </div>
+              <div className="bg-gray-50 border border-gray-100 rounded-lg px-3 py-2.5 mb-4 text-xs text-gray-700 space-y-1">
+                <div><span className="text-gray-500">Story:</span> <span className="font-semibold text-violet-700">{assignConfirm.key}</span> — {truncate(titleOf(confirmStory || { key: assignConfirm.key }), 60)}</div>
+                {isUnassign
+                  ? <div><span className="text-gray-500">Currently:</span> <span className="font-semibold text-gray-800">{confirmStory?.assignee?.displayName || 'assigned'}</span> → <span className="font-semibold text-amber-700">Unassigned</span></div>
+                  : <div><span className="text-gray-500">{isReassign ? 'Reassign to:' : 'Assign to:'}</span> <span className="font-semibold text-gray-800">{assignConfirm.displayName}</span></div>}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setAssignConfirm(null)}
+                  disabled={assignLoading}
+                  className="flex-1 py-2 border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 text-sm font-medium rounded-lg transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    const c = assignConfirm;
+                    setAssignConfirm(null);
+                    if (c.action === 'unassign') { unassignStoryFn(c.key); return; }
+                    if (c.action === 'reassign') { c.isMe ? reassignToMe(c.key) : reassignStory(c.key, c.accountId, c.displayName); return; }
+                    c.isMe ? assignToMe(c.key) : assignStory(c.key, c.accountId, c.displayName);
+                  }}
+                  disabled={assignLoading}
+                  className={confirmClasses}
+                >
+                  {assignLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : (isUnassign ? <X className="w-4 h-4" /> : <Check className="w-4 h-4" />)}
+                  {confirmLabel}
+                </button>
+              </div>
+            </div>
+          </div>
+          );
+        })()}
+        </>
       );
     }
 

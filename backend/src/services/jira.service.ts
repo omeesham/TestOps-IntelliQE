@@ -4,7 +4,8 @@ import { decryptConfigData, encryptConfigData } from '../utils/crypto.js';
 
 // --- Types ---
 export type JiraCreds = { baseUrl: string; authHeader: string; projectKey?: string };
-type StorySummary = { key: string; summary: string };
+type JiraUser = { accountId: string; displayName: string; emailAddress?: string; avatarUrl?: string };
+type StorySummary = { key: string; summary: string; assignee: JiraUser | null };
 type StoryDetails = {
   key: string;
   title: string;
@@ -162,6 +163,29 @@ async function request<T>(creds: JiraCreds, url: string, params?: Record<string,
   return resp.data;
 }
 
+// PUT sibling of request() — same auth headers, used for issue mutations (assign).
+async function putRequest<T>(creds: JiraCreds, url: string, body: any): Promise<T> {
+  const resp = await axios.put<T>(url, body, {
+    headers: {
+      Authorization: creds.authHeader,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+  });
+  return resp.data;
+}
+
+// Normalise a JIRA user object into the shape the UI needs.
+function mapUser(u: any): { accountId: string; displayName: string; emailAddress?: string; avatarUrl?: string } | null {
+  if (!u || !u.accountId) return null;
+  return {
+    accountId: u.accountId,
+    displayName: u.displayName || u.emailAddress || u.accountId,
+    emailAddress: u.emailAddress || undefined,
+    avatarUrl: u.avatarUrls?.['24x24'] || u.avatarUrls?.['48x48'] || undefined,
+  };
+}
+
 // --- Issue type discovery ---
 // Best-effort: discovery is a convenience to scope the JQL to this instance's
 // real Story/Task names. If it fails (permission scope, deprecated payload,
@@ -257,7 +281,7 @@ export async function getStories(creds: JiraCreds): Promise<StorySummary[]> {
   const url = `${creds.baseUrl}/rest/api/3/search/jql`;
 
   const run = async (jql: string, maxResults: number): Promise<any[]> => {
-    const data = await request<any>(creds, url, { jql, maxResults, fields: 'summary,issuetype' });
+    const data = await request<any>(creds, url, { jql, maxResults, fields: 'summary,issuetype,assignee' });
     return Array.isArray(data.issues) ? data.issues : [];
   };
 
@@ -294,7 +318,47 @@ export async function getStories(creds: JiraCreds): Promise<StorySummary[]> {
     }
   }
 
-  return issues.map((i: any) => ({ key: i.key, summary: i.fields?.summary ?? '' }));
+  return issues.map((i: any) => ({
+    key: i.key,
+    summary: i.fields?.summary ?? '',
+    assignee: mapUser(i.fields?.assignee),
+  }));
+}
+
+// --- Assignee support ---
+// Current connected JIRA user — used for the "Assign to me" shortcut.
+export async function getCurrentUser(creds: JiraCreds): Promise<JiraUser> {
+  const url = `${creds.baseUrl}/rest/api/3/myself`;
+  const me = await request<any>(creds, url);
+  const mapped = mapUser(me);
+  if (!mapped) {
+    throw new Error('Could not resolve the current JIRA user (no accountId returned).');
+  }
+  return mapped;
+}
+
+// Users who can be assigned to an issue (or, as a fallback, to the project).
+export async function getAssignableUsers(creds: JiraCreds, issueKey?: string): Promise<JiraUser[]> {
+  const url = `${creds.baseUrl}/rest/api/3/user/assignable/search`;
+  const params: Record<string, any> = { maxResults: 50 };
+  if (issueKey) params.issueKey = issueKey;
+  else if (creds.projectKey) params.project = creds.projectKey;
+  const users = await request<any[]>(creds, url, params);
+  return (Array.isArray(users) ? users : []).map(mapUser).filter((u): u is JiraUser => u !== null);
+}
+
+// Assign an issue to a user. JIRA Cloud requires accountId (not username).
+export async function assignIssue(creds: JiraCreds, issueKey: string, accountId: string): Promise<{ ok: true }> {
+  const url = `${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}/assignee`;
+  await putRequest(creds, url, { accountId });
+  return { ok: true };
+}
+
+// Remove the assignee from an issue. JIRA Cloud clears it with accountId: null.
+export async function unassignIssue(creds: JiraCreds, issueKey: string): Promise<{ ok: true }> {
+  const url = `${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}/assignee`;
+  await putRequest(creds, url, { accountId: null });
+  return { ok: true };
 }
 
 export async function getStory(creds: JiraCreds, key: string): Promise<StoryDetails> {
@@ -372,4 +436,4 @@ export async function getStory(creds: JiraCreds, key: string): Promise<StoryDeta
   return { key, title, description: descriptionPlain, acceptanceCriteria: acPlain || '' };
 }
 
-export default { testConnection, getStories, getStory, getCredsForTenant, saveCredsForTenant, deleteCredsForTenant, getConnectionStatus };
+export default { testConnection, getStories, getStory, getCurrentUser, getAssignableUsers, assignIssue, unassignIssue, getCredsForTenant, saveCredsForTenant, deleteCredsForTenant, getConnectionStatus };
