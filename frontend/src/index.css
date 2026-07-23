@@ -114,22 +114,132 @@
   display: none;
 }
 
-/* ──────────────────────────────────────────────────────────────
-   App-wide button design language
-   - Square edges (no rounded corners)
-   - Icons and shadows in lavender (#DDD6FE / rgb(221, 214, 254))
-   In Tailwind v4 every shadow utility resolves its color through
-   --tw-shadow-color, so overriding it recolors all button shadows.
-   ────────────────────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════════
+   IntelliQE "4D" design language — depth (3D) + motion (the 4th D)
+   A pure-CSS presentation layer: restyles the entire app globally
+   without touching any component logic. Deliberately UNLAYERED so
+   it takes priority over Tailwind's layered utilities.
+   ══════════════════════════════════════════════════════════════ */
+
+/* 1 ▸ Living aurora backdrop — soft brand-colored light pools behind every
+      page. background-attachment: fixed makes content glide over a still
+      backdrop while scrolling (a subtle parallax depth cue). */
+main {
+  background-image:
+    radial-gradient(1100px 520px at 8% -5%, rgba(124, 58, 237, 0.08), transparent 60%),
+    radial-gradient(900px 480px at 100% 0%, rgba(99, 102, 241, 0.08), transparent 55%),
+    radial-gradient(1000px 620px at 50% 112%, rgba(6, 182, 212, 0.06), transparent 62%);
+  background-attachment: fixed;
+}
+
+/* 2 ▸ Buttons — tactile 3D: soft rounded corners, purple-tinted elevation,
+      lift on hover, press-down on click. */
 button,
 select,
 textarea,
 input:not([type="radio"]):not([type="checkbox"]):not([type="range"]) {
-  border-radius: 0 !important;
+  border-radius: 10px !important;
+}
+button.rounded-full,
+input.rounded-full {
+  border-radius: 9999px !important; /* keep genuinely circular controls circular */
 }
 button {
-  --tw-shadow-color: #DDD6FE !important;
+  --tw-shadow-color: rgb(124 58 237 / 0.22) !important;
+  transition:
+    transform 0.16s ease,
+    box-shadow 0.2s ease,
+    filter 0.2s ease,
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    opacity 0.2s ease;
 }
-button svg {
-  color: #DDD6FE !important;
+button:not(:disabled):hover {
+  transform: translateY(-1px);
+  filter: brightness(1.04);
+}
+button:not(:disabled):active {
+  transform: translateY(0) scale(0.98);
+  filter: brightness(0.98);
+  transition-duration: 0.06s;
+}
+
+/* 3 ▸ Inputs — smooth focus/hover feel to match the buttons. */
+select,
+textarea,
+input:not([type="radio"]):not([type="checkbox"]):not([type="range"]) {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+/* 4 ▸ Cards — every standard card (`bg-white … shadow-sm`) gets a layered,
+      purple-tinted elevation and breathes on hover. Scoped to shadow-sm so
+      modals (shadow-2xl) keep their own heavier float. */
+:where(.bg-white.shadow-sm) {
+  box-shadow:
+    0 1px 2px rgb(30 27 75 / 0.05),
+    0 12px 32px -16px rgb(124 58 237 / 0.16);
+  transition: box-shadow 0.25s ease, border-color 0.25s ease;
+}
+:where(.bg-white.shadow-sm):hover {
+  box-shadow:
+    0 2px 4px rgb(30 27 75 / 0.05),
+    0 20px 44px -18px rgb(124 58 237 / 0.24);
+}
+
+/* 5 ▸ Modals — springy pop-in entrance for every overlay dialog. The
+      animation releases after 0.22s (fill: none), so it can never disturb
+      layout or positioning afterwards. */
+@keyframes modalPop {
+  from { opacity: 0; transform: translateY(12px) scale(0.965); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+:where(.fixed.inset-0) > :where(div) {
+  animation: modalPop 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.15);
+}
+
+/* 6 ▸ Nav sidebar — deep-space gradient with a violet glow instead of flat
+      navy. Scoped to the aside that declares the navy bg (bg-[#1E1B4B]) so
+      OTHER asides (e.g. the Chat page's light AI Pipeline Progress panel)
+      keep their own background. */
+aside[class*="1E1B4B"] {
+  background-image:
+    radial-gradient(420px 260px at 85% -8%, rgba(124, 58, 237, 0.35), transparent 65%),
+    radial-gradient(360px 420px at -20% 105%, rgba(99, 102, 241, 0.22), transparent 60%),
+    linear-gradient(197deg, #241b63 0%, #1e1b4b 45%, #151233 100%);
+}
+
+/* 7 ▸ Table rows — gentle glide on hover. */
+tbody tr {
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+/* 8 ▸ Slim, branded scrollbars. */
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: #ddd6fe; border-radius: 8px; }
+*::-webkit-scrollbar-thumb:hover { background: #c4b5fd; }
+* { scrollbar-width: thin; scrollbar-color: #ddd6fe transparent; }
+
+/* 9 ▸ Keyboard focus — a clear brand-colored ring for accessibility. */
+:focus-visible {
+  outline: 2px solid rgb(124 58 237 / 0.55);
+  outline-offset: 2px;
+}
+
+/* 10 ▸ Respect users who opt out of motion. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Exception: the Bug Tracker "Raise Bug" destination picker uses larger-radius
+   3D cards with brand-colored (Azure DevOps / JIRA) logos. */
+.raise-dest-modal button {
+  border-radius: 1rem !important;
+}
+.raise-dest-modal svg {
+  color: currentColor !important; /* brand/white icons inherit their designed color */
 }

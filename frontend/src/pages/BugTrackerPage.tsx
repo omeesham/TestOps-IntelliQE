@@ -111,6 +111,24 @@ const fmtDate = (d?: string | null) =>
 const fmtDateTime = (d?: string | null) =>
   d ? new Date(d).toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
 
+/** Azure DevOps brand mark (inline SVG — external icon CDNs are blocked in some deployments). */
+function AdoLogo({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+      <path d="M0 8.877L2.247 5.91l8.405-3.416V.022l7.37 5.393L2.966 8.338v8.225L0 15.707zm24-4.45v14.651l-5.753 4.9-9.303-3.057v3.056l-5.978-7.416 15.057 1.798V5.415z" />
+    </svg>
+  );
+}
+
+/** JIRA brand mark (inline SVG). */
+function JiraLogo({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+      <path d="M11.571 11.513H0a5.218 5.218 0 0 0 5.232 5.215h2.13v2.057A5.215 5.215 0 0 0 12.575 24V12.518a1.005 1.005 0 0 0-1.005-1.005zm5.723-5.756H5.736a5.215 5.215 0 0 0 5.215 5.214h2.129v2.058a5.218 5.218 0 0 0 5.215 5.214V6.758a1.001 1.001 0 0 0-1.001-1.001zM23.013 0H11.455a5.215 5.215 0 0 0 5.215 5.215h2.129v2.057A5.215 5.215 0 0 0 24 12.483V1.005A1.001 1.001 0 0 0 23.013 0z" />
+    </svg>
+  );
+}
+
 function StatusBadge({ status }: { status: string }) {
   const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.open;
   const Icon = cfg.icon;
@@ -1173,55 +1191,100 @@ export default function BugTrackerPage() {
 
       {/* Raise destination picker */}
       {raiseOpen && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setRaiseOpen(false)}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-5 border-b border-gray-100">
+        <div
+          className="fixed inset-0 bg-black/45 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => { if (!pushingAdo && !pushingJira) setRaiseOpen(false); }}
+        >
+          <div
+            className="raise-dest-modal bg-gradient-to-b from-white to-slate-50 rounded-3xl shadow-[0_24px_60px_-12px_rgba(30,27,75,0.45)] ring-1 ring-black/5 w-full max-w-md overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100">
               <div>
                 <h3 className="text-lg font-bold text-gray-900">Raise Bug{selectedIds.size > 1 ? 's' : ''}</h3>
                 <p className="text-sm text-gray-500 mt-0.5">
                   Where should the {selectedIds.size} selected bug{selectedIds.size > 1 ? 's' : ''} be raised?
                 </p>
               </div>
-              <button onClick={() => setRaiseOpen(false)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400">
+              <button
+                onClick={() => setRaiseOpen(false)}
+                disabled={pushingAdo || pushingJira}
+                className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 disabled:opacity-40"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-5 space-y-3">
+            <div className="p-6 space-y-4">
+              {/* Azure DevOps — 3D card */}
               <button
-                onClick={() => { setRaiseOpen(false); handleRaiseInAdo(); }}
-                disabled={!adoStatus?.connected}
-                className="w-full flex items-center gap-3 p-4 rounded-xl border text-left transition-colors border-sky-200 bg-sky-50/50 hover:bg-sky-50 hover:border-sky-300 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-sky-50/50"
+                onClick={async () => { await handleRaiseInAdo(); setRaiseOpen(false); }}
+                disabled={!adoStatus?.connected || pushingAdo || pushingJira}
+                className={`group relative w-full flex items-center gap-4 p-4 rounded-2xl text-left transform-gpu transition-all duration-200 ease-out
+                  border border-sky-100 bg-gradient-to-br from-white via-sky-50/40 to-sky-100/60
+                  shadow-[0_6px_16px_-6px_rgba(2,132,199,0.35),inset_0_1px_0_rgba(255,255,255,0.9)]
+                  hover:-translate-y-1 hover:border-sky-300 hover:shadow-[0_16px_32px_-10px_rgba(2,132,199,0.5),inset_0_1px_0_rgba(255,255,255,0.9)]
+                  active:translate-y-0 active:shadow-[0_4px_10px_-4px_rgba(2,132,199,0.4)]
+                  disabled:cursor-not-allowed disabled:hover:translate-y-0
+                  ${pushingAdo ? 'animate-pulse border-sky-400 ring-2 ring-sky-300/60' : (!adoStatus?.connected || pushingJira) ? 'opacity-50' : ''}`}
                 title={adoStatus?.connected ? undefined : 'Connect Azure DevOps in System Configuration → Requirement Sources'}
               >
-                <div className="w-10 h-10 rounded-lg bg-sky-600 flex items-center justify-center shrink-0">
-                  <Upload className="w-5 h-5 text-white" />
+                <div className="relative w-14 h-14 shrink-0 rounded-2xl text-white bg-gradient-to-br from-sky-400 via-sky-600 to-blue-800 flex items-center justify-center
+                    shadow-[0_8px_16px_-4px_rgba(2,132,199,0.55),inset_0_1px_1px_rgba(255,255,255,0.5),inset_0_-2px_3px_rgba(0,0,0,0.25)]
+                    transition-transform duration-200 group-hover:scale-105 group-hover:rotate-[-3deg]">
+                  {pushingAdo
+                    ? <Upload className="w-7 h-7 text-white drop-shadow animate-bounce" />
+                    : <AdoLogo className="w-7 h-7 text-white drop-shadow-[0_2px_2px_rgba(0,0,0,0.3)]" />}
+                  <span className="pointer-events-none absolute inset-x-1.5 top-1 h-1/3 rounded-t-xl bg-white/30 blur-[1px]" />
                 </div>
                 <div className="min-w-0">
-                  <div className="font-semibold text-gray-900">Azure DevOps</div>
-                  <div className="text-xs text-gray-500">
-                    {adoStatus?.connected
-                      ? <>Raise as Bug work items in <span className="font-medium text-sky-700">{adoStatus.project}</span></>
-                      : 'Not connected'}
+                  <div className="font-bold text-gray-900 text-[15px]">Azure DevOps</div>
+                  <div className="text-xs text-gray-500 mt-0.5">
+                    {pushingAdo
+                      ? <span className="text-sky-700 font-medium">Raising {selectedIds.size} bug{selectedIds.size > 1 ? 's' : ''} in {adoStatus?.project}…</span>
+                      : adoStatus?.connected
+                        ? <>Raise as Bug work items in <span className="font-semibold text-sky-700">{adoStatus.project}</span></>
+                        : 'Not connected'}
                   </div>
                 </div>
+                {pushingAdo
+                  ? <span className="ml-auto shrink-0 text-sky-600"><Loader2 className="w-5 h-5 animate-spin" /></span>
+                  : <span className="ml-auto shrink-0 text-sky-400 opacity-0 -translate-x-1 transition-all duration-200 group-hover:opacity-100 group-hover:translate-x-0">→</span>}
               </button>
+
+              {/* JIRA — 3D card */}
               <button
-                onClick={() => { setRaiseOpen(false); handleRaiseInJira(); }}
-                disabled={!jiraStatus?.connected}
-                className="w-full flex items-center gap-3 p-4 rounded-xl border text-left transition-colors border-indigo-200 bg-indigo-50/50 hover:bg-indigo-50 hover:border-indigo-300 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-indigo-50/50"
+                onClick={async () => { await handleRaiseInJira(); setRaiseOpen(false); }}
+                disabled={!jiraStatus?.connected || pushingAdo || pushingJira}
+                className={`group relative w-full flex items-center gap-4 p-4 rounded-2xl text-left transform-gpu transition-all duration-200 ease-out
+                  border border-blue-100 bg-gradient-to-br from-white via-blue-50/40 to-indigo-100/60
+                  shadow-[0_6px_16px_-6px_rgba(37,99,235,0.35),inset_0_1px_0_rgba(255,255,255,0.9)]
+                  hover:-translate-y-1 hover:border-blue-300 hover:shadow-[0_16px_32px_-10px_rgba(37,99,235,0.5),inset_0_1px_0_rgba(255,255,255,0.9)]
+                  active:translate-y-0 active:shadow-[0_4px_10px_-4px_rgba(37,99,235,0.4)]
+                  disabled:cursor-not-allowed disabled:hover:translate-y-0
+                  ${pushingJira ? 'animate-pulse border-blue-400 ring-2 ring-blue-300/60' : (!jiraStatus?.connected || pushingAdo) ? 'opacity-50' : ''}`}
                 title={jiraStatus?.connected ? undefined : 'Connect JIRA in System Configuration → Requirement Sources'}
               >
-                <div className="w-10 h-10 rounded-lg bg-indigo-600 flex items-center justify-center shrink-0">
-                  <Upload className="w-5 h-5 text-white" />
+                <div className="relative w-14 h-14 shrink-0 rounded-2xl text-white bg-gradient-to-br from-blue-400 via-blue-600 to-indigo-800 flex items-center justify-center
+                    shadow-[0_8px_16px_-4px_rgba(37,99,235,0.55),inset_0_1px_1px_rgba(255,255,255,0.5),inset_0_-2px_3px_rgba(0,0,0,0.25)]
+                    transition-transform duration-200 group-hover:scale-105 group-hover:rotate-[3deg]">
+                  {pushingJira
+                    ? <Upload className="w-7 h-7 text-white drop-shadow animate-bounce" />
+                    : <JiraLogo className="w-7 h-7 text-white drop-shadow-[0_2px_2px_rgba(0,0,0,0.3)]" />}
+                  <span className="pointer-events-none absolute inset-x-1.5 top-1 h-1/3 rounded-t-xl bg-white/30 blur-[1px]" />
                 </div>
                 <div className="min-w-0">
-                  <div className="font-semibold text-gray-900">JIRA</div>
-                  <div className="text-xs text-gray-500">
-                    {jiraStatus?.connected
-                      ? <>Raise as Bug issues in project <span className="font-medium text-indigo-700">{jiraStatus.projectKey || '—'}</span></>
-                      : 'Not connected'}
+                  <div className="font-bold text-gray-900 text-[15px]">JIRA</div>
+                  <div className="text-xs text-gray-500 mt-0.5">
+                    {pushingJira
+                      ? <span className="text-blue-700 font-medium">Raising {selectedIds.size} bug{selectedIds.size > 1 ? 's' : ''} in project {jiraStatus?.projectKey}…</span>
+                      : jiraStatus?.connected
+                        ? <>Raise as Bug issues in project <span className="font-semibold text-blue-700">{jiraStatus.projectKey || '—'}</span></>
+                        : 'Not connected'}
                   </div>
                 </div>
+                {pushingJira
+                  ? <span className="ml-auto shrink-0 text-blue-600"><Loader2 className="w-5 h-5 animate-spin" /></span>
+                  : <span className="ml-auto shrink-0 text-blue-400 opacity-0 -translate-x-1 transition-all duration-200 group-hover:opacity-100 group-hover:translate-x-0">→</span>}
               </button>
             </div>
           </div>
