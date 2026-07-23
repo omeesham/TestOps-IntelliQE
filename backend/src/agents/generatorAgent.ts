@@ -118,9 +118,14 @@ function buildPrompt(state: TestOpsState, excludeTitles: string[] = []): string 
     : '';
 
   // Count is driven by RELEVANCE, not exhaustiveness. No fixed target, but no
-  // padding either: a simple page yields a small, focused suite.
-  const countInstruction =
-    `- The number of test cases is driven by what the functionality GENUINELY warrants — there is no target count and no minimum. A simple login page is a handful of cases (~6–12), not dozens. Do NOT pad to look thorough; a smaller, sharply relevant suite is better than a long one full of marginal scenarios. Any counts in the TEST PLAN are rough estimates, NOT quotas to fill.`;
+  // padding either: a simple page yields a small, focused suite. When the
+  // caller supplied an explicit maxTestCases (generationOptions), enforce it
+  // as a HARD cap — this option was previously stored in state but never read,
+  // so the API silently ignored it.
+  const maxCases = state.generationOptions?.maxTestCases;
+  const countInstruction = maxCases && maxCases > 0
+    ? `- HARD LIMIT: generate AT MOST ${maxCases} test case${maxCases > 1 ? 's' : ''} — the caller explicitly capped the suite size. Pick the ${maxCases} most important scenario${maxCases > 1 ? 's' : ''} (highest priority / risk first). Do not exceed this number.`
+    : `- The number of test cases is driven by what the functionality GENUINELY warrants — there is no target count and no minimum. A simple login page is a handful of cases (~6–12), not dozens. Do NOT pad to look thorough; a smaller, sharply relevant suite is better than a long one full of marginal scenarios. Any counts in the TEST PLAN are rough estimates, NOT quotas to fill.`;
 
   const exclusionBlock = excludeTitles.length > 0
     ? `\n\nALREADY GENERATED — DO NOT REPEAT THESE TITLES (case-insensitive):\n${excludeTitles.map((s) => `- ${s}`).join('\n')}\nGenerate only NEW scenarios not in the above list.`
@@ -228,6 +233,12 @@ export async function generatorAgent(state: TestOpsState): Promise<TestOpsState>
     throw new Error('Claude returned no test cases');
   }
 
-  const testCases = parsed.map(coerceTestCase);
+  let testCases = parsed.map(coerceTestCase);
+  // Belt-and-braces for the maxTestCases cap: the prompt asks the model to
+  // respect it, but a model overshoot must not leak past an explicit API cap.
+  const cap = state.generationOptions?.maxTestCases;
+  if (cap && cap > 0 && testCases.length > cap) {
+    testCases = testCases.slice(0, cap);
+  }
   return { ...state, testCases };
 }

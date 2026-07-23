@@ -118,7 +118,28 @@ export async function processStageCompletion(
     return { nextStage: null, action: 'complete' };
   }
 
-  const nextStageId = resolveNextStage(stageDef, result);
+  let nextStageId = resolveNextStage(stageDef, result);
+
+  // Convergence guard: pipeline-definition.json DECLARES maxIterations but
+  // nothing enforced it — a "fail → healing" routing rule (healing + audit
+  // both route failures back to healing) could loop a run forever, burning
+  // tokens. Count how many worker tasks this run has already spent on the
+  // next stage; at/over the limit, terminate the run as 'fixme' instead of
+  // enqueueing another pass.
+  if (nextStageId && !definition.terminalStates.includes(nextStageId)) {
+    const guard = (definition as any).convergenceGuards?.maxIterations;
+    if (guard?.enabled !== false) {
+      const limit = Math.max(1, Number(guard?.limit) || 3);
+      const { rows: [cnt] } = await pool.query(
+        `SELECT COUNT(*) AS count FROM ${SCHEMA}.qa_worker_tasks WHERE run_id = $1 AND stage_id = $2`,
+        [runId, nextStageId],
+      );
+      if (parseInt(cnt.count) >= limit) {
+        console.warn(`[orchestrator] run ${runId}: stage '${nextStageId}' hit maxIterations (${limit}) — terminating as fixme`);
+        nextStageId = null; // fall through to the terminal branch below
+      }
+    }
+  }
 
   // Terminal
   if (!nextStageId || definition.terminalStates.includes(nextStageId)) {

@@ -8,7 +8,9 @@ const ANTHROPIC_VERSION = '2023-06-01';
 const MODEL_MAP: Record<string, string> = {
   haiku: 'claude-haiku-4-5-20251001',
   sonnet: 'claude-sonnet-4-6',
-  opus: 'claude-opus-4-7',
+  // Keep in sync with the inline pipeline's default (claude-runner.ts
+  // DEFAULT_API_MODEL) so both paths run the same Opus tier.
+  opus: 'claude-opus-4-8',
 };
 
 export interface SdkExecutionResult {

@@ -26,9 +26,24 @@ const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3001';
 const WORKER_SECRET = process.env.WORKER_SECRET || 'dev-secret';
 const WORKER_ID = process.env.WORKER_ID || 'local-worker-1';
 const PLATFORM_DEFAULT_API_KEY = process.env.ANTHROPIC_API_KEY;
-const AGENTS_DIR = process.env.AGENTS_DIR
-  ? path.resolve(process.env.AGENTS_DIR)
-  : path.resolve(__dirname, '../..', '.github', 'agents');
+// Agent .md files live at the REPO root (.github/agents), which is one level
+// above backend/ — i.e. three levels up from src/worker (or dist/worker). The
+// old default ('../..') resolved to backend/.github/agents, which doesn't
+// exist, so every stage silently ran without its agent instructions. Probe the
+// candidates and take the first that exists so both repo layouts keep working.
+function resolveAgentsDir(): string {
+  if (process.env.AGENTS_DIR) return path.resolve(process.env.AGENTS_DIR);
+  const candidates = [
+    path.resolve(__dirname, '../../..', '.github', 'agents'), // repo root (standard layout)
+    path.resolve(__dirname, '../..', '.github', 'agents'),    // backend-local (legacy)
+  ];
+  for (const dir of candidates) {
+    if (fs.existsSync(dir)) return dir;
+  }
+  console.warn(`[worker] agents directory not found (tried: ${candidates.join(', ')}) — stages will run without agent instructions. Set AGENTS_DIR to fix.`);
+  return candidates[0];
+}
+const AGENTS_DIR = resolveAgentsDir();
 
 interface TaskResponse {
   taskId: string;
