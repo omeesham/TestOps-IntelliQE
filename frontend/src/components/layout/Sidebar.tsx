@@ -6,7 +6,7 @@ import { PATH_TO_FEATURE } from '@/config/featureCatalog';
 import { getMenuConfig } from '@/services/api';
 import {
   Home, ClipboardList, BarChart3, Users, Settings,
-  ChevronLeft, ChevronRight, Bug, ToggleRight,
+  ChevronLeft, ChevronRight, Bug, ToggleRight, Activity,
 } from 'lucide-react';
 
 interface NavItem {
@@ -27,6 +27,7 @@ const navItems: NavItem[] = [
   { name: 'Generated Test Cases',  path: '/generated-tests',      icon: ClipboardList,   roles: ALL },
   { name: 'Reports',               path: '/reports',              icon: BarChart3,       roles: ALL },
   { name: 'Bug Tracker',           path: '/bug-tracker',          icon: Bug,             roles: ALL },
+  { name: 'Agent Performance',     path: '/agent-performance',    icon: Activity,        roles: ALL },
   { name: 'User Management',       path: '/user-management',      icon: Users,           roles: ['admin', 'qa_engineer'] },
   { name: 'System Configuration',  path: '/system-configuration', icon: Settings,        roles: ['admin', 'qa_engineer'] },
   { name: 'Feature Toggles',       path: '/feature-toggles',      icon: ToggleRight,     roles: ['admin'] },

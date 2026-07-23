@@ -14,6 +14,7 @@ import GeneratedTestCasesPage from '@/pages/GeneratedTestCasesPage';
 import UserManagementPage from '@/pages/UserManagementPage';
 import BugTrackerPage from '@/pages/BugTrackerPage';
 import FeatureTogglesPage from '@/pages/FeatureTogglesPage';
+import AgentPerformancePage from '@/pages/AgentPerformancePage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth();
@@ -60,6 +61,8 @@ function AppRoutes() {
         <Route path="/system-configuration" element={<FeatureRoute feature="system-configuration" name="System Configuration"><SystemConfigurationPage /></FeatureRoute>} />
         {/* Feature Toggles dashboard — admin control panel, never feature-gated */}
         <Route path="/feature-toggles" element={<FeatureTogglesPage />} />
+        {/* Agent Performance monitor — read-only telemetry, not feature-gated */}
+        <Route path="/agent-performance" element={<AgentPerformancePage />} />
         {/* Backward-compat redirects */}
         <Route path="/configurations" element={<Navigate to="/system-configuration" replace />} />
         <Route path="/settings" element={<Navigate to="/system-configuration" replace />} />

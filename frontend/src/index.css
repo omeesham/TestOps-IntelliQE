@@ -235,6 +235,67 @@ tbody tr {
   }
 }
 
+/* ══════════════════════════════════════════════════════════════
+   Login — cinematic 3D entrance
+   ══════════════════════════════════════════════════════════════ */
+/* Slow-drifting aurora orbs behind the split-screen. */
+@keyframes loginFloat {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  33%      { transform: translate3d(24px, -30px, 0) scale(1.06); }
+  66%      { transform: translate3d(-18px, 18px, 0) scale(0.96); }
+}
+.login-orb { animation: loginFloat 18s ease-in-out infinite; will-change: transform; }
+
+/* The card floats up into place with a touch of 3D rotation. */
+@keyframes loginCardIn {
+  from { opacity: 0; transform: perspective(1400px) translateY(28px) rotateX(8deg) scale(0.96); }
+  to   { opacity: 1; transform: perspective(1400px) translateY(0) rotateX(0deg) scale(1); }
+}
+.login-card-3d { animation: loginCardIn 0.6s cubic-bezier(0.22, 0.85, 0.3, 1.05) both; }
+
+/* Brand-side hero content fades/rises in, gently staggered. */
+@keyframes loginRise {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.login-rise { animation: loginRise 0.7s ease-out both; }
+
+/* A very slow shine sweeping the brand headline. */
+@keyframes loginShine {
+  0% { background-position: -160% 0; }
+  100% { background-position: 260% 0; }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Diagnostics — live 3D log stream
+   ══════════════════════════════════════════════════════════════ */
+/* Perspective viewport so rows have real depth. */
+.diag-stream { perspective: 1400px; perspective-origin: 50% 0%; }
+
+/* Each new log row flies in from the back — the "live capture" feel. */
+@keyframes diagRowIn {
+  from { opacity: 0; transform: translateY(-10px) translateZ(-60px) rotateX(12deg); }
+  to   { opacity: 1; transform: translateY(0) translateZ(0) rotateX(0deg); }
+}
+.diag-row {
+  transform-style: preserve-3d;
+  transition: transform 0.18s ease, box-shadow 0.22s ease, filter 0.18s ease;
+  animation: diagRowIn 0.32s cubic-bezier(0.22, 0.85, 0.3, 1.1) both;
+}
+.diag-row:hover {
+  transform: translateZ(24px) translateY(-1px) rotateX(2deg);
+  box-shadow: 0 22px 40px -18px rgb(30 27 75 / 0.45);
+  filter: brightness(1.02);
+  z-index: 2;
+}
+
+/* Live pulse dot on the header. */
+@keyframes diagPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(16 185 129 / 0.55); opacity: 1; }
+  50%      { box-shadow: 0 0 0 6px rgb(16 185 129 / 0); opacity: 0.75; }
+}
+.diag-live-dot { animation: diagPulse 1.6s ease-in-out infinite; }
+
 /* Exception: the Bug Tracker "Raise Bug" destination picker uses larger-radius
    3D cards with brand-colored (Azure DevOps / JIRA) logos. */
 .raise-dest-modal button {

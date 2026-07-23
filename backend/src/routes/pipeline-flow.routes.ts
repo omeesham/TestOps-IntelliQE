@@ -14,6 +14,7 @@ import { dispatchTestRunNotification } from '../services/notification-dispatcher
 import type { TestRunEmailPayload } from '../services/email.service.js';
 import { generateAllureHtml, REPORTS_ROOT } from '../services/allure-report.service.js';
 import { startJob, getJob } from '../services/async-jobs.service.js';
+import { timed } from '../services/agent-metrics.service.js';
 import { logger } from '../utils/logger.js';
 import path from 'path';
 import fs from 'fs/promises';
@@ -337,7 +338,9 @@ async function scriptsStage(tenantId: string, body: any): Promise<any> {
     }
   }
 
-  const next = live ? await liveScriptAgent(state) : await scriptAgent(state);
+  const next = await timed(tenantId, 'script',
+    () => (live ? liveScriptAgent(state) : scriptAgent(state)),
+    (s) => ({ scripts: s.automationScripts.length, pageObjects: (s.pageObjects || []).length, mode: live ? 'live' : 'batch' }));
   console.log(
     `[pipeline-flow/scripts] (${live ? 'live' : 'batch'}) produced ${next.automationScripts.length} script(s), ` +
     `${(next.pageObjects || []).length} page object(s) for ${state.testCases.length} test case(s)`,
@@ -414,7 +417,9 @@ async function executeStage(tenantId: string, body: any): Promise<any> {
   const allureResultsDir = path.join(os.tmpdir(), `jbs-allure-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   // Playwright HTML report → run root (served as the "Basic Report").
   // Allure results → tmp, then built into the run's /allure subfolder below.
-  const next = await executionAgent(state, { htmlReportDir: reportDirFor(tenantId, reportScope), allureResultsDir });
+  const next = await timed(tenantId, 'execution',
+    () => executionAgent(state, { htmlReportDir: reportDirFor(tenantId, reportScope), allureResultsDir }),
+    (s) => ({ passed: s.executionResults?.passed ?? 0, failed: s.executionResults?.failed ?? 0, total: s.testCases.length }));
   const executed = next.executionResults !== null;
   const details = next.executionResults?.details || [];
   const passed = next.executionResults?.passed || 0;
@@ -617,9 +622,11 @@ async function healStage(tenantId: string, body: any): Promise<any> {
         break;
       }
       passesRun = pass;
-      const healed = liveHeal
-        ? await liveHealingAgent(workingState, { failuresByTc: currentFailures })
-        : await healingAgent(workingState, { failuresByTc: currentFailures });
+      const healed = await timed(tenantId, 'healing',
+        () => (liveHeal
+          ? liveHealingAgent(workingState, { failuresByTc: currentFailures })
+          : healingAgent(workingState, { failuresByTc: currentFailures })),
+        () => ({ pass, mode: liveHeal ? 'live' : 'batch', failing: Object.keys(currentFailures).length }));
       Object.assign(allNotes, healed.healingNotes || {});
       // Fresh Allure results per pass so the final report reflects the last run.
       await fs.rm(allureResultsDir, { recursive: true, force: true }).catch(() => {});

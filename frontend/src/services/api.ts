@@ -1309,3 +1309,96 @@ export function subscribeToBugEvents(
     onStatusChange?.(false);
   };
 }
+
+/* ─────────────────────────────────────────────────────────────
+   Agent Performance monitor
+   ───────────────────────────────────────────────────────────── */
+export interface AgentStat {
+  agent: string;
+  runs: number;
+  successes: number;
+  errors: number;
+  lastStatus: 'success' | 'error' | null;
+  lastDurationMs: number | null;
+  avgDurationMs: number | null;
+  minDurationMs: number | null;
+  maxDurationMs: number | null;
+  totalDurationMs: number;
+  lastRunAt: string | null;
+  lastError?: string;
+  lastMeta?: Record<string, unknown>;
+  recent: { durationMs: number; status: 'success' | 'error'; at: string }[];
+}
+
+export interface AgentPerformance {
+  agents: AgentStat[];
+  totals: { totalRuns: number; totalDurationMs: number; agentsUsed: number; errors: number };
+  generatedAt: string;
+}
+
+/** Snapshot of every agent's performance stats for this tenant. */
+export async function getAgentPerformance() {
+  const { data } = await api.get('/agent-performance/stats');
+  return data as AgentPerformance;
+}
+
+/** Clear this tenant's captured agent runs. */
+export async function resetAgentPerformance() {
+  const { data } = await api.post('/agent-performance/reset');
+  return data as { ok: boolean };
+}
+
+/**
+ * Live agent-performance events over SSE (agent_start / agent_run / agent_reset).
+ * Same auth-aware fetch-stream + reconnect pattern as subscribeToBugEvents.
+ * Returns an unsubscribe function.
+ */
+export function subscribeToAgentPerformance(
+  onEvent: (event: any) => void,
+  onStatusChange?: (connected: boolean) => void,
+): () => void {
+  const controller = new AbortController();
+  let stopped = false;
+
+  async function connect() {
+    while (!stopped) {
+      try {
+        const token = sessionStorage.getItem('intelliqe_token') || '';
+        const resp = await fetch('/api/agent-performance/events', {
+          headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
+          signal: controller.signal,
+        });
+        if (!resp.ok || !resp.body) throw new Error(`SSE connect failed: ${resp.status}`);
+        onStatusChange?.(true);
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const frames = buffer.split('\n\n');
+          buffer = frames.pop() || '';
+          for (const frame of frames) {
+            const dataLine = frame.split('\n').find((l) => l.startsWith('data: '));
+            if (!dataLine) continue;
+            try { onEvent(JSON.parse(dataLine.slice(6))); } catch { /* ignore */ }
+          }
+        }
+      } catch {
+        // fall through to reconnect
+      }
+      onStatusChange?.(false);
+      if (stopped) return;
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+  }
+
+  connect();
+  return () => {
+    stopped = true;
+    controller.abort();
+    onStatusChange?.(false);
+  };
+}

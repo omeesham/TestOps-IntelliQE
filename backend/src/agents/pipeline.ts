@@ -7,6 +7,7 @@ import { scriptAgent } from './scriptAgent.js';
 import { executionAgent } from './executionAgent.js';
 import { healingAgent } from './healingAgent.js';
 import { exploreAgent, crawlAppMap } from './exploreAgent.js';
+import { timed } from '../services/agent-metrics.service.js';
 import type { TestOpsState, AppContext, LlmConfig, ExploredApp } from './state.js';
 
 /**
@@ -125,8 +126,9 @@ export async function runPipeline(
 
 export async function runGenerationOnly(
   requirements: string,
-  options?: { maxTestCases?: number; appContext?: AppContext; llm?: LlmConfig | null },
+  options?: { maxTestCases?: number; appContext?: AppContext; llm?: LlmConfig | null; tenantId?: string },
 ): Promise<TestOpsState> {
+  const tenantId = options?.tenantId;
   let state = createInitialState(requirements, options?.appContext, options?.llm);
   if (options?.maxTestCases !== undefined) {
     state.generationOptions = { maxTestCases: options.maxTestCases };
@@ -134,19 +136,26 @@ export async function runGenerationOnly(
   // Path 4 — explore the live application first when the user provided
   // only a URL (no Jira story, no upload, no pasted requirements).
   if (shouldExploreFirst(state)) {
-    state = await exploreAgent(state);
+    state = await timed(tenantId, 'explore', () => exploreAgent(state),
+      (s) => ({ pages: s.exploredApp?.pages.length ?? 0 }));
   }
-  state = await requirementAgent(state);
+  state = await timed(tenantId, 'requirement', () => requirementAgent(state),
+    (s) => ({ features: s.parsedRequirements?.features?.length ?? 0 }));
   // Audit (enhances edge cases) and planning (produces the strategy) both depend
   // only on the parsed requirements — run them in PARALLEL, then merge.
-  const [audited, planned] = await Promise.all([auditAgent(state), plannerAgent(state)]);
+  const [audited, planned] = await Promise.all([
+    timed(tenantId, 'audit', () => auditAgent(state)),
+    timed(tenantId, 'planner', () => plannerAgent(state),
+      (s) => ({ uiTests: s.testPlan?.uiTests ?? 0, apiTests: s.testPlan?.apiTests ?? 0 })),
+  ]);
   state = {
     ...state,
     parsedRequirements: audited.parsedRequirements,
     testPlan: planned.testPlan,
     extendedTestPlan: planned.extendedTestPlan,
   };
-  state = await generatorAgent(state);
+  state = await timed(tenantId, 'generator', () => generatorAgent(state),
+    (s) => ({ testCases: s.testCases.length }));
   // NOTE: scripts are intentionally NOT generated here. The chat flow generates
   // them in a later, DOM-grounded step (POST /api/pipeline-flow/scripts), which
   // crawls the live app for real selectors. Generating blind scripts here would

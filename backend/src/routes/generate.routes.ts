@@ -108,6 +108,7 @@ router.post('/', async (req: Request, res: Response) => {
       maxTestCases: Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : undefined,
       appContext,
       llm,
+      tenantId: req.user?.tenantId,
     });
 
     res.json({
