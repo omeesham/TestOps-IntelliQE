@@ -1228,6 +1228,29 @@ export async function removeBugFromAdo(bugId: string) {
   return data as { ok: boolean; adoId: number; alreadyGone?: boolean };
 }
 
+/** Is JIRA connected for this tenant? (drives the "Raise in JIRA" UI) */
+export async function getBugJiraStatus() {
+  const { data } = await api.get('/bugs/jira/status');
+  return data as { connected: boolean; jiraUrl?: string; projectKey?: string };
+}
+
+/** Raise the selected bug(s) in JIRA as Bug issues. */
+export async function pushBugsToJira(ids: string[]) {
+  const { data } = await api.post('/bugs/jira/push', { ids });
+  return data as {
+    ok: boolean;
+    raised: number;
+    projectKey?: string;
+    results: { id: string; ok: boolean; jiraKey?: string; jiraUrl?: string; error?: string }[];
+  };
+}
+
+/** Delete just the JIRA issue a bug was raised as (the IntelliQE bug stays and can be raised again). */
+export async function removeBugFromJira(bugId: string) {
+  const { data } = await api.delete(`/bugs/${bugId}/jira`);
+  return data as { ok: boolean; jiraKey: string; alreadyGone?: boolean };
+}
+
 /**
  * Live bug events over SSE. Native EventSource cannot send the Authorization
  * header the backend requires, so this streams via fetch and reconnects with

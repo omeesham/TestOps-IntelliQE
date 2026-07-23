@@ -8,6 +8,23 @@ import {
   createBug as createAdoBug,
   deleteWorkItem as deleteAdoWorkItem,
 } from '../services/azure-devops.service.js';
+import {
+  getCredsForTenant as getJiraCreds,
+  getConnectionStatus as getJiraStatus,
+  createBug as createJiraBug,
+  deleteIssue as deleteJiraIssue,
+} from '../services/jira.service.js';
+
+// JIRA error payloads carry the reason in errorMessages[] or errors{field: msg}.
+function jiraErrorDetail(e: any, fallback: string): string {
+  const data = e?.response?.data;
+  return (
+    data?.errorMessages?.[0] ||
+    (data?.errors && Object.values(data.errors)[0] as string) ||
+    e?.message ||
+    fallback
+  );
+}
 
 const router = Router();
 
@@ -328,6 +345,136 @@ router.delete('/:id/ado', async (req: Request, res: Response) => {
   }
 });
 
+// GET /jira/status — is JIRA connected for this tenant? (drives the
+// "Raise in JIRA" UI in the Bug Tracker)
+router.get('/jira/status', async (req: Request, res: Response) => {
+  try {
+    const status = await getJiraStatus(req.user!.tenantId);
+    if (!status.connected) { res.json(status); return; }
+    // Bug creation needs a project to land in — surface the linked key so the
+    // UI can show it (and warn when the connection has no project scope).
+    const creds = await getJiraCreds(req.user!.tenantId);
+    res.json({ ...status, projectKey: creds?.projectKey });
+  } catch (err: any) {
+    console.error('Bug JIRA status error:', err.message);
+    res.status(500).json({ error: 'Failed to check JIRA status' });
+  }
+});
+
+// POST /jira/push — raise the selected bug(s) in JIRA as Bug issues.
+// Body: { ids: string[] }. Same per-bug result shape as /ado/push so the UI
+// can report exactly which succeeded / failed. Already-pushed bugs are skipped.
+router.post('/jira/push', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter((x: any) => UUID_RE.test(String(x))) : [];
+    if (ids.length === 0) { res.status(400).json({ error: 'ids (array of bug UUIDs) is required' }); return; }
+
+    const creds = await getJiraCreds(user.tenantId);
+    if (!creds) {
+      res.status(400).json({ error: 'Not connected to JIRA. Connect it in System Configuration → Requirement Sources first.' });
+      return;
+    }
+
+    const results: { id: string; ok: boolean; jiraKey?: string; jiraUrl?: string; error?: string }[] = [];
+    for (const id of ids) {
+      const bug = await findBug(id, user.tenantId);
+      if (!bug) { results.push({ id, ok: false, error: 'Bug not found' }); continue; }
+      if (bug.jira_issue_key) {
+        results.push({ id, ok: true, jiraKey: bug.jira_issue_key, jiraUrl: bug.jira_url, error: 'Already raised' });
+        continue;
+      }
+      try {
+        const created = await createJiraBug(creds, {
+          title: bug.title,
+          description: bug.description || undefined,
+          stepsToReproduce: bug.steps_to_reproduce || undefined,
+          expectedResult: bug.expected_result || undefined,
+          actualResult: bug.actual_result || undefined,
+          environment: bug.environment || undefined,
+          priority: bug.priority,
+          severity: bug.severity,
+          tags: Array.isArray(bug.tags) ? bug.tags : [],
+        });
+        const upd = await pool.query(
+          `UPDATE bugs SET jira_issue_key = $1, jira_url = $2, jira_pushed_at = now(), updated_at = now()
+           WHERE id = $3 AND tenant_id = $4 RETURNING *`,
+          [created.key, created.url, id, user.tenantId],
+        );
+        await logActivity(id, user.tenantId, 'jira_raised', { jiraKey: created.key, jiraUrl: created.url }, user.displayName || user.username);
+        emitBugEvent(user.tenantId, 'bug_updated', { bugId: id, bug: upd.rows[0] });
+        results.push({ id, ok: true, jiraKey: created.key, jiraUrl: created.url });
+      } catch (e: any) {
+        const detail = jiraErrorDetail(e, 'Failed to create the JIRA issue');
+        console.error(`Bug JIRA push error [${id}]:`, detail);
+        results.push({ id, ok: false, error: detail });
+      }
+    }
+
+    const raised = results.filter((r) => r.ok && r.error !== 'Already raised').length;
+    res.json({ ok: true, raised, results, projectKey: creds.projectKey });
+  } catch (err: any) {
+    console.error('Bug JIRA push error:', err.message);
+    res.status(500).json({ error: 'Failed to raise bugs in JIRA' });
+  }
+});
+
+// DELETE /:id/jira — delete just the JIRA issue a bug was raised as and clear
+// the link locally. The IntelliQE bug itself stays and becomes raisable again.
+// If someone already deleted the issue in JIRA (404), the link is still cleared.
+router.delete('/:id/jira', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const bugId = req.params.id as string;
+    if (!UUID_RE.test(bugId)) { res.status(404).json({ error: 'Bug not found' }); return; }
+
+    const existing = await findBug(bugId, user.tenantId);
+    if (!existing) { res.status(404).json({ error: 'Bug not found' }); return; }
+    if (!existing.jira_issue_key) {
+      res.status(400).json({ error: 'This bug has not been raised in JIRA' });
+      return;
+    }
+
+    const creds = await getJiraCreds(user.tenantId);
+    if (!creds) {
+      res.status(400).json({ error: 'Not connected to JIRA. Connect it in System Configuration → Requirement Sources first.' });
+      return;
+    }
+
+    const jiraKey = String(existing.jira_issue_key);
+    let alreadyGone = false;
+    try {
+      await deleteJiraIssue(creds, jiraKey);
+    } catch (e: any) {
+      if (e?.response?.status === 404) {
+        alreadyGone = true;
+      } else {
+        const detail = jiraErrorDetail(e, 'Failed to delete the JIRA issue');
+        console.error(`Bug JIRA remove error [${bugId} → ${jiraKey}]:`, detail);
+        res.status(502).json({ error: detail });
+        return;
+      }
+    }
+
+    const upd = await pool.query(
+      `UPDATE bugs SET jira_issue_key = NULL, jira_url = NULL, jira_pushed_at = NULL, updated_at = now()
+       WHERE id = $1 AND tenant_id = $2 RETURNING *`,
+      [bugId, user.tenantId],
+    );
+    await logActivity(
+      bugId, user.tenantId, 'jira_removed',
+      { jiraKey, ...(alreadyGone ? { note: 'issue was already deleted in JIRA' } : {}) },
+      user.displayName || user.username,
+    );
+    emitBugEvent(user.tenantId, 'bug_updated', { bugId, bug: upd.rows[0] });
+
+    res.json({ ok: true, jiraKey, alreadyGone });
+  } catch (err: any) {
+    console.error('Bug JIRA remove error:', err.message);
+    res.status(500).json({ error: 'Failed to delete the JIRA issue' });
+  }
+});
+
 // GET /:id — full bug detail + activity timeline
 router.get('/:id', async (req: Request, res: Response) => {
   try {
@@ -545,10 +692,37 @@ router.delete('/:id', async (req: Request, res: Response) => {
       }
     }
 
+    // Same best-effort cascade for JIRA: delete the linked issue when the bug
+    // was raised there, but never block the local delete on it.
+    let jiraDeleted = false;
+    let jiraError: string | undefined;
+    if (existing.jira_issue_key) {
+      try {
+        const jiraCreds = await getJiraCreds(user.tenantId);
+        if (!jiraCreds) {
+          jiraError = 'JIRA is not connected — the local bug was deleted but its JIRA issue remains.';
+        } else {
+          await deleteJiraIssue(jiraCreds, String(existing.jira_issue_key));
+          jiraDeleted = true;
+        }
+      } catch (e: any) {
+        if (e?.response?.status === 404) {
+          jiraDeleted = true; // already gone in JIRA — nothing left to remove
+        } else {
+          jiraError = jiraErrorDetail(e, 'Failed to delete the JIRA issue.');
+          console.error(`Bug JIRA delete error [${bugId} → ${existing.jira_issue_key}]:`, jiraError);
+        }
+      }
+    }
+
     await pool.query(`DELETE FROM bugs WHERE id = $1 AND tenant_id = $2`, [bugId, user.tenantId]);
     emitBugEvent(user.tenantId, 'bug_deleted', { bugId });
 
-    res.json({ ok: true, adoDeleted, adoError, adoId: existing.ado_work_item_id || undefined });
+    res.json({
+      ok: true,
+      adoDeleted, adoError, adoId: existing.ado_work_item_id || undefined,
+      jiraDeleted, jiraError, jiraKey: existing.jira_issue_key || undefined,
+    });
   } catch (err: any) {
     console.error('Delete bug error:', err.message);
     res.status(500).json({ error: 'Failed to delete bug' });

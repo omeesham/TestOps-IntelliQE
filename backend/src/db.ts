@@ -730,6 +730,11 @@ export async function initDb(): Promise<void> {
     await addColumn('bugs', 'ado_work_item_id', 'INT');
     await addColumn('bugs', 'ado_url', 'NVARCHAR(500)');
     await addColumn('bugs', 'ado_pushed_at', 'DATETIMEOFFSET');
+    // JIRA push tracking: when a bug is raised as a JIRA Bug issue, record its
+    // key (e.g. IQ-42), browser url, and when it was pushed.
+    await addColumn('bugs', 'jira_issue_key', 'NVARCHAR(50)');
+    await addColumn('bugs', 'jira_url', 'NVARCHAR(500)');
+    await addColumn('bugs', 'jira_pushed_at', 'DATETIMEOFFSET');
 
     // ─── 11. Indexes ───
     await createIndex('idx_users_tenant', 'users', '(tenant_id)');

@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import {
   listBugs, getBugStats, getBug, createBug, updateBug, revokeBug, deleteBug,
-  subscribeToBugEvents, getBugAdoStatus, pushBugsToAdo,
+  subscribeToBugEvents, getBugAdoStatus, pushBugsToAdo, getBugJiraStatus, pushBugsToJira,
 } from '@/services/api';
 import { useToast } from '@/components/feedback/ToastProvider';
 import ActionIcon from '@/components/ui/ActionIcon';
@@ -34,6 +34,9 @@ interface BugRow {
   ado_work_item_id?: number | null;
   ado_url?: string | null;
   ado_pushed_at?: string | null;
+  jira_issue_key?: string | null;
+  jira_url?: string | null;
+  jira_pushed_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -134,6 +137,8 @@ function activityLabel(entry: BugActivityRow): string {
     case 'revoked': return 'revoked this bug';
     case 'ado_raised': return 'raised this bug in Azure DevOps';
     case 'ado_removed': return 'deleted the Azure DevOps work item';
+    case 'jira_raised': return 'raised this bug in JIRA';
+    case 'jira_removed': return 'deleted the JIRA issue';
     default: return entry.action;
   }
 }
@@ -174,13 +179,17 @@ export default function BugTrackerPage() {
   const [confirmDelete, setConfirmDelete] = useState<BugRow | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  // Azure DevOps: connection status + row selection for bulk "raise in ADO".
+  // External trackers: connection status + row selection for bulk raise.
+  // Selecting bugs enables BOTH destinations — the user picks which button
+  // (Azure DevOps or JIRA) to send them to.
   const [adoStatus, setAdoStatus] = useState<{ connected: boolean; project?: string; orgUrl?: string } | null>(null);
+  const [jiraStatus, setJiraStatus] = useState<{ connected: boolean; projectKey?: string } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [pushingAdo, setPushingAdo] = useState(false);
+  const [pushingJira, setPushingJira] = useState(false);
 
-  // Bugs on the current page that can still be raised (not already in ADO).
-  const selectableBugs = bugs.filter((b) => !b.ado_work_item_id);
+  // Bugs on the current page that can still be raised in at least one tracker.
+  const selectableBugs = bugs.filter((b) => !b.ado_work_item_id || !b.jira_issue_key);
   const allSelectableChecked = selectableBugs.length > 0 && selectableBugs.every((b) => selectedIds.has(b.id));
   const toggleSelect = (id: string) =>
     setSelectedIds((prev) => {
@@ -267,6 +276,7 @@ export default function BugTrackerPage() {
   // action knows whether it's available (and which project bugs land in).
   useEffect(() => {
     getBugAdoStatus().then(setAdoStatus).catch(() => setAdoStatus({ connected: false }));
+    getBugJiraStatus().then(setJiraStatus).catch(() => setJiraStatus({ connected: false }));
   }, []);
 
   const handleRaiseInAdo = async () => {
@@ -297,6 +307,37 @@ export default function BugTrackerPage() {
       toast.fromError(err);
     } finally {
       setPushingAdo(false);
+    }
+  };
+
+  const handleRaiseInJira = async () => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    if (!jiraStatus?.connected) {
+      toast.error('JIRA not connected', 'Connect it in System Configuration → Requirement Sources first.');
+      return;
+    }
+    setPushingJira(true);
+    try {
+      const res = await pushBugsToJira(ids);
+      const failed = res.results.filter((r) => !r.ok);
+      if (res.raised > 0) {
+        toast.success(
+          `Raised ${res.raised} bug${res.raised > 1 ? 's' : ''} in JIRA${res.projectKey ? ` (${res.projectKey})` : ''}`,
+          'Find them on your JIRA board / backlog.',
+        );
+      }
+      if (failed.length > 0) {
+        toast.error(`${failed.length} bug${failed.length > 1 ? 's' : ''} could not be raised`, failed[0]?.error || 'Check the bug details and try again.');
+      } else if (res.raised === 0) {
+        toast.info('Nothing to raise', 'The selected bugs are already in JIRA.');
+      }
+      setSelectedIds(new Set());
+      fetchBugsRef.current(paginationRef.current.page, paginationRef.current.limit, { silent: true });
+    } catch (err) {
+      toast.fromError(err);
+    } finally {
+      setPushingJira(false);
     }
   };
 
@@ -472,11 +513,19 @@ export default function BugTrackerPage() {
     if (!confirmDelete) return;
     setDeleting(true);
     try {
-      const res = await deleteBug(confirmDelete.id) as { adoDeleted?: boolean; adoError?: string; adoId?: number };
-      if (confirmDelete.ado_work_item_id && res?.adoDeleted) {
-        toast.success('Deleted', `Removed the bug and its Azure DevOps work item #${res.adoId ?? confirmDelete.ado_work_item_id}.`);
-      } else if (confirmDelete.ado_work_item_id && res?.adoError) {
+      const res = await deleteBug(confirmDelete.id) as {
+        adoDeleted?: boolean; adoError?: string; adoId?: number;
+        jiraDeleted?: boolean; jiraError?: string; jiraKey?: string;
+      };
+      const removed: string[] = [];
+      if (confirmDelete.ado_work_item_id && res?.adoDeleted) removed.push(`Azure DevOps work item #${res.adoId ?? confirmDelete.ado_work_item_id}`);
+      if (confirmDelete.jira_issue_key && res?.jiraDeleted) removed.push(`JIRA issue ${res.jiraKey ?? confirmDelete.jira_issue_key}`);
+      if (confirmDelete.ado_work_item_id && res?.adoError) {
         toast.warning('Bug deleted — Azure DevOps not removed', res.adoError);
+      } else if (confirmDelete.jira_issue_key && res?.jiraError) {
+        toast.warning('Bug deleted — JIRA issue not removed', res.jiraError);
+      } else if (removed.length > 0) {
+        toast.success('Deleted', `Removed the bug and its ${removed.join(' and ')}.`);
       } else {
         toast.success('Deleted successfully');
       }
@@ -546,6 +595,19 @@ export default function BugTrackerPage() {
             Azure DevOps {adoStatus?.connected ? `· ${adoStatus.project}` : 'not connected'}
           </span>
 
+          {/* JIRA connection chip */}
+          <span
+            className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${
+              jiraStatus?.connected
+                ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                : 'bg-gray-50 text-gray-500 border-gray-200'
+            }`}
+            title={jiraStatus?.connected ? `Bugs raise into JIRA project ${jiraStatus.projectKey || ''}` : 'Connect JIRA in System Configuration'}
+          >
+            <span className={`w-2 h-2 rounded-full ${jiraStatus?.connected ? 'bg-indigo-500' : 'bg-gray-400'}`} />
+            JIRA {jiraStatus?.connected ? `· ${jiraStatus.projectKey || 'connected'}` : 'not connected'}
+          </span>
+
           <button
             onClick={handleRaiseInAdo}
             disabled={selectedIds.size === 0 || pushingAdo || !adoStatus?.connected}
@@ -554,6 +616,16 @@ export default function BugTrackerPage() {
           >
             {pushingAdo ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
             Raise in Azure DevOps{selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}
+          </button>
+
+          <button
+            onClick={handleRaiseInJira}
+            disabled={selectedIds.size === 0 || pushingJira || !jiraStatus?.connected}
+            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md text-sm font-medium transition-colors shadow-sm"
+            title={jiraStatus?.connected ? 'Raise the selected bugs in JIRA' : 'JIRA is not connected'}
+          >
+            {pushingJira ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+            Raise in JIRA{selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}
           </button>
 
           <button
@@ -673,6 +745,7 @@ export default function BugTrackerPage() {
                 <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Module</th>
                 <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Assigned To</th>
                 <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Azure DevOps</th>
+                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">JIRA</th>
                 <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Updated</th>
                 <th className="text-right px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Actions</th>
               </tr>
@@ -680,7 +753,7 @@ export default function BugTrackerPage() {
             <tbody>
               {bugs.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-3 py-12 text-center text-gray-400">
+                  <td colSpan={12} className="px-3 py-12 text-center text-gray-400">
                     <Bug className="w-8 h-8 mx-auto mb-2 text-gray-300" />
                     {hasFilters ? 'No bugs match the current filters.' : 'No bugs reported yet. Click "Report Bug" to log your first one.'}
                   </td>
@@ -692,15 +765,15 @@ export default function BugTrackerPage() {
                   onClick={() => openDetail(bug.id)}
                 >
                   <td className="px-3 py-1.5" onClick={(e) => e.stopPropagation()}>
-                    {bug.ado_work_item_id ? (
-                      <CheckCircle2 className="w-4 h-4 text-sky-500" aria-label="Already in Azure DevOps" />
+                    {bug.ado_work_item_id && bug.jira_issue_key ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500" aria-label="Already in Azure DevOps and JIRA" />
                     ) : (
                       <input
                         type="checkbox"
                         checked={selectedIds.has(bug.id)}
                         onChange={() => toggleSelect(bug.id)}
                         className="w-4 h-4 rounded border-gray-300 text-sky-600 focus:ring-sky-500 cursor-pointer"
-                        title="Select to raise in Azure DevOps"
+                        title="Select, then choose Raise in Azure DevOps or Raise in JIRA"
                       />
                     )}
                   </td>
@@ -729,6 +802,21 @@ export default function BugTrackerPage() {
                         title="Open the Azure DevOps work item"
                       >
                         ADO #{bug.ado_work_item_id} <ExternalLink className="w-3 h-3" />
+                      </a>
+                    ) : (
+                      <span className="text-gray-300 text-xs">—</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-1.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                    {bug.jira_issue_key ? (
+                      <a
+                        href={bug.jira_url || '#'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-medium hover:bg-indigo-100 transition-colors"
+                        title="Open the JIRA issue"
+                      >
+                        {bug.jira_issue_key} <ExternalLink className="w-3 h-3" />
                       </a>
                     ) : (
                       <span className="text-gray-300 text-xs">—</span>
@@ -1131,6 +1219,12 @@ export default function BugTrackerPage() {
                   <p className="mt-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5">
                     This also deletes its linked Azure DevOps work item{' '}
                     <span className="font-mono">#{confirmDelete.ado_work_item_id}</span> (moved to the ADO Recycle Bin).
+                  </p>
+                )}
+                {confirmDelete.jira_issue_key && (
+                  <p className="mt-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5">
+                    This also deletes its linked JIRA issue{' '}
+                    <span className="font-mono">{confirmDelete.jira_issue_key}</span>.
                   </p>
                 )}
               </div>

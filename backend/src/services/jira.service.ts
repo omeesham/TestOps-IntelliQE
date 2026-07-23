@@ -175,6 +175,18 @@ async function putRequest<T>(creds: JiraCreds, url: string, body: any): Promise<
   return resp.data;
 }
 
+// POST sibling of request() — used for issue creation.
+async function postRequest<T>(creds: JiraCreds, url: string, body: any): Promise<T> {
+  const resp = await axios.post<T>(url, body, {
+    headers: {
+      Authorization: creds.authHeader,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+  });
+  return resp.data;
+}
+
 // Normalise a JIRA user object into the shape the UI needs.
 function mapUser(u: any): { accountId: string; displayName: string; emailAddress?: string; avatarUrl?: string } | null {
   if (!u || !u.accountId) return null;
@@ -436,4 +448,118 @@ export async function getStory(creds: JiraCreds, key: string): Promise<StoryDeta
   return { key, title, description: descriptionPlain, acceptanceCriteria: acPlain || '' };
 }
 
-export default { testConnection, getStories, getStory, getCurrentUser, getAssignableUsers, assignIssue, unassignIssue, getCredsForTenant, saveCredsForTenant, deleteCredsForTenant, getConnectionStatus };
+// --- Bug push (Bug Tracker → JIRA) ---
+export interface JiraBugInput {
+  title: string;
+  description?: string;
+  stepsToReproduce?: string;
+  expectedResult?: string;
+  actualResult?: string;
+  environment?: string;
+  priority?: string;   // P0–P3
+  severity?: string;   // critical/high/medium/low
+  tags?: string[];
+}
+
+// IntelliQE P0–P3 → the default JIRA priority scheme.
+const JIRA_PRIORITY_MAP: Record<string, string> = {
+  P0: 'Highest', P1: 'High', P2: 'Medium', P3: 'Low',
+};
+
+// One labelled section of the ADF description: a bold label paragraph followed
+// by the section text (one paragraph per line, blank lines dropped).
+function adfSection(label: string, text: string): any[] {
+  const paras = String(text)
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((line) => ({ type: 'paragraph', content: [{ type: 'text', text: line }] }));
+  return [
+    { type: 'paragraph', content: [{ type: 'text', text: label, marks: [{ type: 'strong' }] }] },
+    ...paras,
+  ];
+}
+
+// Best-effort: find this instance's real Bug issue-type name. Defaults to
+// 'Bug' when discovery fails — the create call will surface a genuine error.
+async function findBugIssueTypeName(creds: JiraCreds): Promise<string> {
+  try {
+    const all = await request<any[]>(creds, `${creds.baseUrl}/rest/api/3/issuetype`);
+    const names = (all || []).map((t) => String(t?.name || '').trim()).filter(Boolean);
+    return names.find((n) => /^bug$/i.test(n)) || names.find((n) => /bug|defect/i.test(n)) || 'Bug';
+  } catch {
+    return 'Bug';
+  }
+}
+
+/**
+ * Create a Bug issue in JIRA from an IntelliQE bug. The full bug detail
+ * (description, repro steps, expected/actual, environment, severity) lands in
+ * the issue description as ADF so it reads well on the JIRA board. Returns the
+ * new issue's key + browser url.
+ */
+export async function createBug(creds: JiraCreds, bug: JiraBugInput): Promise<{ key: string; url: string }> {
+  if (!creds.projectKey) {
+    throw new Error('No JIRA project is linked. Re-connect JIRA in System Configuration using a project or board URL (e.g. .../projects/IQ/...).');
+  }
+  const issueType = await findBugIssueTypeName(creds);
+
+  const content: any[] = [];
+  if (bug.description) content.push(...adfSection('Description', bug.description));
+  if (bug.stepsToReproduce) content.push(...adfSection('Steps to Reproduce', bug.stepsToReproduce));
+  if (bug.expectedResult) content.push(...adfSection('Expected Result', bug.expectedResult));
+  if (bug.actualResult) content.push(...adfSection('Actual Result', bug.actualResult));
+  if (bug.environment) content.push(...adfSection('Environment', bug.environment));
+  if (bug.severity) content.push(...adfSection('Severity', bug.severity));
+  content.push({ type: 'paragraph', content: [{ type: 'text', text: 'Raised from IntelliQE.', marks: [{ type: 'em' }] }] });
+
+  const baseFields: Record<string, any> = {
+    project: { key: creds.projectKey },
+    issuetype: { name: issueType },
+    summary: bug.title.slice(0, 255),
+    description: { type: 'doc', version: 1, content },
+  };
+  // JIRA labels cannot contain spaces — dash them.
+  const labels = ['IntelliQE', ...(bug.tags || [])]
+    .map((t) => String(t).trim().replace(/\s+/g, '-'))
+    .filter(Boolean);
+  const priorityName = JIRA_PRIORITY_MAP[bug.priority || ''];
+  const richFields = {
+    ...baseFields,
+    labels,
+    ...(priorityName ? { priority: { name: priorityName } } : {}),
+  };
+
+  const post = (fields: Record<string, any>) =>
+    postRequest<any>(creds, `${creds.baseUrl}/rest/api/3/issue`, { fields });
+
+  let data: any;
+  try {
+    data = await post(richFields);
+  } catch (err: any) {
+    // priority/labels are frequently not on the project's create screen; the
+    // push must still succeed — retry with just the core fields.
+    const fieldErrors = err?.response?.data?.errors || {};
+    if (err?.response?.status === 400 && (fieldErrors.priority || fieldErrors.labels)) {
+      data = await post(baseFields);
+    } else {
+      throw err;
+    }
+  }
+  const key = data?.key;
+  if (!key) throw new Error('JIRA did not return an issue key for the created bug.');
+  return { key, url: `${creds.baseUrl}/browse/${key}` };
+}
+
+/**
+ * Delete a JIRA issue (used to cascade an IntelliQE bug deletion / unlink to
+ * the JIRA Bug it was raised as). Subtasks are deleted along with it.
+ */
+export async function deleteIssue(creds: JiraCreds, issueKey: string): Promise<void> {
+  await axios.delete(`${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}`, {
+    params: { deleteSubtasks: 'true' },
+    headers: { Authorization: creds.authHeader, Accept: 'application/json' },
+  });
+}
+
+export default { testConnection, getStories, getStory, getCurrentUser, getAssignableUsers, assignIssue, unassignIssue, getCredsForTenant, saveCredsForTenant, deleteCredsForTenant, getConnectionStatus, createBug, deleteIssue };
