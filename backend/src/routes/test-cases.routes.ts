@@ -118,9 +118,12 @@ router.get('/', async (req: Request, res: Response) => {
       .filter(Boolean);
     if (tags.length > 0) {
       params.push(tags);
-      // tags overlap: any element of the JSON `tags` array matches any requested tag.
+      // Match either the JSON `tags` array (overlap) OR the case `type` — the
+      // generator records POSITIVE/NEGATIVE/E2E as type, not as a tag, so a
+      // tags-only match would return nothing for those chips.
       where += ` AND EXISTS (SELECT 1 FROM test_cases tc WHERE tc.test_run_id = r.id
-        AND EXISTS (SELECT 1 FROM OPENJSON(tc.tags) jt JOIN OPENJSON($${params.length}) pt ON jt.value = pt.value))`;
+        AND (EXISTS (SELECT 1 FROM OPENJSON(tc.tags) jt JOIN OPENJSON($${params.length}) pt ON jt.value = pt.value)
+             OR UPPER(tc.type) IN (SELECT value FROM OPENJSON($${params.length}))))`;
     }
 
     // Count total
@@ -347,7 +350,10 @@ router.get('/:testRunId', async (req: Request, res: Response) => {
     let tagClause = '';
     if (tagList.length > 0) {
       caseParams.push(tagList);
-      tagClause = ` AND EXISTS (SELECT 1 FROM OPENJSON(tags) jt JOIN OPENJSON($${caseParams.length}) pt ON jt.value = pt.value)`;
+      // Match tags overlap OR case type (POSITIVE/NEGATIVE/E2E live in `type`,
+      // not in the tags array — see the same clause in the runs-list route).
+      tagClause = ` AND (EXISTS (SELECT 1 FROM OPENJSON(tags) jt JOIN OPENJSON($${caseParams.length}) pt ON jt.value = pt.value)
+        OR UPPER(type) IN (SELECT value FROM OPENJSON($${caseParams.length})))`;
     }
     const casesRes = await pool.query(
       `SELECT * FROM test_cases WHERE test_run_id = $1${tagClause} ORDER BY sort_order`,

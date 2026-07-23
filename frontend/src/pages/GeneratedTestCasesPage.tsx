@@ -556,9 +556,20 @@ export default function GeneratedTestCasesPage() {
                             {(tc.steps || []).length > 0 && (
                               <div>
                                 <span className="font-semibold text-gray-500">Steps:</span>
-                                <ol className="list-decimal list-inside mt-1 space-y-0.5">
-                                  {(tc.steps || []).map((s: string, i: number) => <li key={i}>{s}</li>)}
-                                </ol>
+                                <ul className="list-none mt-1 space-y-0.5">
+                                  {(tc.steps || []).map((s: string, i: number) => {
+                                    // Step text usually already carries its own number ("1. Navigate...").
+                                    // Render that number once; only prefix an index when it doesn't.
+                                    const m = s.match(/^\s*(\d+[.)])\s*(.*)$/s);
+                                    return (
+                                      <li key={i}>
+                                        {m
+                                          ? <><span className="font-semibold text-gray-500 mr-1">{m[1]}</span>{m[2]}</>
+                                          : <><span className="font-semibold text-gray-500 mr-1">{i + 1}.</span>{s}</>}
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
                               </div>
                             )}
                             {tc.expected && <div><span className="font-semibold text-gray-500">Expected:</span> {tc.expected}</div>}

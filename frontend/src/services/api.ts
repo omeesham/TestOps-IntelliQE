@@ -7,6 +7,11 @@ const api = axios.create({
   baseURL: '/api',
   headers: { 'Content-Type': 'application/json' },
   timeout: 120_000, // 2 min — generous; UI shows TIMEOUT classification past this
+  // Serialize array params as repeated keys (?tag=A&tag=B), not axios's default
+  // bracket syntax (?tag[]=A). Express 5's "simple" query parser does NOT strip
+  // brackets, so tag[] would land in req.query as the literal key "tag[]" and
+  // server-side filters would silently never apply.
+  paramsSerializer: { indexes: null },
 });
 
 // Long timeout for the AI pipeline stages. A single stage chains several
