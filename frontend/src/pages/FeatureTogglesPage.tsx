@@ -1,16 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ToggleRight, Save, RotateCcw, ShieldCheck, Loader2 } from 'lucide-react';
-import { useAuth, type UserRole } from '@/contexts/AuthContext';
+import { ToggleRight, Save, RotateCcw, ShieldCheck, Loader2, Layers } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
 import { useFeatureToggles, type FeatureMap } from '@/contexts/FeatureToggleContext';
 import { updateFeatureToggles } from '@/services/api';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { ROLES, groupedFeatures, FEATURE_CATALOG } from '@/config/featureCatalog';
 import FeatureUnavailable from '@/components/FeatureUnavailable';
 
-/** A feature is enabled unless it is explicitly set to false. */
-function isOn(map: FeatureMap, key: string, role: UserRole): boolean {
-  const v = map[key]?.[role];
-  return v === undefined ? true : v;
+/**
+ * A feature counts as ON when it is enabled for every role (missing entries
+ * mean "enabled"). The dashboard exposes ONE workspace-wide switch per feature;
+ * toggling writes the same value to all roles, so the stored per-role map and
+ * everything that consumes it (sidebar gating, route guards) stay unchanged.
+ */
+function isFeatureOn(map: FeatureMap, key: string): boolean {
+  return ROLES.every((r) => {
+    const v = map[key]?.[r.key];
+    return v === undefined ? true : v;
+  });
 }
 
 function Switch({
@@ -53,6 +60,11 @@ export default function FeatureTogglesPage() {
 
   const dirty = useMemo(() => !sameMap(draft, features), [draft, features]);
   const groups = useMemo(() => groupedFeatures(), []);
+  const enabledCount = useMemo(
+    () => FEATURE_CATALOG.filter((f) => isFeatureOn(draft, f.key)).length,
+    [draft],
+  );
+  const allOn = enabledCount === FEATURE_CATALOG.length;
 
   // Re-seed the draft when the server map arrives/changes (e.g. the initial
   // fetch resolves after this page mounts, or after a save+refresh). Only
@@ -68,20 +80,23 @@ export default function FeatureTogglesPage() {
     return <FeatureUnavailable name="Feature Toggles" />;
   }
 
-  const toggle = (key: string, role: UserRole) => {
+  /** Flip one feature for the whole workspace (all roles at once). */
+  const toggleFeature = (key: string) => {
     setDraft((prev) => {
+      const value = !isFeatureOn(prev, key);
       const next: FeatureMap = { ...prev, [key]: { ...(prev[key] || {}) } };
-      const current = isOn(prev, key, role);
-      next[key][role] = !current;
+      for (const r of ROLES) next[key][r.key] = value;
       return next;
     });
   };
 
-  const setColumn = (role: UserRole, value: boolean) => {
+  /** Master switch: turn every IntelliQE feature on or off in one click. */
+  const setAll = (value: boolean) => {
     setDraft((prev) => {
       const next: FeatureMap = { ...prev };
       for (const f of FEATURE_CATALOG) {
-        next[f.key] = { ...(next[f.key] || {}), [role]: value };
+        next[f.key] = { ...(next[f.key] || {}) };
+        for (const r of ROLES) next[f.key][r.key] = value;
       }
       return next;
     });
@@ -96,10 +111,9 @@ export default function FeatureTogglesPage() {
       // saved map is complete and unambiguous.
       const payload: Record<string, Record<string, boolean>> = {};
       for (const f of FEATURE_CATALOG) {
+        const value = isFeatureOn(draft, f.key);
         payload[f.key] = {};
-        for (const r of ROLES) {
-          payload[f.key][r.key] = isOn(draft, f.key, r.key);
-        }
+        for (const r of ROLES) payload[f.key][r.key] = value;
       }
       await updateFeatureToggles(payload);
       await refresh();
@@ -112,7 +126,7 @@ export default function FeatureTogglesPage() {
   };
 
   return (
-    <div className="max-w-5xl mx-auto">
+    <div className="max-w-3xl mx-auto">
       {/* Header */}
       <div className="flex items-start justify-between gap-4 mb-6">
         <div className="flex items-start gap-3">
@@ -122,8 +136,8 @@ export default function FeatureTogglesPage() {
           <div>
             <h1 className="text-xl font-semibold text-gray-900">Feature Toggles</h1>
             <p className="text-sm text-gray-500 mt-0.5">
-              Enable or disable features per role for your workspace. Disabled
-              features are hidden from that role's navigation and pages.
+              Turn IntelliQE features on or off for your workspace. Disabled
+              features are hidden from navigation and pages.
             </p>
           </div>
         </div>
@@ -146,102 +160,58 @@ export default function FeatureTogglesPage() {
         </div>
       </div>
 
-      {/* Table */}
-      <div className="overflow-x-auto rounded-2xl border border-purple-100 bg-white shadow-sm">
-        <table className="w-full min-w-[640px] text-sm">
-          <thead>
-            <tr className="border-b border-gray-100 bg-[#F5F3FF]/60">
-              <th className="px-5 py-3 text-left font-semibold text-gray-700">Feature</th>
-              {ROLES.map((r) => (
-                <th key={r.key} className="px-4 py-3 text-center font-semibold text-gray-700 w-40">
-                  <div className="flex flex-col items-center gap-1.5">
-                    <span>{r.label}</span>
-                    <div className="flex items-center gap-1 text-[10px] font-normal text-gray-400">
-                      <button
-                        onClick={() => setColumn(r.key, true)}
-                        className="hover:text-[#7C3AED] hover:underline"
-                      >
-                        All on
-                      </button>
-                      <span>·</span>
-                      <button
-                        onClick={() => setColumn(r.key, false)}
-                        className="hover:text-[#7C3AED] hover:underline"
-                      >
-                        All off
-                      </button>
-                    </div>
-                  </div>
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {groups.map(({ group, features: feats }) => (
-              <FeatureGroup
-                key={group}
-                group={group}
-                feats={feats}
-                draft={draft}
-                onToggle={toggle}
-              />
+      {/* Master switch — all of IntelliQE in one toggle */}
+      <div className="mb-4 flex items-center justify-between gap-4 rounded-2xl border border-purple-100 bg-white px-5 py-4 shadow-sm">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#F5F3FF]">
+            <Layers className="h-4.5 w-4.5 text-[#7C3AED]" />
+          </div>
+          <div className="min-w-0">
+            <div className="font-semibold text-gray-900">All features</div>
+            <div className="text-xs text-gray-500 mt-0.5">
+              {enabledCount} of {FEATURE_CATALOG.length} features enabled
+            </div>
+          </div>
+        </div>
+        <Switch checked={allOn} onChange={() => setAll(!allOn)} label="All IntelliQE features" />
+      </div>
+
+      {/* Feature list */}
+      <div className="rounded-2xl border border-purple-100 bg-white shadow-sm divide-y divide-gray-50">
+        {groups.map(({ group, features: feats }) => (
+          <div key={group} className="px-5 py-4">
+            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-[#7C3AED]/70">
+              {group}
+            </div>
+            {feats.map((f) => (
+              <div
+                key={f.key}
+                className="flex items-center justify-between gap-4 py-3 border-t border-gray-50 first-of-type:border-t-0"
+              >
+                <div className="min-w-0">
+                  <div className="font-medium text-gray-900">{f.name}</div>
+                  <div className="text-xs text-gray-500 mt-0.5">{f.description}</div>
+                </div>
+                <Switch
+                  checked={isFeatureOn(draft, f.key)}
+                  onChange={() => toggleFeature(f.key)}
+                  label={f.name}
+                />
+              </div>
             ))}
-          </tbody>
-        </table>
+          </div>
+        ))}
       </div>
 
       <div className="mt-4 flex items-center gap-2 text-xs text-gray-400">
         <ShieldCheck className="h-3.5 w-3.5" />
         <span>
-          Toggles are stored per workspace and enforced in the UI. The Feature
-          Toggles dashboard itself can't be disabled, so admins never get locked out.
+          Toggles apply to the whole workspace and are enforced in the UI. The
+          Feature Toggles dashboard itself can't be disabled, so admins never
+          get locked out.
         </span>
       </div>
     </div>
-  );
-}
-
-function FeatureGroup({
-  group,
-  feats,
-  draft,
-  onToggle,
-}: {
-  group: string;
-  feats: ReturnType<typeof groupedFeatures>[number]['features'];
-  draft: FeatureMap;
-  onToggle: (key: string, role: UserRole) => void;
-}) {
-  return (
-    <>
-      <tr>
-        <td
-          colSpan={1 + ROLES.length}
-          className="px-5 pt-5 pb-1 text-[11px] font-semibold uppercase tracking-wider text-[#7C3AED]/70"
-        >
-          {group}
-        </td>
-      </tr>
-      {feats.map((f) => (
-        <tr key={f.key} className="border-t border-gray-50 hover:bg-[#F5F3FF]/40">
-          <td className="px-5 py-3.5">
-            <div className="font-medium text-gray-900">{f.name}</div>
-            <div className="text-xs text-gray-500 mt-0.5">{f.description}</div>
-          </td>
-          {ROLES.map((r) => (
-            <td key={r.key} className="px-4 py-3.5 text-center">
-              <div className="flex justify-center">
-                <Switch
-                  checked={isOn(draft, f.key, r.key)}
-                  onChange={() => onToggle(f.key, r.key)}
-                  label={`${f.name} for ${r.label}`}
-                />
-              </div>
-            </td>
-          ))}
-        </tr>
-      ))}
-    </>
   );
 }
 
@@ -253,12 +223,10 @@ function structuredCloneMap(map: FeatureMap): FeatureMap {
   return out;
 }
 
-/** Compare two maps by the effective (enabled) value of every catalog cell. */
+/** Compare two maps by the effective workspace-wide value of every feature. */
 function sameMap(a: FeatureMap, b: FeatureMap): boolean {
   for (const f of FEATURE_CATALOG) {
-    for (const r of ROLES) {
-      if (isOn(a, f.key, r.key) !== isOn(b, f.key, r.key)) return false;
-    }
+    if (isFeatureOn(a, f.key) !== isFeatureOn(b, f.key)) return false;
   }
   return true;
 }

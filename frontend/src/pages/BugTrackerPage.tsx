@@ -187,6 +187,8 @@ export default function BugTrackerPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [pushingAdo, setPushingAdo] = useState(false);
   const [pushingJira, setPushingJira] = useState(false);
+  // The "Raise Bug" destination picker popup (Azure DevOps vs JIRA).
+  const [raiseOpen, setRaiseOpen] = useState(false);
 
   // Bugs on the current page that can still be raised in at least one tracker.
   const selectableBugs = bugs.filter((b) => !b.ado_work_item_id || !b.jira_issue_key);
@@ -582,50 +584,17 @@ export default function BugTrackerPage() {
           <p className="text-sm text-gray-500">Track, triage and resolve defects across your test runs in real time.</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          {/* Azure DevOps connection chip */}
-          <span
-            className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${
-              adoStatus?.connected
-                ? 'bg-sky-50 text-sky-700 border-sky-200'
-                : 'bg-gray-50 text-gray-500 border-gray-200'
-            }`}
-            title={adoStatus?.connected ? `Bugs raise into ${adoStatus.project}` : 'Connect Azure DevOps in System Configuration'}
-          >
-            <span className={`w-2 h-2 rounded-full ${adoStatus?.connected ? 'bg-sky-500' : 'bg-gray-400'}`} />
-            Azure DevOps {adoStatus?.connected ? `· ${adoStatus.project}` : 'not connected'}
-          </span>
-
-          {/* JIRA connection chip */}
-          <span
-            className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${
-              jiraStatus?.connected
-                ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                : 'bg-gray-50 text-gray-500 border-gray-200'
-            }`}
-            title={jiraStatus?.connected ? `Bugs raise into JIRA project ${jiraStatus.projectKey || ''}` : 'Connect JIRA in System Configuration'}
-          >
-            <span className={`w-2 h-2 rounded-full ${jiraStatus?.connected ? 'bg-indigo-500' : 'bg-gray-400'}`} />
-            JIRA {jiraStatus?.connected ? `· ${jiraStatus.projectKey || 'connected'}` : 'not connected'}
-          </span>
-
+          {/* One generic raise button — the destination (Azure DevOps / JIRA)
+              is picked in a popup so new trackers can be added without
+              crowding the header. */}
           <button
-            onClick={handleRaiseInAdo}
-            disabled={selectedIds.size === 0 || pushingAdo || !adoStatus?.connected}
+            onClick={() => setRaiseOpen(true)}
+            disabled={selectedIds.size === 0 || pushingAdo || pushingJira}
             className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-sky-600 hover:bg-sky-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md text-sm font-medium transition-colors shadow-sm"
-            title={adoStatus?.connected ? 'Raise the selected bugs in Azure DevOps' : 'Azure DevOps is not connected'}
+            title={selectedIds.size === 0 ? 'Select bugs with the checkboxes first' : 'Raise the selected bugs in Azure DevOps or JIRA'}
           >
-            {pushingAdo ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-            Raise in Azure DevOps{selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}
-          </button>
-
-          <button
-            onClick={handleRaiseInJira}
-            disabled={selectedIds.size === 0 || pushingJira || !jiraStatus?.connected}
-            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md text-sm font-medium transition-colors shadow-sm"
-            title={jiraStatus?.connected ? 'Raise the selected bugs in JIRA' : 'JIRA is not connected'}
-          >
-            {pushingJira ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-            Raise in JIRA{selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}
+            {(pushingAdo || pushingJira) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+            Raise Bug{selectedIds.size > 1 ? 's' : ''}{selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}
           </button>
 
           <button
@@ -1196,6 +1165,63 @@ export default function BugTrackerPage() {
               >
                 {saving && <Loader2 className="w-4 h-4 animate-spin" />}
                 {editor.mode === 'edit' ? 'Save Changes' : 'Report Bug'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Raise destination picker */}
+      {raiseOpen && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setRaiseOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-5 border-b border-gray-100">
+              <div>
+                <h3 className="text-lg font-bold text-gray-900">Raise Bug{selectedIds.size > 1 ? 's' : ''}</h3>
+                <p className="text-sm text-gray-500 mt-0.5">
+                  Where should the {selectedIds.size} selected bug{selectedIds.size > 1 ? 's' : ''} be raised?
+                </p>
+              </div>
+              <button onClick={() => setRaiseOpen(false)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <button
+                onClick={() => { setRaiseOpen(false); handleRaiseInAdo(); }}
+                disabled={!adoStatus?.connected}
+                className="w-full flex items-center gap-3 p-4 rounded-xl border text-left transition-colors border-sky-200 bg-sky-50/50 hover:bg-sky-50 hover:border-sky-300 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-sky-50/50"
+                title={adoStatus?.connected ? undefined : 'Connect Azure DevOps in System Configuration → Requirement Sources'}
+              >
+                <div className="w-10 h-10 rounded-lg bg-sky-600 flex items-center justify-center shrink-0">
+                  <Upload className="w-5 h-5 text-white" />
+                </div>
+                <div className="min-w-0">
+                  <div className="font-semibold text-gray-900">Azure DevOps</div>
+                  <div className="text-xs text-gray-500">
+                    {adoStatus?.connected
+                      ? <>Raise as Bug work items in <span className="font-medium text-sky-700">{adoStatus.project}</span></>
+                      : 'Not connected'}
+                  </div>
+                </div>
+              </button>
+              <button
+                onClick={() => { setRaiseOpen(false); handleRaiseInJira(); }}
+                disabled={!jiraStatus?.connected}
+                className="w-full flex items-center gap-3 p-4 rounded-xl border text-left transition-colors border-indigo-200 bg-indigo-50/50 hover:bg-indigo-50 hover:border-indigo-300 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-indigo-50/50"
+                title={jiraStatus?.connected ? undefined : 'Connect JIRA in System Configuration → Requirement Sources'}
+              >
+                <div className="w-10 h-10 rounded-lg bg-indigo-600 flex items-center justify-center shrink-0">
+                  <Upload className="w-5 h-5 text-white" />
+                </div>
+                <div className="min-w-0">
+                  <div className="font-semibold text-gray-900">JIRA</div>
+                  <div className="text-xs text-gray-500">
+                    {jiraStatus?.connected
+                      ? <>Raise as Bug issues in project <span className="font-medium text-indigo-700">{jiraStatus.projectKey || '—'}</span></>
+                      : 'Not connected'}
+                  </div>
+                </div>
               </button>
             </div>
           </div>
