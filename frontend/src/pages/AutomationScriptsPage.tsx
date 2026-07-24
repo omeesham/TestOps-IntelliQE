@@ -235,7 +235,7 @@ export default function AutomationScriptsPage() {
               ) : (
                 <>
                   <button onClick={handleSave} disabled={saving}
-                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-40">
+                    className="btn-3d flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-40">
                     <Save className="w-3.5 h-3.5" /> {saving ? 'Saving...' : 'Save Changes'}
                   </button>
                   <button onClick={() => { setIsEditing(false); setEditCode(selectedScript.code); }}

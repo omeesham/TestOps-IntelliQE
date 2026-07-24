@@ -152,7 +152,7 @@ export default function FeatureTogglesPage() {
           <button
             onClick={save}
             disabled={!dirty || saving}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-[#7C3AED] to-[#6366F1] px-4 py-2 text-sm font-medium text-white shadow-sm hover:opacity-95 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="btn-3d inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-[#7C3AED] to-[#6366F1] px-4 py-2 text-sm font-medium text-white shadow-sm hover:opacity-95 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             {saving ? 'Saving…' : 'Save changes'}
