@@ -5,6 +5,7 @@ import ConnectModal from './ConnectModal';
 import { connectIntegration, disconnectIntegration, reconnectIntegration, deleteIntegration, testGitConnection } from '@/services/api';
 import type { CatalogItem } from './integrationCatalog';
 import { useToast } from '@/components/feedback/ToastProvider';
+import { normalizeError } from '@/utils/apiError';
 
 interface DbConfig {
   integrationId: string;
@@ -74,7 +75,10 @@ export default function GitRepositoriesSection({ configs, onRefresh }: Props) {
       onRefresh();
       toast.success('Connected successfully');
     } catch (err: any) {
-      setError(err?.response?.data?.error || err.message || 'Connection failed');
+      // Prefer the backend's structured message; for a bodyless transport 500
+      // (dev proxy couldn't reach the backend) fall back to a human message.
+      const n = normalizeError(err);
+      setError(n.hint ? `${n.title} — ${n.hint}` : (n.message || 'Connection failed'));
     } finally {
       setSaving(false);
     }

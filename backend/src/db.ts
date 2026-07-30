@@ -735,6 +735,12 @@ export async function initDb(): Promise<void> {
     await addColumn('bugs', 'jira_issue_key', 'NVARCHAR(50)');
     await addColumn('bugs', 'jira_url', 'NVARCHAR(500)');
     await addColumn('bugs', 'jira_pushed_at', 'DATETIMEOFFSET');
+    // Bug origin/classification: 'manual' (reported by a person), 'failure' (a
+    // test that failed and stayed failing), or 'flaky' (a test that failed then
+    // passed after auto-heal). Auto-registered from execution runs. Validated in
+    // the app layer (bugs.routes.ts BUG_TYPES); no DB CHECK so the migration is a
+    // plain additive ALTER that backfills existing rows to 'manual'.
+    await addColumn('bugs', 'bug_type', "NVARCHAR(20) NOT NULL DEFAULT 'manual'");
 
     // ─── 11. Indexes ───
     await createIndex('idx_users_tenant', 'users', '(tenant_id)');
@@ -760,6 +766,7 @@ export async function initDb(): Promise<void> {
     await createIndex('idx_qa_pages_tenant', 'qa_pages', '(tenant_id)');
     await createIndex('idx_bugs_tenant_status', 'bugs', '(tenant_id, status)');
     await createIndex('idx_bugs_tenant_created', 'bugs', '(tenant_id, created_at DESC)');
+    await createIndex('idx_bugs_tenant_type', 'bugs', '(tenant_id, bug_type)');
     await createIndex('idx_bug_activity_bug', 'bug_activity', '(bug_id)');
 
     // ─── 12. Seed: JBS platform tenant + default users ───

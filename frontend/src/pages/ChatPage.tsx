@@ -27,6 +27,8 @@ import {
   getConfluencePage,
   getSharePointDocuments,
   getSharePointDocument,
+  registerBugsFromRun,
+  reportToSupport,
 } from '@/services/api';
 import {
   Send, Bot, Loader2, CheckCircle, Monitor, Plug,
@@ -35,7 +37,7 @@ import {
   Plus, Trash2, Download, Clipboard, Cpu, Code, Search, Zap,
   BarChart3, Activity, Workflow, Box, Pencil, Save, ChevronLeft, ChevronRight,
   Play, Heart, GitBranch, Terminal, AlertTriangle, Wrench, ExternalLink, Copy, Package,
-  SkipForward, XCircle, Volume2, VolumeX, Settings, MoreHorizontal,
+  SkipForward, XCircle, Volume2, VolumeX, Settings, MoreHorizontal, Github, LifeBuoy,
 } from 'lucide-react';
 import { initTTS, speak, speakAsync, waitForSpeech, waitForVoices, stopSpeaking, isTTSEnabled, toggleTTS } from '@/utils/tts';
 import { useToast } from '@/components/feedback/ToastProvider';
@@ -303,6 +305,17 @@ export default function ChatPage() {
   const [exploreAppName, setExploreAppName] = useState('');
   const [exploreUsername, setExploreUsername] = useState('');
   const [explorePassword, setExplorePassword] = useState('');
+  // Applications configured in System Configuration → Application Setup, offered
+  // as a dropdown on the explore form so the user picks a known app (name + URL)
+  // instead of retyping it. Loaded when the explore form opens.
+  const [exploreApps, setExploreApps] = useState<{ integrationId: string; appName: string; baseUrl: string }[]>([]);
+  const [exploreAppsLoading, setExploreAppsLoading] = useState(false);
+  const [exploreAppId, setExploreAppId] = useState('');
+  // Optional free-form guidance the user types to steer what the explore agent
+  // focuses on (e.g. "focus on the checkout flow and negative payment cases").
+  // Threaded to the backend as appContext.explorePrompt — never changes the
+  // crawl itself, only biases the requirements synthesis.
+  const [explorePrompt, setExplorePrompt] = useState('');
 
   // Column select + results management
   const [selectedColumns, setSelectedColumns] = useState<string[]>(ALL_COLUMNS.filter(c => c.default).map(c => c.key));
@@ -376,6 +389,13 @@ export default function ChatPage() {
   // produced). Surfacing it honestly beats faking a pass or a fail.
   const [executionResults, setExecutionResults] = useState<{ testCaseId: string; testName: string; status: 'pending' | 'running' | 'passed' | 'failed' | 'not_run'; duration: string; error?: string }[]>([]);
   const [executionSummary, setExecutionSummary] = useState<{ total: number; passed: number; failed: number; duration: string; durationMs: number } | null>(null);
+  // Which in-place subset re-run is running ('failure' | 'flaky' | ''), so only
+  // that button spins and re-runs are not fired concurrently.
+  const [rerunKind, setRerunKind] = useState<'' | 'failure' | 'flaky'>('');
+  // One-click "Push to GitHub" state (report + results screens).
+  const [gitPush, setGitPush] = useState<{ status: 'idle' | 'pushing' | 'done' | 'error'; prUrl?: string; error?: string }>({ status: 'idle' });
+  // "Report to Support" state.
+  const [supportState, setSupportState] = useState<{ status: 'idle' | 'sending' | 'sent' | 'error'; msg?: string }>({ status: 'idle' });
   // Rows whose ⋯ expander is open (full raw error + fix hint). Reset per run.
   const [expandedResults, setExpandedResults] = useState<Set<number>>(new Set());
   const toggleResultExpanded = (i: number) => setExpandedResults((prev) => {
@@ -448,6 +468,24 @@ export default function ChatPage() {
     (async () => {
       const apps = await getReadyApps();
       if (!cancelled) setReadyApps(apps);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
+
+  // Load the applications configured in Application Setup for the explore form's
+  // "Application" dropdown, so the user picks a configured app (name + base URL)
+  // rather than retyping it. Runs whenever the explore form opens.
+  useEffect(() => {
+    if (step !== 'explore-form') return;
+    let cancelled = false;
+    setExploreAppsLoading(true);
+    (async () => {
+      const apps = await getReadyApps();
+      if (!cancelled) {
+        setExploreApps(apps || []);
+        setExploreAppsLoading(false);
+      }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1062,10 +1100,13 @@ export default function ChatPage() {
      to call the backend with exploreMode=true; the marker itself is never
      sent — runGeneration unpacks it back into structured options. */
   const handleExploreSubmit = () => {
-    if (!exploreUrl.trim()) return;
-    const summary = exploreUsername
+    if (!exploreUrl.trim() || !explorePrompt.trim()) return;
+    const base = exploreUsername
       ? `Explore ${exploreUrl} as ${exploreUsername}`
       : `Explore ${exploreUrl} (anonymous)`;
+    const summary = explorePrompt.trim()
+      ? `${base} — focus: ${explorePrompt.trim()}`
+      : base;
     push('user', summary);
     // The literal placeholder is what we'll show in the column-select UI;
     // the real backend call uses exploreMode + roles, not this text.
@@ -1150,6 +1191,7 @@ export default function ChatPage() {
           exploreMode: true,
           targetUrl: exploreUrl,
           appName: exploreAppName || undefined,
+          explorePrompt: explorePrompt.trim() || undefined,
           roles,
         });
       } else {
@@ -1538,6 +1580,13 @@ export default function ChatPage() {
     } else {
       push('tessa', `All ${passed} tests passed! You can now generate the execution report.`);
     }
+
+    // Auto-register failures in the Bug Tracker as soon as the run finishes —
+    // before any healing — so failing tests are tracked even if the user never
+    // heals or proceeds to the report. Healing later reclassifies healed ones
+    // to flaky via the same upsert key.
+    if (failed > 0) void registerRunBugs(finalResults, []);
+
     setStep('execution-results');
   };
 
@@ -1640,7 +1689,117 @@ export default function ChatPage() {
     } else {
       push('tessa', 'All tests are passing after auto-healing! You can now generate the execution report.');
     }
+    // Auto-register the outcomes in the Bug Tracker: still-failing → failure,
+    // failed-then-healed → flaky. Fire-and-forget so it never blocks the flow.
+    void registerRunBugs(updatedResults, healLog);
+
     setStep('execution-results');
+  };
+
+  /* --- Auto-register failures / flaky tests as bugs ---
+     Classifies each affected test and upserts it into the Bug Tracker via the
+     backend (keyed by testRunId + testCaseId so repeated cycles never
+     duplicate). Needs a saved run id for the dedup/persistence key. */
+  const registerRunBugs = async (
+    rows: typeof executionResults,
+    healLog: { testCaseId: string; error: string; fix: string; result: string }[],
+  ): Promise<{ created: number; updated: number } | null> => {
+    if (!savedTestRunId) return null;
+    const healedById = new Map(
+      healLog.filter((l) => l.result === 'fixed').map((l) => [l.testCaseId, l]),
+    );
+    type RunBugItem = { testCaseId: string; testName: string; bugType: 'failure' | 'flaky'; error?: string; fix?: string };
+    const items: RunBugItem[] = [];
+    for (const r of rows) {
+      if (r.status === 'failed') {
+        items.push({ testCaseId: r.testCaseId, testName: r.testName, bugType: 'failure', error: r.error });
+      } else if (r.status === 'passed' && healedById.has(r.testCaseId)) {
+        // A test that passed but was healed on the way is flaky.
+        const log = healedById.get(r.testCaseId)!;
+        items.push({ testCaseId: r.testCaseId, testName: r.testName, bugType: 'flaky', error: log.error, fix: log.fix });
+      }
+    }
+    if (items.length === 0) return null;
+    try {
+      const res = await registerBugsFromRun({ testRunId: savedTestRunId, items });
+      const n = (res.created || 0) + (res.updated || 0);
+      if (n > 0) {
+        const failures = items.filter((i) => i.bugType === 'failure').length;
+        const flaky = items.filter((i) => i.bugType === 'flaky').length;
+        const parts = [
+          failures ? `${failures} failure${failures > 1 ? 's' : ''}` : '',
+          flaky ? `${flaky} flaky` : '',
+        ].filter(Boolean).join(' and ');
+        push('tessa', `Logged ${parts} in the Bug Tracker — open it to triage, or re-run flaky / failing tests separately from there.`);
+      }
+      return { created: res.created, updated: res.updated };
+    } catch (err) {
+      console.error('Bug auto-registration failed:', err);
+      return null;
+    }
+  };
+
+  /* --- Re-run only the failing OR only the flaky tests, in place ---
+     Re-executes just that subset of the reviewed scripts and merges the fresh
+     results back into the table, then re-registers the affected bugs. */
+  const handleRerunSubset = async (kind: 'failure' | 'flaky') => {
+    if (rerunKind) return;
+    const flowId = flowIdRef.current;
+    const healedIds = new Set(
+      healingLog.filter((l) => l.result === 'fixed').map((l) => l.testCaseId),
+    );
+    const targets = executionResults.filter((r) =>
+      kind === 'failure'
+        ? r.status === 'failed'
+        : r.status === 'passed' && healedIds.has(r.testCaseId),
+    );
+    if (targets.length === 0) return;
+    const targetIds = new Set(targets.map((r) => r.testCaseId));
+    const subsetScripts = generatedScripts.filter((s) => targetIds.has(s.testCaseId));
+    if (subsetScripts.length === 0) return;
+    const subsetTestCases = (results?.testCases || []).filter((tc: any) =>
+      targetIds.has(tc.id) || targetIds.has(tc.testCaseId));
+
+    setRerunKind(kind);
+    push('tessa', `Re-running ${targets.length} ${kind === 'flaky' ? 'flaky' : 'failing'} test${targets.length > 1 ? 's' : ''}...`);
+    // Mark the targeted rows as running so the table reflects the in-flight subset.
+    setExecutionResults((prev) => prev.map((r) =>
+      targetIds.has(r.testCaseId) ? { ...r, status: 'running' as const, error: undefined } : r));
+
+    let execRes: Awaited<ReturnType<typeof executePipeline>> | null = null;
+    try {
+      execRes = await executePipeline(subsetTestCases, subsetScripts, generatedPageObjects, selectedAppId || undefined, savedTestRunId || undefined);
+    } catch (err) {
+      console.error('Subset re-run failed:', err);
+    }
+    if (flowId !== flowIdRef.current) { setRerunKind(''); return; }
+
+    const details: any[] = Array.isArray(execRes?.executionDetails) ? execRes!.executionDetails : [];
+    const byId = new Map<string, any>(details.map((d) => [d.testCaseId, d]));
+    // Merge fresh outcomes for the targeted rows onto the CURRENT table.
+    const merged = executionResults.map((r) => {
+      if (!targetIds.has(r.testCaseId)) return r;
+      const d = byId.get(r.testCaseId);
+      if (!d) return { ...r, status: 'not_run' as const, error: 'No result returned on re-run' };
+      const duration = typeof d.durationMs === 'number' ? `${(d.durationMs / 1000).toFixed(2)}s` : r.duration;
+      if (d.status === 'passed') return { ...r, status: 'passed' as const, duration, error: undefined };
+      if (d.status === 'failed') return { ...r, status: 'failed' as const, duration, error: d.error || 'Test failed (no error message returned)' };
+      return { ...r, status: 'not_run' as const, duration };
+    });
+    setExecutionResults(merged);
+    const passed = merged.filter((r) => r.status === 'passed').length;
+    const failed = merged.filter((r) => r.status === 'failed').length;
+    setExecutionSummary((s) => (s ? { ...s, passed, failed } : s));
+
+    // Refresh the Bug Tracker with the new outcomes for the re-run subset.
+    // A flaky test that now passes cleanly (no heal this run) is no longer
+    // flaky, but it stays registered; the user resolves it from the tracker.
+    void registerRunBugs(merged, healingLog);
+
+    const nowPassing = targets.filter((t) => byId.get(t.testCaseId)?.status === 'passed').length;
+    const stillFailing = targets.length - nowPassing;
+    push('tessa', `Re-run complete: ${nowPassing} now passing, ${stillFailing} still ${kind === 'flaky' ? 'flaky/failing' : 'failing'}.`);
+    setRerunKind('');
   };
 
   /* --- Proceed to Report (Stage 6) --- */
@@ -1761,6 +1920,108 @@ export default function ChatPage() {
       push('tessa', `I couldn't publish to Git: ${msg}. Your scripts are still available below for manual download.`);
     } finally {
       setIsPublishing(false);
+    }
+  };
+
+  /* --- One-click Push to GitHub ---
+     Pushes the generated test cases + scripts + page objects straight to the
+     connected git repository (opens a PR), resolving the repo automatically from
+     System Configuration → Code Repositories. No wizard — usable directly from
+     the results/report screens once all agents have finished. */
+  const handleQuickPushToGit = async () => {
+    if (gitPush.status === 'pushing') return;
+    if (generatedScripts.length === 0) {
+      push('tessa', 'There are no scripts to push yet.');
+      return;
+    }
+    setGitPush({ status: 'pushing' });
+    try {
+      // Resolve the connected repo: reuse a prior selection, else the first
+      // connected git-repo integration from System Configuration.
+      let integrationId = selectedRepoId as string | undefined;
+      if (!integrationId) {
+        const result = await getConfigurations();
+        const repo = (result.configs || []).find(
+          (c: any) => ['github', 'gitlab', 'bitbucket'].includes(c.integrationId) && c.status === 'connected',
+        );
+        integrationId = repo?.integrationId;
+        if (integrationId) setSelectedRepoId(integrationId);
+      }
+      if (!integrationId) {
+        setGitPush({ status: 'error', error: 'No repository connected' });
+        push('tessa', 'No code repository is connected. Connect GitHub under System Configuration → Code Repositories, then try again.');
+        return;
+      }
+      push('tessa', `Pushing ${generatedScripts.length} test script(s) and the test cases to your ${integrationId} repository...`);
+      const result = await publishToGit({
+        scripts: generatedScripts.map((s) => ({ fileName: s.fileName, code: s.code, path: s.path })),
+        pageObjects: generatedPageObjects.map((p) => ({ path: p.path, code: p.code })),
+        testCases: results?.testCases || [],
+        integrationId: integrationId as 'github' | 'gitlab' | 'bitbucket',
+        testRunId: savedTestRunId || currentRunId || undefined,
+      });
+      setPublishedPrUrl(result.prUrl);
+      setGitPush({ status: 'done', prUrl: result.prUrl });
+      toast.success('Pushed to GitHub');
+      push('tessa', `Done! I opened ${result.provider === 'gitlab' ? 'MR' : 'PR'} #${result.prNumber} on ${result.provider} with ${result.fileCount} file(s): ${result.prUrl}`);
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || 'Git push failed';
+      setGitPush({ status: 'error', error: msg });
+      push('tessa', `I couldn't push to GitHub: ${msg}. You can still create a Pull Request from the report screen.`);
+    }
+  };
+
+  /* --- Report to Support ---
+     Sends a failure + flaky summary of this run to every notification channel
+     the tenant has connected (Outlook email / Slack / Teams). The failures are
+     already auto-registered in the Bug Tracker; this escalates them to the team. */
+  const handleReportToSupport = async () => {
+    if (supportState.status === 'sending') return;
+    const healedIds = new Set(healingLog.filter((l) => l.result === 'fixed').map((l) => l.testCaseId));
+    const failures = executionResults
+      .filter((r) => r.status === 'failed')
+      .map((r) => ({ name: r.testName, error: r.error }));
+    const flaky = executionResults
+      .filter((r) => r.status === 'passed' && healedIds.has(r.testCaseId))
+      .map((r) => ({ name: r.testName }));
+    if (failures.length === 0 && flaky.length === 0) {
+      push('tessa', 'There are no failing or flaky tests to report — everything passed cleanly.');
+      return;
+    }
+    setSupportState({ status: 'sending' });
+    push('tessa', `Reporting ${failures.length} failing and ${flaky.length} flaky test(s) to your team...`);
+    try {
+      const res = await reportToSupport({
+        runId: savedTestRunId || currentRunId || undefined,
+        feature: (results?.testCases?.[0]?.feature) || (results?.testCases?.[0]?.module) || 'Web Application Automation',
+        module: results?.testCases?.[0]?.module || undefined,
+        total: executionSummary?.total,
+        passed: executionSummary?.passed,
+        failed: executionSummary?.failed,
+        durationSeconds: executionSummary ? Math.round(executionSummary.durationMs / 1000) : undefined,
+        failures,
+        flaky,
+      });
+      if (!res.configured) {
+        setSupportState({ status: 'error', msg: 'No notification channel configured' });
+        push('tessa', 'No notification channel is connected yet. Add Outlook email, Slack, or Teams under System Configuration → Notifications, then try again. (The failures are already logged in the Bug Tracker.)');
+        return;
+      }
+      const okChannels = res.results.filter((r) => r.sent).map((r) => r.channel);
+      const failChannels = res.results.filter((r) => !r.sent);
+      if (okChannels.length > 0) {
+        setSupportState({ status: 'sent', msg: `Sent via ${okChannels.join(', ')}` });
+        toast.success('Reported to support', `Sent via ${okChannels.join(', ')}.`);
+        push('tessa', `Reported to your team via ${okChannels.join(', ')}. The failing and flaky tests are also tracked in the Bug Tracker.`);
+      } else {
+        const why = failChannels[0]?.error ? ` (${failChannels[0].error})` : '';
+        setSupportState({ status: 'error', msg: `Could not send${why}` });
+        push('tessa', `I couldn't deliver the report to your notification channel${why}. Please check the Notifications settings.`);
+      }
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || 'Failed to report to support';
+      setSupportState({ status: 'error', msg });
+      push('tessa', `I couldn't report to support: ${msg}.`);
     }
   };
 
@@ -1889,6 +2150,8 @@ export default function ChatPage() {
     setGitBranch('main');
     setIsPublishing(false);
     setPublishResult(null);
+    setGitPush({ status: 'idle' });
+    setSupportState({ status: 'idle' });
     clearSession(); // clear persisted session on explicit reset
     setTimeout(() => push('tessa', `Welcome back! What would you like to test today?`), 100);
   };
@@ -2493,13 +2756,39 @@ export default function ChatPage() {
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Application name (optional)</label>
-            <input
-              value={exploreAppName}
-              onChange={(e) => setExploreAppName(e.target.value)}
-              placeholder="e.g. Acme Banking Portal"
-              className={inputCls}
-            />
+            <label className="block text-xs font-medium text-gray-600 mb-1">Application (optional)</label>
+            <select
+              value={exploreAppId}
+              disabled={exploreAppsLoading || exploreApps.length === 0}
+              onChange={(e) => {
+                const id = e.target.value;
+                setExploreAppId(id);
+                const app = exploreApps.find((a) => a.integrationId === id);
+                // Selecting a configured app fills its name and base URL; both
+                // stay editable afterwards.
+                setExploreAppName(app?.appName || '');
+                if (app?.baseUrl) setExploreUrl(app.baseUrl);
+              }}
+              className={inputCls + ' disabled:bg-gray-50 disabled:text-gray-400'}
+            >
+              <option value="">
+                {exploreAppsLoading
+                  ? 'Loading applications…'
+                  : exploreApps.length === 0
+                    ? 'No applications configured in Application Setup'
+                    : 'Select a configured application…'}
+              </option>
+              {exploreApps.map((a) => (
+                <option key={a.integrationId} value={a.integrationId}>
+                  {a.appName}{a.baseUrl ? ` — ${a.baseUrl}` : ''}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-gray-400 mt-1">
+              {exploreApps.length === 0 && !exploreAppsLoading
+                ? 'Add applications under System Configuration → Application Setup to pick them here.'
+                : 'Configured under System Configuration → Application Setup. Picking one fills the URL above.'}
+            </p>
           </div>
 
           <div className="pt-1 border-t border-gray-100">
@@ -2536,9 +2825,30 @@ export default function ChatPage() {
             </div>
           </div>
 
+          {/* Guidance prompt — mandatory. Filled last, after the fields above,
+             it biases what the explore agent focuses on. Threaded to the backend
+             as appContext.explorePrompt; never sent as credentials. */}
+          <div className="pt-1 border-t border-gray-100">
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              Guide the exploration <span className="text-rose-500">*</span>
+            </label>
+            <textarea
+              value={explorePrompt}
+              onChange={(e) => setExplorePrompt(e.target.value)}
+              rows={3}
+              maxLength={1000}
+              placeholder="e.g. Prioritise the checkout and payment flows, include negative cases for invalid cards, and cover mobile viewport behaviour."
+              className={inputCls + ' resize-y'}
+            />
+            <div className="flex items-center justify-between mt-1">
+              <span className="text-[11px] text-gray-400">Tell Tessa what to focus on — steers coverage, not sent as credentials.</span>
+              <span className="text-[11px] text-gray-400 tabular-nums">{explorePrompt.length}/1000</span>
+            </div>
+          </div>
+
           <button
             onClick={runOnce(handleExploreSubmit)}
-            disabled={busy || !exploreUrl.trim()}
+            disabled={busy || !exploreUrl.trim() || !explorePrompt.trim()}
             className="mt-2 w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
           >
             <Search className="w-4 h-4" />Start Exploration
@@ -3145,12 +3455,47 @@ export default function ChatPage() {
             })}
           </div>
 
+          {/* Run separately — re-execute just the failing OR just the flaky
+              (auto-healed) subset in place. Failures are auto-registered in the
+              Bug Tracker, where the same split re-run is also available. */}
+          {(() => {
+            const healedIds = new Set(healingLog.filter((l) => l.result === 'fixed').map((l) => l.testCaseId));
+            const failCount = executionResults.filter((r) => r.status === 'failed').length;
+            const flakyCount = executionResults.filter((r) => r.status === 'passed' && healedIds.has(r.testCaseId)).length;
+            if (failCount === 0 && flakyCount === 0) return null;
+            return (
+              <div className="bg-white border border-gray-100 rounded-xl p-3 shadow-sm">
+                <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Run separately</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleRerunSubset('failure')}
+                    disabled={!!rerunKind || failCount === 0}
+                    className="flex-1 py-2 bg-red-50 hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed text-red-700 border border-red-200 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5"
+                    title={failCount === 0 ? 'No failing tests' : 'Re-run only the failing tests'}
+                  >
+                    {rerunKind === 'failure' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />}
+                    Re-run Failures{failCount > 0 ? ` (${failCount})` : ''}
+                  </button>
+                  <button
+                    onClick={() => handleRerunSubset('flaky')}
+                    disabled={!!rerunKind || flakyCount === 0}
+                    className="flex-1 py-2 bg-amber-50 hover:bg-amber-100 disabled:opacity-40 disabled:cursor-not-allowed text-amber-700 border border-amber-200 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5"
+                    title={flakyCount === 0 ? 'No flaky (auto-healed) tests yet — heal first' : 'Re-run only the flaky (auto-healed) tests'}
+                  >
+                    {rerunKind === 'flaky' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                    Re-run Flaky{flakyCount > 0 ? ` (${flakyCount})` : ''}
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Decision Buttons */}
           <div className="flex gap-2">
             {executionSummary.failed > 0 && healingAttempt < 2 && (
               <button
                 onClick={runOnce(handleAutoHeal)}
-                disabled={busy}
+                disabled={busy || !!rerunKind}
                 className="flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
               >
                 <Wrench className="w-4 h-4" />Auto-Heal & Re-Execute
@@ -3164,6 +3509,48 @@ export default function ChatPage() {
               <BarChart3 className="w-4 h-4" />Generate Report
             </button>
           </div>
+
+          {/* Push generated tests + scripts straight to the connected repo, and
+              escalate failures/flaky tests to the team's notification channel.
+              Both are available as soon as the agents finish. */}
+          {(() => {
+            const healedIds = new Set(healingLog.filter((l) => l.result === 'fixed').map((l) => l.testCaseId));
+            const hasEscalatable = executionResults.some((r) => r.status === 'failed')
+              || executionResults.some((r) => r.status === 'passed' && healedIds.has(r.testCaseId));
+            return (
+              <div className="flex gap-2">
+                <button
+                  onClick={handleQuickPushToGit}
+                  disabled={gitPush.status === 'pushing' || generatedScripts.length === 0}
+                  className="flex-1 py-2 bg-white border border-gray-800 hover:bg-gray-900 hover:text-white text-gray-800 disabled:opacity-40 text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+                  title="Push the generated test cases and scripts to your connected repository"
+                >
+                  {gitPush.status === 'pushing' ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : gitPush.status === 'done' ? <CheckCircle className="w-4 h-4 text-emerald-500" />
+                    : <Github className="w-4 h-4" />}
+                  {gitPush.status === 'done' ? 'Pushed to GitHub' : gitPush.status === 'pushing' ? 'Pushing…' : 'Push to GitHub'}
+                </button>
+                {hasEscalatable && (
+                  <button
+                    onClick={handleReportToSupport}
+                    disabled={supportState.status === 'sending'}
+                    className="flex-1 py-2 bg-white border border-rose-300 hover:bg-rose-50 text-rose-600 disabled:opacity-40 text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+                    title="Send a failure summary to your team (email / Slack / Teams)"
+                  >
+                    {supportState.status === 'sending' ? <Loader2 className="w-4 h-4 animate-spin" />
+                      : supportState.status === 'sent' ? <CheckCircle className="w-4 h-4 text-emerald-500" />
+                      : <LifeBuoy className="w-4 h-4" />}
+                    {supportState.status === 'sent' ? 'Reported' : 'Report to Support'}
+                  </button>
+                )}
+              </div>
+            );
+          })()}
+          {gitPush.status === 'done' && gitPush.prUrl && (
+            <a href={gitPush.prUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-xs font-medium text-violet-700 hover:text-violet-800 break-all">
+              <ExternalLink className="w-3.5 h-3.5 flex-shrink-0" /> {gitPush.prUrl}
+            </a>
+          )}
         </div>
       );
     }
@@ -3269,17 +3656,47 @@ export default function ChatPage() {
             )}
           </div>
           {/* Action buttons */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center flex-wrap gap-3">
+            <button
+              onClick={handleQuickPushToGit}
+              disabled={gitPush.status === 'pushing' || generatedScripts.length === 0}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-800 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all"
+              title="Push the generated test cases and scripts to your connected repository"
+            >
+              {gitPush.status === 'pushing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                : gitPush.status === 'done' ? <CheckCircle className="w-3.5 h-3.5" />
+                : <Github className="w-3.5 h-3.5" />}
+              {gitPush.status === 'done' ? 'Pushed to GitHub' : gitPush.status === 'pushing' ? 'Pushing…' : 'Push to GitHub'}
+            </button>
+            {(reportData.failed > 0 || reportData.healed > 0) && (
+              <button
+                onClick={handleReportToSupport}
+                disabled={supportState.status === 'sending'}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-rose-300 text-rose-600 hover:bg-rose-50 disabled:opacity-40 text-sm font-medium rounded-lg transition-all"
+                title="Send a failure summary to your team (email / Slack / Teams)"
+              >
+                {supportState.status === 'sending' ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : supportState.status === 'sent' ? <CheckCircle className="w-3.5 h-3.5 text-emerald-500" />
+                  : <LifeBuoy className="w-3.5 h-3.5" />}
+                {supportState.status === 'sent' ? 'Reported' : 'Report to Support'}
+              </button>
+            )}
             <button
               onClick={() => setStep('publish')}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-sm font-medium rounded-lg transition-all"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-violet-300 text-violet-700 hover:bg-violet-50 text-sm font-medium rounded-lg transition-all"
+              title="Open the guided Pull Request flow"
             >
-              <GitBranch className="w-3.5 h-3.5" />Create Pull Request
+              <GitBranch className="w-3.5 h-3.5" />Create PR…
             </button>
             <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-violet-300 hover:text-violet-600 transition-all">
               <RotateCcw className="w-3.5 h-3.5" />Start New Test
             </button>
           </div>
+          {gitPush.status === 'done' && gitPush.prUrl && (
+            <a href={gitPush.prUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-xs font-medium text-violet-700 hover:text-violet-800 break-all">
+              <ExternalLink className="w-3.5 h-3.5 flex-shrink-0" /> {gitPush.prUrl}
+            </a>
+          )}
         </div>
       );
     }

@@ -750,4 +750,56 @@ router.post('/heal/start', (req: Request, res: Response) => {
   res.json({ jobId });
 });
 
+/**
+ * POST /report-support
+ * On-demand "Report to Support": send a failure/flaky summary of the current run
+ * to every notification channel the tenant has connected (Outlook email / Slack /
+ * Teams). Distinct from the automatic post-run notification — this is a manual
+ * button the user clicks to escalate a failing run. Returns per-channel results;
+ * `configured:false` means the tenant has no notification channel set up yet.
+ * Body: { runId?, feature?, module?, total?, passed?, failed?, durationSeconds?,
+ *         reportUrl?, failures?: [{name,error}], flaky?: [{name,error}] }
+ */
+router.post('/report-support', async (req: Request, res: Response) => {
+  try {
+    const tenantId = req.user!.tenantId;
+    const b = req.body || {};
+
+    const failures: { name?: string; error?: string }[] = Array.isArray(b.failures) ? b.failures : [];
+    const flaky: { name?: string; error?: string }[] = Array.isArray(b.flaky) ? b.flaky : [];
+
+    const failLines = failures.slice(0, 10).map(
+      (f) => `• ${f.name || 'test'}: ${String(f.error || 'failed').split('\n')[0].slice(0, 160)}`,
+    );
+    if (failures.length > 10) failLines.push(`…and ${failures.length - 10} more failing`);
+    const flakyLines = flaky.slice(0, 10).map((f) => `• [flaky/auto-healed] ${f.name || 'test'}`);
+    const errorText = [...failLines, ...flakyLines].join('\n') || undefined;
+
+    const total = Number(b.total) || 0;
+    const passed = Number(b.passed) || 0;
+    const failed = Number(b.failed) || failures.length;
+    const status: TestRunEmailPayload['status'] =
+      total === 0 ? 'partial' : passed === 0 ? 'failed' : failed > 0 ? 'partial' : 'passed';
+
+    const payload: TestRunEmailPayload = {
+      runId: String(b.runId || `support-${Date.now()}`),
+      feature: `Support escalation — ${String(b.feature || 'Web Application Automation')}`,
+      module: b.module ? String(b.module) : undefined,
+      status,
+      totalTests: total,
+      passed,
+      failed,
+      durationSeconds: typeof b.durationSeconds === 'number' ? b.durationSeconds : undefined,
+      reportUrl: typeof b.reportUrl === 'string' && /^https?:/i.test(b.reportUrl) ? b.reportUrl : undefined,
+      error: errorText,
+    };
+
+    const results = await dispatchTestRunNotification(tenantId, payload);
+    res.json({ ok: true, configured: results.length > 0, results });
+  } catch (err: any) {
+    console.error('[pipeline-flow/report-support] error:', err.message);
+    res.status(500).json({ error: 'Failed to send the support report.' });
+  }
+});
+
 export default router;

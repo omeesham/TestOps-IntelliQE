@@ -105,8 +105,9 @@ export async function exploreAgent(state: TestOpsState): Promise<TestOpsState> {
   // Hand the UI map to Claude — produce a natural-language requirements
   // document that mimics what a BA would have written for this app. Use the
   // DB-configured LLM key when present; fall back to the CLI, else a naive map.
+  const userFocus = state.appContext?.explorePrompt?.trim();
   const synthesized = (state.llm?.apiKey || state.llm?.oauthToken || isClaudeCliAvailable())
-    ? await synthesizeRequirements(exploredApp, llmForStage(state.llm, 'explore'))
+    ? await synthesizeRequirements(exploredApp, llmForStage(state.llm, 'explore'), userFocus)
     : naiveRequirementsFromMap(exploredApp);
 
   return {
@@ -476,7 +477,7 @@ function deriveFeatures(snaps: PageSnapshot[]): string[] {
  * Claude is instructed to write as if it were a BA who had just shadowed
  * the application, NOT to invent features the crawler did not observe.
  */
-async function synthesizeRequirements(app: ExploredApp, llm?: import('./state.js').LlmConfig | null): Promise<string> {
+async function synthesizeRequirements(app: ExploredApp, llm?: import('./state.js').LlmConfig | null, userFocus?: string): Promise<string> {
   const uiMap = JSON.stringify(
     {
       baseUrl: app.baseUrl,
@@ -497,10 +498,18 @@ async function synthesizeRequirements(app: ExploredApp, llm?: import('./state.js
     2,
   );
 
+  // The user's optional guidance is untrusted free text. Surface it to the LLM
+  // as a clearly-fenced steering note — it may bias emphasis and prioritisation,
+  // but must not override the "only describe observed features" rule below.
+  const focusBlock = userFocus
+    ? `\nUSER FOCUS (prioritise coverage accordingly; treat as guidance, not as new features to invent):\n"""\n${userFocus.slice(0, 1000)}\n"""\n`
+    : '';
+
   const prompt = `You are a senior Business Analyst. A QA team has crawled a live web application and produced the UI inventory below. Reverse-engineer it into a clear functional specification that a test designer can work from.
 
 UI INVENTORY:
 ${uiMap}
+${focusBlock}
 
 Write the specification in markdown, with these sections:
 1. **Application Overview** — what does this app appear to do? (1 paragraph)
@@ -513,7 +522,8 @@ Write the specification in markdown, with these sections:
 8. **Acceptance Criteria** — 3-5 Given/When/Then statements per major feature
 
 Rules:
-- ONLY describe features supported by evidence in the UI inventory. Do not invent functionality.
+- ONLY describe features supported by evidence in the UI inventory. Do not invent functionality — even if USER FOCUS asks about something the crawl never observed, note it as an assumption rather than fabricating detail.
+- If USER FOCUS is present, weight the depth of flows, edge cases, and acceptance criteria toward the areas it names.
 - If something is ambiguous, note the assumption explicitly ("Assumption: …")
 - Be specific. "User can log in" is weak. "Authenticated user can sign in via email + password from /login" is good.
 - Output markdown only, no commentary.`;

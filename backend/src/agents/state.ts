@@ -143,6 +143,12 @@ export interface AppContext {
   appName?: string;
   environment?: string;
   roles?: { roleName: string; username: string; password: string }[];
+  /**
+   * Optional free-form guidance from the user (explore mode) that steers what
+   * the explore agent emphasises when synthesising requirements from the crawl.
+   * Purely additive — it never changes the crawl itself.
+   */
+  explorePrompt?: string;
 }
 
 /**

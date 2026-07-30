@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { X, Plug, Loader2, Eye, EyeOff, Send, CheckCircle, AlertCircle } from 'lucide-react';
 import type { CatalogItem } from './integrationCatalog';
+import { normalizeError } from '@/utils/apiError';
 
 interface Props {
   integration: CatalogItem;
@@ -37,7 +38,11 @@ export default function ConnectModal({ integration, saving, error, onSave, onClo
       const ok = !!(r.ok || r.sent);
       setTestResult({ ok, message: ok ? (r.message || 'Test message sent — check your channel.') : (r.error || r.message || 'Test failed.') });
     } catch (err: any) {
-      setTestResult({ ok: false, message: err?.response?.data?.error || err?.message || 'Test failed.' });
+      // A raw axios 500 (e.g. the dev proxy couldn't reach the backend) has no
+      // JSON body, so surface a human message via normalizeError instead of the
+      // cryptic "Request failed with status code 500".
+      const n = normalizeError(err);
+      setTestResult({ ok: false, message: n.hint ? `${n.title} — ${n.hint}` : (n.message || 'Test failed.') });
     } finally {
       setTesting(false);
     }
@@ -59,7 +64,10 @@ export default function ConnectModal({ integration, saving, error, onSave, onClo
         <div className="space-y-4">
           {integration.fields.map((field) => (
             <div key={field.key}>
-              <label className="block text-xs font-medium text-[#6B7280] mb-1">{field.label}</label>
+              <label className="block text-xs font-medium text-[#6B7280] mb-1">
+                {field.label}
+                {field.optional && <span className="ml-1 font-normal text-gray-400">(optional)</span>}
+              </label>
               <div className="relative">
                 <input
                   type={field.type === 'password' && !visibleFields.has(field.key) ? 'password' : 'text'}
@@ -79,6 +87,7 @@ export default function ConnectModal({ integration, saving, error, onSave, onClo
                   </button>
                 )}
               </div>
+              {field.hint && <p className="mt-1 text-[11px] text-gray-400">{field.hint}</p>}
             </div>
           ))}
         </div>

@@ -284,6 +284,8 @@ export async function generateTests(
     appName?: string;
     /** When true, the backend skips the analyst pre-pass and goes straight to crawling the live app. */
     exploreMode?: boolean;
+    /** Optional free-form guidance that steers what the explore agent focuses on. */
+    explorePrompt?: string;
     /** Optional credentials so the explore agent can log in. */
     roles?: { roleName?: string; username: string; password: string }[];
     /** The specific Application Setup entry (`app-<slug>` integrationId) these
@@ -299,6 +301,7 @@ export async function generateTests(
     module: options?.module,
     appName: options?.appName,
     exploreMode: options?.exploreMode,
+    explorePrompt: options?.explorePrompt,
     roles: options?.roles,
     appId: options?.appId,
   };
@@ -444,6 +447,31 @@ export async function healPipeline(
     app: { name: string; targetUrl?: string } | null;
     summary: { total: number; passed: number; failed: number; executed: boolean; reason?: string };
   }>(started.jobId, 30 * 60_000);
+}
+
+/**
+ * Escalate a failing run to Support: sends a failure/flaky summary to every
+ * notification channel the tenant has connected (Outlook email / Slack / Teams).
+ * `configured:false` means no channel is set up yet.
+ */
+export async function reportToSupport(payload: {
+  runId?: string;
+  feature?: string;
+  module?: string;
+  total?: number;
+  passed?: number;
+  failed?: number;
+  durationSeconds?: number;
+  reportUrl?: string;
+  failures?: { name?: string; error?: string }[];
+  flaky?: { name?: string; error?: string }[];
+}) {
+  const { data } = await api.post('/pipeline-flow/report-support', payload);
+  return data as {
+    ok: boolean;
+    configured: boolean;
+    results: { channel: string; sent: boolean; error?: string }[];
+  };
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -1169,9 +1197,49 @@ export async function listBugs(opts?: {
   severity?: string;
   priority?: string;
   assignee?: string;
+  /** Filter by origin: 'manual' | 'failure' | 'flaky'. */
+  type?: string;
 }) {
   const { data } = await api.get('/bugs', { params: opts });
   return data;
+}
+
+/**
+ * Auto-register bugs from a completed execution run. `items` classify each
+ * affected test as a 'failure' (still failing) or 'flaky' (failed then healed).
+ * Upserts by (testRunId, testCaseId) server-side so repeated cycles don't
+ * duplicate bugs.
+ */
+export async function registerBugsFromRun(payload: {
+  testRunId?: string;
+  appName?: string;
+  environment?: string;
+  module?: string;
+  items: {
+    testCaseId: string;
+    testName?: string;
+    bugType: 'failure' | 'flaky';
+    error?: string;
+    fix?: string;
+    severity?: string;
+  }[];
+}) {
+  const { data } = await api.post('/bugs/from-run', payload);
+  return data as { ok: boolean; created: number; updated: number; skipped: number; bugs: any[] };
+}
+
+/** Re-execute the tests behind flaky/failure bugs (or specific bug ids). */
+export async function rerunBugs(opts: { bugType?: 'flaky' | 'failure'; ids?: string[] }) {
+  const { data } = await api.post('/bugs/rerun', opts, { timeout: 30 * 60_000 });
+  return data as {
+    ok: boolean;
+    ran: number;
+    passed: number;
+    failed: number;
+    resolved: number;
+    byRun: { testRunId: string; ran: number; passed: number; failed: number; error?: string }[];
+    message?: string;
+  };
 }
 
 export async function getBugStats() {

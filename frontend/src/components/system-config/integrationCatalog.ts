@@ -15,7 +15,7 @@ export interface CatalogItem {
   description: string;
   comingSoon: boolean;
   logo?: string;
-  fields: { key: string; label: string; placeholder: string; type?: string }[];
+  fields: { key: string; label: string; placeholder: string; type?: string; optional?: boolean; hint?: string }[];
 }
 
 export const LOGOS: Record<string, string> = {
@@ -124,7 +124,7 @@ export const INTEGRATION_CATALOG: CatalogItem[] = [
     fields: [
       { key: 'repo_url', label: 'Repository URL', placeholder: 'https://github.com/org/repo' },
       { key: 'branch', label: 'Default Branch (PR target)', placeholder: 'main' },
-      { key: 'scripts_path', label: 'Scripts Path (folder)', placeholder: 'tests/' },
+      { key: 'scripts_path', label: 'Scripts Path (folder)', placeholder: 'tests/', optional: true, hint: 'Folder in the repo where generated scripts are committed. Leave blank to use tests/.' },
       { key: 'access_token', label: 'Access Token', placeholder: 'ghp_...', type: 'password' },
     ],
   },
@@ -135,7 +135,7 @@ export const INTEGRATION_CATALOG: CatalogItem[] = [
     fields: [
       { key: 'repo_url', label: 'Repository URL', placeholder: 'https://gitlab.com/org/repo' },
       { key: 'branch', label: 'Default Branch (MR target)', placeholder: 'main' },
-      { key: 'scripts_path', label: 'Scripts Path (folder)', placeholder: 'tests/' },
+      { key: 'scripts_path', label: 'Scripts Path (folder)', placeholder: 'tests/', optional: true, hint: 'Folder in the repo where generated scripts are committed. Leave blank to use tests/.' },
       { key: 'access_token', label: 'Personal Access Token', placeholder: 'glpat-...', type: 'password' },
     ],
   },
@@ -146,7 +146,7 @@ export const INTEGRATION_CATALOG: CatalogItem[] = [
     fields: [
       { key: 'repo_url', label: 'Repository URL', placeholder: 'https://bitbucket.org/org/repo' },
       { key: 'branch', label: 'Default Branch (PR target)', placeholder: 'main' },
-      { key: 'scripts_path', label: 'Scripts Path (folder)', placeholder: 'tests/' },
+      { key: 'scripts_path', label: 'Scripts Path (folder)', placeholder: 'tests/', optional: true, hint: 'Folder in the repo where generated scripts are committed. Leave blank to use tests/.' },
       { key: 'username', label: 'Username', placeholder: 'your-username' },
       { key: 'app_password', label: 'App Password', placeholder: 'Bitbucket app password', type: 'password' },
     ],

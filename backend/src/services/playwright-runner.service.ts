@@ -21,6 +21,52 @@ interface PwSummary {
   suites?: any[];
 }
 
+/** Per-test outcome mapped back to its originating test_case_id (for re-runs). */
+export interface RunTestResult {
+  testCaseId: string;
+  passed: boolean;
+  durationMs?: number;
+  errorMessage?: string;
+}
+
+/** Strip ANSI color codes Playwright embeds in error messages. */
+function stripAnsiCodes(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+/**
+ * Walk a Playwright JSON-reporter summary and map each spec's first-attempt
+ * outcome back to a test_case_id via the spec file basename. Mirrors the
+ * mapping in executionAgent.summarizeSpecs so re-runs classify identically.
+ */
+function resultsFromSummary(summary: PwSummary | null, fileToTcId: Map<string, string>): RunTestResult[] {
+  if (!summary) return [];
+  const specs: any[] = [];
+  const collect = (suite: any) => {
+    if (Array.isArray(suite?.specs)) specs.push(...suite.specs);
+    if (Array.isArray(suite?.suites)) suite.suites.forEach(collect);
+  };
+  for (const top of summary.suites || []) collect(top);
+
+  const out: RunTestResult[] = [];
+  for (const spec of specs) {
+    const fileBase = spec?.file ? path.basename(String(spec.file)) : '';
+    const tcId = fileToTcId.get(fileBase);
+    if (!tcId) continue;
+    const firstResult = spec?.tests?.[0]?.results?.[0];
+    const status = firstResult?.status ?? 'failed';
+    const passed = status === 'passed' || status === 'expected';
+    out.push({
+      testCaseId: tcId,
+      passed,
+      durationMs: typeof firstResult?.duration === 'number' ? firstResult.duration : undefined,
+      errorMessage: passed ? undefined : (stripAnsiCodes(firstResult?.error?.message || '') || undefined),
+    });
+  }
+  return out;
+}
+
 /* ──────────────────────────────────────────────────────────────────
    Structured failure type — user-friendly messages with actionable hints
    ────────────────────────────────────────────────────────────────── */
@@ -200,7 +246,9 @@ export async function runPlaywrightForRun(
   tenantId: string,
   isPlatform: boolean,
   runId: string,
-): Promise<{ resultsDir: string; workspace: string; summary: PwSummary | null }> {
+  /** Optional subset — run only these test cases (used by Bug Tracker re-runs). */
+  testCaseIds?: string[],
+): Promise<{ resultsDir: string; workspace: string; summary: PwSummary | null; results: RunTestResult[] }> {
   if (!runId) throw new Error('runId is required to execute Playwright tests');
 
   const query = isPlatform
@@ -211,7 +259,15 @@ export async function runPlaywrightForRun(
        FROM "JBSTestOpsAI".automation_scripts
        WHERE test_run_id = $1 AND tenant_id = $2 AND framework = 'playwright' AND code IS NOT NULL AND code <> ''`;
   const params = isPlatform ? [runId] : [runId, tenantId];
-  const { rows } = await pool.query(query, params);
+  const { rows: allRows } = await pool.query(query, params);
+
+  // Subset filter: when specific test cases are requested (re-run flaky/failure
+  // only), keep just those scripts. An empty intersection is treated as "no
+  // scripts" below so the caller gets a clear NO_SCRIPTS error.
+  const wantIds = Array.isArray(testCaseIds) && testCaseIds.length > 0
+    ? new Set(testCaseIds.map(String))
+    : null;
+  const rows = wantIds ? allRows.filter((r: any) => wantIds.has(String(r.test_case_id))) : allRows;
 
   if (rows.length === 0) {
     throw new PlaywrightRunError({
@@ -228,11 +284,24 @@ export async function runPlaywrightForRun(
   await fs.mkdir(testsDir, { recursive: true });
   await fs.mkdir(resultsDir, { recursive: true });
 
-  // Write each stored spec to the tests dir
+  // Write each stored spec to the tests dir. Track basename → test_case_id so
+  // we can map Playwright's per-spec results back to the originating test case.
   const written: { scriptId: string; specFile: string }[] = [];
+  const fileToTcId = new Map<string, string>();
+  const usedNames = new Set<string>();
   for (const row of rows) {
     const base = sanitizeFileName(row.file_name || row.tc_number || row.test_case_id || row.id);
-    const name = base.endsWith('.spec.ts') ? base : `${base}.spec.ts`;
+    let name = base.endsWith('.spec.ts') ? base : `${base}.spec.ts`;
+    // Dedup basenames globally so a cross-module collision can't overwrite a
+    // spec or corrupt the result→test-case mapping.
+    if (usedNames.has(name)) {
+      const stem = name.replace(/\.spec\.ts$/, '');
+      let n = 2;
+      while (usedNames.has(`${stem}-${n}.spec.ts`)) n++;
+      name = `${stem}-${n}.spec.ts`;
+    }
+    usedNames.add(name);
+    if (row.test_case_id) fileToTcId.set(name, String(row.test_case_id));
     const specFile = path.join(testsDir, name);
     await fs.writeFile(specFile, row.code, 'utf-8');
     written.push({ scriptId: row.id, specFile });
@@ -333,5 +402,5 @@ module.exports = defineConfig({
     console.warn('[playwright-runner] failed to update automation_scripts last_run:', e.message);
   }
 
-  return { resultsDir, workspace, summary };
+  return { resultsDir, workspace, summary, results: resultsFromSummary(summary, fileToTcId) };
 }

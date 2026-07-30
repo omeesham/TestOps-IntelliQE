@@ -22,6 +22,9 @@ router.post('/', async (req: Request, res: Response) => {
     // string to force shouldExploreFirst() to fire even if the caller padded
     // the body with placeholder text.
     exploreMode,
+    // Optional free-form guidance (explore mode) that steers what the explore
+    // agent focuses on. Additive only — never changes the crawl itself.
+    explorePrompt,
     // The SPECIFIC Application Setup entry these requirements target (its
     // `app-<slug>` integrationId). When the tenant has more than one
     // application configured, the caller (chat wizard) MUST send this rather
@@ -42,6 +45,9 @@ router.post('/', async (req: Request, res: Response) => {
         targetUrl,
         appName,
         environment,
+        explorePrompt: typeof explorePrompt === 'string' && explorePrompt.trim()
+          ? explorePrompt.trim().slice(0, 1000)
+          : undefined,
         roles: Array.isArray(roles)
           ? roles.filter((r: any) => r && typeof r === 'object').map((r: any) => ({
               roleName: String(r.roleName || 'user'),
@@ -76,6 +82,7 @@ router.post('/', async (req: Request, res: Response) => {
         targetUrl: (d.baseUrl || '').trim() || undefined,
         appName: d.appName,
         environment: d.environment,
+        explorePrompt: undefined,
         roles: Array.isArray(d.roles)
           ? d.roles.filter((r: any) => r && typeof r === 'object').map((r: any) => ({
               roleName: String(r.roleName || 'user'),

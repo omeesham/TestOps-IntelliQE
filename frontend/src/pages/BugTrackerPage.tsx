@@ -3,10 +3,12 @@ import {
   Bug, Plus, Search, X, Trash2, Edit3, Undo2, RotateCcw, AlertTriangle,
   CheckCircle2, Clock, XCircle, CircleDot, Loader2, RefreshCw, Eye,
   Activity, User, CalendarDays, Layers, Monitor, Tag, ExternalLink, Upload,
+  Zap, Play,
 } from 'lucide-react';
 import {
   listBugs, getBugStats, getBug, createBug, updateBug, revokeBug, deleteBug,
   subscribeToBugEvents, getBugAdoStatus, pushBugsToAdo, getBugJiraStatus, pushBugsToJira,
+  rerunBugs,
 } from '@/services/api';
 import { useToast } from '@/components/feedback/ToastProvider';
 import ActionIcon from '@/components/ui/ActionIcon';
@@ -25,6 +27,7 @@ interface BugRow {
   expected_result?: string | null;
   actual_result?: string | null;
   tags?: string[];
+  bug_type?: string | null;
   test_run_id?: string | null;
   test_case_id?: string | null;
   reported_by?: string | null;
@@ -53,6 +56,7 @@ interface BugStats {
   total: number;
   byStatus: Record<string, number>;
   bySeverity: Record<string, number>;
+  byType?: Record<string, number>;
 }
 
 interface Pagination { page: number; limit: number; total: number; totalPages: number; }
@@ -94,6 +98,14 @@ const STATUS_CONFIG: Record<string, { bg: string; dot: string; icon: any; label:
 
 const SEVERITIES = ['critical', 'high', 'medium', 'low'];
 const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
+
+// Bug origin/classification. 'failure' = failed and stayed failing; 'flaky' =
+// failed then passed after auto-heal; 'manual' = filed by a person.
+const BUG_TYPE_CONFIG: Record<string, { label: string; cls: string; icon: any }> = {
+  failure: { label: 'Failure', cls: 'bg-red-50 text-red-700 border border-red-200',       icon: XCircle },
+  flaky:   { label: 'Flaky',   cls: 'bg-amber-50 text-amber-700 border border-amber-200', icon: Zap },
+  manual:  { label: 'Manual',  cls: 'bg-gray-100 text-gray-600 border border-gray-200',   icon: User },
+};
 
 const FIELD_LABELS: Record<string, string> = {
   title: 'Title', description: 'Description', severity: 'Severity', priority: 'Priority',
@@ -147,6 +159,16 @@ function SeverityBadge({ severity }: { severity: string }) {
   );
 }
 
+function TypeBadge({ type }: { type?: string | null }) {
+  const cfg = BUG_TYPE_CONFIG[type || 'manual'] || BUG_TYPE_CONFIG.manual;
+  const Icon = cfg.icon;
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium whitespace-nowrap ${cfg.cls}`}>
+      <Icon className="w-3 h-3" /> {cfg.label}
+    </span>
+  );
+}
+
 function activityLabel(entry: BugActivityRow): string {
   switch (entry.action) {
     case 'created': return 'reported this bug';
@@ -157,6 +179,10 @@ function activityLabel(entry: BugActivityRow): string {
     case 'ado_removed': return 'deleted the Azure DevOps work item';
     case 'jira_raised': return 'raised this bug in JIRA';
     case 'jira_removed': return 'deleted the JIRA issue';
+    case 'auto_created': return 'auto-registered this from a test run';
+    case 'auto_updated': return 'refreshed this from a later test run';
+    case 'rerun_passed': return 'passed on re-run — resolved';
+    case 'rerun_failed': return 're-ran the test — still failing';
     default: return entry.action;
   }
 }
@@ -182,6 +208,9 @@ export default function BugTrackerPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [severityFilter, setSeverityFilter] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+  // Which re-run is in flight ('flaky' | 'failure' | ''), so only that button spins.
+  const [rerunning, setRerunning] = useState('');
 
   const [detail, setDetail] = useState<{ bug: BugRow; activity: BugActivityRow[] } | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -256,6 +285,7 @@ export default function BugTrackerPage() {
         status: statusFilter || undefined,
         severity: severityFilter || undefined,
         priority: priorityFilter || undefined,
+        type: typeFilter || undefined,
       });
       if (seq !== fetchSeqRef.current) return; // superseded by a newer fetch
       // Requested page emptied out (e.g. after deletes) — snap back to page 1
@@ -274,7 +304,7 @@ export default function BugTrackerPage() {
       // owns the spinner now) may keep it spinning.
       if (!opts?.silent && seq === loadingSeqRef.current) setLoading(false);
     }
-  }, [debouncedSearch, statusFilter, severityFilter, priorityFilter, toast]);
+  }, [debouncedSearch, statusFilter, severityFilter, priorityFilter, typeFilter, toast]);
 
   const fetchBugsRef = useRef(fetchBugs);
   fetchBugsRef.current = fetchBugs;
@@ -576,9 +606,36 @@ export default function BugTrackerPage() {
     setStatusFilter('');
     setSeverityFilter('');
     setPriorityFilter('');
+    setTypeFilter('');
   };
 
-  const hasFilters = Boolean(search || statusFilter || severityFilter || priorityFilter);
+  const hasFilters = Boolean(search || statusFilter || severityFilter || priorityFilter || typeFilter);
+
+  // Re-run all flaky (or failure) bugs' tests server-side, then refresh the list.
+  const handleRerun = async (bugType: 'flaky' | 'failure') => {
+    if (rerunning) return;
+    setRerunning(bugType);
+    try {
+      const res = await rerunBugs({ bugType });
+      if (res.ran === 0) {
+        toast.info('Nothing to re-run', res.message || `No re-runnable ${bugType} tests are linked to a saved run.`);
+      } else {
+        toast.success(
+          `Re-ran ${res.ran} ${bugType} test${res.ran > 1 ? 's' : ''}`,
+          `${res.passed} passed (${res.resolved} resolved), ${res.failed} still failing.`,
+        );
+      }
+      const runErrors = res.byRun.filter((r) => r.error);
+      if (runErrors.length > 0) {
+        toast.error('Some runs could not execute', runErrors[0].error || 'See server logs for details.');
+      }
+      refreshAll();
+    } catch (err) {
+      toast.fromError(err);
+    } finally {
+      setRerunning('');
+    }
+  };
   const detailBug = detail?.bug;
   const canRevoke = detailBug && detailBug.status !== 'revoked';
   const canReopen = detailBug && ['resolved', 'closed', 'revoked'].includes(detailBug.status);
@@ -602,6 +659,27 @@ export default function BugTrackerPage() {
           <p className="text-sm text-gray-500">Track, triage and resolve defects across your test runs in real time.</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          {/* Re-run all failing / flaky tests. Each button re-executes just the
+              tests linked to bugs of that type and updates their status. */}
+          <button
+            onClick={() => handleRerun('failure')}
+            disabled={!!rerunning}
+            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-red-50 hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed text-red-700 border border-red-200 rounded-md text-sm font-medium transition-colors"
+            title="Re-run every failing test that has an open failure bug"
+          >
+            {rerunning === 'failure' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+            Run Failures
+          </button>
+          <button
+            onClick={() => handleRerun('flaky')}
+            disabled={!!rerunning}
+            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-amber-50 hover:bg-amber-100 disabled:opacity-40 disabled:cursor-not-allowed text-amber-700 border border-amber-200 rounded-md text-sm font-medium transition-colors"
+            title="Re-run every flaky (auto-healed) test that has an open bug"
+          >
+            {rerunning === 'flaky' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+            Run Flaky
+          </button>
+
           {/* One generic raise button — the destination (Azure DevOps / JIRA)
               is picked in a popup so new trackers can be added without
               crowding the header. */}
@@ -690,6 +768,19 @@ export default function BugTrackerPage() {
           <option value="">All Priorities</option>
           {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
+        <select
+          value={typeFilter}
+          onChange={(e) => setTypeFilter(e.target.value)}
+          className="h-9 px-3 pr-8 bg-white border border-gray-200 rounded-md text-sm text-gray-700 outline-none hover:border-gray-300 focus:border-[#7C3AED] focus:ring-1 focus:ring-[#7C3AED]/20 transition-colors"
+          title="Filter by bug origin"
+        >
+          <option value="">All Types</option>
+          {Object.entries(BUG_TYPE_CONFIG).map(([key, cfg]) => (
+            <option key={key} value={key}>
+              {cfg.label}{stats?.byType?.[key] !== undefined ? ` (${stats.byType[key]})` : ''}
+            </option>
+          ))}
+        </select>
         {hasFilters && (
           <button onClick={clearFilters} className="text-sm text-gray-500 hover:text-[#7C3AED] px-2 transition-colors">
             Clear
@@ -729,6 +820,7 @@ export default function BugTrackerPage() {
                 <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Severity</th>
                 <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Priority</th>
                 <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Status</th>
+                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Type</th>
                 <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Module</th>
                 <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Assigned To</th>
                 <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Azure DevOps</th>
@@ -740,7 +832,7 @@ export default function BugTrackerPage() {
             <tbody>
               {bugs.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="px-3 py-12 text-center text-gray-400">
+                  <td colSpan={13} className="px-3 py-12 text-center text-gray-400">
                     <Bug className="w-8 h-8 mx-auto mb-2 text-gray-300" />
                     {hasFilters ? 'No bugs match the current filters.' : 'No bugs reported yet. Click "Report Bug" to log your first one.'}
                   </td>
@@ -777,6 +869,7 @@ export default function BugTrackerPage() {
                     </span>
                   </td>
                   <td className="px-3 py-1.5 whitespace-nowrap"><StatusBadge status={bug.status} /></td>
+                  <td className="px-3 py-1.5 whitespace-nowrap"><TypeBadge type={bug.bug_type} /></td>
                   <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{bug.module || '—'}</td>
                   <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{bug.assigned_to || <span className="text-gray-400">Unassigned</span>}</td>
                   <td className="px-3 py-1.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>

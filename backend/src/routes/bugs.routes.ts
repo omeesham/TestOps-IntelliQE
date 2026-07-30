@@ -14,6 +14,7 @@ import {
   createBug as createJiraBug,
   deleteIssue as deleteJiraIssue,
 } from '../services/jira.service.js';
+import { runPlaywrightForRun, PlaywrightRunError } from '../services/playwright-runner.service.js';
 
 // JIRA error payloads carry the reason in errorMessages[] or errors{field: msg}.
 function jiraErrorDetail(e: any, fallback: string): string {
@@ -31,6 +32,10 @@ const router = Router();
 const SEVERITIES = ['critical', 'high', 'medium', 'low'];
 const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
 const STATUSES = ['open', 'in_progress', 'resolved', 'closed', 'revoked'];
+// Bug origin/classification. 'failure' = a test that failed and stayed failing;
+// 'flaky' = a test that failed then passed after auto-heal; 'manual' = filed by
+// a person. Kept in sync with the bug_type column added in db.ts.
+const BUG_TYPES = ['manual', 'failure', 'flaky'];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Editable columns shared by create/update. tags is JSON (auto-parsed on read via db.ts JSON_COLUMNS).
@@ -152,6 +157,13 @@ router.get('/', async (req: Request, res: Response) => {
       params.push(`%${escapeLike(assignee)}%`);
       where += ` AND assigned_to LIKE $${params.length}`;
     }
+    // Bug type filter (manual | failure | flaky). Accept either `type` or
+    // `bug_type` so the query param name is forgiving.
+    const bugType = (req.query.type as string) || (req.query.bug_type as string);
+    if (bugType && BUG_TYPES.includes(bugType)) {
+      params.push(bugType);
+      where += ` AND bug_type = $${params.length}`;
+    }
 
     const countRes = await pool.query(`SELECT COUNT(*) AS count FROM bugs${where}`, params);
     const total = parseInt(countRes.rows[0].count);
@@ -178,21 +190,23 @@ router.get('/stats', async (req: Request, res: Response) => {
   try {
     const user = req.user!;
     const result = await pool.query(
-      `SELECT status, severity, COUNT(*) AS count FROM bugs
-       WHERE tenant_id = $1 GROUP BY status, severity`,
+      `SELECT status, severity, bug_type, COUNT(*) AS count FROM bugs
+       WHERE tenant_id = $1 GROUP BY status, severity, bug_type`,
       [user.tenantId],
     );
 
     const byStatus: Record<string, number> = {};
     const bySeverity: Record<string, number> = {};
+    const byType: Record<string, number> = {};
     let total = 0;
     for (const row of result.rows) {
       const count = parseInt(row.count);
       byStatus[row.status] = (byStatus[row.status] || 0) + count;
       bySeverity[row.severity] = (bySeverity[row.severity] || 0) + count;
+      byType[row.bug_type || 'manual'] = (byType[row.bug_type || 'manual'] || 0) + count;
       total += count;
     }
-    res.json({ total, byStatus, bySeverity });
+    res.json({ total, byStatus, bySeverity, byType });
   } catch (err: any) {
     console.error('Bug stats error:', err.message);
     res.status(500).json({ error: 'Failed to load bug stats' });
@@ -517,8 +531,8 @@ router.post('/', async (req: Request, res: Response) => {
       `INSERT INTO bugs (
          tenant_id, title, description, severity, priority, status,
          environment, module, steps_to_reproduce, expected_result, actual_result,
-         tags, test_run_id, test_case_id, reported_by, assigned_to
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+         tags, test_run_id, test_case_id, reported_by, assigned_to, bug_type
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
        RETURNING *`,
       [
         user.tenantId,
@@ -537,6 +551,7 @@ router.post('/', async (req: Request, res: Response) => {
         body.test_case_id || null,
         user.displayName || user.username,
         body.assigned_to || null,
+        body.bug_type && BUG_TYPES.includes(body.bug_type) ? body.bug_type : 'manual',
       ],
     );
     const bug = result.rows[0];
@@ -548,6 +563,195 @@ router.post('/', async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('Create bug error:', err.message);
     res.status(500).json({ error: 'Failed to create bug' });
+  }
+});
+
+// POST /from-run — auto-register bugs from a completed execution run.
+// Body: { testRunId?, appName?, environment?, module?, items: [
+//   { testCaseId, testName, bugType: 'failure'|'flaky', error?, fix?, severity? }
+// ] }
+// Upserts by (tenant_id, test_run_id, test_case_id): a test that reappears in a
+// later cycle (e.g. failure → healed-flaky) updates its existing bug instead of
+// creating a duplicate. Only 'failure' and 'flaky' are accepted here — manual
+// bugs go through POST /.
+router.post('/from-run', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const body = req.body || {};
+    const testRunId = body.testRunId && UUID_RE.test(String(body.testRunId)) ? String(body.testRunId) : null;
+    const environment = body.environment ? String(body.environment).slice(0, 100) : null;
+    const defaultModule = body.module ? String(body.module).slice(0, 100) : null;
+
+    const rawItems = Array.isArray(body.items) ? body.items.slice(0, 500) : [];
+    if (rawItems.length === 0) { res.json({ ok: true, created: 0, updated: 0, skipped: 0, bugs: [] }); return; }
+
+    let created = 0, updated = 0, skipped = 0;
+    const bugs: any[] = [];
+    const actor = user.displayName || user.username;
+
+    for (const item of rawItems) {
+      const testCaseId = String(item?.testCaseId || '').trim().slice(0, 100);
+      const bugType = item?.bugType === 'flaky' ? 'flaky' : item?.bugType === 'failure' ? 'failure' : null;
+      if (!testCaseId || !bugType) { skipped++; continue; }
+
+      const testName = String(item?.testName || testCaseId).trim();
+      const errorText = item?.error ? String(item.error).slice(0, 8000) : '';
+      const fixText = item?.fix ? String(item.fix).slice(0, 4000) : '';
+      const severity = SEVERITIES.includes(item?.severity)
+        ? item.severity
+        : (bugType === 'failure' ? 'high' : 'medium');
+      const title = (bugType === 'flaky'
+        ? `Flaky test (auto-healed): ${testName}`
+        : `Test failed: ${testName}`).slice(0, 400);
+      const description = bugType === 'flaky'
+        ? `This test failed on execution but passed after auto-healing, so it is flaky.${fixText ? `\n\nApplied fix:\n${fixText}` : ''}${errorText ? `\n\nOriginal error:\n${errorText}` : ''}`
+        : `This test failed during automated execution.${errorText ? `\n\nError:\n${errorText}` : ''}`;
+      const tags = ['auto', bugType, ...(bugType === 'flaky' ? ['auto-healed'] : [])];
+
+      // Upsert only when we can key on a run — without a test_run_id there's no
+      // safe dedup key, so we always insert.
+      let existing: any = null;
+      if (testRunId) {
+        const found = await pool.query(
+          `SELECT * FROM bugs WHERE tenant_id = $1 AND test_run_id = $2 AND test_case_id = $3
+             AND bug_type IN ('failure','flaky') ORDER BY created_at DESC`,
+          [user.tenantId, testRunId, testCaseId],
+        );
+        existing = found.rows[0] || null;
+      }
+
+      if (existing) {
+        // Refresh classification + latest error, and reopen if it had been
+        // resolved/closed but is failing again. Never touch a revoked bug.
+        if (existing.status === 'revoked') { skipped++; continue; }
+        const reopen = bugType === 'failure' && ['resolved', 'closed'].includes(existing.status);
+        const upd = await pool.query(
+          `UPDATE bugs SET bug_type = $1, severity = $2, title = $3, description = $4,
+             actual_result = $5, tags = $6${reopen ? ", status = 'open'" : ''}, updated_at = now()
+           WHERE id = $7 AND tenant_id = $8 RETURNING *`,
+          [bugType, severity, title, description, errorText || null, JSON.stringify(tags), existing.id, user.tenantId],
+        );
+        const bug = upd.rows[0];
+        await logActivity(existing.id, user.tenantId, 'auto_updated', { bugType, reopened: reopen }, actor);
+        emitBugEvent(user.tenantId, 'bug_updated', { bugId: existing.id, bug });
+        bugs.push(bug); updated++;
+      } else {
+        const ins = await pool.query(
+          `INSERT INTO bugs (
+             tenant_id, title, description, severity, priority, status,
+             environment, module, actual_result, tags, test_run_id, test_case_id,
+             reported_by, bug_type
+           ) VALUES ($1,$2,$3,$4,'P2','open',$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+          [
+            user.tenantId, title, description, severity,
+            environment, defaultModule, errorText || null,
+            JSON.stringify(tags), testRunId, testCaseId, actor, bugType,
+          ],
+        );
+        const bug = ins.rows[0];
+        await logActivity(bug.id, user.tenantId, 'auto_created', { bugType }, actor);
+        emitBugEvent(user.tenantId, 'bug_created', { bugId: bug.id, bug });
+        bugs.push(bug); created++;
+      }
+    }
+
+    res.json({ ok: true, created, updated, skipped, bugs });
+  } catch (err: any) {
+    console.error('Register bugs from run error:', err.message);
+    res.status(500).json({ error: 'Failed to register bugs from run' });
+  }
+});
+
+// POST /rerun — re-execute the tests behind the selected/flaky/failure bugs.
+// Body: { bugType?: 'flaky'|'failure', ids?: string[] }. Groups the target bugs
+// by their linked test_run_id and re-runs just those test cases via Playwright,
+// then resolves any bug whose test now passes and refreshes the error on the
+// rest. Synchronous — the caller shows a spinner while tests run.
+router.post('/rerun', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const body = req.body || {};
+    const bugType = BUG_TYPES.includes(body.bugType) && body.bugType !== 'manual' ? body.bugType : null;
+    const ids: string[] = Array.isArray(body.ids) ? body.ids.filter((x: any) => UUID_RE.test(String(x))) : [];
+    if (!bugType && ids.length === 0) {
+      res.status(400).json({ error: 'Provide bugType ("flaky" | "failure") or ids to re-run.' });
+      return;
+    }
+
+    // Select the target bugs: linked to a run, still active (open/in_progress).
+    const params: any[] = [user.tenantId];
+    let where = `WHERE tenant_id = $1 AND test_run_id IS NOT NULL AND test_case_id IS NOT NULL
+                 AND status IN ('open','in_progress')`;
+    if (ids.length > 0) {
+      const placeholders = ids.map((_, i) => `$${i + 2}`).join(', ');
+      where += ` AND id IN (${placeholders})`;
+      params.push(...ids);
+    } else if (bugType) {
+      params.push(bugType);
+      where += ` AND bug_type = $${params.length}`;
+    }
+    const targetRes = await pool.query(`SELECT * FROM bugs ${where}`, params);
+    const targets: any[] = targetRes.rows;
+    if (targets.length === 0) {
+      res.json({ ok: true, ran: 0, passed: 0, failed: 0, resolved: 0, byRun: [], message: 'No re-runnable tests found for the selection.' });
+      return;
+    }
+
+    // Group by run, collect the distinct test case ids to execute.
+    const byRunId = new Map<string, { bugs: any[]; testCaseIds: Set<string> }>();
+    for (const b of targets) {
+      const g = byRunId.get(b.test_run_id) || { bugs: [], testCaseIds: new Set<string>() };
+      g.bugs.push(b);
+      g.testCaseIds.add(String(b.test_case_id));
+      byRunId.set(b.test_run_id, g);
+    }
+
+    let ran = 0, passed = 0, failed = 0, resolved = 0;
+    const byRun: { testRunId: string; ran: number; passed: number; failed: number; error?: string }[] = [];
+    const actor = user.displayName || user.username;
+
+    for (const [runId, group] of byRunId) {
+      const wantIds = [...group.testCaseIds];
+      try {
+        const { results } = await runPlaywrightForRun(user.tenantId, user.isPlatform, runId, wantIds);
+        const resultByTc = new Map(results.map((r) => [r.testCaseId, r]));
+        let rp = 0, rf = 0;
+        for (const bug of group.bugs) {
+          const r = resultByTc.get(String(bug.test_case_id));
+          if (!r) continue; // no result for this test (didn't run) — leave untouched
+          ran++;
+          if (r.passed) {
+            passed++; rp++; resolved++;
+            const upd = await pool.query(
+              `UPDATE bugs SET status = 'resolved', resolution_notes = $1, updated_at = now()
+               WHERE id = $2 AND tenant_id = $3 RETURNING *`,
+              [`Passed on re-run at ${new Date().toISOString()}.`, bug.id, user.tenantId],
+            );
+            await logActivity(bug.id, user.tenantId, 'rerun_passed', null, actor);
+            emitBugEvent(user.tenantId, 'bug_updated', { bugId: bug.id, bug: upd.rows[0] });
+          } else {
+            failed++; rf++;
+            const upd = await pool.query(
+              `UPDATE bugs SET actual_result = $1, updated_at = now()
+               WHERE id = $2 AND tenant_id = $3 RETURNING *`,
+              [(r.errorMessage || 'Still failing on re-run').slice(0, 8000), bug.id, user.tenantId],
+            );
+            await logActivity(bug.id, user.tenantId, 'rerun_failed', null, actor);
+            emitBugEvent(user.tenantId, 'bug_updated', { bugId: bug.id, bug: upd.rows[0] });
+          }
+        }
+        byRun.push({ testRunId: runId, ran: rp + rf, passed: rp, failed: rf });
+      } catch (e: any) {
+        const msg = e instanceof PlaywrightRunError ? `${e.code}: ${e.message}` : (e?.message || 'Re-run failed');
+        console.error(`Bug re-run error [run ${runId}]:`, msg);
+        byRun.push({ testRunId: runId, ran: 0, passed: 0, failed: 0, error: msg });
+      }
+    }
+
+    res.json({ ok: true, ran, passed, failed, resolved, byRun });
+  } catch (err: any) {
+    console.error('Bug re-run error:', err.message);
+    res.status(500).json({ error: 'Failed to re-run tests' });
   }
 });
 
