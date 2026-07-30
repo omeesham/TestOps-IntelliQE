@@ -10,32 +10,64 @@
  * process tree dies and no orphaned claude.exe can accumulate overnight.
  */
 import { execSync, spawn } from 'child_process';
-import { homedir } from 'os';
+import { homedir, tmpdir } from 'os';
 import { join } from 'path';
 import type { LlmConfig } from './state.js';
 export type { LlmConfig };
 
-let resolvedCliPath: string | null = null;
 const IS_WINDOWS = process.platform === 'win32';
 
-function findClaudeCli(): string | null {
-  if (resolvedCliPath) return resolvedCliPath;
+/**
+ * A resolved CLI target. `useShell` matters more than it looks: with
+ * `shell: true` Node only CONCATENATES argv into a command string, so an
+ * empty-string argument vanishes — `--tools ''` silently degraded to a bare
+ * `--tools`, leaving every tool enabled (the cause of the 5-minute hangs).
+ * Spawning the native binary with `shell: false` keeps argv exact; the shell
+ * fallback has to spell the empty value as literal quotes instead.
+ */
+interface ResolvedCli {
+  cmd: string;
+  useShell: boolean;
+}
 
-  const candidates = [
-    'claude',
-    join(homedir(), 'AppData', 'Roaming', 'npm', 'claude.cmd'),
-    join(homedir(), '.npm-global', 'bin', 'claude'),
-    '/usr/local/bin/claude',
-  ];
+let resolvedCli: ResolvedCli | null = null;
 
-  for (const cmd of candidates) {
+function findClaudeCli(): ResolvedCli | null {
+  if (resolvedCli) return resolvedCli;
+
+  const candidates: ResolvedCli[] = [];
+  if (IS_WINDOWS) {
+    // Native binary FIRST. The npm `claude.cmd` shim does nothing but forward
+    // to this exe, so targeting it directly buys us a shell-free spawn.
+    candidates.push({ cmd: join(homedir(), 'AppData', 'Roaming', 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'), useShell: false });
+    candidates.push({ cmd: join(homedir(), '.local', 'bin', 'claude.exe'), useShell: false });
+  }
+  candidates.push({ cmd: 'claude', useShell: IS_WINDOWS });
+  candidates.push({ cmd: join(homedir(), 'AppData', 'Roaming', 'npm', 'claude.cmd'), useShell: true });
+  candidates.push({ cmd: join(homedir(), '.npm-global', 'bin', 'claude'), useShell: false });
+  candidates.push({ cmd: '/usr/local/bin/claude', useShell: false });
+
+  for (const candidate of candidates) {
     try {
-      execSync(`"${cmd}" --version`, { timeout: 5000, encoding: 'utf-8', stdio: 'pipe' });
-      resolvedCliPath = cmd;
-      return cmd;
+      execSync(`"${candidate.cmd}" --version`, { timeout: 5000, encoding: 'utf-8', stdio: 'pipe' });
+      resolvedCli = candidate;
+      return candidate;
     } catch { /* try next */ }
   }
   return null;
+}
+
+/**
+ * Wall-clock budget for one CLI call, scaled by how much OUTPUT is expected.
+ * A fixed 5-minute cap killed the generator mid-write: it asks for up to 64k
+ * tokens of JSON test cases, which legitimately streams for longer than that,
+ * while short analysis calls (4-8k) finish in well under a minute. Budget ~90s
+ * per 8k output tokens, floored at 5 min and ceilinged at 15 min — the same
+ * order as the Messages API path (10 min) and within the client's own window.
+ */
+function cliTimeoutFor(maxTokens: number | undefined): number {
+  const scaled = Math.ceil((maxTokens || 4096) / 8000) * 90_000;
+  return Math.min(900_000, Math.max(300_000, scaled));
 }
 
 /**
@@ -47,11 +79,21 @@ function findClaudeCli(): string | null {
  * own kill only reaches the immediate child, not the helper processes the
  * CLI spawns.
  */
-export function runClaudePrompt(prompt: string, options?: { maxTokens?: number; model?: string; oauthToken?: string }): Promise<string> {
+export function runClaudePrompt(prompt: string, options?: { maxTokens?: number; model?: string; oauthToken?: string; timeoutMs?: number }): Promise<string> {
   const cli = findClaudeCli();
   if (!cli) return Promise.reject(new Error('Claude CLI not found'));
 
-  const args: string[] = ['-p'];
+  const timeoutMs = options?.timeoutMs ?? cliTimeoutFor(options?.maxTokens);
+
+  // An empty --tools value disables every built-in tool (Bash/Read/Grep/Edit/…)
+  // and --safe-mode skips CLAUDE.md / memory / skills / plugin discovery.
+  // Without these, `claude -p` still behaves like a full agentic coding session
+  // — free to wander off exploring a codebase with tools for what should be a
+  // single stateless text/JSON completion — which is what was exhausting the
+  // 5-minute timeout on real prompts. Through a shell the empty value must be
+  // written as literal quotes, since Node's argv concatenation drops '' (see
+  // ResolvedCli).
+  const args: string[] = ['-p', '--tools', cli.useShell ? '""' : '', '--safe-mode'];
   if (options?.model) args.push('--model', options.model);
   // Note: Claude CLI does not support --max-tokens; use --max-budget-usd for cost control
 
@@ -65,9 +107,12 @@ export function runClaudePrompt(prompt: string, options?: { maxTokens?: number; 
     : process.env;
 
   return new Promise<string>((resolve, reject) => {
-    const child = spawn(cli, args, {
+    const child = spawn(cli.cmd, args, {
+      // Run from outside the repo so the CLI can't pick up this project's own
+      // CLAUDE.md as context (belt-and-braces alongside --safe-mode).
+      cwd: tmpdir(),
       stdio: ['pipe', 'pipe', 'pipe'],
-      shell: IS_WINDOWS,
+      shell: cli.useShell,
       windowsHide: true,
       env,
     });
@@ -84,8 +129,9 @@ export function runClaudePrompt(prompt: string, options?: { maxTokens?: number; 
 
     const timer = setTimeout(() => {
       if (child.pid) treeKill(child.pid);
-      settle(() => reject(new Error(`Claude CLI timed out after 5 minutes (tree-killed pid ${child.pid})`)));
-    }, 300000); // 5 minutes
+      const mins = Math.round(timeoutMs / 60000);
+      settle(() => reject(new Error(`Claude CLI timed out after ${mins} minute${mins === 1 ? '' : 's'} (tree-killed pid ${child.pid})`)));
+    }, timeoutMs);
 
     child.stdout.setEncoding('utf-8');
     child.stderr.setEncoding('utf-8');
@@ -200,14 +246,17 @@ export async function runLLM(
           'Install and log in the Claude CLI here, or switch Claude Code to API mode in System Configuration → LLM Configuration.',
         );
       }
-      return runClaudePrompt(prompt, { maxTokens: options?.maxTokens, model, oauthToken: llm?.oauthToken });
+      // Pass the RESOLVED maxTokens — it sizes the CLI's wall-clock budget
+      // (cliTimeoutFor), so leaving it undefined would under-budget a large
+      // generation and kill it mid-write.
+      return runClaudePrompt(prompt, { maxTokens, model, oauthToken: llm?.oauthToken });
     }
     // API mode.
     if (llm?.oauthToken) {
       return callApi({ authMethod: 'claude_code', oauthToken: llm.oauthToken, model, baseUrl, maxTokens, system: options?.system, effort: llm?.effort, extendedThinking: llm?.extendedThinking });
     }
     if (isClaudeCliAvailable()) {
-      return runClaudePrompt(prompt, { maxTokens: options?.maxTokens, model, oauthToken: llm?.oauthToken });
+      return runClaudePrompt(prompt, { maxTokens, model, oauthToken: llm?.oauthToken });
     }
     throw new Error(
       'Claude Code is selected but no OAuth token is saved and no local Claude CLI is available. ' +
@@ -221,7 +270,7 @@ export async function runLLM(
   }
   if (isClaudeCliAvailable()) {
     // Local-dev fallback — CLI must be logged in.
-    return runClaudePrompt(prompt, { maxTokens: options?.maxTokens, model: llm?.model });
+    return runClaudePrompt(prompt, { maxTokens, model: llm?.model });
   }
   throw new Error(
     'No LLM configured. Add an Anthropic API key in System Configuration → LLM Configuration.',
