@@ -111,6 +111,10 @@ router.post('/publish', async (req: Request, res: Response) => {
       directory: requestedDir,
       testRunId,
       integrationId,
+      // When true, commit straight onto the default branch (no branch, no PR).
+      // The one-click "Push to GitHub" button sends this; "Create Pull Request"
+      // omits it and gets the branch + PR flow.
+      directCommit,
     } = req.body;
 
     if (!Array.isArray(scripts) || scripts.length === 0) {
@@ -218,8 +222,8 @@ router.post('/publish', async (req: Request, res: Response) => {
     const commitMessage = (requestedCommitMessage && String(requestedCommitMessage).trim()) || title;
     const body = (requestedDescription && String(requestedDescription).trim()) || buildDefaultPrBody(specFiles, { testRunId, username: user.username });
 
-    // 5. Publish.
-    const result = await provider.publish(config, files, { branch, title, body, commitMessage });
+    // 5. Publish — direct commit to the default branch, or branch + PR.
+    const result = await provider.publish(config, files, { branch, title, body, commitMessage, directCommit: directCommit === true });
 
     // 6. Bump last_sync_at so the UI shows a fresh connection timestamp.
     await pool.query(

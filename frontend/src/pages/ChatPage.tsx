@@ -1959,11 +1959,17 @@ export default function ChatPage() {
         testCases: results?.testCases || [],
         integrationId: integrationId as 'github' | 'gitlab' | 'bitbucket',
         testRunId: savedTestRunId || currentRunId || undefined,
+        // One-click push commits straight to the default branch so the code
+        // shows up in the repo immediately (no PR to merge). The separate
+        // "Create Pull Request" action still opens a PR.
+        directCommit: true,
       });
       setPublishedPrUrl(result.prUrl);
       setGitPush({ status: 'done', prUrl: result.prUrl });
       toast.success('Pushed to GitHub');
-      push('tessa', `Done! I opened ${result.provider === 'gitlab' ? 'MR' : 'PR'} #${result.prNumber} on ${result.provider} with ${result.fileCount} file(s): ${result.prUrl}`);
+      push('tessa', result.mode === 'commit'
+        ? `Done! Committed ${result.fileCount} file(s) straight to the "${result.branch}" branch on ${result.provider}: ${result.prUrl}`
+        : `Done! I opened ${result.provider === 'gitlab' ? 'MR' : 'PR'} #${result.prNumber} on ${result.provider} with ${result.fileCount} file(s): ${result.prUrl}`);
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.message || 'Git push failed';
       setGitPush({ status: 'error', error: msg });

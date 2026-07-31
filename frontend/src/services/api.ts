@@ -215,6 +215,8 @@ export interface GitPublishResult {
   prNumber: number;
   branch: string;
   fileCount: number;
+  /** 'pr' = branch + PR; 'commit' = pushed straight to the default branch. */
+  mode?: 'pr' | 'commit';
 }
 
 export async function publishToGit(payload: {
@@ -228,6 +230,8 @@ export async function publishToGit(payload: {
   directory?: string;
   testRunId?: string;
   integrationId?: 'github' | 'gitlab' | 'bitbucket';
+  /** Commit straight to the default branch instead of opening a PR. */
+  directCommit?: boolean;
 }): Promise<GitPublishResult> {
   const { data } = await api.post('/git/publish', payload, { timeout: 120_000 });
   return data;

@@ -15,6 +15,28 @@
 import type { GitFile, GitProvider, GitProviderConfig, GitTestResult, PublishResult } from './git.types.js';
 import { parseRepoUrl } from './git.types.js';
 
+/** True for the GitHub 403 that means "the token is valid but lacks WRITE scope". */
+function isWritePermissionError(err: any): boolean {
+  const msg = String(err?.message || err || '');
+  return err?.status === 403 || /resource not accessible|not accessible by (personal|integration)|forbidden/i.test(msg);
+}
+
+/**
+ * Actionable guidance for the #1 push blocker: a token that can READ the repo
+ * (so the connection test passes) but cannot WRITE. GitHub's account-level
+ * `permissions.push` flag reads true even for a fine-grained token that has no
+ * Contents/Pull-requests permission, so this only surfaces at push time.
+ */
+function writePermissionHint(owner: string, repo: string): string {
+  return (
+    `The access token cannot write to ${owner}/${repo} — GitHub refused it with ` +
+    `"Resource not accessible by personal access token". The connection can READ the repo but not PUSH. Grant write access, then push again:\n` +
+    `• Fine-grained token (github_pat_…): github.com/settings/personal-access-tokens → edit this token → make sure ${owner}/${repo} is in "Repository access", then under "Repository permissions" set Contents = Read and write AND Pull requests = Read and write.\n` +
+    `• Classic token (ghp_…): enable the "repo" scope (or at least "public_repo" for a public repo).\n` +
+    `Then re-save the token in System Configuration → Code Repositories and try again.`
+  );
+}
+
 export const githubProvider: GitProvider = {
   id: 'github',
 
@@ -55,8 +77,11 @@ export const githubProvider: GitProvider = {
       ok: true,
       canPush,
       message: canPush
-        ? `Connected to ${owner}/${repo}. Default branch '${config.defaultBranch}' found and the token can push. Ready to raise PRs.`
-        : `Connected to ${owner}/${repo} and branch '${config.defaultBranch}' found, but the token cannot push to this repo. Grant Contents + Pull requests write access.`,
+        // NOTE: `permissions.push` is an ACCOUNT-level flag — it reads true even
+        // for a fine-grained token that has no Contents/Pull-requests permission,
+        // so it can't guarantee a push will succeed. Say so instead of promising.
+        ? `Connected to ${owner}/${repo}; default branch '${config.defaultBranch}' found. If pushing fails, make sure the token has write access — a fine-grained token needs Contents = Read and write AND Pull requests = Read and write on this repo (a classic token needs the "repo" scope).`
+        : `Connected to ${owner}/${repo} and branch '${config.defaultBranch}' found, but the token cannot push to this repo. Grant Contents = Read and write and Pull requests = Read and write (fine-grained token) or the "repo" scope (classic token).`,
     };
   },
 
@@ -73,6 +98,58 @@ export const githubProvider: GitProvider = {
     });
 
     const { owner, repo } = coords;
+    const htmlHost = coords.host === 'api.github.com' ? 'github.com' : coords.host;
+
+    // DIRECT-COMMIT mode — commit each file straight onto the default branch,
+    // with no new branch and no PR. This is the one-click "Push to GitHub" path:
+    // the code lands on the branch the user browses (e.g. main) and is visible
+    // immediately, rather than sitting in a PR waiting to be merged.
+    if (opts.directCommit) {
+      const branch = config.defaultBranch;
+      let committed = 0;
+      let lastCommitUrl = '';
+      for (const file of files) {
+        try {
+          // Existing path needs its current blob sha to update (see PR path note).
+          let sha: string | undefined;
+          try {
+            const existing = await octokit.repos.getContent({ owner, repo, path: file.path, ref: branch });
+            if (!Array.isArray(existing.data) && 'sha' in existing.data) sha = existing.data.sha;
+          } catch (e: any) {
+            if (e?.status !== 404) throw e;
+          }
+          const res = await octokit.repos.createOrUpdateFileContents({
+            owner, repo,
+            path: file.path,
+            message: opts.commitMessage,
+            content: Buffer.from(file.content, 'utf-8').toString('base64'),
+            branch,
+            ...(sha ? { sha } : {}),
+          });
+          lastCommitUrl = res.data.commit?.html_url || lastCommitUrl;
+          committed++;
+        } catch (err: any) {
+          if (isWritePermissionError(err)) {
+            throw new Error(writePermissionHint(owner, repo));
+          }
+          if (/protected branch|not permitted|required status|changes must be made through a pull request|review/i.test(String(err?.message))) {
+            throw new Error(
+              `The '${branch}' branch is protected, so a direct commit was refused (${err.message}). ` +
+              `Either allow direct pushes to '${branch}' in the repo's branch-protection settings, or use "Create Pull Request" to open a PR instead.`,
+            );
+          }
+          throw new Error(`Could not commit ${file.path} to ${branch}: ${err.message || err}`);
+        }
+      }
+      return {
+        provider: 'github',
+        prUrl: lastCommitUrl || `https://${htmlHost}/${owner}/${repo}/tree/${branch}`,
+        prNumber: 0,
+        branch,
+        fileCount: committed,
+        mode: 'commit',
+      };
+    }
 
     // 1. Get the SHA of the default branch tip.
     let baseSha: string;
@@ -97,6 +174,11 @@ export const githubProvider: GitProvider = {
       // surface a clear error rather than silently appending.
       if (err.status === 422) {
         throw new Error(`Branch '${opts.branch}' already exists on ${owner}/${repo}. Choose a different branch name or delete the existing one.`);
+      }
+      // The token can read the repo (the connection test passed) but can't
+      // create a branch — it lacks write scope. Give the exact fix.
+      if (isWritePermissionError(err)) {
+        throw new Error(writePermissionHint(owner, repo));
       }
       throw new Error(`Could not create branch '${opts.branch}': ${err.message || err}`);
     }
@@ -131,6 +213,9 @@ export const githubProvider: GitProvider = {
         });
         committed++;
       } catch (err: any) {
+        if (isWritePermissionError(err)) {
+          throw new Error(writePermissionHint(owner, repo));
+        }
         throw new Error(`Could not commit ${file.path}: ${err.message || err}`);
       }
     }
@@ -150,8 +235,15 @@ export const githubProvider: GitProvider = {
         prNumber: pr.data.number,
         branch: opts.branch,
         fileCount: committed,
+        mode: 'pr',
       };
     } catch (err: any) {
+      if (isWritePermissionError(err)) {
+        throw new Error(
+          `Files were committed to '${opts.branch}', but the pull request was refused. ${writePermissionHint(owner, repo)} ` +
+          `(Opening a PR specifically needs "Pull requests: Read and write".)`,
+        );
+      }
       throw new Error(`Branch '${opts.branch}' was created with ${committed} file(s) but the PR could not be opened: ${err.message || err}`);
     }
   },

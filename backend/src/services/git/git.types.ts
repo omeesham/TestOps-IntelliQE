@@ -40,11 +40,15 @@ export interface GitTestResult {
 /** Result of a successful publish. */
 export interface PublishResult {
   provider: 'github' | 'gitlab' | 'bitbucket';
+  /** PR/MR URL for the 'pr' mode; a browse URL for the pushed code in 'commit' mode. */
   prUrl: string;
+  /** PR/MR number for the 'pr' mode; 0 for a direct commit (no PR is opened). */
   prNumber: number;
   branch: string;
   /** Files actually committed (provider may dedupe or skip empty entries) */
   fileCount: number;
+  /** How the code was delivered: 'pr' = branch + PR (default), 'commit' = straight to the default branch. */
+  mode?: 'pr' | 'commit';
 }
 
 /**
@@ -64,7 +68,15 @@ export interface GitProvider {
   publish(
     config: GitProviderConfig,
     files: GitFile[],
-    opts: { branch: string; title: string; body: string; commitMessage: string },
+    opts: {
+      branch: string;
+      title: string;
+      body: string;
+      commitMessage: string;
+      /** When true, commit `files` directly onto `defaultBranch` — no new branch,
+       *  no PR. When false/undefined (default), create `branch` + open a PR. */
+      directCommit?: boolean;
+    },
   ): Promise<PublishResult>;
 
   /**
