@@ -561,11 +561,14 @@ async function healStage(tenantId: string, body: any): Promise<any> {
     const healStart = Date.now();
     const timeBudgetMs = Math.max(60_000, parseInt(process.env.HEAL_TIME_BUDGET_MS || '', 10) || 600_000);
 
-    // LIVE healing (default when a target URL exists): replay each failing
-    // scenario in a real browser and only accept heals that verified live —
-    // Playwright test-healer style. SCRIPT_GEN_MODE=batch forces the text
-    // healer instead.
-    const liveHeal = !!ctx?.targetUrl && process.env.SCRIPT_GEN_MODE !== 'batch';
+    // Default to the FAST targeted TEXT healer (Playwright-healer style:
+    // diagnose the failure category → smallest patch → re-run to verify). It
+    // heals every failing spec in PARALLEL with one LLM call each, so a handful
+    // of tests heal in ~1-2 min. The LIVE browser healer instead re-derives each
+    // test step-by-step (one LLM call per browser action, up to ~18/case, only 2
+    // in parallel) — thorough but minutes-slow for a few tests. Opt into the live
+    // healer with HEAL_MODE=live.
+    const liveHeal = process.env.HEAL_MODE === 'live' && !!ctx?.targetUrl;
 
     // Text-healer grounding only: a real DOM inventory of the app's ENTRY
     // page. (The live healer observes pages itself, so the snapshot would be

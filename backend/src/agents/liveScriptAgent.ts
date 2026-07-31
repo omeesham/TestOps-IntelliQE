@@ -386,7 +386,9 @@ async function generateOneLive(
   heal?: HealContext,
 ): Promise<{ script: AutomationScript; verified: boolean; log: string; steps: number }> {
   const baseUrl = state.appContext!.targetUrl!;
-  const llm = llmForStage(state.llm, 'script');
+  // Healing re-derives a known-failing case — use the admin's per-agent 'heal'
+  // model for that path, and the 'script' model for first-time generation.
+  const llm = llmForStage(state.llm, heal ? 'heal' : 'script');
   const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1280, height: 800 } });
   await context.addInitScript({ content: 'window.__name = window.__name || function (f) { return f; };' });
   const page = await context.newPage();
