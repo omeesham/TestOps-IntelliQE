@@ -52,6 +52,17 @@ const ACTION_TIMEOUT_MS = 10_000;     // per locator action
 const NAV_TIMEOUT_MS = 30_000;
 const CONCURRENCY = Math.max(1, Math.min(3, parseInt(process.env.LIVE_GEN_CONCURRENCY || '', 10) || 2));
 
+// Heal-path caps — MUCH tighter than first-time generation. When healing we are
+// RE-deriving a case from a known failure, so it should converge quickly; the
+// generous generation budgets (28 actions / 5 min per case) let a single stuck
+// test dominate the whole heal wall-clock. These bound each case so healing a
+// handful of tests stays in the tens-of-seconds range, not minutes. Both are
+// env-overridable for ops tuning.
+const HEAL_MAX_ACTIONS_PER_CASE = Math.max(6, Math.min(MAX_ACTIONS_PER_CASE,
+  parseInt(process.env.HEAL_MAX_ACTIONS_PER_CASE || '', 10) || 18));
+const HEAL_CASE_TIME_BUDGET_MS = Math.max(30_000,
+  parseInt(process.env.HEAL_CASE_TIME_BUDGET_MS || '', 10) || 90_000);
+
 /* ── Action & locator DSL (what the LLM returns each step) ── */
 
 interface LocatorSpec {
@@ -388,9 +399,15 @@ async function generateOneLive(
   let abortNote = '';
   const startedAt = Date.now();
 
+  // Healing re-derives a known-failing case, so cap it tighter than first-time
+  // generation — a stuck case must give up in ~90s, not 5 min, so it can't
+  // dominate the heal wall-clock.
+  const maxActions = heal ? HEAL_MAX_ACTIONS_PER_CASE : MAX_ACTIONS_PER_CASE;
+  const caseBudgetMs = heal ? HEAL_CASE_TIME_BUDGET_MS : CASE_TIME_BUDGET_MS;
+
   try {
-    for (let i = 0; i < MAX_ACTIONS_PER_CASE; i++) {
-      if (Date.now() - startedAt > CASE_TIME_BUDGET_MS) { abortNote = 'time budget exhausted'; break; }
+    for (let i = 0; i < maxActions; i++) {
+      if (Date.now() - startedAt > caseBudgetMs) { abortNote = 'time budget exhausted'; break; }
 
       const observation = await observePage(page);
       let act: LiveAction;
@@ -423,8 +440,17 @@ async function generateOneLive(
   }
 
   const hasAssertion = recorded.some((r) => r.code.includes('expect(') || r.code.includes('waitForURL'));
-  if (outcome === 'done' && recorded.length > 0 && hasAssertion) {
-    return { script: buildVerifiedSpec(tc, recorded), verified: true, log: `verified in ${recorded.length} step(s)`, steps: recorded.length };
+  // Accept any run that executed at least one action AND recorded an assertion —
+  // even if the model never emitted the explicit 'done' sentinel. It commonly
+  // does all the real work (navigate, fill, submit, assert) but hits the
+  // action/time budget before saying 'done' (outcome 'exhausted'). Every
+  // recorded step already executed successfully against the live DOM, so the
+  // spec is genuinely verified; requiring the sentinel was silently discarding
+  // good, proven specs and shipping failing placeholders in their place. Only an
+  // explicit 'abort' (model judged the scenario not applicable) is rejected.
+  if (outcome !== 'abort' && recorded.length > 0 && hasAssertion) {
+    const note = outcome === 'done' ? '' : ` (${outcome})`;
+    return { script: buildVerifiedSpec(tc, recorded), verified: true, log: `verified in ${recorded.length} step(s)${note}`, steps: recorded.length };
   }
   // Couldn't complete live — emit the honest failing placeholder so execution
   // reports it truthfully and the healer has a real signal to regenerate from.
@@ -503,12 +529,39 @@ export async function liveScriptAgent(state: TestOpsState): Promise<TestOpsState
     console.warn('[liveScriptAgent] no test case could be verified live — falling back to batch generation');
     return groundedBatchFallback(state);
   }
+
+  // Some cases verified live, others didn't. Rather than ship the unverified
+  // ones as failing `expect(false)` placeholders (a guaranteed execution
+  // failure and a poor healer signal), regenerate ONLY those through the
+  // grounded batch generator: an unverified-but-real spec (semantic locators
+  // grounded in a crawl) can actually pass and gives the healer real code to
+  // repair. Verified live specs are kept exactly as proven.
+  let pageObjects: NonNullable<TestOpsState['pageObjects']> = [];
+  const unverifiedIdx = results.map((r, i) => (r?.verified ? -1 : i)).filter((i) => i >= 0);
+  if (unverifiedIdx.length > 0) {
+    const unverifiedCases = unverifiedIdx.map((i) => eligible[i]!);
+    console.warn(`[liveScriptAgent] ${unverifiedCases.length}/${eligible.length} case(s) not verified live — regenerating those via grounded batch instead of placeholders`);
+    try {
+      const batch = await groundedBatchFallback({ ...state, testCases: unverifiedCases });
+      const byId = new Map(batch.automationScripts.map((s): [string, AutomationScript] => [s.testCaseId, s]));
+      for (const i of unverifiedIdx) {
+        const s = byId.get(eligible[i]!.id);
+        if (s) results[i] = { script: s, verified: false, log: 'batch fallback (unverified live)', steps: 0 };
+      }
+      // Batch specs import page objects by path — publish them so the imports resolve.
+      pageObjects = batch.pageObjects || [];
+    } catch (e) {
+      console.warn('[liveScriptAgent] per-case batch fallback failed — keeping live results:', (e as Error).message);
+    }
+  }
+
   console.log(`[liveScriptAgent] ${verifiedCount}/${eligible.length} spec(s) verified live against ${state.appContext.targetUrl}`);
   return {
     ...state,
-    // Live specs are self-contained (codegen-style, proven locators) — no POM
-    // files needed; execution handles page-object-free specs natively.
-    pageObjects: [],
+    // Verified live specs are self-contained (proven locators, no POM). Any
+    // batch-fallback specs bring their own page objects (imported by path), so
+    // publish whatever the fallback produced alongside the live specs.
+    pageObjects,
     automationScripts: ensureUniqueSpecPaths(results.map((r) => r.script)),
   };
 }

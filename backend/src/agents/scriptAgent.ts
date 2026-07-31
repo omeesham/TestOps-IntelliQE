@@ -342,8 +342,13 @@ async function generateSpecs(state: TestOpsState, batch: TestCase[], catalog: Pa
   const catalogBlock = buildCatalog(catalog);
   const credentials = buildCredentialsBlock(state);
 
+  // Send the id under the SAME key the model must echo back (`testCaseId`).
+  // Naming it `id` on the way in but demanding `testCaseId` out invited the
+  // model to mirror the input key — every entry then failed the `e.testCaseId`
+  // check below, `byId` came back empty, and the whole batch collapsed to
+  // failing placeholder specs.
   const casesPayload = batch.map((tc) => ({
-    id: tc.id, feature: tc.feature, scenario: tc.scenario,
+    testCaseId: tc.id, feature: tc.feature, scenario: tc.scenario,
     steps: tc.steps, expectedResult: tc.expectedResult, type: tc.type, precondition: tc.precondition,
   }));
 
