@@ -1,11 +1,19 @@
 {
-  "dependencies": {
-    "edge-tts": "^1.0.1",
-    "playwright": "^1.58.2",
-    "pptxgenjs": "^4.0.1",
-    "say": "^0.16.0"
+  "name": "qe-playwright-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright end-to-end test package (Page Object Model).",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "test:chromium": "playwright test --project=chromium",
+    "report": "playwright show-report ./reports/html",
+    "install:browsers": "playwright install"
   },
   "devDependencies": {
-    "@ffmpeg-installer/ffmpeg": "^1.1.0"
+    "@playwright/test": "^1.58.2",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0"
   }
 }
