@@ -1,0 +1,7 @@
+{
+  "exampleUser": {
+    "email": "test.user@example.com",
+    "displayName": "Test User"
+  },
+  "note": "Replace this placeholder with your own non-sensitive test data files."
+}
