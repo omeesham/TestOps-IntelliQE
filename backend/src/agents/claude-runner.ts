@@ -488,6 +488,68 @@ export function parseJsonFromResponse<T>(response: string): T {
 }
 
 /**
+ * Coerce a parsed LLM payload into an array. Models drift on shape: asked for a
+ * bare array, they periodically wrap it in an object ({ "testCases": [...] },
+ * { "data": [...] }). Rejecting those shapes fails whole pipeline stages for a
+ * formatting quirk — unwrap instead. Returns null when no array is present.
+ */
+export function coerceJsonArray<T>(parsed: unknown): T[] | null {
+  if (Array.isArray(parsed)) return parsed as T[];
+  if (parsed && typeof parsed === 'object') {
+    const obj = parsed as Record<string, unknown>;
+    const preferredKeys = ['testCases', 'test_cases', 'tests', 'cases', 'items', 'data', 'results', 'specs'];
+    for (const k of preferredKeys) {
+      if (Array.isArray(obj[k])) return obj[k] as T[];
+    }
+    // Exactly one array-valued property → unambiguous, take it.
+    const arrays = Object.values(obj).filter((v): v is unknown[] => Array.isArray(v));
+    if (arrays.length === 1) return arrays[0] as T[];
+  }
+  return null;
+}
+
+/**
+ * Salvage the complete top-level objects of a JSON array whose tail is broken —
+ * typically a response truncated at max_tokens mid-element. Every fully-closed
+ * `{...}` element parses individually; the torn final element is dropped. This
+ * turns "SyntaxError → entire stage failed" into "N-1 usable results".
+ */
+export function salvageJsonArrayObjects<T>(text: string): T[] {
+  let cleaned = text.trim();
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+  }
+  const start = cleaned.indexOf('[');
+  if (start === -1) return [];
+  const out: T[] = [];
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  let objStart = -1;
+  for (let i = start + 1; i < cleaned.length; i++) {
+    const c = cleaned[i] as string;
+    if (escape) { escape = false; continue; }
+    if (c === '\\') { escape = true; continue; }
+    if (c === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (c === '{') {
+      if (depth === 0) objStart = i;
+      depth++;
+    } else if (c === '}') {
+      depth--;
+      if (depth === 0 && objStart >= 0) {
+        try { out.push(JSON.parse(repairJsonArtifacts(cleaned.slice(objStart, i + 1))) as T); }
+        catch { /* malformed element — skip it, keep the rest */ }
+        objStart = -1;
+      }
+    } else if (c === ']' && depth === 0) {
+      break; // array closed cleanly
+    }
+  }
+  return out;
+}
+
+/**
  * Repair non-JSON artifacts LLMs sometimes emit inside otherwise-valid JSON:
  *   "a" * 10000          → "a (repeated 10000 times)"   (string-multiply shorthand)
  *   "a".repeat(10000)    → "a (repeated 10000 times)"

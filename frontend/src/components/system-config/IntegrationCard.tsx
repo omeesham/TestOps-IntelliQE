@@ -1,4 +1,4 @@
-import { XCircle, RefreshCw, Loader2, CheckCircle, AlertCircle, Plug, Trash2 } from 'lucide-react';
+import { XCircle, Loader2, CheckCircle, AlertCircle, Plug, Trash2, Pencil } from 'lucide-react';
 import { LOGOS } from './integrationCatalog';
 
 interface Props {
@@ -16,6 +16,8 @@ interface Props {
   onReconnect?: () => void;
   /** Permanently delete the saved configuration. */
   onDelete?: () => void;
+  /** Edit the saved configuration (reopens the connect form prefilled). */
+  onEdit?: () => void;
   /** Optional connectivity test for connected integrations (e.g. git repos). */
   onTest?: () => void;
   testing?: boolean;
@@ -29,18 +31,7 @@ const badge: Record<string, { label: string; color: string; bg: string; dot: str
   coming_soon: { label: 'Coming Soon', color: 'text-gray-400', bg: 'bg-gray-50 border-gray-200', dot: null },
 };
 
-function timeSince(dateStr: string | null): string {
-  if (!dateStr) return '';
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins} min ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
-
-export default function IntegrationCard({ id, name, category, description, comingSoon, status, connectedBy, lastSyncAt, onConnect, onDisconnect, onReconnect, onDelete, onTest, testing, testResult }: Props) {
+export default function IntegrationCard({ id, name, category, description, comingSoon, status, onConnect, onDisconnect, onReconnect, onDelete, onEdit, onTest, testing, testResult }: Props) {
   const b = badge[status] || badge.available;
   const logo = LOGOS[id];
 
@@ -68,10 +59,6 @@ export default function IntegrationCard({ id, name, category, description, comin
       </div>
       <p className="text-sm text-[#6B7280] mb-3">{description}</p>
       <div className="flex items-center justify-between">
-        {lastSyncAt && (
-          <p className="text-xs text-[#A5B4FC] flex items-center gap-1"><RefreshCw className="w-3 h-3" /> Synced {timeSince(lastSyncAt)}</p>
-        )}
-        {connectedBy && <p className="text-xs text-[#A5B4FC]">by {connectedBy}</p>}
         {status === 'connected' ? (
           <div className="flex items-center gap-3 ml-auto">
             {onTest && (
@@ -87,9 +74,14 @@ export default function IntegrationCard({ id, name, category, description, comin
             <button onClick={onDisconnect} className="text-xs text-amber-600 hover:underline flex items-center gap-1">
               Disconnect <XCircle className="w-3 h-3" />
             </button>
+            {onEdit && (
+              <button onClick={onEdit} className="p-1.5 rounded-lg text-[#7C3AED] hover:bg-[#F5F3FF] transition-colors" title="Edit configuration">
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+            )}
             {onDelete && (
-              <button onClick={onDelete} className="text-xs text-red-500 hover:underline flex items-center gap-1" title="Delete saved configuration">
-                Delete <Trash2 className="w-3 h-3" />
+              <button onClick={onDelete} className="p-1.5 rounded-lg text-red-500 hover:bg-red-50 transition-colors" title="Delete saved configuration">
+                <Trash2 className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
@@ -98,9 +90,14 @@ export default function IntegrationCard({ id, name, category, description, comin
             <button onClick={onReconnect || onConnect} className="px-3 py-1.5 bg-[#F5F3FF] text-[#7C3AED] rounded-lg text-xs font-medium hover:bg-[#EDE9FE] transition-colors flex items-center gap-1">
               <Plug className="w-3 h-3" />Reconnect
             </button>
+            {onEdit && (
+              <button onClick={onEdit} className="p-1.5 rounded-lg text-[#7C3AED] hover:bg-[#F5F3FF] transition-colors" title="Edit configuration">
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+            )}
             {onDelete && (
-              <button onClick={onDelete} className="text-xs text-red-500 hover:underline flex items-center gap-1" title="Delete saved configuration">
-                Delete <Trash2 className="w-3 h-3" />
+              <button onClick={onDelete} className="p-1.5 rounded-lg text-red-500 hover:bg-red-50 transition-colors" title="Delete saved configuration">
+                <Trash2 className="w-3.5 h-3.5" />
               </button>
             )}
           </div>

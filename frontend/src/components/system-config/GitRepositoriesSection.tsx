@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { getGitRepos } from './integrationCatalog';
+import { getGitRepos, prefillFromConfig } from './integrationCatalog';
 import IntegrationCard from './IntegrationCard';
 import ConnectModal from './ConnectModal';
 import { connectIntegration, disconnectIntegration, reconnectIntegration, deleteIntegration, testGitConnection } from '@/services/api';
@@ -26,6 +26,7 @@ export default function GitRepositoriesSection({ configs, onRefresh }: Props) {
   const catalog = getGitRepos();
 
   const [modalIntegration, setModalIntegration] = useState<CatalogItem | null>(null);
+  const [editValues, setEditValues] = useState<Record<string, string> | undefined>();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -122,11 +123,21 @@ export default function GitRepositoriesSection({ configs, onRefresh }: Props) {
             lastSyncAt={item.lastSyncAt}
             onConnect={() => {
               setError('');
+              setEditValues(undefined);
               setModalIntegration(catalog.find((c) => c.id === item.id) ?? null);
             }}
             onDisconnect={() => handleDisconnect(item.id)}
             onReconnect={() => handleReconnect(item.id)}
             onDelete={() => handleDelete(item.id)}
+            onEdit={
+              item.status === 'connected' || item.status === 'disconnected'
+                ? () => {
+                    setError('');
+                    setEditValues(prefillFromConfig(item, configs.find((c) => c.integrationId === item.id)?.configData));
+                    setModalIntegration(catalog.find((c) => c.id === item.id) ?? null);
+                  }
+                : undefined
+            }
             onTest={item.status === 'connected' ? () => handleTest(item.id) : undefined}
             testing={testingId === item.id}
             testResult={testResults[item.id] ?? null}
@@ -139,6 +150,7 @@ export default function GitRepositoriesSection({ configs, onRefresh }: Props) {
           integration={modalIntegration}
           saving={saving}
           error={error}
+          initialValues={editValues}
           onSave={handleConnect}
           testLabel="Test Connection"
           onTest={(formData) => testGitConnection({
@@ -149,6 +161,7 @@ export default function GitRepositoriesSection({ configs, onRefresh }: Props) {
           })}
           onClose={() => {
             setModalIntegration(null);
+            setEditValues(undefined);
             setError('');
           }}
         />

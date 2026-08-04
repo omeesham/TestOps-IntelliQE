@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Send, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
-import { getNotifications } from './integrationCatalog';
+import { getNotifications, prefillFromConfig } from './integrationCatalog';
 import IntegrationCard from './IntegrationCard';
 import ConnectModal from './ConnectModal';
 import { connectIntegration, disconnectIntegration, reconnectIntegration, deleteIntegration, testNotificationIntegration } from '@/services/api';
@@ -33,6 +33,7 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
   const catalog = getNotifications();
 
   const [modalIntegration, setModalIntegration] = useState<CatalogItem | null>(null);
+  const [editValues, setEditValues] = useState<Record<string, string> | undefined>();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -132,7 +133,7 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
       <div className="mb-4">
         <h3 className="text-sm font-semibold text-[#1E1B4B]">Notifications</h3>
         <p className="text-xs text-[#6B7280] mt-0.5">
-          Configure notification channels to receive test execution results, alerts, and reports.
+          Get notified when test runs complete.
         </p>
       </div>
 
@@ -150,11 +151,21 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
               lastSyncAt={item.lastSyncAt}
               onConnect={() => {
                 setError('');
+                setEditValues(undefined);
                 setModalIntegration(catalog.find((c) => c.id === item.id) ?? null);
               }}
               onDisconnect={() => handleDisconnect(item.id)}
               onReconnect={() => handleReconnect(item.id)}
               onDelete={() => handleDelete(item.id)}
+              onEdit={
+                item.status === 'connected' || item.status === 'disconnected'
+                  ? () => {
+                      setError('');
+                      setEditValues(prefillFromConfig(item, configs.find((c) => c.integrationId === item.id)?.configData));
+                      setModalIntegration(catalog.find((c) => c.id === item.id) ?? null);
+                    }
+                  : undefined
+              }
             />
 
             {/* Trigger Events + Test — only shown when this notification channel is connected */}
@@ -213,6 +224,7 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
           integration={modalIntegration}
           saving={saving}
           error={error}
+          initialValues={editValues}
           onSave={handleConnect}
           onTest={
             modalIntegration.id === 'notif-slack' || modalIntegration.id === 'notif-teams'
@@ -221,6 +233,7 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
           }
           onClose={() => {
             setModalIntegration(null);
+            setEditValues(undefined);
             setError('');
           }}
         />

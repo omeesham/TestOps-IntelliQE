@@ -13,10 +13,12 @@ interface Props {
   onTest?: (formData: Record<string, string>) => Promise<{ ok?: boolean; sent?: boolean; error?: string; message?: string }>;
   /** Label for the test button (default "Send Test"). */
   testLabel?: string;
+  /** Prefill values when editing an existing configuration (secrets excluded). */
+  initialValues?: Record<string, string>;
 }
 
-export default function ConnectModal({ integration, saving, error, onSave, onClose, onTest, testLabel = 'Send Test' }: Props) {
-  const [formData, setFormData] = useState<Record<string, string>>({});
+export default function ConnectModal({ integration, saving, error, onSave, onClose, onTest, testLabel = 'Send Test', initialValues }: Props) {
+  const [formData, setFormData] = useState<Record<string, string>>(initialValues || {});
   const [visibleFields, setVisibleFields] = useState<Set<string>>(new Set());
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);

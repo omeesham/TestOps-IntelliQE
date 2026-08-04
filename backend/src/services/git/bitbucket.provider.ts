@@ -129,6 +129,7 @@ export const bitbucketProvider: GitProvider = {
       const pr = await r.json() as any;
       return {
         provider: 'bitbucket',
+        mode: 'pr',
         prUrl: pr?.links?.html?.href || `https://${coords.host}/${workspace}/${repo}/pull-requests/${pr?.id}`,
         prNumber: pr?.id,
         branch: opts.branch,

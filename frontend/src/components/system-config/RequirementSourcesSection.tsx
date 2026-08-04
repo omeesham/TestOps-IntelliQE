@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { getRequirementSources } from './integrationCatalog';
+import { getRequirementSources, prefillFromConfig } from './integrationCatalog';
 import type { CatalogItem } from './integrationCatalog';
 import IntegrationCard from './IntegrationCard';
 import ConnectModal from './ConnectModal';
@@ -26,6 +26,7 @@ export default function RequirementSourcesSection({ configs, onRefresh }: Props)
   const { user } = useAuth();
   const toast = useToast();
   const [connectModal, setConnectModal] = useState<CatalogItem | null>(null);
+  const [editValues, setEditValues] = useState<Record<string, string> | undefined>();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -49,6 +50,14 @@ export default function RequirementSourcesSection({ configs, onRefresh }: Props)
   }, [catalog, configs]);
 
   const handleConnect = (cat: CatalogItem) => {
+    setEditValues(undefined);
+    setConnectModal(cat);
+    setError('');
+  };
+
+  /** Reopen the connect form prefilled with the saved (non-secret) config. */
+  const handleEdit = (cat: CatalogItem, configData: Record<string, any> | null | undefined) => {
+    setEditValues(prefillFromConfig(cat, configData));
     setConnectModal(cat);
     setError('');
   };
@@ -111,7 +120,7 @@ export default function RequirementSourcesSection({ configs, onRefresh }: Props)
       <div>
         <h3 className="text-sm font-semibold text-[#1E1B4B] mb-1">Requirement Sources</h3>
         <p className="text-xs text-[#6B7280]">
-          Connect project management and documentation tools to import requirements
+          Import requirements from your project tools.
         </p>
       </div>
 
@@ -131,6 +140,7 @@ export default function RequirementSourcesSection({ configs, onRefresh }: Props)
             onDisconnect={() => handleDisconnect(item.id)}
             onReconnect={() => handleReconnect(item.id)}
             onDelete={() => handleDelete(item.id)}
+            onEdit={item.dbRow ? () => handleEdit(item, item.dbRow?.configData) : undefined}
           />
         ))}
       </div>
@@ -141,9 +151,11 @@ export default function RequirementSourcesSection({ configs, onRefresh }: Props)
           integration={connectModal}
           saving={saving}
           error={error}
+          initialValues={editValues}
           onSave={handleSaveConnect}
           onClose={() => {
             setConnectModal(null);
+            setEditValues(undefined);
             setError('');
           }}
         />

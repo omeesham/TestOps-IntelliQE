@@ -211,8 +211,12 @@ router.post('/publish', async (req: Request, res: Response) => {
     console.log(`[git.publish] deliverable = ${bundle.length} scaffold + ${pageObjectFiles.length} page object(s) + ${specFiles.length} spec(s) + ${docFiles.length} doc(s) + CI workflow`);
 
     // 4. Defaults — branch name, PR title, commit message, PR body.
+    // GitHub publishes go STRAIGHT onto the configured branch (no
+    // intelliqe/tests-* branches, no PR) — the connected branch is the
+    // delivery target. GitLab/Bitbucket keep the branch+MR flow.
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const branch = (requestedBranch && String(requestedBranch).trim()) || `intelliqe/tests-${ts}`;
+    const branch = (requestedBranch && String(requestedBranch).trim())
+      || (coords.provider === 'github' ? config.defaultBranch : `intelliqe/tests-${ts}`);
     const title = (requestedTitle && String(requestedTitle).trim())
       || `IntelliQE: ${specFiles.length} generated test script(s)${testRunId ? ` (run ${testRunId})` : ''}`;
     const commitMessage = (requestedCommitMessage && String(requestedCommitMessage).trim()) || title;

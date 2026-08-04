@@ -191,17 +191,55 @@ function typesClause(types: string[]): string {
 
 // ─── Public API ───
 export async function testConnection(creds: AdoCreds): Promise<{ id: string; name: string }> {
-  const url = `${creds.baseUrl}/_apis/projects/${encodeURIComponent(creds.project)}?api-version=${API_VERSION}`;
-  const resp = await axios.get(url, { headers: authHeaders(creds) });
-  const data = resp.data;
-  // A wrong org/PAT often returns HTML (a sign-in page) with 200 and no id.
-  if (!data || typeof data !== 'object' || !data.id || !data.name) {
+  // Validate with a WIQL query, NOT the projects API: fetching work items only
+  // needs the Work Items (Read) scope we ask users for, whereas
+  // `_apis/projects/{name}` needs the extra Project and Team (Read) scope — a
+  // correctly-scoped PAT would fail validation there (Azure answers with an
+  // HTML sign-in page) despite being perfectly able to fetch work items.
+  const wiqlUrl = `${creds.baseUrl}/${encodeURIComponent(creds.project)}/_apis/wit/wiql?$top=1&api-version=${API_VERSION}`;
+  const resp = await axios.post(
+    wiqlUrl,
+    { query: 'SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project' },
+    { headers: { ...authHeaders(creds), 'Content-Type': 'application/json' }, validateStatus: () => true },
+  );
+
+  const isJson = resp.data && typeof resp.data === 'object';
+  if (resp.status === 200 && isJson && Array.isArray(resp.data.workItems)) {
+    // Connection proven. Best-effort friendly project name (needs the optional
+    // Project and Team (Read) scope — fall back to the name the user typed).
+    try {
+      const p = await axios.get(
+        `${creds.baseUrl}/_apis/projects/${encodeURIComponent(creds.project)}?api-version=${API_VERSION}`,
+        { headers: authHeaders(creds) },
+      );
+      if (p.data && typeof p.data === 'object' && p.data.id && p.data.name) {
+        return { id: String(p.data.id), name: String(p.data.name) };
+      }
+    } catch { /* name lookup is optional */ }
+    return { id: creds.project, name: creds.project };
+  }
+
+  if (resp.status === 401) {
     throw new Error(
-      'That organization/project did not return an Azure DevOps API response. ' +
-      'Check the Organization URL (https://dev.azure.com/your-org), the Project name, and that the PAT has Work Items (Read) scope.',
+      'Azure DevOps rejected the Personal Access Token (401). The PAT is invalid, expired, or was created for a different organization.',
     );
   }
-  return { id: String(data.id), name: String(data.name) };
+  if (resp.status === 404) {
+    throw new Error(
+      `Project "${creds.project}" was not found in organization "${creds.org}". Check the Project name (it is case-insensitive but must match an existing project) and the Organization URL.`,
+    );
+  }
+  if (resp.status === 203 || !isJson) {
+    // Azure answers unauthenticated API calls with an HTML sign-in page
+    // (often status 203) instead of a JSON error.
+    throw new Error(
+      'Azure DevOps returned a sign-in page instead of an API response — the PAT was not accepted for this organization. ' +
+      'Recreate the PAT in this organization (https://dev.azure.com/' + creds.org + ') with at least Work Items (Read) scope, and check it has not expired.',
+    );
+  }
+  throw new Error(
+    `Azure DevOps API error (${resp.status}): ${isJson ? (resp.data.message || JSON.stringify(resp.data).slice(0, 200)) : String(resp.data).slice(0, 200)}`,
+  );
 }
 
 export async function getStories(creds: AdoCreds): Promise<WorkItemSummary[]> {

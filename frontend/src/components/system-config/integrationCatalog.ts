@@ -2,7 +2,6 @@
  * Shared integration catalog — single source of truth for all integrations.
  * Kept lean to match the current SaaS scope:
  *   - Requirement sources (Jira / Confluence / SharePoint)
- *   - Storage providers (Azure Blob / AWS S3 / GCP Storage) for test artifacts
  *   - Git repositories (GitHub / GitLab / Bitbucket) for script delivery
  *   - Notification channels (Outlook email / Slack / Microsoft Teams)
  */
@@ -29,16 +28,13 @@ export const LOGOS: Record<string, string> = {
   'notif-email': 'https://api.iconify.design/selfhst/microsoft-outlook-2018.svg',
   'notif-slack': 'https://api.iconify.design/logos/slack-icon.svg',
   'notif-teams': 'https://api.iconify.design/logos/microsoft-teams.svg',
-  'azure-blob': 'https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/azure/azure-original.svg',
-  'aws-s3': 'https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/amazonwebservices/amazonwebservices-original-wordmark.svg',
-  'gcp-storage': 'https://cdn.simpleicons.org/googlecloud/4285F4',
 };
 
 export const INTEGRATION_CATALOG: CatalogItem[] = [
   // ──── Requirement Sources ────
   {
     id: 'jira', name: 'JIRA', category: 'Project Management', categoryKey: 'requirement-source',
-    description: 'Import user stories and acceptance criteria into the test-generation pipeline',
+    description: 'User stories and acceptance criteria from JIRA',
     comingSoon: false,
     fields: [
       { key: 'jira_url', label: 'JIRA URL', placeholder: 'https://your-org.atlassian.net' },
@@ -48,7 +44,7 @@ export const INTEGRATION_CATALOG: CatalogItem[] = [
   },
   {
     id: 'azure-devops', name: 'Azure DevOps', category: 'Boards & Test Plans', categoryKey: 'requirement-source',
-    description: 'Import user stories, work items, and existing test cases from Azure DevOps (Azure Boards / Test Plans)',
+    description: 'Work items and test cases from Azure Boards',
     comingSoon: false,
     fields: [
       { key: 'org_url', label: 'Organization URL', placeholder: 'https://dev.azure.com/your-org' },
@@ -59,7 +55,7 @@ export const INTEGRATION_CATALOG: CatalogItem[] = [
   },
   {
     id: 'confluence', name: 'Confluence', category: 'Documentation', categoryKey: 'requirement-source',
-    description: 'Import requirements and specifications from Confluence pages',
+    description: 'Requirements and specs from Confluence pages',
     comingSoon: false,
     fields: [
       { key: 'url', label: 'Confluence URL', placeholder: 'https://your-org.atlassian.net/wiki' },
@@ -69,7 +65,7 @@ export const INTEGRATION_CATALOG: CatalogItem[] = [
   },
   {
     id: 'sharepoint', name: 'SharePoint', category: 'Document Management', categoryKey: 'requirement-source',
-    description: 'Import requirements from SharePoint document libraries',
+    description: 'Requirements from SharePoint document libraries',
     comingSoon: false,
     fields: [
       { key: 'siteUrl', label: 'Site URL', placeholder: 'https://org.sharepoint.com/sites/QA' },
@@ -78,41 +74,6 @@ export const INTEGRATION_CATALOG: CatalogItem[] = [
       { key: 'tenantId', label: 'Azure AD Tenant ID', placeholder: '00000000-0000-0000-0000-000000000000' },
       { key: 'clientId', label: 'Application (client) ID', placeholder: '11111111-1111-1111-1111-111111111111' },
       { key: 'clientSecret', label: 'Client Secret', placeholder: 'Client secret value', type: 'password' },
-    ],
-  },
-
-  // ──── Storage Providers (for test artifacts) ────
-  {
-    id: 'azure-blob', name: 'Azure Blob Storage', category: 'Cloud Storage', categoryKey: 'data-source',
-    description: 'Store test artifacts (screenshots, traces, reports) in Azure Blob Storage',
-    comingSoon: false,
-    fields: [
-      { key: 'accountName', label: 'Storage Account', placeholder: 'mystorageaccount' },
-      { key: 'containerName', label: 'Container Name', placeholder: 'intelliqe-artifacts' },
-      { key: 'sasToken', label: 'SAS Token', placeholder: '?sv=2024-11-04&ss=...', type: 'password' },
-      { key: 'internalPath', label: 'Path Prefix (optional)', placeholder: 'runs/' },
-    ],
-  },
-  {
-    id: 'aws-s3', name: 'AWS S3', category: 'Cloud Storage', categoryKey: 'data-source',
-    description: 'Store test artifacts in AWS S3 buckets',
-    comingSoon: false,
-    fields: [
-      { key: 'bucket', label: 'Bucket Name', placeholder: 'my-artifacts-bucket' },
-      { key: 'region', label: 'Region', placeholder: 'us-east-1' },
-      { key: 'accessKeyId', label: 'Access Key ID', placeholder: 'AKIA...' },
-      { key: 'secretAccessKey', label: 'Secret Access Key', placeholder: 'Your secret key', type: 'password' },
-      { key: 'prefix', label: 'Path Prefix (optional)', placeholder: 'runs/' },
-    ],
-  },
-  {
-    id: 'gcp-storage', name: 'GCP Cloud Storage', category: 'Cloud Storage', categoryKey: 'data-source',
-    description: 'Store test artifacts in Google Cloud Storage',
-    comingSoon: false,
-    fields: [
-      { key: 'projectId', label: 'Project ID', placeholder: 'my-gcp-project' },
-      { key: 'bucket', label: 'Bucket Name', placeholder: 'my-bucket' },
-      { key: 'serviceAccountKey', label: 'Service Account Key (JSON)', placeholder: '{ "type": "service_account", ... }', type: 'password' },
     ],
   },
 
@@ -155,7 +116,7 @@ export const INTEGRATION_CATALOG: CatalogItem[] = [
   // ──── Notifications ────
   {
     id: 'notif-email', name: 'Outlook', category: 'Email', categoryKey: 'notification',
-    description: 'Receive test-run pass/fail notifications via Outlook email (SMTP)',
+    description: 'Test-run results delivered by email',
     comingSoon: false,
     fields: [
       { key: 'smtpHost', label: 'SMTP Host', placeholder: 'smtp.office365.com' },
@@ -169,7 +130,7 @@ export const INTEGRATION_CATALOG: CatalogItem[] = [
   },
   {
     id: 'notif-slack', name: 'Slack', category: 'Chat', categoryKey: 'notification',
-    description: 'Post test-run pass/fail alerts to a Slack channel via an incoming webhook',
+    description: 'Test-run alerts in a Slack channel',
     comingSoon: false,
     fields: [
       { key: 'webhook_url', label: 'Incoming Webhook URL', placeholder: 'https://hooks.slack.com/services/T000/B000/XXXXXXXX', type: 'password' },
@@ -179,7 +140,7 @@ export const INTEGRATION_CATALOG: CatalogItem[] = [
   },
   {
     id: 'notif-teams', name: 'Microsoft Teams', category: 'Chat', categoryKey: 'notification',
-    description: 'Send test-run notifications to a Microsoft Teams channel via an incoming webhook',
+    description: 'Test-run alerts in a Teams channel',
     comingSoon: false,
     fields: [
       { key: 'webhook_url', label: 'Incoming Webhook URL', placeholder: 'https://<org>.webhook.office.com/webhookb2/...', type: 'password' },
@@ -189,11 +150,25 @@ export const INTEGRATION_CATALOG: CatalogItem[] = [
 
 ];
 
+/**
+ * Prefill values for editing a saved integration: only the catalog-declared
+ * field keys, and never encrypted secrets (the user re-enters those).
+ */
+export function prefillFromConfig(item: CatalogItem, configData: Record<string, any> | null | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!configData) return out;
+  for (const f of item.fields) {
+    const v = configData[f.key];
+    if (v === undefined || v === null || typeof v === 'object') continue;
+    const s = String(v);
+    if (/^__(?:ENC|AES)__/.test(s)) continue;
+    out[f.key] = s;
+  }
+  return out;
+}
+
 export function getRequirementSources(): CatalogItem[] {
   return INTEGRATION_CATALOG.filter((i) => i.categoryKey === 'requirement-source');
-}
-export function getDataSources(): CatalogItem[] {
-  return INTEGRATION_CATALOG.filter((i) => i.categoryKey === 'data-source');
 }
 export function getGitRepos(): CatalogItem[] {
   return INTEGRATION_CATALOG.filter((i) => i.categoryKey === 'git-repo');

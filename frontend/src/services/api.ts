@@ -207,10 +207,14 @@ export async function getSharePointDocument(itemId: string): Promise<SharePointD
 }
 
 /* ─────────────────────────────────────────────────────────────
-   Git publish — opens a real PR on the connected GitHub/GitLab/Bitbucket
+   Git publish — GitHub commits straight onto the configured branch
+   (mode 'direct'); GitLab/Bitbucket open a real MR/PR (mode 'pr').
    ───────────────────────────────────────────────────────────── */
 export interface GitPublishResult {
   provider: 'github' | 'gitlab' | 'bitbucket';
+  /** 'direct' = committed onto the configured branch; 'pr' = PR/MR opened. */
+  mode: 'pr' | 'direct';
+  /** PR/MR URL in 'pr' mode; the branch's web URL in 'direct' mode. */
   prUrl: string;
   prNumber: number;
   branch: string;
@@ -753,37 +757,6 @@ export async function getJiraStoryDetails(username: string, issueKey: string) {
 export async function disconnectJira(username: string) {
   const { data } = await api.delete('/jira/disconnect', { params: { username } });
   return data;
-}
-
-export interface JiraUser {
-  accountId: string;
-  displayName: string;
-  emailAddress?: string;
-  avatarUrl?: string;
-}
-
-/** Current connected JIRA user — for the "Assign to me" shortcut. */
-export async function getJiraCurrentUser(username: string) {
-  const { data } = await api.get('/jira/me', { params: { username } });
-  return data as JiraUser;
-}
-
-/** Users who can be assigned to a given issue (or the project). */
-export async function getJiraAssignableUsers(username: string, issueKey: string) {
-  const { data } = await api.get('/jira/assignable', { params: { username, issueKey } });
-  return data as JiraUser[];
-}
-
-/** Assign a JIRA issue to a user; returns the resolved assignee. */
-export async function assignJiraStory(username: string, issueKey: string, accountId: string) {
-  const { data } = await api.put('/jira/assign', { issueKey, accountId }, { params: { username } });
-  return data as { ok: boolean; issueKey: string; assignee: JiraUser };
-}
-
-/** Remove the assignee from a JIRA issue (moves it back to unassigned). */
-export async function unassignJiraStory(username: string, issueKey: string) {
-  const { data } = await api.put('/jira/unassign', { issueKey }, { params: { username } });
-  return data as { ok: boolean; issueKey: string };
 }
 
 /* ─────────────────────────────────────────────────────────────

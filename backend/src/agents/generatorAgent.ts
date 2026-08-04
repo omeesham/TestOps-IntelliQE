@@ -29,7 +29,7 @@
  *   3. Titles must be unique and follow the "Verify …" convention.
  */
 import type { TestOpsState, TestCase, TestStep } from './state.js';
-import { runLLM, parseJsonFromResponse, llmForStage } from './claude-runner.js';
+import { runLLM, parseJsonFromResponse, coerceJsonArray, salvageJsonArrayObjects, llmForStage } from './claude-runner.js';
 import type { ExtendedTestPlan } from './plannerAgent.js';
 
 let counter = 0;
@@ -219,21 +219,58 @@ QUALITY RULES (every case must satisfy these — incomplete cases will be reject
 GENERATE NOW. Return the JSON array directly.`;
 }
 
+/**
+ * Extract test cases from a raw model response, tolerating the response shapes
+ * that occur in production: a clean array, an object-wrapped array
+ * ({ "testCases": [...] }), and an array truncated at max_tokens (salvage the
+ * complete elements). Returns [] when nothing usable is present.
+ */
+function extractTestCases(response: string): RawTestCase[] {
+  let parsed: unknown = null;
+  try { parsed = parseJsonFromResponse<unknown>(response); } catch { /* try salvage below */ }
+  let arr = coerceJsonArray<RawTestCase>(parsed);
+  if (!arr || arr.length === 0) arr = salvageJsonArrayObjects<RawTestCase>(response);
+  // Keep only entries that look like test cases — a salvaged array can contain
+  // stray objects (e.g. a nested testSteps entry if the outer parse tore).
+  return (arr || []).filter((e): e is RawTestCase =>
+    !!e && typeof e === 'object' && !Array.isArray(e) &&
+    ('title' in e || 'scenario' in e || 'feature' in e || 'testSteps' in e));
+}
+
 export async function generatorAgent(state: TestOpsState): Promise<TestOpsState> {
   if (!state.parsedRequirements) return state;
   counter = 0;
 
-  // SINGLE pass — no retry, no top-up. The model decides how many cases the
-  // functionality needs (see the coverage mandate in buildPrompt). We give it
-  // the model's full output window so a comprehensive set is never truncated.
-  const response = await runLLM(buildPrompt(state), { maxTokens: 64000, llm: llmForStage(state.llm, 'generator') });
-  const parsed = parseJsonFromResponse<RawTestCase[]>(response);
-
-  if (!Array.isArray(parsed) || parsed.length === 0) {
-    throw new Error('Claude returned no test cases');
+  // ONE generation pass, ONE corrective retry. The retry fires only when the
+  // first response yielded no parseable test cases at all (never to change the
+  // count — the model decides how many cases the functionality needs, see the
+  // coverage mandate in buildPrompt). 64k output keeps big suites untruncated.
+  const llm = llmForStage(state.llm, 'generator');
+  let raw: RawTestCase[] = [];
+  let lastResponseHead = '';
+  for (let attempt = 1; attempt <= 2 && raw.length === 0; attempt++) {
+    const prompt = attempt === 1
+      ? buildPrompt(state)
+      : buildPrompt(state) +
+        '\n\nIMPORTANT: Your previous response could not be parsed as a JSON array of test cases. ' +
+        'Return ONLY the raw JSON array — starting with [ and ending with ] — with no wrapper object, no markdown fences, and no commentary before or after it.';
+    const response = await runLLM(prompt, { maxTokens: 64000, llm });
+    raw = extractTestCases(response);
+    if (raw.length === 0) {
+      lastResponseHead = response.slice(0, 400).replace(/\s+/g, ' ').trim();
+      console.warn(`[generatorAgent] attempt ${attempt}: response yielded no test cases (length=${response.length}). Head: ${lastResponseHead}`);
+    }
   }
 
-  let testCases = parsed.map(coerceTestCase);
+  if (raw.length === 0) {
+    throw new Error(
+      `Test generation produced no test cases after 2 attempts — the model's response was not a usable JSON array. ` +
+      `Response started with: "${lastResponseHead.slice(0, 200)}". ` +
+      `Check the configured model in System Configuration → LLM Configuration and try again.`,
+    );
+  }
+
+  let testCases = raw.map(coerceTestCase);
   // Belt-and-braces for the maxTestCases cap: the prompt asks the model to
   // respect it, but a model overshoot must not leak past an explicit API cap.
   const cap = state.generationOptions?.maxTestCases;

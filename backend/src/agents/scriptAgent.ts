@@ -1,5 +1,18 @@
 import type { TestOpsState, AutomationScript, PageObjectFile, TestCase, ExploredApp } from './state.js';
-import { runLLM, parseJsonFromResponse, llmForStage } from './claude-runner.js';
+import { runLLM, parseJsonFromResponse, coerceJsonArray, salvageJsonArrayObjects, llmForStage } from './claude-runner.js';
+
+/**
+ * Parse an LLM response expected to be a JSON array, tolerating production
+ * shape drift: object-wrapped arrays and responses truncated at max_tokens
+ * (salvages the complete elements). Returns [] when nothing usable parsed.
+ */
+function parseArrayResponse<T>(response: string): T[] {
+  let parsed: unknown = null;
+  try { parsed = parseJsonFromResponse<unknown>(response); } catch { /* salvage below */ }
+  let arr = coerceJsonArray<T>(parsed);
+  if (!arr || arr.length === 0) arr = salvageJsonArrayObjects<T>(response);
+  return arr || [];
+}
 
 /**
  * Script Agent — generates a Page Object Model (POM) Playwright suite.
@@ -222,8 +235,7 @@ Output STRICT valid JSON — literal strings only, no trailing commas.`;
 
     try {
       const response = await runLLM(prompt, { maxTokens: 16000, llm: llmForStage(state.llm, 'script') });
-      const parsed = parseJsonFromResponse<{ module?: string; className?: string; fileName?: string; methods?: string[]; code?: string }[]>(response);
-      if (!Array.isArray(parsed)) return [] as PageObjectFile[];
+      const parsed = parseArrayResponse<{ module?: string; className?: string; fileName?: string; methods?: string[]; code?: string }>(response);
       const out: PageObjectFile[] = [];
       for (let i = 0; i < parsed.length; i++) {
         const entry = parsed[i];
@@ -372,14 +384,16 @@ Strict rules for the \`code\` field:
 ${usageRules}
 - NAVIGATION: the FIRST action of every test must load a page — either \`await page.goto(...)\` in the spec or a page-object method that navigates internally (e.g. a login() that starts with goto). A spec whose first interaction is a fill/click on a never-navigated page fails on a blank screen.
 - ${LOGIN_CONTRACT}
-- WAITS: SPA-safe — auto-waiting locators and \`await expect(locator).toBeVisible({ timeout: 15000 })\`; never \`waitForTimeout\`.
+- WAITS: SPA-safe — auto-waiting locators and \`await expect(locator).toBeVisible({ timeout: 15000 })\`; never \`waitForTimeout\`, never \`waitForLoadState('networkidle')\` or other discouraged/deprecated APIs.
 - ASSERTIONS: functional only. No timing/performance thresholds. For a "performance" case, just assert the page/feature loads.
-- Cover EVERY step in order. Wrap each scenario in a single \`test(...)\`. One entry per input test case; testCaseId MUST match.
+- STRUCTURE: wrap the single \`test(...)\` in a \`test.describe('<feature>')\` block named after the test case's feature; the test title must be the scenario name verbatim.
+- STEP COMMENTS: before the action(s) for each step, add a comment with that step's text (one comment per step — do not duplicate it when a step needs multiple actions).
+- Cover EVERY step in order. One \`test(...)\` per scenario. One entry per input test case; testCaseId MUST match.
 - Output STRICT valid JSON — literal strings only, no trailing commas.`;
 
   const response = await runLLM(prompt, { maxTokens: 20000, llm: llmForStage(state.llm, 'script') });
-  const parsed = parseJsonFromResponse<AiSpecResponse[]>(response);
-  if (!Array.isArray(parsed) || parsed.length === 0) throw new Error('LLM returned no specs for batch');
+  const parsed = parseArrayResponse<AiSpecResponse>(response);
+  if (parsed.length === 0) throw new Error(`LLM returned no specs for batch (response started with: "${response.slice(0, 200).replace(/\s+/g, ' ')}")`);
 
   const byId = new Map<string, AiSpecResponse>();
   for (const e of parsed) if (e && typeof e.code === 'string' && e.testCaseId) byId.set(e.testCaseId, e);

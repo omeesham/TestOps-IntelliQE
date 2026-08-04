@@ -4,10 +4,6 @@ import {
   testConnection,
   getStories,
   getStory,
-  getCurrentUser,
-  getAssignableUsers,
-  assignIssue,
-  unassignIssue,
   getCredsForTenant,
   saveCredsForTenant,
   deleteCredsForTenant,
@@ -139,114 +135,6 @@ router.get('/story/:key', async (req: Request, res: Response) => {
     console.error(`JIRA story detail error [${req.params.key}]:`, {
       status, code: err?.code, data: err?.response?.data, message: err?.message,
     });
-    res.status(status || 500).json({ error: detail, status, code: err?.code ?? null });
-  }
-});
-
-// GET /api/jira/me — Current connected JIRA user (for "Assign to me")
-router.get('/me', async (req: Request, res: Response) => {
-  try {
-    const user = req.user!;
-    const creds = await getCredsForTenant(user.tenantId);
-    if (!creds) { res.status(400).json({ error: 'Not connected to JIRA. Connect first.' }); return; }
-
-    const me = await getCurrentUser(creds);
-    res.json(me);
-  } catch (err: any) {
-    const status = err?.response?.status ?? null;
-    const detail =
-      err?.response?.data?.errorMessages?.join('; ') ||
-      err?.response?.data?.message ||
-      (err?.response?.data ? JSON.stringify(err.response.data) : '') ||
-      err?.code ||
-      err?.message ||
-      'Unknown error';
-    console.error('JIRA me error:', { status, code: err?.code, data: err?.response?.data, message: err?.message });
-    res.status(status || 500).json({ error: detail, status, code: err?.code ?? null });
-  }
-});
-
-// GET /api/jira/assignable — Users assignable to an issue/project (tenant-scoped)
-router.get('/assignable', async (req: Request, res: Response) => {
-  try {
-    const user = req.user!;
-    const issueKey = typeof req.query.issueKey === 'string' ? req.query.issueKey : undefined;
-    const creds = await getCredsForTenant(user.tenantId);
-    if (!creds) { res.status(400).json({ error: 'Not connected to JIRA. Connect first.' }); return; }
-
-    const users = await getAssignableUsers(creds, issueKey);
-    res.json(users);
-  } catch (err: any) {
-    const status = err?.response?.status ?? null;
-    const detail =
-      err?.response?.data?.errorMessages?.join('; ') ||
-      err?.response?.data?.message ||
-      (err?.response?.data ? JSON.stringify(err.response.data) : '') ||
-      err?.code ||
-      err?.message ||
-      'Unknown error';
-    console.error('JIRA assignable error:', { status, code: err?.code, data: err?.response?.data, message: err?.message });
-    res.status(status || 500).json({ error: detail, status, code: err?.code ?? null });
-  }
-});
-
-// PUT /api/jira/assign — Assign an issue to a user (tenant-scoped)
-router.put('/assign', async (req: Request, res: Response) => {
-  try {
-    const user = req.user!;
-    const { issueKey, accountId } = req.body || {};
-    if (!issueKey || !accountId) {
-      res.status(400).json({ error: 'issueKey and accountId are required' });
-      return;
-    }
-    const creds = await getCredsForTenant(user.tenantId);
-    if (!creds) { res.status(400).json({ error: 'Not connected to JIRA. Connect first.' }); return; }
-
-    await assignIssue(creds, issueKey, accountId);
-    // Return the resolved assignee so the client can update its list without a refetch.
-    const users = await getAssignableUsers(creds, issueKey).catch(() => []);
-    const assignee = users.find((u) => u.accountId === accountId) || { accountId, displayName: accountId };
-    console.log(`JIRA assigned: tenant=${user.tenantId}, issue=${issueKey}, accountId=${accountId}`);
-    res.json({ ok: true, issueKey, assignee });
-  } catch (err: any) {
-    const status = err?.response?.status ?? null;
-    const detail =
-      err?.response?.data?.errorMessages?.join('; ') ||
-      err?.response?.data?.message ||
-      (err?.response?.data ? JSON.stringify(err.response.data) : '') ||
-      err?.code ||
-      err?.message ||
-      'Unknown error';
-    console.error('JIRA assign error:', { status, code: err?.code, data: err?.response?.data, message: err?.message });
-    res.status(status || 500).json({ error: detail, status, code: err?.code ?? null });
-  }
-});
-
-// PUT /api/jira/unassign — Remove the assignee from an issue (tenant-scoped)
-router.put('/unassign', async (req: Request, res: Response) => {
-  try {
-    const user = req.user!;
-    const { issueKey } = req.body || {};
-    if (!issueKey) {
-      res.status(400).json({ error: 'issueKey is required' });
-      return;
-    }
-    const creds = await getCredsForTenant(user.tenantId);
-    if (!creds) { res.status(400).json({ error: 'Not connected to JIRA. Connect first.' }); return; }
-
-    await unassignIssue(creds, issueKey);
-    console.log(`JIRA unassigned: tenant=${user.tenantId}, issue=${issueKey}`);
-    res.json({ ok: true, issueKey });
-  } catch (err: any) {
-    const status = err?.response?.status ?? null;
-    const detail =
-      err?.response?.data?.errorMessages?.join('; ') ||
-      err?.response?.data?.message ||
-      (err?.response?.data ? JSON.stringify(err.response.data) : '') ||
-      err?.code ||
-      err?.message ||
-      'Unknown error';
-    console.error('JIRA unassign error:', { status, code: err?.code, data: err?.response?.data, message: err?.message });
     res.status(status || 500).json({ error: detail, status, code: err?.code ?? null });
   }
 });

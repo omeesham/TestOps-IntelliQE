@@ -367,6 +367,8 @@ Rules:
 - Prefer fixing selectors/navigation in the page object over inlining them in the spec.
 - Prefer getByLabel/getByPlaceholder/getByRole(name)/getByText grounded in the real DOM over brittle CSS; add an explicit \`{ timeout: 20000 }\` only where a slow element genuinely needs it.
 - NEVER delete, skip (test.skip/fixme), or weaken assertions to force a pass — a healed test must still verify the scenario's expected result.
+- NEVER wait for 'networkidle' (\`waitForLoadState('networkidle')\`) or use other discouraged/deprecated APIs (\`waitForTimeout\`, \`waitForNavigation\`, \`page.$\`) — rely on locator auto-waiting and web-first \`expect(...)\` assertions.
+- For inherently dynamic data (timestamps, counters, generated ids), use regular expressions to produce resilient locators/assertions instead of exact literals that change every run.
 - Use the EXACT credentials from APPLICATION UNDER TEST when the flow signs in; never invent or placeholder them.`;
 
       const response = await runLLM(prompt, { maxTokens: 12000, llm: llmForStage(state.llm, 'heal') });

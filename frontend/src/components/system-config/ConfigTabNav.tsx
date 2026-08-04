@@ -1,5 +1,5 @@
 import {
-  Settings, AppWindow, FileText, Database,
+  Settings, AppWindow, FileText,
   GitBranch, Bell, BrainCircuit, Volume2,
 } from 'lucide-react';
 
@@ -7,7 +7,6 @@ export type TabKey =
   | 'general'
   | 'application'
   | 'requirements'
-  | 'data-sources'
   | 'git-repos'
   | 'notifications'
   | 'llm-config'
@@ -23,7 +22,6 @@ const TABS: Tab[] = [
   { key: 'general',       label: 'General Settings',       icon: Settings  },
   { key: 'application',   label: 'Application Setup',      icon: AppWindow },
   { key: 'requirements',  label: 'Requirement Sources',    icon: FileText  },
-  { key: 'data-sources',  label: 'Data Sources',           icon: Database  },
   { key: 'git-repos',     label: 'Code Repositories',      icon: GitBranch },
   { key: 'notifications', label: 'Notifications',          icon: Bell      },
   { key: 'llm-config',    label: 'LLM Configuration',      icon: BrainCircuit },

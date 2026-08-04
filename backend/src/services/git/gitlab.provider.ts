@@ -113,6 +113,7 @@ export const gitlabProvider: GitProvider = {
       );
       return {
         provider: 'gitlab',
+        mode: 'pr',
         prUrl: (mr as any).web_url,
         prNumber: (mr as any).iid,
         branch: opts.branch,

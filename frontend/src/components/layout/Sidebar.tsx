@@ -22,6 +22,10 @@ const ALL: UserRole[] = ['admin', 'qa_engineer', 'data_analyst'];
 // Format: V<build>-DDMMYY (e.g. "V42-150626"). Falls back to "dev" locally.
 const APP_VERSION = (import.meta.env.VITE_APP_VERSION as string | undefined) || 'dev';
 
+// Pages temporarily hidden from the UI (code kept intact). Remove a path from
+// this list to bring its nav item back. Keep in sync with HIDDEN_PAGES in App.tsx.
+const HIDDEN_PATHS: string[] = ['/agent-performance', '/feature-toggles'];
+
 const navItems: NavItem[] = [
   { name: 'Chat',                  path: '/chat',                 icon: Home,            roles: ALL },
   { name: 'Generated Test Cases',  path: '/generated-tests',      icon: ClipboardList,   roles: ALL },
@@ -59,6 +63,7 @@ export default function Sidebar() {
   };
 
   const visibleItems = navItems.filter((item) => {
+    if (HIDDEN_PATHS.includes(item.path)) return false;
     if (!item.roles.includes(role)) return false;
     if (allowedPaths && !allowedPaths.includes(item.path)) return false;
     // Feature toggle gating: hide nav items whose feature is disabled for this role.

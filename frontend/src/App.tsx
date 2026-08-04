@@ -16,6 +16,11 @@ import BugTrackerPage from '@/pages/BugTrackerPage';
 import FeatureTogglesPage from '@/pages/FeatureTogglesPage';
 import AgentPerformancePage from '@/pages/AgentPerformancePage';
 
+// Feature Toggles + Agent Performance are temporarily hidden from the UI.
+// Flip to true to restore their routes (and remove the matching paths from
+// HIDDEN_PATHS in components/layout/Sidebar.tsx to restore the nav items).
+const SHOW_HIDDEN_PAGES = false;
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth();
   if (!isAuthenticated) return <Navigate to="/login" replace />;
@@ -59,10 +64,13 @@ function AppRoutes() {
         <Route path="/bug-tracker" element={<FeatureRoute feature="bug-tracker" name="Bug Tracker"><BugTrackerPage /></FeatureRoute>} />
         <Route path="/user-management" element={<FeatureRoute feature="user-management" name="User Management"><UserManagementPage /></FeatureRoute>} />
         <Route path="/system-configuration" element={<FeatureRoute feature="system-configuration" name="System Configuration"><SystemConfigurationPage /></FeatureRoute>} />
-        {/* Feature Toggles dashboard — admin control panel, never feature-gated */}
-        <Route path="/feature-toggles" element={<FeatureTogglesPage />} />
-        {/* Agent Performance monitor — read-only telemetry, not feature-gated */}
-        <Route path="/agent-performance" element={<AgentPerformancePage />} />
+        {/* Feature Toggles dashboard — admin control panel, never feature-gated.
+            Temporarily hidden from the UI (set SHOW_HIDDEN_PAGES = true to restore;
+            keep in sync with HIDDEN_PATHS in Sidebar.tsx). */}
+        {SHOW_HIDDEN_PAGES && <Route path="/feature-toggles" element={<FeatureTogglesPage />} />}
+        {/* Agent Performance monitor — read-only telemetry, not feature-gated.
+            Temporarily hidden from the UI (see SHOW_HIDDEN_PAGES above). */}
+        {SHOW_HIDDEN_PAGES && <Route path="/agent-performance" element={<AgentPerformancePage />} />}
         {/* Backward-compat redirects */}
         <Route path="/configurations" element={<Navigate to="/system-configuration" replace />} />
         <Route path="/settings" element={<Navigate to="/system-configuration" replace />} />

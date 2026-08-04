@@ -40,7 +40,12 @@ export interface GitTestResult {
 /** Result of a successful publish. */
 export interface PublishResult {
   provider: 'github' | 'gitlab' | 'bitbucket';
+  /** 'direct' = files were committed straight onto the configured branch (no
+   *  PR); 'pr' = a new branch was created and a PR/MR opened. */
+  mode: 'pr' | 'direct';
+  /** PR/MR URL in 'pr' mode; the branch's web URL in 'direct' mode. */
   prUrl: string;
+  /** PR/MR number in 'pr' mode; 0 in 'direct' mode. */
   prNumber: number;
   branch: string;
   /** Files actually committed (provider may dedupe or skip empty entries) */
