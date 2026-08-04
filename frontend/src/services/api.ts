@@ -373,11 +373,30 @@ function targetBody(t?: TargetOverride): Record<string, any> {
  *  cases. Runs as a detached server job + polling: the default LIVE generator
  *  drives a real browser through every test case (verifying each locator by
  *  executing it), which takes well past any single-request ingress timeout. */
-export async function generateScripts(testCases: any[], appId?: string, target?: TargetOverride) {
+export async function generateScripts(testCases: any[], appId?: string, target?: TargetOverride, control?: PipelineControl) {
   const body = { testCases, appId, ...targetBody(target) };
   const { data: started } = await api.post('/pipeline-flow/scripts/start', body, { timeout: 60_000 });
   // Live generation is slower than batch — allow up to 30 minutes of polling.
-  return pollPipelineJob<{ scripts: GeneratedScript[]; pageObjects: GeneratedPageObject[]; mode?: string }>(started.jobId, 30 * 60_000);
+  return pollPipelineJob<{ scripts: GeneratedScript[]; pageObjects: GeneratedPageObject[]; mode?: string }>(started.jobId, 30 * 60_000, control);
+}
+
+/**
+ * Cooperative run control for the workflow's long-running stages. The ChatPage
+ * pipeline sidebar exposes Pause / Resume / Stop; the polling loop below checks
+ * this each tick so the user can pause the UI's advancement (the detached server
+ * job keeps running, but results are held until Resume) or stop the flow outright.
+ */
+export interface PipelineControl {
+  isPaused: () => boolean;
+  isStopped: () => boolean;
+}
+
+/** Thrown by pollPipelineJob when the user stops the pipeline mid-stage. */
+export class PipelineStoppedError extends Error {
+  constructor() {
+    super('Pipeline stopped by user');
+    this.name = 'PipelineStoppedError';
+  }
 }
 
 /**
@@ -388,13 +407,30 @@ export async function generateScripts(testCases: any[], appId?: string, target?:
  * the results never reached the UI. Short poll requests are immune to that.
  * A few consecutive poll failures (network blips, brief backend restarts
  * during dev) are tolerated before giving up.
+ *
+ * `control` lets the workflow UI pause (hold polling without advancing) or stop
+ * (abort the wait) the stage. Pausing extends the deadline so a paused run never
+ * times out while it's deliberately held.
  */
-async function pollPipelineJob<T>(jobId: string, deadlineMs: number = PIPELINE_TIMEOUT_MS): Promise<T> {
-  const deadline = Date.now() + deadlineMs;
+async function pollPipelineJob<T>(
+  jobId: string,
+  deadlineMs: number = PIPELINE_TIMEOUT_MS,
+  control?: PipelineControl,
+): Promise<T> {
+  let deadline = Date.now() + deadlineMs;
   let consecutiveErrors = 0;
   for (;;) {
+    if (control?.isStopped()) throw new PipelineStoppedError();
+    // Held by the user: don't poll or advance, and keep the deadline ahead so a
+    // paused stage doesn't expire while it's intentionally on hold.
+    if (control?.isPaused()) {
+      await new Promise((r) => setTimeout(r, 1_000));
+      deadline = Date.now() + deadlineMs;
+      continue;
+    }
     if (Date.now() > deadline) throw new Error('Timed out waiting for the stage to finish.');
     await new Promise((r) => setTimeout(r, 4_000));
+    if (control?.isStopped()) throw new PipelineStoppedError();
     let data: any;
     try {
       ({ data } = await api.get(`/pipeline-flow/jobs/${encodeURIComponent(jobId)}`, { timeout: 30_000 }));
@@ -416,7 +452,7 @@ async function pollPipelineJob<T>(jobId: string, deadlineMs: number = PIPELINE_T
  *  Pass testRunId (the saved run) so the Allure report is built for that run and
  *  shows up on the Reports page. `target` supplies an inline URL when no app is configured.
  *  Runs as a detached server job + polling so long Playwright runs survive ingress timeouts. */
-export async function executePipeline(testCases: any[], scripts: any[], pageObjects: any[] = [], appId?: string, testRunId?: string, target?: TargetOverride) {
+export async function executePipeline(testCases: any[], scripts: any[], pageObjects: any[] = [], appId?: string, testRunId?: string, target?: TargetOverride, control?: PipelineControl) {
   const body = { testCases, scripts, pageObjects, appId, testRunId, ...targetBody(target) };
   const { data: started } = await api.post('/pipeline-flow/execute/start', body, { timeout: 60_000 });
   return pollPipelineJob<{
@@ -425,7 +461,7 @@ export async function executePipeline(testCases: any[], scripts: any[], pageObje
     reportUrl?: string;
     app: { name: string; targetUrl?: string } | null;
     summary: { total: number; passed: number; failed: number; executed: boolean; reason?: string };
-  }>(started.jobId);
+  }>(started.jobId, PIPELINE_TIMEOUT_MS, control);
 }
 
 /** Stage 5 — heal failing tests then re-execute the suite (detached job + polling). */
@@ -437,6 +473,7 @@ export async function healPipeline(
   appId?: string,
   testRunId?: string,
   target?: TargetOverride,
+  control?: PipelineControl,
 ) {
   const body = { testCases, scripts, executionDetails, pageObjects, appId, testRunId, ...targetBody(target) };
   const { data: started } = await api.post('/pipeline-flow/heal/start', body, { timeout: 60_000 });
@@ -450,7 +487,7 @@ export async function healPipeline(
     reportUrl?: string;
     app: { name: string; targetUrl?: string } | null;
     summary: { total: number; passed: number; failed: number; executed: boolean; reason?: string };
-  }>(started.jobId, 30 * 60_000);
+  }>(started.jobId, 30 * 60_000, control);
 }
 
 /**

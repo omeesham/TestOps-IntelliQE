@@ -38,6 +38,7 @@ import {
   BarChart3, Activity, Workflow, Box, Pencil, Save, ChevronLeft, ChevronRight,
   Play, Heart, GitBranch, Terminal, AlertTriangle, Wrench, ExternalLink, Copy, Package,
   SkipForward, XCircle, Volume2, VolumeX, Settings, MoreHorizontal, Github, LifeBuoy,
+  Pause, Square,
 } from 'lucide-react';
 import { initTTS, speak, speakAsync, waitForSpeech, waitForVoices, stopSpeaking, isTTSEnabled, toggleTTS } from '@/utils/tts';
 import { useToast } from '@/components/feedback/ToastProvider';
@@ -377,6 +378,55 @@ export default function ChatPage() {
     const id = setInterval(() => setNowTick(Date.now()), 1000);
     return () => clearInterval(id);
   }, [pipelineStages]);
+
+  // ── Workflow run controls (Start / Pause / Stop) ──
+  // The long-running stages (script generation, execution, healing) run as
+  // detached server jobs the UI polls. `pipelineControl` gates that polling so
+  // the user can pause the workflow (hold advancement without losing the run) or
+  // stop it (discard the active flow). A ref mirror is read synchronously by the
+  // poller; the state drives the sidebar buttons. 'idle' = run normally.
+  type PipelineControlState = 'idle' | 'paused' | 'stopped';
+  const [pipelineControl, setPipelineControl] = useState<PipelineControlState>('idle');
+  const pipelineControlRef = useRef<PipelineControlState>('idle');
+  const setControl = (v: PipelineControlState) => { pipelineControlRef.current = v; setPipelineControl(v); };
+  // Stable controller handed to the api layer — reads the ref so it always sees
+  // the latest value without being re-created on every render.
+  const pipelineController = useRef({
+    isPaused: () => pipelineControlRef.current === 'paused',
+    isStopped: () => pipelineControlRef.current === 'stopped',
+  }).current;
+
+  // Only the detached-job stages poll the server, so only those can be paused
+  // cooperatively. Stop works for any stage (it just discards the flow).
+  const POLLER_STAGE_KEYS = new Set(['script-gen', 'execution', 'auto-healing']);
+  const pipelineRunning = pipelineStages.some(s => s.status === 'running');
+  const runningPollerStage = pipelineStages.some(s => s.status === 'running' && POLLER_STAGE_KEYS.has(s.key));
+  const canPause = runningPollerStage && pipelineControl !== 'paused';
+  const pipelineActive = pipelineRunning || pipelineControl === 'paused';
+
+  const pausePipeline = () => { if (runningPollerStage) setControl('paused'); };
+  const resumePipeline = () => { if (pipelineControl === 'paused') setControl('idle'); };
+  const stopPipeline = () => {
+    // Discard the active flow: bumping flowIdRef makes any in-flight handler
+    // continuation drop its result (same guard reset() uses), and the poller
+    // sees isStopped() and aborts its wait.
+    flowIdRef.current += 1;
+    setControl('stopped');
+    setBusy(false);
+    // Freeze the visual pipeline — mark any running stage as stopped.
+    setPipelineStages(prev => prev.map(s => s.status === 'running'
+      ? { ...s, status: 'skipped', detail: 'Stopped by user', durationMs: s.startedAt ? Date.now() - s.startedAt : s.durationMs }
+      : s));
+    push('tessa', 'Pipeline stopped. You can start a new test or continue from the current results.');
+    // Leave any spinner screen so nothing is left hanging — drop back to the
+    // last screen the user can act from for whichever stage was interrupted.
+    setStep(prev => {
+      if (prev === 'executing') return 'script-review';
+      if (prev === 'healing') return 'execution-results';
+      if (prev === 'script-generating') return 'results';
+      return prev;
+    });
+  };
 
   // Script generation results (POM: specs + shared page objects)
   const [generatedScripts, setGeneratedScripts] = useState<{ testCaseId: string; fileName: string; code: string; path?: string; uses?: string[] }[]>([]);
@@ -1391,6 +1441,7 @@ export default function ChatPage() {
     push('tessa', `Generating automation scripts for ${testCases.length} test cases...`);
     await waitForSpeech(); // Let Tessa finish speaking before starting execution
     if (flowId !== flowIdRef.current) return; // flow discarded while speaking
+    setControl('idle'); // clear any prior stop/pause before a fresh run
     setStep('script-generating');
 
     const steps: AgentStep[] = [{ name: 'Script Writer', status: 'pending' as const, detail: 'Analyzing test cases and producing automation scripts' }];
@@ -1413,7 +1464,7 @@ export default function ChatPage() {
     let pageObjects: any[] = generatedPageObjects;
     if (!covered) {
       try {
-        const scriptRes = await generateScripts(testCases, selectedAppId || undefined);
+        const scriptRes = await generateScripts(testCases, selectedAppId || undefined, undefined, pipelineController);
         if (flowId !== flowIdRef.current) return; // flow discarded while generating
         scripts = (scriptRes?.scripts || []).map((s: any) => ({
           testCaseId: s.testCaseId,
@@ -1470,6 +1521,7 @@ export default function ChatPage() {
     push('tessa', 'Executing your test suite in the staging environment...');
     await waitForSpeech();
     if (flowId !== flowIdRef.current) return; // flow discarded while speaking
+    setControl('idle'); // clear any prior stop/pause before a fresh run
     setStep('executing');
 
     // Pipeline: Stage 4 → running
@@ -1497,7 +1549,7 @@ export default function ChatPage() {
     try {
       // Pass the saved run id so the Allure report is built for that run and
       // appears on the Reports page.
-      execRes = await executePipeline(results?.testCases || [], generatedScripts, generatedPageObjects, selectedAppId || undefined, savedTestRunId || undefined);
+      execRes = await executePipeline(results?.testCases || [], generatedScripts, generatedPageObjects, selectedAppId || undefined, savedTestRunId || undefined, undefined, pipelineController);
     } catch (err) {
       console.error('Execute tests failed:', err);
     }
@@ -1598,6 +1650,7 @@ export default function ChatPage() {
 
     const attempt = healingAttempt + 1;
     setHealingAttempt(attempt);
+    setControl('idle'); // clear any prior stop/pause before a fresh heal run
     setStep('healing');
 
     push('tessa', `Auto-healing attempt ${attempt}: fixing ${failedTests.length} failing test(s)...`);
@@ -1620,7 +1673,7 @@ export default function ChatPage() {
         status: r.status,
         error: r.error,
       }));
-      healRes = await healPipeline(results?.testCases || [], generatedScripts, detailsPayload, generatedPageObjects, selectedAppId || undefined, savedTestRunId || undefined);
+      healRes = await healPipeline(results?.testCases || [], generatedScripts, detailsPayload, generatedPageObjects, selectedAppId || undefined, savedTestRunId || undefined, undefined, pipelineController);
     } catch (err: any) {
       // Surface the REAL reason instead of a generic "could not be reached".
       // The backend also logs it as "[pipeline-flow/heal] error: …".
@@ -1685,7 +1738,7 @@ export default function ChatPage() {
     if (newFailed > 0 && attempt < 2) {
       push('tessa', `Re-execution complete: ${newFailed} test(s) are still failing. You can run another auto-healing cycle or continue to the report.`);
     } else if (newFailed > 0) {
-      push('tessa', `Maximum auto-healing attempts reached — ${newFailed} test(s) are still failing. Please continue to the report.`);
+      push('tessa', `Maximum auto-healing attempts reached — ${newFailed} test(s) are still failing. Use "Report to Support" to notify your team (email / Slack / Teams), or continue to the report.`);
     } else {
       push('tessa', 'All tests are passing after auto-healing! You can now generate the execution report.');
     }
@@ -2145,6 +2198,7 @@ export default function ChatPage() {
     setSelectedAppId(null);
     setPendingGenRequirements('');
     setPipelineStages(PIPELINE_STAGES.map(s => ({ key: s.key, status: 'pending' as const, detail: 'Pending' })));
+    setControl('idle');
     setGeneratedScripts([]);
     setSelectedScriptIdx(0);
     setExecutionResults([]);
@@ -3520,9 +3574,12 @@ export default function ChatPage() {
               escalate failures/flaky tests to the team's notification channel.
               Both are available as soon as the agents finish. */}
           {(() => {
-            const healedIds = new Set(healingLog.filter((l) => l.result === 'fixed').map((l) => l.testCaseId));
-            const hasEscalatable = executionResults.some((r) => r.status === 'failed')
-              || executionResults.some((r) => r.status === 'passed' && healedIds.has(r.testCaseId));
+            // Escalation to Support is offered only once auto-healing has run its
+            // full course (2 attempts) and tests are STILL failing. Before that
+            // the user is steered to Auto-Heal instead — the heal button and the
+            // support button are mutually exclusive by design.
+            const healExhausted = healingAttempt >= 2 && executionSummary.failed > 0;
+            const hasEscalatable = healExhausted;
             return (
               <div className="flex gap-2">
                 <button
@@ -3832,12 +3889,57 @@ export default function ChatPage() {
     <aside className="w-72 flex-shrink-0 border-l border-[#DDD6FE]/60 bg-white/90 backdrop-blur-sm overflow-y-auto">
       <div className="p-5">
         {/* Title */}
-        <div className="flex items-center gap-2 mb-6">
+        <div className="flex items-center gap-2 mb-4">
           <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#7C3AED] to-[#6366F1] flex items-center justify-center">
             <Workflow className="w-3.5 h-3.5 text-white" />
           </div>
           <h3 className="text-sm font-semibold text-[#1E1B4B]">AI Pipeline Progress</h3>
+          {pipelineActive && (
+            <span className={`ml-auto text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+              pipelineControl === 'paused'
+                ? 'bg-amber-50 text-amber-600 border border-amber-200'
+                : 'bg-emerald-50 text-emerald-600 border border-emerald-200'
+            }`}>
+              {pipelineControl === 'paused' ? 'Paused' : 'Running'}
+            </span>
+          )}
         </div>
+
+        {/* Run controls — Pause / Resume / Stop the active workflow. Shown only
+            while a stage is running (or held), since there's nothing to control
+            otherwise. Pause holds the UI's advancement without losing the
+            server-side run; Stop discards the active flow. */}
+        {pipelineActive && (
+          <div className="flex items-center gap-2 mb-5">
+            {pipelineControl === 'paused' ? (
+              <button
+                onClick={resumePipeline}
+                className="flex-1 inline-flex items-center justify-center gap-1.5 py-1.5 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:opacity-90 text-white text-xs font-medium rounded-lg transition-all"
+                title="Resume the workflow"
+              >
+                <Play className="w-3.5 h-3.5" />Resume
+              </button>
+            ) : (
+              <button
+                onClick={pausePipeline}
+                disabled={!canPause}
+                className="flex-1 inline-flex items-center justify-center gap-1.5 py-1.5 bg-white border border-amber-300 text-amber-600 hover:bg-amber-50 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-medium rounded-lg transition-all"
+                title={canPause
+                  ? 'Pause the workflow (the current stage keeps running on the server)'
+                  : 'This stage cannot be paused — you can still stop the run'}
+              >
+                <Pause className="w-3.5 h-3.5" />Pause
+              </button>
+            )}
+            <button
+              onClick={stopPipeline}
+              className="flex-1 inline-flex items-center justify-center gap-1.5 py-1.5 bg-white border border-rose-300 text-rose-600 hover:bg-rose-50 text-xs font-medium rounded-lg transition-all"
+              title="Stop the workflow and discard the active run"
+            >
+              <Square className="w-3.5 h-3.5" />Stop
+            </button>
+          </div>
+        )}
 
         {/* Stages */}
         <div className="relative">

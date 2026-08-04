@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import pool from '../db.js';
 import * as XLSX from 'xlsx';
 import { listReports, readAllureResults, getReportStats, readBasicReport, statsFromResults, SAFE_RUN_ID_RE } from '../services/allure-report.service.js';
+import { listBlobReports } from '../services/report-storage.service.js';
 
 const router = Router();
 
@@ -185,7 +186,16 @@ router.get('/history', async (req: Request, res: Response) => {
     const typeFilter = req.query.type ? String(req.query.type).toLowerCase() : ''; // 'allure' | 'basic'
     const search = req.query.search ? String(req.query.search).toLowerCase() : '';
 
-    const reports = await listReports(user.tenantId);
+    // Local filesystem reports, unioned with any reports that live only in cloud
+    // blob storage (e.g. a report built before a redeploy wiped the ephemeral
+    // container FS, or on another replica). Local copies win on runId collision.
+    const localReports = await listReports(user.tenantId);
+    const blobReports = await listBlobReports(user.tenantId);
+    const byRunId = new Map<string, typeof localReports[number]>();
+    for (const r of blobReports) byRunId.set(r.runId, r);
+    for (const r of localReports) byRunId.set(r.runId, r); // local overrides blob
+    const reports = Array.from(byRunId.values())
+      .sort((a, b) => (Date.parse(b.generatedAt) || 0) - (Date.parse(a.generatedAt) || 0));
 
     // Enrich with run metadata (source/story/module) for report dirs that map to
     // a saved test_runs row (UUID dirs). Ephemeral chat runs (chat-<ts>) have no

@@ -2,7 +2,8 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs/promises';
-import { getOrGenerateRealReport, getReportStatus, getLatestReport, REPORTS_ROOT, SAFE_RUN_ID_RE } from '../services/allure-report.service.js';
+import { getOrGenerateRealReport, getReportStatus, getLatestReport, getReportStats, REPORTS_ROOT, SAFE_RUN_ID_RE } from '../services/allure-report.service.js';
+import { getReportFileFromBlob, contentTypeFor, mirrorReportToBlob } from '../services/report-storage.service.js';
 import { PlaywrightRunError } from '../services/playwright-runner.service.js';
 import { authMiddleware } from '../middleware/auth.middleware.js';
 
@@ -58,6 +59,12 @@ router.post('/generate', authMiddleware, async (req: Request, res: Response) => 
     try {
       const result = await promise;
       const scope = runId;
+      // Persist the regenerated report to cloud storage (Azure Blob) so it
+      // survives the ephemeral container FS. No-op unless a cloud
+      // STORAGE_PROVIDER is configured; never blocks the response.
+      void getReportStats(user.tenantId, scope)
+        .then((stats) => mirrorReportToBlob(user.tenantId, scope, stats))
+        .catch(() => {});
       res.json({
         ok: true,
         generatedAt: result.generatedAt,
@@ -150,32 +157,8 @@ router.get('/report/:tenantId/:scope/{*filePath}', async (req: Request, res: Res
       return;
     }
 
-    // Check file exists
-    try {
-      await fs.access(requestedFile);
-    } catch {
-      res.status(404).json({ error: 'File not found' });
-      return;
-    }
-
-    // Set content type based on extension
-    const ext = path.extname(requestedFile).toLowerCase();
-    const mimeTypes: Record<string, string> = {
-      '.html': 'text/html',
-      '.css': 'text/css',
-      '.js': 'application/javascript',
-      '.json': 'application/json',
-      '.png': 'image/png',
-      '.svg': 'image/svg+xml',
-      '.ico': 'image/x-icon',
-      '.woff': 'font/woff',
-      '.woff2': 'font/woff2',
-      '.ttf': 'font/ttf',
-    };
-
-    if (mimeTypes[ext]) {
-      res.setHeader('Content-Type', mimeTypes[ext]);
-    }
+    const contentType = contentTypeFor(requestedFile);
+    if (contentType) res.setHeader('Content-Type', contentType);
 
     // These are self-contained reports (Playwright HTML / Allure) that rely on
     // INLINE scripts + styles. In production, helmet's default CSP (script-src
@@ -187,7 +170,26 @@ router.get('/report/:tenantId/:scope/{*filePath}', async (req: Request, res: Res
     res.removeHeader('Cross-Origin-Embedder-Policy');
     res.removeHeader('Cross-Origin-Opener-Policy');
 
-    res.sendFile(requestedFile);
+    // Prefer the local copy; fall back to cloud blob storage when the local
+    // filesystem no longer has it (ephemeral container FS after a redeploy, or
+    // a report built on another replica). Blob fallback is a no-op locally.
+    let localExists = true;
+    try {
+      await fs.access(requestedFile);
+    } catch {
+      localExists = false;
+    }
+    if (localExists) {
+      res.sendFile(requestedFile);
+      return;
+    }
+
+    const blob = await getReportFileFromBlob(tenantId, scope, filePath);
+    if (blob) {
+      res.send(blob);
+      return;
+    }
+    res.status(404).json({ error: 'File not found' });
   } catch (err: any) {
     console.error('Allure serve error:', err.message);
     res.status(500).json({ error: 'Failed to serve report file' });
