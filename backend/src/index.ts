@@ -35,6 +35,7 @@ import sharepointRoutes from './routes/sharepoint.routes.js';
 import testCasesRoutes from './routes/test-cases.routes.js';
 import configurationsRoutes from './routes/configurations.routes.js';
 import reportsRoutes from './routes/reports.routes.js';
+import storageRoutes from './routes/storage.routes.js';
 import pipelineRoutes from './routes/pipeline.routes.js';
 import pipelineEventsRoutes from './routes/pipeline-events.routes.js';
 import pipelineWorkerRoutes from './routes/pipeline-worker.routes.js';
@@ -268,6 +269,7 @@ app.use('/api/test-cases', authMiddleware, testCasesRoutes);
 app.use('/api/bugs', authMiddleware, bugsRoutes);
 app.use('/api/configurations', authMiddleware, configurationsRoutes);
 app.use('/api/reports', authMiddleware, reportsRoutes);
+app.use('/api/storage', authMiddleware, storageRoutes);
 app.use('/api/tenant-settings', authMiddleware, tenantSettingsRoutes);
 app.use('/api/llm-config', authMiddleware, llmConfigRoutes);
 

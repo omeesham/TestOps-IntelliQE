@@ -13,6 +13,7 @@ import { decryptStored, decryptField } from '../utils/crypto.js';
 import { dispatchTestRunNotification } from '../services/notification-dispatcher.service.js';
 import type { TestRunEmailPayload } from '../services/email.service.js';
 import { generateAllureHtml, REPORTS_ROOT } from '../services/allure-report.service.js';
+import { archiveAndPrune } from '../services/report-archive.service.js';
 import { startJob, getJob } from '../services/async-jobs.service.js';
 import { timed } from '../services/agent-metrics.service.js';
 import { logger } from '../utils/logger.js';
@@ -431,6 +432,8 @@ async function executeStage(tenantId: string, body: any): Promise<any> {
   if (executed) {
     const built = await buildAllureReport(tenantId, reportScope, allureResultsDir);
     reportUrl = built ? reportUrlFor(tenantId, reportScope) : undefined;
+    // Durable copy + latest-10 retention (fire-and-forget; never blocks the run).
+    if (built) void archiveAndPrune(tenantId, reportScope);
   }
   await fs.rm(allureResultsDir, { recursive: true, force: true }).catch(() => {});
 
@@ -689,6 +692,8 @@ async function healStage(tenantId: string, body: any): Promise<any> {
       }
       const built = await buildAllureReport(tenantId, reportScope, allureResultsDir);
       reportUrl = built ? reportUrlFor(tenantId, reportScope) : undefined;
+      // Durable copy + latest-10 retention (fire-and-forget; never blocks the run).
+      if (built) void archiveAndPrune(tenantId, reportScope);
     }
     await fs.rm(allureResultsDir, { recursive: true, force: true }).catch(() => {});
     await fs.rm(htmlTmpDir, { recursive: true, force: true }).catch(() => {});

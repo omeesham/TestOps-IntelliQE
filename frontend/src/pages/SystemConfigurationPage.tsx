@@ -3,6 +3,7 @@ import ConfigTabNav, { type TabKey } from '@/components/system-config/ConfigTabN
 import GeneralSettingsSection from '@/components/system-config/GeneralSettingsSection';
 import ApplicationSetupSection from '@/components/system-config/ApplicationSetupSection';
 import RequirementSourcesSection from '@/components/system-config/RequirementSourcesSection';
+import StorageSection from '@/components/system-config/StorageSection';
 import GitRepositoriesSection from '@/components/system-config/GitRepositoriesSection';
 import NotificationsSection from '@/components/system-config/NotificationsSection';
 import LlmConfigurationSection from '@/components/system-config/LLMConfigurationSection';
@@ -62,6 +63,8 @@ export default function SystemConfigurationPage() {
         return <ApplicationSetupSection configs={configs} onRefresh={fetchConfigs} />;
       case 'requirements':
         return <RequirementSourcesSection configs={configs} onRefresh={fetchConfigs} />;
+      case 'storage':
+        return <StorageSection configs={configs} onRefresh={fetchConfigs} />;
       case 'git-repos':
         return <GitRepositoriesSection configs={configs} onRefresh={fetchConfigs} />;
       case 'notifications':

@@ -6,7 +6,7 @@ import {
   Zap, Play,
 } from 'lucide-react';
 import {
-  listBugs, getBugStats, getBug, createBug, updateBug, revokeBug, deleteBug,
+  listBugs, getBug, createBug, updateBug, revokeBug, deleteBug,
   subscribeToBugEvents, getBugAdoStatus, pushBugsToAdo, getBugJiraStatus, pushBugsToJira,
   rerunBugs,
 } from '@/services/api';
@@ -50,13 +50,6 @@ interface BugActivityRow {
   details?: { changes?: Record<string, { from: any; to: any }>; reason?: string } | null;
   performed_by?: string | null;
   created_at: string;
-}
-
-interface BugStats {
-  total: number;
-  byStatus: Record<string, number>;
-  bySeverity: Record<string, number>;
-  byType?: Record<string, number>;
 }
 
 interface Pagination { page: number; limit: number; total: number; totalPages: number; }
@@ -199,9 +192,8 @@ export default function BugTrackerPage() {
 
   const [bugs, setBugs] = useState<BugRow[]>([]);
   const [pagination, setPagination] = useState<Pagination>({ page: 1, limit: 10, total: 0, totalPages: 1 });
-  const [stats, setStats] = useState<BugStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [live, setLive] = useState(false);
+  const [, setLive] = useState(false); // connection status feeds the SSE subscription; no longer shown in the UI
 
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -260,14 +252,6 @@ export default function BugTrackerPage() {
   // stop the superseded non-silent fetch from clearing it (stuck spinner).
   const loadingSeqRef = useRef(0);
 
-  const fetchStats = useCallback(async () => {
-    try {
-      setStats(await getBugStats());
-    } catch (err) {
-      console.error('Load bug stats error:', err);
-    }
-  }, []);
-
   const fetchBugs = useCallback(async (
     page: number,
     limit: number,
@@ -319,8 +303,6 @@ export default function BugTrackerPage() {
   useEffect(() => {
     fetchBugs(1, paginationRef.current.limit);
   }, [fetchBugs]);
-
-  useEffect(() => { fetchStats(); }, [fetchStats]);
 
   // Resolve the Azure DevOps connection once so the "Raise in Azure DevOps"
   // action knows whether it's available (and which project bugs land in).
@@ -391,12 +373,11 @@ export default function BugTrackerPage() {
     }
   };
 
-  // Live updates: refetch the current page + stats whenever another session mutates bugs
+  // Live updates: refetch the current page whenever another session mutates bugs
   useEffect(() => {
     const unsubscribe = subscribeToBugEvents((event) => {
       if (!event || event.type === 'connected') return;
       fetchBugsRef.current(paginationRef.current.page, paginationRef.current.limit, { silent: true });
-      fetchStats();
       if (event.type === 'bug_deleted' && event.bugId) {
         // The bug is gone — drop any selection or confirm dialog still
         // pointing at it (they'd hold a stale snapshot otherwise).
@@ -419,7 +400,7 @@ export default function BugTrackerPage() {
       }
     }, setLive);
     return unsubscribe;
-  }, [fetchStats]);
+  }, []);
 
   const openDetail = async (bugId: string) => {
     setDetailLoading(true);
@@ -437,7 +418,6 @@ export default function BugTrackerPage() {
 
   const refreshAll = (opts?: { silent?: boolean }) => {
     fetchBugs(pagination.page, pagination.limit, opts);
-    fetchStats();
   };
 
   const openCreate = () => {
@@ -592,7 +572,6 @@ export default function BugTrackerPage() {
       } else {
         fetchBugs(pagination.page, pagination.limit, { silent: true });
       }
-      fetchStats();
     } catch (err) {
       console.error('Delete bug error:', err);
       toast.fromError(err);
@@ -642,29 +621,25 @@ export default function BugTrackerPage() {
 
   return (
     <div className="-m-6 p-4 space-y-3">
-      {/* Header */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex items-center gap-4">
-        <div className="w-11 h-11 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] flex items-center justify-center shadow-lg shadow-purple-500/25">
-          <Bug className="w-6 h-6 text-white" />
-        </div>
-        <div>
-          <div className="flex items-center gap-2.5">
-            <h1 className="text-lg font-bold text-gray-900">Bug Tracker</h1>
-            <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold border ${
-              live ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-gray-100 text-gray-500 border-gray-200'}`}>
-              <span className={`w-2 h-2 rounded-full ${live ? 'bg-emerald-500 animate-pulse' : 'bg-gray-400'}`} />
-              {live ? 'Live' : 'Offline'}
-            </span>
-          </div>
-          <p className="text-sm text-gray-500">Track, triage and resolve defects across your test runs in real time.</p>
-        </div>
-        <div className="ml-auto flex items-center gap-2">
+      {/* Action bar — the layout header already names the page, so no title here */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {/* Refresh — kept on the left, away from the primary actions */}
+        <button
+          onClick={() => refreshAll()}
+          title="Refresh"
+          aria-label="Refresh"
+          className="inline-flex items-center justify-center h-9 w-9 rounded-lg border border-gray-200 bg-white text-gray-500 hover:text-[#7C3AED] hover:border-[#DDD6FE] hover:bg-[#F5F3FF] shadow-sm transition-colors shrink-0"
+        >
+          <RefreshCw className="w-4 h-4" />
+        </button>
+
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {/* Re-run all failing / flaky tests. Each button re-executes just the
               tests linked to bugs of that type and updates their status. */}
           <button
             onClick={() => handleRerun('failure')}
             disabled={!!rerunning}
-            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-red-50 hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed text-red-700 border border-red-200 rounded-md text-sm font-medium transition-colors"
+            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-white hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed text-red-600 border border-red-200 rounded-lg text-sm font-medium whitespace-nowrap shrink-0 shadow-sm transition-colors"
             title="Re-run every failing test that has an open failure bug"
           >
             {rerunning === 'failure' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
@@ -673,7 +648,7 @@ export default function BugTrackerPage() {
           <button
             onClick={() => handleRerun('flaky')}
             disabled={!!rerunning}
-            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-amber-50 hover:bg-amber-100 disabled:opacity-40 disabled:cursor-not-allowed text-amber-700 border border-amber-200 rounded-md text-sm font-medium transition-colors"
+            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-white hover:bg-amber-50 disabled:opacity-40 disabled:cursor-not-allowed text-amber-600 border border-amber-200 rounded-lg text-sm font-medium whitespace-nowrap shrink-0 shadow-sm transition-colors"
             title="Re-run every flaky (auto-healed) test that has an open bug"
           >
             {rerunning === 'flaky' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
@@ -686,58 +661,20 @@ export default function BugTrackerPage() {
           <button
             onClick={() => setRaiseOpen(true)}
             disabled={selectedIds.size === 0 || pushingAdo || pushingJira}
-            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-sky-600 hover:bg-sky-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-md text-sm font-medium transition-colors shadow-sm"
+            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-sky-600 hover:bg-sky-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium whitespace-nowrap shrink-0 shadow-sm transition-colors"
             title={selectedIds.size === 0 ? 'Select bugs with the checkboxes first' : 'Raise the selected bugs in Azure DevOps or JIRA'}
           >
             {(pushingAdo || pushingJira) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-            Raise Bug{selectedIds.size > 1 ? 's' : ''}{selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}
+            Raise Bug{selectedIds.size > 1 ? 's' : ''}
           </button>
 
           <button
-            onClick={() => refreshAll()}
-            className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 transition-colors"
-            title="Refresh"
-          >
-            <RefreshCw className="w-4 h-4" />
-          </button>
-          <button
             onClick={openCreate}
-            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-[#7C3AED] hover:bg-[#6D28D9] text-white rounded-md text-sm font-medium transition-colors"
+            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-[#7C3AED] hover:bg-[#6D28D9] text-white rounded-lg text-sm font-medium whitespace-nowrap shrink-0 shadow-sm shadow-purple-500/25 transition-colors"
           >
             <Plus className="w-3.5 h-3.5" /> Report Bug
           </button>
         </div>
-      </div>
-
-      {/* Stat cards — clicking a status card toggles that filter */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3">
-        <button
-          onClick={() => setStatusFilter('')}
-          className={`bg-white rounded-xl border shadow-sm p-4 text-left transition-colors ${
-            statusFilter === '' ? 'border-[#7C3AED] ring-1 ring-[#7C3AED]/20' : 'border-gray-100 hover:border-gray-200'}`}
-        >
-          <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Total</div>
-          <div className="text-2xl font-bold text-gray-900 mt-1">{stats?.total ?? '—'}</div>
-          <div className="text-[11px] text-gray-400 mt-0.5">
-            {stats ? `${(stats.bySeverity.critical || 0)} critical · ${(stats.bySeverity.high || 0)} high` : ''}
-          </div>
-        </button>
-        {Object.entries(STATUS_CONFIG).map(([key, cfg]) => {
-          const Icon = cfg.icon;
-          return (
-            <button
-              key={key}
-              onClick={() => setStatusFilter(statusFilter === key ? '' : key)}
-              className={`bg-white rounded-xl border shadow-sm p-4 text-left transition-colors ${
-                statusFilter === key ? 'border-[#7C3AED] ring-1 ring-[#7C3AED]/20' : 'border-gray-100 hover:border-gray-200'}`}
-            >
-              <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                <Icon className={`w-3.5 h-3.5 ${cfg.dot}`} /> {cfg.label}
-              </div>
-              <div className="text-2xl font-bold text-gray-900 mt-1">{stats?.byStatus[key] || 0}</div>
-            </button>
-          );
-        })}
       </div>
 
       {/* Toolbar */}
@@ -776,9 +713,7 @@ export default function BugTrackerPage() {
         >
           <option value="">All Types</option>
           {Object.entries(BUG_TYPE_CONFIG).map(([key, cfg]) => (
-            <option key={key} value={key}>
-              {cfg.label}{stats?.byType?.[key] !== undefined ? ` (${stats.byType[key]})` : ''}
-            </option>
+            <option key={key} value={key}>{cfg.label}</option>
           ))}
         </select>
         {hasFilters && (
@@ -822,9 +757,6 @@ export default function BugTrackerPage() {
                 <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Status</th>
                 <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Type</th>
                 <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Module</th>
-                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Assigned To</th>
-                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Azure DevOps</th>
-                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">JIRA</th>
                 <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Updated</th>
                 <th className="text-right px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Actions</th>
               </tr>
@@ -832,7 +764,7 @@ export default function BugTrackerPage() {
             <tbody>
               {bugs.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="px-3 py-12 text-center text-gray-400">
+                  <td colSpan={10} className="px-3 py-12 text-center text-gray-400">
                     <Bug className="w-8 h-8 mx-auto mb-2 text-gray-300" />
                     {hasFilters ? 'No bugs match the current filters.' : 'No bugs reported yet. Click "Report Bug" to log your first one.'}
                   </td>
@@ -871,37 +803,6 @@ export default function BugTrackerPage() {
                   <td className="px-3 py-1.5 whitespace-nowrap"><StatusBadge status={bug.status} /></td>
                   <td className="px-3 py-1.5 whitespace-nowrap"><TypeBadge type={bug.bug_type} /></td>
                   <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{bug.module || '—'}</td>
-                  <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{bug.assigned_to || <span className="text-gray-400">Unassigned</span>}</td>
-                  <td className="px-3 py-1.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                    {bug.ado_work_item_id ? (
-                      <a
-                        href={bug.ado_url || '#'}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-50 text-sky-700 border border-sky-200 text-xs font-medium hover:bg-sky-100 transition-colors"
-                        title="Open the Azure DevOps work item"
-                      >
-                        ADO #{bug.ado_work_item_id} <ExternalLink className="w-3 h-3" />
-                      </a>
-                    ) : (
-                      <span className="text-gray-300 text-xs">—</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-1.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                    {bug.jira_issue_key ? (
-                      <a
-                        href={bug.jira_url || '#'}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-medium hover:bg-indigo-100 transition-colors"
-                        title="Open the JIRA issue"
-                      >
-                        {bug.jira_issue_key} <ExternalLink className="w-3 h-3" />
-                      </a>
-                    ) : (
-                      <span className="text-gray-300 text-xs">—</span>
-                    )}
-                  </td>
                   <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{fmtDate(bug.updated_at)}</td>
                   <td className="px-3 py-1.5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                     <div className="inline-flex items-center gap-1.5">
@@ -994,29 +895,29 @@ export default function BugTrackerPage() {
                   )}
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="md:col-span-2 space-y-4">
+                    <div className="md:col-span-2 min-w-0 space-y-4">
                       <div>
                         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Description</div>
-                        <p className="text-sm text-gray-700 whitespace-pre-wrap">{detailBug.description || <span className="text-gray-400">No description provided.</span>}</p>
+                        <p className="text-sm text-gray-700 whitespace-pre-wrap break-words">{detailBug.description || <span className="text-gray-400">No description provided.</span>}</p>
                       </div>
                       <div>
                         <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Steps to Reproduce</div>
-                        <p className="text-sm text-gray-700 whitespace-pre-wrap">{detailBug.steps_to_reproduce || <span className="text-gray-400">Not documented.</span>}</p>
+                        <p className="text-sm text-gray-700 whitespace-pre-wrap break-words">{detailBug.steps_to_reproduce || <span className="text-gray-400">Not documented.</span>}</p>
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div className="bg-emerald-50/50 border border-emerald-100 rounded-xl p-3">
                           <div className="text-xs font-semibold text-emerald-700 uppercase tracking-wider mb-1">Expected Result</div>
-                          <p className="text-sm text-gray-700 whitespace-pre-wrap">{detailBug.expected_result || <span className="text-gray-400">—</span>}</p>
+                          <p className="text-sm text-gray-700 whitespace-pre-wrap break-words">{detailBug.expected_result || <span className="text-gray-400">—</span>}</p>
                         </div>
                         <div className="bg-red-50/50 border border-red-100 rounded-xl p-3">
                           <div className="text-xs font-semibold text-red-700 uppercase tracking-wider mb-1">Actual Result</div>
-                          <p className="text-sm text-gray-700 whitespace-pre-wrap">{detailBug.actual_result || <span className="text-gray-400">—</span>}</p>
+                          <p className="text-sm text-gray-700 whitespace-pre-wrap break-words">{detailBug.actual_result || <span className="text-gray-400">—</span>}</p>
                         </div>
                       </div>
                       {detailBug.resolution_notes && (
                         <div>
                           <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Resolution Notes</div>
-                          <p className="text-sm text-gray-700 whitespace-pre-wrap">{detailBug.resolution_notes}</p>
+                          <p className="text-sm text-gray-700 whitespace-pre-wrap break-words">{detailBug.resolution_notes}</p>
                         </div>
                       )}
                     </div>
@@ -1059,6 +960,36 @@ export default function BugTrackerPage() {
                         <span className="text-gray-400 w-20 shrink-0">Updated</span>
                         <span>{fmtDateTime(detailBug.updated_at)}</span>
                       </div>
+                      {(detailBug.ado_work_item_id || detailBug.jira_issue_key) && (
+                        <div className="flex items-start gap-2 text-gray-600" onClick={(e) => e.stopPropagation()}>
+                          <ExternalLink className="w-3.5 h-3.5 text-gray-400 shrink-0 mt-1" />
+                          <span className="text-gray-400 w-20 shrink-0">Trackers</span>
+                          <div className="flex flex-wrap gap-1">
+                            {detailBug.ado_work_item_id && (
+                              <a
+                                href={detailBug.ado_url || '#'}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-50 text-sky-700 border border-sky-200 text-xs font-medium hover:bg-sky-100 transition-colors"
+                                title="Open the Azure DevOps work item"
+                              >
+                                ADO #{detailBug.ado_work_item_id} <ExternalLink className="w-3 h-3" />
+                              </a>
+                            )}
+                            {detailBug.jira_issue_key && (
+                              <a
+                                href={detailBug.jira_url || '#'}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-medium hover:bg-indigo-100 transition-colors"
+                                title="Open the JIRA issue"
+                              >
+                                {detailBug.jira_issue_key} <ExternalLink className="w-3 h-3" />
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      )}
                       {(detailBug.tags || []).length > 0 && (
                         <div className="flex items-start gap-2 text-gray-600">
                           <Tag className="w-3.5 h-3.5 text-gray-400 shrink-0 mt-1" />

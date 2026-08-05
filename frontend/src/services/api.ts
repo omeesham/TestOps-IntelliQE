@@ -207,6 +207,38 @@ export async function getSharePointDocument(itemId: string): Promise<SharePointD
 }
 
 /* ─────────────────────────────────────────────────────────────
+   Azure Storage — durable report archive (System Configuration → Storage)
+   ───────────────────────────────────────────────────────────── */
+export async function connectAzureStorage(payload: {
+  accountUrl?: string; connectionString?: string; containerName?: string; prefix?: string;
+}) {
+  const { data } = await api.post('/storage/connect', {
+    accountUrl: payload.accountUrl || undefined,
+    connectionString: payload.connectionString ? encryptField(payload.connectionString) : undefined,
+    containerName: payload.containerName || undefined,
+    prefix: payload.prefix || undefined,
+  });
+  return data as { ok: boolean; message?: string; containerName?: string };
+}
+
+export async function testAzureStorage(payload: {
+  accountUrl?: string; connectionString?: string; containerName?: string;
+}) {
+  const { data } = await api.post('/storage/test', {
+    accountUrl: payload.accountUrl || undefined,
+    connectionString: payload.connectionString ? encryptField(payload.connectionString) : undefined,
+    containerName: payload.containerName || undefined,
+  });
+  return data as { ok: boolean; message?: string; error?: string };
+}
+
+/** Load a run's report — restores it from Azure storage when not cached locally. */
+export async function loadAllureReport(runId: string) {
+  const { data } = await api.post('/allure/load', { runId }, { timeout: 120_000 });
+  return data as { exists: boolean; generatedAt?: string; reportUrl?: string; allureReportUrl?: string; source?: 'local' | 'restored' | 'missing' };
+}
+
+/* ─────────────────────────────────────────────────────────────
    Git publish — GitHub commits straight onto the configured branch
    (mode 'direct'); GitLab/Bitbucket open a real MR/PR (mode 'pr').
    ───────────────────────────────────────────────────────────── */

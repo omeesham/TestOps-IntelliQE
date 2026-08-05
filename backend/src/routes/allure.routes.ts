@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs/promises';
 import { getOrGenerateRealReport, getReportStatus, getLatestReport, REPORTS_ROOT, SAFE_RUN_ID_RE } from '../services/allure-report.service.js';
+import { archiveAndPrune, restoreReport } from '../services/report-archive.service.js';
 import { PlaywrightRunError } from '../services/playwright-runner.service.js';
 import { authMiddleware } from '../middleware/auth.middleware.js';
 
@@ -29,7 +30,10 @@ router.post('/generate', authMiddleware, async (req: Request, res: Response) => 
     // If a report already exists for this run (e.g. built during the Chat
     // execution), serve it instead of re-running — the Chat flow is stateless
     // and stores no DB scripts to re-run. Pass { force: true } to rebuild.
+    // A report missing locally (ephemeral disk) is first restored from the
+    // tenant's Azure storage before we resort to re-running Playwright.
     if (!req.body?.force) {
+      await restoreReport(user.tenantId, runId).catch(() => 'missing');
       const existing = await getReportStatus(user.tenantId, runId);
       if (existing.exists) {
         res.json({
@@ -58,6 +62,8 @@ router.post('/generate', authMiddleware, async (req: Request, res: Response) => 
     try {
       const result = await promise;
       const scope = runId;
+      // Durable copy + latest-10 retention (fire-and-forget).
+      void archiveAndPrune(user.tenantId, scope);
       res.json({
         ok: true,
         generatedAt: result.generatedAt,
@@ -82,6 +88,30 @@ router.post('/generate', authMiddleware, async (req: Request, res: Response) => 
       code: 'UNKNOWN',
       hint: 'An unexpected error occurred. Try again, or contact support if it persists.',
     });
+  }
+});
+
+/**
+ * POST /api/allure/load  (auth required)
+ * Make a run's report viewable: use the local copy when present, otherwise
+ * restore it from the tenant's Azure storage (System Configuration → Storage).
+ * Returns the same shape as /status plus where the report came from.
+ * Body: { runId: string }
+ */
+router.post('/load', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const { runId } = req.body || {};
+    if (!runId || !SAFE_RUN_ID_RE.test(String(runId))) {
+      res.status(400).json({ error: 'A valid runId is required' });
+      return;
+    }
+    const from = await restoreReport(user.tenantId, String(runId));
+    const status = await getReportStatus(user.tenantId, String(runId));
+    res.json({ ...status, source: from });
+  } catch (err: any) {
+    console.error('Allure load error:', err.message);
+    res.status(500).json({ error: `Could not load the report: ${err.message}` });
   }
 });
 

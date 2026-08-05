@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import pool from '../db.js';
 import * as XLSX from 'xlsx';
 import { listReports, readAllureResults, getReportStats, readBasicReport, statsFromResults, SAFE_RUN_ID_RE } from '../services/allure-report.service.js';
+import { REPORT_RETENTION } from '../services/report-archive.service.js';
 
 const router = Router();
 
@@ -185,7 +186,10 @@ router.get('/history', async (req: Request, res: Response) => {
     const typeFilter = req.query.type ? String(req.query.type).toLowerCase() : ''; // 'allure' | 'basic'
     const search = req.query.search ? String(req.query.search).toLowerCase() : '';
 
-    const reports = await listReports(user.tenantId);
+    // Product rule: the Reports page shows the LATEST 10 reports only —
+    // retention (report-archive.service) prunes older ones at generation time;
+    // the cap here also hides any pre-retention leftovers immediately.
+    const reports = (await listReports(user.tenantId)).slice(0, REPORT_RETENTION);
 
     // Enrich with run metadata (source/story/module) for report dirs that map to
     // a saved test_runs row (UUID dirs). Ephemeral chat runs (chat-<ts>) have no

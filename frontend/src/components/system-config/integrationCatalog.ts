@@ -28,6 +28,7 @@ export const LOGOS: Record<string, string> = {
   'notif-email': 'https://api.iconify.design/selfhst/microsoft-outlook-2018.svg',
   'notif-slack': 'https://api.iconify.design/logos/slack-icon.svg',
   'notif-teams': 'https://api.iconify.design/logos/microsoft-teams.svg',
+  'azure-storage': 'https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/azure/azure-original.svg',
 };
 
 export const INTEGRATION_CATALOG: CatalogItem[] = [
@@ -74,6 +75,19 @@ export const INTEGRATION_CATALOG: CatalogItem[] = [
       { key: 'tenantId', label: 'Azure AD Tenant ID', placeholder: '00000000-0000-0000-0000-000000000000' },
       { key: 'clientId', label: 'Application (client) ID', placeholder: '11111111-1111-1111-1111-111111111111' },
       { key: 'clientSecret', label: 'Client Secret', placeholder: 'Client secret value', type: 'password' },
+    ],
+  },
+
+  // ──── Storage (durable report archive) ────
+  {
+    id: 'azure-storage', name: 'Azure Blob Storage', category: 'Report Storage', categoryKey: 'storage',
+    description: 'Your storage account for execution reports (latest 10 kept)',
+    comingSoon: false,
+    fields: [
+      { key: 'accountUrl', label: 'Storage Account URL — Managed Identity', placeholder: 'https://youraccount.blob.core.windows.net', optional: true, hint: 'Recommended, no secret stored: grant the IntelliQE app identity "Storage Blob Data Contributor" on your storage account, then enter only this URL.' },
+      { key: 'connectionString', label: 'Connection String — alternative', placeholder: 'DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...', type: 'password', optional: true, hint: 'Azure Portal → Storage Account → Access keys. Leave blank when using Managed Identity above.' },
+      { key: 'containerName', label: 'Container Name', placeholder: 'intelliqe-reports', optional: true, hint: 'Created automatically if it does not exist. Defaults to intelliqe-reports.' },
+      { key: 'prefix', label: 'Path Prefix (optional)', placeholder: 'qa/', optional: true },
     ],
   },
 
@@ -172,6 +186,9 @@ export function getRequirementSources(): CatalogItem[] {
 }
 export function getGitRepos(): CatalogItem[] {
   return INTEGRATION_CATALOG.filter((i) => i.categoryKey === 'git-repo');
+}
+export function getStorageIntegrations(): CatalogItem[] {
+  return INTEGRATION_CATALOG.filter((i) => i.categoryKey === 'storage');
 }
 export function getNotifications(): CatalogItem[] {
   return INTEGRATION_CATALOG.filter((i) => i.categoryKey === 'notification');

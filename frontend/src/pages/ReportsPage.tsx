@@ -1,16 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Loader2, FileText, RefreshCw, BarChart3, Download, Eye, X, Search,
-  ChevronLeft, ChevronRight, CheckCircle2, XCircle, Clock, FileSpreadsheet,
-  Layers, FolderGit2,
+  Loader2, FileText, BarChart3, Download, ArrowLeft,
+  CheckCircle2, XCircle, Clock, FileSpreadsheet,
 } from 'lucide-react';
 import {
-  getReportsHistory, downloadReportExport, generateAllureReport,
-  getAllureReportStatus, getLatestAllureReport,
+  getReportsHistory, downloadReportExport,
+  loadAllureReport,
   type ReportHistoryItem, type ReportHistoryResponse,
 } from '@/services/api';
 import ErrorAlert from '@/components/feedback/ErrorAlert';
-import ActionIcon from '@/components/ui/ActionIcon';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { normalizeError } from '@/utils/apiError';
 
@@ -21,51 +19,38 @@ function fmtDate(iso?: string): string {
   if (isNaN(d.getTime())) return '—';
   return d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
-function fmtDuration(ms?: number): string {
-  const s = Math.max(0, Math.round((ms || 0) / 1000));
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-  return `${h ? `${h}h ` : ''}${m ? `${m}m ` : ''}${sec}s`;
-}
-const SOURCE_STYLE: Record<string, string> = {
-  jira: 'bg-blue-50 text-blue-700 border-blue-200',
-  'azure-devops': 'bg-sky-50 text-sky-700 border-sky-200',
-  confluence: 'bg-indigo-50 text-indigo-700 border-indigo-200',
-  sharepoint: 'bg-cyan-50 text-cyan-700 border-cyan-200',
-  chat: 'bg-violet-50 text-violet-700 border-violet-200',
-  'ad-hoc': 'bg-gray-50 text-gray-600 border-gray-200',
-};
-function sourceLabel(s: string): string {
-  if (s === 'azure-devops') return 'Azure DevOps';
-  if (s === 'ad-hoc') return 'Ad-hoc';
-  return s.charAt(0).toUpperCase() + s.slice(1);
+function reportTitle(i: ReportHistoryItem): string {
+  return i.story || i.storyKey || (i.runId.startsWith('chat-') ? 'Chat run' : i.runId);
 }
 
+/**
+ * Reports — executive view.
+ *   • List: the latest 10 reports (retention prunes older ones from storage).
+ *   • Row click → full-page report view with Allure / Basic HTML tabs; the
+ *     report is restored from Azure storage automatically on open, with Excel
+ *     and PDF export beside the tabs.
+ */
 export default function ReportsPage() {
   const toast = useToast();
   const [error, setError] = useState('');
 
-  // History + filters
   const [data, setData] = useState<ReportHistoryResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
-  const [pageSize] = useState(10);
-  const [source, setSource] = useState('');
-  const [typeFilter, setTypeFilter] = useState('');
-  const [search, setSearch] = useState('');
   const [downloadingKey, setDownloadingKey] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
-  // Report viewer (iframe)
-  const [viewRunId, setViewRunId] = useState('');
-  const [viewStatus, setViewStatus] = useState<{ reportUrl?: string; allureReportUrl?: string } | null>(null);
+  // Full-page report view
+  const [viewItem, setViewItem] = useState<ReportHistoryItem | null>(null);
+  const [viewStatus, setViewStatus] = useState<{ reportUrl?: string; allureReportUrl?: string; source?: string } | null>(null);
   const [viewTab, setViewTab] = useState<'allure' | 'basic'>('allure');
   const [viewLoading, setViewLoading] = useState(false);
-
-  const [generating, setGenerating] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await getReportsHistory({ page, pageSize, source: source || undefined, type: typeFilter || undefined, search: search || undefined });
+      // Retention caps the total at REPORT_RETENTION (10); server paginates within it.
+      const res = await getReportsHistory({ page, pageSize });
       setData(res);
       setError('');
     } catch (err) {
@@ -73,25 +58,26 @@ export default function ReportsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, source, typeFilter, search]);
+  }, [page, pageSize]);
 
   useEffect(() => { load(); }, [load]);
-  // Reset to page 1 when filters change
-  useEffect(() => { setPage(1); }, [source, typeFilter, search]);
 
+  /** Open a report full-page; restore it from Azure storage when not local. */
   const openReport = useCallback(async (item: ReportHistoryItem) => {
-    setViewRunId(item.runId);
+    setViewItem(item);
     setViewTab(item.hasAllure ? 'allure' : 'basic');
+    setViewStatus(null);
     setViewLoading(true);
     try {
-      const s = await getAllureReportStatus(item.runId);
-      setViewStatus(s as any);
+      const s = await loadAllureReport(item.runId);
+      setViewStatus(s);
+      if (s.source === 'restored') toast.success('Report loaded from Azure Storage');
     } catch {
       setViewStatus(null);
     } finally {
       setViewLoading(false);
     }
-  }, []);
+  }, [toast]);
 
   const doDownload = useCallback(async (runId: string, format: 'xlsx' | 'pdf') => {
     const key = `${runId}:${format}`;
@@ -106,31 +92,9 @@ export default function ReportsPage() {
     }
   }, [toast]);
 
-  // Generate a report for the latest run, then refresh the list.
-  const handleGenerateLatest = useCallback(async () => {
-    setGenerating(true);
-    try {
-      const latest = await getLatestAllureReport();
-      if (!latest?.runId) {
-        toast.error('No run found', 'Run a test execution from the Chat flow first.');
-        return;
-      }
-      await generateAllureReport(latest.runId);
-      toast.success('Report generated');
-      await load();
-    } catch (err) {
-      toast.error('Report unavailable', normalizeError(err).message);
-    } finally {
-      setGenerating(false);
-    }
-  }, [toast, load]);
-
-  // Aggregate stat cards from the current page's data (whole history counts via total).
   const items = data?.items ?? [];
-  const withStats = items.filter((i) => i.stats);
-  const avgPassRate = withStats.length
-    ? Math.round(withStats.reduce((s, i) => s + (i.stats!.passRate || 0), 0) / withStats.length)
-    : 0;
+  const total = data?.total ?? 0;
+  const totalPages = data?.totalPages ?? 1;
 
   if (error) {
     return (
@@ -143,100 +107,94 @@ export default function ReportsPage() {
     );
   }
 
-  const viewUrl = viewTab === 'allure' ? viewStatus?.allureReportUrl : viewStatus?.reportUrl;
-
-  return (
-    <div className="space-y-4">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-[#1E1B4B]">Reports</h1>
-          <p className="text-sm text-[#6B7280]">History of every report generated — view, classify and export past &amp; present runs.</p>
-        </div>
-        <button
-          onClick={handleGenerateLatest}
-          disabled={generating}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-[#7C3AED] rounded-lg hover:bg-[#6D28D9] disabled:opacity-50 transition-all shadow-md shadow-purple-200"
-        >
-          {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-          {generating ? 'Generating…' : 'Generate Latest Report'}
-        </button>
-      </div>
-
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard icon={<Layers className="w-4 h-4" />} label="Total Reports" value={data?.total ?? 0} tone="violet" />
-        <StatCard icon={<BarChart3 className="w-4 h-4" />} label="Avg Pass Rate (page)" value={`${avgPassRate}%`} tone="emerald" />
-        <StatCard icon={<FileText className="w-4 h-4" />} label="Allure Reports" value={items.filter(i => i.hasAllure).length} tone="sky" />
-        <StatCard icon={<FolderGit2 className="w-4 h-4" />} label="Sources" value={data?.facets.sources.length ?? 0} tone="amber" />
-      </div>
-
-      {/* Filters */}
-      <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-[#DDD6FE]/60 p-3 flex flex-wrap items-center gap-2">
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by story, module or run id…"
-            className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-[#DDD6FE] bg-[#F5F3FF] outline-none focus:ring-2 focus:ring-[#7C3AED]/20"
-          />
-        </div>
-        <select value={source} onChange={(e) => setSource(e.target.value)} className="px-3 py-2 text-sm rounded-lg border border-[#DDD6FE] bg-white outline-none focus:ring-2 focus:ring-[#7C3AED]/20">
-          <option value="">All sources</option>
-          {(data?.facets.sources ?? []).map((s) => <option key={s} value={s}>{sourceLabel(s)}</option>)}
-        </select>
-        <div className="flex items-center gap-1 bg-[#F5F3FF]/60 rounded-lg p-1">
-          {[['', 'All'], ['allure', 'Allure'], ['basic', 'Basic']].map(([val, label]) => (
+  /* ════════ FULL-PAGE REPORT VIEW ════════ */
+  if (viewItem) {
+    const viewUrl = viewTab === 'allure' ? viewStatus?.allureReportUrl : viewStatus?.reportUrl;
+    return (
+      <div className="space-y-2">
+        {/* Header bar */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             <button
-              key={val}
-              onClick={() => setTypeFilter(val)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${typeFilter === val ? 'bg-[#7C3AED] text-white' : 'text-[#6B7280] hover:bg-white'}`}
-            >{label}</button>
-          ))}
+              onClick={() => { setViewItem(null); setViewStatus(null); }}
+              title="All reports"
+              aria-label="All reports"
+              className="p-2 text-[#6B7280] bg-white border border-[#DDD6FE] rounded-lg hover:bg-[#F5F3FF] hover:text-[#7C3AED] transition-colors flex-shrink-0"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+            <h1 className="text-sm font-bold text-[#1E1B4B] truncate" title={reportTitle(viewItem)}>{reportTitle(viewItem)}</h1>
+          </div>
+          <span className="flex items-center gap-1 text-xs text-[#6B7280] flex-shrink-0"><Clock className="w-3 h-3" />{fmtDate(viewItem.generatedAt)}</span>
         </div>
-      </div>
 
-      {/* Report viewer */}
-      {viewRunId && (
+        {/* Tabs + full-page report */}
         <div className="bg-white/90 backdrop-blur-sm rounded-xl border border-[#DDD6FE]/60 overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#EDE9FE] bg-[#F5F3FF]/50">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-[#EDE9FE] bg-[#F5F3FF]/50">
             <div className="flex items-center gap-1 bg-white rounded-lg p-1 border border-[#DDD6FE]/60">
-              <button onClick={() => setViewTab('allure')} disabled={!viewStatus?.allureReportUrl} className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors disabled:opacity-40 ${viewTab === 'allure' ? 'bg-[#7C3AED] text-white' : 'text-[#6B7280]'}`}><FileText className="w-3.5 h-3.5" />Allure</button>
-              <button onClick={() => setViewTab('basic')} disabled={!viewStatus?.reportUrl} className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors disabled:opacity-40 ${viewTab === 'basic' ? 'bg-[#7C3AED] text-white' : 'text-[#6B7280]'}`}><BarChart3 className="w-3.5 h-3.5" />Basic</button>
+              <button
+                onClick={() => setViewTab('allure')}
+                disabled={!viewStatus?.allureReportUrl}
+                className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-md transition-colors disabled:opacity-40 ${viewTab === 'allure' ? 'bg-[#7C3AED] text-white' : 'text-[#6B7280] hover:text-[#7C3AED]'}`}
+              >
+                <FileText className="w-3.5 h-3.5" />Allure
+              </button>
+              <button
+                onClick={() => setViewTab('basic')}
+                disabled={!viewStatus?.reportUrl}
+                className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-md transition-colors disabled:opacity-40 ${viewTab === 'basic' ? 'bg-[#7C3AED] text-white' : 'text-[#6B7280] hover:text-[#7C3AED]'}`}
+              >
+                <BarChart3 className="w-3.5 h-3.5" />Basic HTML
+              </button>
             </div>
-            <button onClick={() => { setViewRunId(''); setViewStatus(null); }} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Close viewer"><X className="w-4 h-4" /></button>
+            <div className="flex items-center gap-2">
+              <button onClick={() => doDownload(viewItem.runId, 'xlsx')} disabled={downloadingKey === `${viewItem.runId}:xlsx`} title="Download Excel" className="p-2 rounded-lg border border-[#DDD6FE] text-emerald-600 bg-white hover:bg-emerald-50 disabled:opacity-50 transition-colors">
+                {downloadingKey === `${viewItem.runId}:xlsx` ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+              </button>
+              <button onClick={() => doDownload(viewItem.runId, 'pdf')} disabled={downloadingKey === `${viewItem.runId}:pdf`} title="Download PDF" className="p-2 rounded-lg border border-[#DDD6FE] text-red-500 bg-white hover:bg-red-50 disabled:opacity-50 transition-colors">
+                {downloadingKey === `${viewItem.runId}:pdf` ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              </button>
+            </div>
           </div>
           {viewLoading ? (
-            <div className="flex items-center justify-center h-[60vh]"><Loader2 className="w-7 h-7 text-[#7C3AED] animate-spin" /></div>
+            <div className="flex flex-col items-center justify-center gap-3" style={{ height: 'calc(100vh - 200px)', minHeight: 460 }}>
+              <Loader2 className="w-7 h-7 text-[#7C3AED] animate-spin" />
+              <p className="text-xs text-[#6B7280]">Loading report…</p>
+            </div>
           ) : viewUrl ? (
-            <iframe key={viewUrl} src={viewUrl} className="w-full border-0" style={{ height: '70vh', minHeight: 480 }} title="Test report" />
+            <iframe key={viewUrl} src={viewUrl} className="w-full border-0" style={{ height: 'calc(100vh - 200px)', minHeight: 460 }} title="Test report" />
           ) : (
-            <div className="flex items-center justify-center h-64 text-sm text-[#6B7280]">This report type isn't available for this run.</div>
+            <div className="flex flex-col items-center justify-center gap-2 text-sm text-[#6B7280]" style={{ height: 'calc(100vh - 200px)', minHeight: 460 }}>
+              <FileText className="w-10 h-10 text-[#A5B4FC]" />
+              <p className="font-medium text-[#1E1B4B]">This report isn't available</p>
+              <p className="text-xs">No saved report was found for this run in Azure Storage.</p>
+            </div>
           )}
         </div>
-      )}
+      </div>
+    );
+  }
 
-      {/* History table */}
+  /* ════════ EXECUTIVE LIST VIEW ════════ */
+  return (
+    <div className="space-y-4">
+      {/* Executive table — latest 10, clickable rows */}
       <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-[#DDD6FE]/60 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-[#6B7280] bg-[#F5F3FF]/50">
-                <th className="px-4 py-3">Report</th>
-                <th className="px-3 py-3">Source</th>
-                <th className="px-3 py-3">Type</th>
-                <th className="px-3 py-3">Generated</th>
-                <th className="px-3 py-3 text-center">Results</th>
-                <th className="px-3 py-3 w-32">Pass Rate</th>
-                <th className="px-3 py-3 text-right">Actions</th>
+              <tr className="bg-gray-50 border-b border-gray-100">
+                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Report</th>
+                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Generated</th>
+                <th className="text-center px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Results</th>
+                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap w-36">Pass Rate</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={7} className="px-4 py-16 text-center"><Loader2 className="w-6 h-6 text-[#7C3AED] animate-spin inline" /></td></tr>
+                <tr><td colSpan={4} className="px-4 py-16 text-center"><Loader2 className="w-6 h-6 text-[#7C3AED] animate-spin inline" /></td></tr>
               ) : items.length === 0 ? (
-                <tr><td colSpan={7} className="px-4 py-16 text-center text-[#6B7280]">
+                <tr><td colSpan={4} className="px-4 py-16 text-center text-[#6B7280]">
                   <FileText className="w-10 h-10 text-[#A5B4FC] mx-auto mb-3" />
                   <p className="font-medium text-[#1E1B4B]">No reports yet</p>
                   <p className="text-xs mt-1">Run a test execution from the Chat flow, then reports appear here.</p>
@@ -244,56 +202,33 @@ export default function ReportsPage() {
               ) : items.map((i) => {
                 const st = i.stats;
                 return (
-                  <tr key={i.runId} className="border-t border-[#F1EEFE] hover:bg-[#F5F3FF]/30 transition-colors">
-                    <td className="px-4 py-3">
-                      <div className="font-medium text-[#1E1B4B] truncate max-w-[280px]" title={i.story || i.runId}>{i.story || i.storyKey || (i.runId.startsWith('chat-') ? 'Chat run' : i.runId)}</div>
+                  <tr
+                    key={i.runId}
+                    onClick={() => openReport(i)}
+                    className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors cursor-pointer"
+                    title="Open full-page report"
+                  >
+                    <td className="px-3 py-1.5">
+                      <div className="font-semibold text-[#1E1B4B] truncate max-w-[320px]" title={reportTitle(i)}>{reportTitle(i)}</div>
                       <div className="text-[11px] text-[#9CA3AF] flex items-center gap-1.5 mt-0.5">
-                        {i.module && <span className="truncate max-w-[160px]">{i.module}</span>}
-                        <span className="text-[#C4B5FD]">•</span>
+                        {i.module && <><span className="truncate max-w-[180px]">{i.module}</span><span className="text-[#C4B5FD]">•</span></>}
                         <span>{i.origin}</span>
                       </div>
                     </td>
-                    <td className="px-3 py-3">
-                      <span className={`inline-block px-2 py-0.5 text-[11px] font-medium rounded-full border ${SOURCE_STYLE[i.source] || SOURCE_STYLE['ad-hoc']}`}>{sourceLabel(i.source)}</span>
-                    </td>
-                    <td className="px-3 py-3">
-                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-full ${i.hasAllure ? 'bg-[#EDE9FE] text-[#7C3AED]' : 'bg-gray-100 text-gray-600'}`}>
-                        {i.hasAllure ? <FileText className="w-3 h-3" /> : <BarChart3 className="w-3 h-3" />}
-                        {i.hasAllure ? 'Allure' : 'Basic'}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3 text-[#6B7280] whitespace-nowrap"><Clock className="w-3 h-3 inline mr-1 text-[#A5B4FC]" />{fmtDate(i.generatedAt)}</td>
-                    <td className="px-3 py-3">
+                    <td className="px-3 py-1.5 text-[#6B7280] whitespace-nowrap">{fmtDate(i.generatedAt)}</td>
+                    <td className="px-3 py-1.5">
                       {st ? (
                         <div className="flex items-center justify-center gap-2.5 text-xs">
                           <span className="flex items-center gap-1 text-emerald-600"><CheckCircle2 className="w-3.5 h-3.5" />{st.passed}</span>
                           <span className="flex items-center gap-1 text-red-500"><XCircle className="w-3.5 h-3.5" />{st.failed}</span>
                           <span className="text-gray-400">/ {st.total}</span>
                         </div>
-                      ) : <span className="text-gray-400 text-xs">—</span>}
+                      ) : <span className="text-gray-400 text-xs text-center block">—</span>}
                     </td>
-                    <td className="px-3 py-3">
+                    <td className="px-3 py-1.5">
                       {st ? (
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1 h-1.5 rounded-full bg-gray-100 overflow-hidden">
-                            <div className={`h-full rounded-full ${st.passRate >= 80 ? 'bg-emerald-500' : st.passRate >= 50 ? 'bg-amber-500' : 'bg-red-500'}`} style={{ width: `${st.passRate}%` }} />
-                          </div>
-                          <span className="text-[11px] font-medium text-[#6B7280] w-8 text-right">{st.passRate}%</span>
-                        </div>
+                        <span className={`text-sm font-semibold ${st.passRate >= 80 ? 'text-emerald-600' : st.passRate >= 50 ? 'text-amber-600' : 'text-red-500'}`}>{st.passRate}%</span>
                       ) : <span className="text-gray-400 text-xs">—</span>}
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <ActionIcon tone="view" title="View report" onClick={() => openReport(i)}>
-                          <Eye className="w-4 h-4" />
-                        </ActionIcon>
-                        <ActionIcon tone="excel" title="Download Excel" onClick={() => doDownload(i.runId, 'xlsx')} disabled={downloadingKey === `${i.runId}:xlsx`}>
-                          {downloadingKey === `${i.runId}:xlsx` ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
-                        </ActionIcon>
-                        <ActionIcon tone="pdf" title="Download PDF" onClick={() => doDownload(i.runId, 'pdf')} disabled={downloadingKey === `${i.runId}:pdf`}>
-                          {downloadingKey === `${i.runId}:pdf` ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                        </ActionIcon>
-                      </div>
                     </td>
                   </tr>
                 );
@@ -303,40 +238,40 @@ export default function ReportsPage() {
         </div>
 
         {/* Pagination */}
-        {data && data.total > 0 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-[#EDE9FE] text-sm">
-            <span className="text-[#6B7280]">
-              {((data.page - 1) * data.pageSize) + 1}–{Math.min(data.page * data.pageSize, data.total)} of {data.total}
+        <div className="flex items-center justify-between px-4 py-1.5 border-t border-gray-100 bg-gray-50/50 text-xs">
+          <div className="flex items-center gap-1.5 text-gray-600">
+            <span>Rows:</span>
+            <select
+              value={pageSize}
+              onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+              className="px-1.5 py-0.5 bg-white border border-gray-200 rounded text-xs outline-none focus:ring-1 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED]"
+            >
+              {[5, 10, 25, 50].map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+            <span className="ml-2 text-gray-500">
+              {total === 0 ? 0 : Math.min((page - 1) * pageSize + 1, total)}–{Math.min(page * pageSize, total)} of {total}
             </span>
-            <div className="flex items-center gap-1">
-              <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={data.page <= 1} className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-[#DDD6FE] text-[#6B7280] hover:bg-[#F5F3FF] disabled:opacity-40 disabled:cursor-not-allowed">
-                <ChevronLeft className="w-3.5 h-3.5" />Prev
-              </button>
-              <span className="px-2 text-xs text-[#6B7280]">Page {data.page} of {data.totalPages}</span>
-              <button onClick={() => setPage((p) => Math.min(data.totalPages, p + 1))} disabled={data.page >= data.totalPages} className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-[#DDD6FE] text-[#6B7280] hover:bg-[#F5F3FF] disabled:opacity-40 disabled:cursor-not-allowed">
-                Next<ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
           </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function StatCard({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: string | number; tone: 'violet' | 'emerald' | 'sky' | 'amber' }) {
-  const tones: Record<string, string> = {
-    violet: 'bg-violet-50 text-violet-600',
-    emerald: 'bg-emerald-50 text-emerald-600',
-    sky: 'bg-sky-50 text-sky-600',
-    amber: 'bg-amber-50 text-amber-600',
-  };
-  return (
-    <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-[#DDD6FE]/60 p-3.5 flex items-center gap-3">
-      <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${tones[tone]}`}>{icon}</div>
-      <div>
-        <div className="text-lg font-bold text-[#1E1B4B] leading-tight">{value}</div>
-        <div className="text-[11px] text-[#6B7280]">{label}</div>
+          <div className="flex items-center gap-1">
+            <button
+              disabled={page <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className="px-2 py-0.5 rounded font-medium text-gray-600 hover:bg-white border border-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Prev
+            </button>
+            <span className="px-2 text-gray-600">
+              Page <span className="font-semibold text-[#7C3AED]">{page}</span> of {totalPages}
+            </span>
+            <button
+              disabled={page >= totalPages}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              className="px-2 py-0.5 rounded font-medium text-gray-600 hover:bg-white border border-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

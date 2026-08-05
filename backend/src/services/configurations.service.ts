@@ -129,6 +129,7 @@ function deriveCategory(integrationId: string): string {
   if (['general-settings', 'ai-self-healing'].includes(integrationId)) return 'settings';
   if (['jira', 'confluence', 'sharepoint'].includes(integrationId)) return 'requirement-source';
   if (['github', 'gitlab', 'bitbucket'].includes(integrationId)) return 'git-repo';
+  if (integrationId === 'azure-storage') return 'storage';
   if (['azure-blob', 'aws-s3', 'gcp-storage', 'databricks', 'snowflake', 'postgresql', 'mysql', 'mssql', 'oracle', 'sharepoint-data', 'jenkins'].includes(integrationId)) return 'data-source';
   return 'integration';
 }
