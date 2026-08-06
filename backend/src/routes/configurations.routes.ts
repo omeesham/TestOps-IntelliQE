@@ -13,6 +13,8 @@ import {
   decryptConfigData,
   encryptConfigData,
   decryptField,
+  isMaskedSecret,
+  SENSITIVE_CONFIG_KEYS,
 } from '../utils/crypto.js';
 
 const router = Router();
@@ -62,6 +64,29 @@ router.put('/:integrationId', async (req: Request, res: Response) => {
 
     // Step 1: Decrypt any __ENC__ values from frontend transit encryption
     const decryptedData = decryptConfigData(rawConfigData);
+
+    // Step 1b: The UI shows saved secrets MASKED (e.g. "git•••xy"). If the user
+    // saves without retyping a secret field, the mask itself comes back here —
+    // persisting it would DESTROY the stored secret. A masked value means
+    // "keep the existing one", so substitute it from the stored config.
+    const cameBackMasked = Object.keys(decryptedData).some(
+      (k) => SENSITIVE_CONFIG_KEYS.has(k) && isMaskedSecret(decryptedData[k]),
+    );
+    if (cameBackMasked) {
+      const existing = (await getConfigsForTenant(user.tenantId))
+        .find((c: any) => c.integrationId === integrationId);
+      const stored = existing ? decryptConfigData(existing.configData || {}) : {};
+      for (const key of Object.keys(decryptedData)) {
+        if (SENSITIVE_CONFIG_KEYS.has(key) && isMaskedSecret(decryptedData[key])) {
+          if (typeof stored[key] === 'string' && stored[key]) {
+            decryptedData[key] = stored[key];
+          } else {
+            delete decryptedData[key]; // nothing stored — drop the mask entirely
+          }
+        }
+      }
+    }
+
     // Step 2: Re-encrypt sensitive fields for secure at-rest storage in DB
     const encryptedData = encryptConfigData(decryptedData);
 

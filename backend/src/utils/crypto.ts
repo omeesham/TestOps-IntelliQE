@@ -239,6 +239,17 @@ export function maskSecret(value: string): string {
   return value.slice(0, 3) + '•••' + value.slice(-2);
 }
 
+/**
+ * True when a submitted value IS a mask produced by maskSecret (it contains the
+ * bullet character '•'). The UI round-trips masked secrets back on save/test
+ * when the user leaves the field untouched — such values mean "keep the stored
+ * secret", never "this is the new secret". Real tokens are ASCII and can never
+ * contain '•'.
+ */
+export function isMaskedSecret(value: unknown): boolean {
+  return typeof value === 'string' && value.includes('•');
+}
+
 // =====================================================================
 // CHAT MESSAGE SANITIZATION (PHI/credential redaction)
 // =====================================================================

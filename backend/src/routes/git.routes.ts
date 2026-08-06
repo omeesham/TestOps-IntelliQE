@@ -24,13 +24,12 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import pool from '../db.js';
-import { decryptConfigData } from '../utils/crypto.js';
+import { decryptConfigData, isMaskedSecret } from '../utils/crypto.js';
 import { parseRepoUrl, type GitProvider, type GitFile, type GitProviderConfig } from '../services/git/git.types.js';
 import { githubProvider } from '../services/git/github.provider.js';
 import { gitlabProvider } from '../services/git/gitlab.provider.js';
 import { bitbucketProvider } from '../services/git/bitbucket.provider.js';
-import { collectClientDeliverableBundle, ciWorkflowFile, CI_WORKFLOW_PATH } from '../services/client-deliverable.service.js';
-import { buildTestCaseDocs } from '../services/test-case-doc.service.js';
+import { assembleClientPackage } from '../services/client-package.service.js';
 import { getReportStats, readAllureResults, readBasicReport } from '../services/allure-report.service.js';
 
 /**
@@ -80,10 +79,16 @@ async function buildExecutionReportDoc(tenantId: string, runId: string): Promise
  * client deliverable there would expose framework IP, so we refuse it. Override
  * via FRAMEWORK_REPO_GUARD (comma-separated) for differently-named forks.
  */
-const FRAMEWORK_REPO_MARKERS = (process.env.FRAMEWORK_REPO_GUARD || 'jbsintelliqe,intelliqe-framework')
+const FRAMEWORK_REPO_MARKERS = (process.env.FRAMEWORK_REPO_GUARD || 'jbsintelliqe,intelliqe-framework,testops-intelliqe')
   .split(',')
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
+
+/** True when the repo name looks like the IntelliQE framework monorepo. */
+function isFrameworkRepo(repoName: string): boolean {
+  const lower = String(repoName || '').toLowerCase();
+  return FRAMEWORK_REPO_MARKERS.some((m) => lower.includes(m));
+}
 
 const router = Router();
 
@@ -151,7 +156,6 @@ router.post('/publish', async (req: Request, res: Response) => {
       scripts,
       pageObjects: requestedPageObjects,
       testCases: requestedTestCases,
-      directory: requestedDir,
       testRunId,
       integrationId,
     } = req.body;
@@ -198,8 +202,7 @@ router.post('/publish', async (req: Request, res: Response) => {
     // 2b. IP guard — refuse to publish into the IntelliQE framework monorepo.
     // The client deliverable must go to a DEDICATED client repository; pushing
     // it into the framework repo would expose proprietary internals.
-    const repoNameLower = String(coords.repo || '').toLowerCase();
-    if (FRAMEWORK_REPO_MARKERS.some((m) => repoNameLower.includes(m))) {
+    if (isFrameworkRepo(coords.repo)) {
       res.status(400).json({
         error:
           `Refusing to publish into "${coords.owner}/${coords.repo}" — this looks like the IntelliQE framework repository. ` +
@@ -208,56 +211,26 @@ router.post('/publish', async (req: Request, res: Response) => {
       return;
     }
 
-    // 3. Build the commit payload = the IP-safe client-deliverable runner
-    // package + the generated test specs. ONLY this self-contained package is
-    // published — never the framework.
-    // Bundle the static runner package (config, utils, package.json, README,
-    // .env.example). Best-effort: if unavailable at runtime, we still publish
-    // the specs so the client at least receives the tests.
-    const bundle = await collectClientDeliverableBundle();
-    // When the runner package is bundled, specs MUST go in `tests/` because the
-    // package's playwright.config.ts hardcodes testDir '../tests'. Only honor a
-    // custom path in the specs-only fallback (no package present).
-    const dir = (bundle.length > 0 ? 'tests' : (requestedDir || config.scriptsPath || 'tests'))
-      .replace(/^\/+|\/+$/g, '');
-    const cleanRel = (p: string) => p.replace(/^\/+/, '').replace(/\.\.+/g, '_').replace(/\\/g, '/').replace(/\s+/g, '-');
-    // Specs honor their POM `path` (tests/<module>/<name>.spec.ts) when present.
-    const specFiles: GitFile[] = scripts.map((s: any, i: number) => {
-      const declared = typeof s.path === 'string' && s.path.trim()
-        ? cleanRel(s.path)
-        : `${dir}/${cleanRel(String(s.fileName || `test-${i + 1}.spec.ts`))}`;
-      return { path: declared, content: String(s.code || '') };
-    });
-    // Generated page objects (POM) at their declared src/pages/... paths.
-    const pageObjectFiles: GitFile[] = Array.isArray(requestedPageObjects)
-      ? requestedPageObjects
-          .filter((p: any) => p && typeof p.path === 'string' && typeof p.code === 'string')
-          .map((p: any) => ({ path: cleanRel(p.path), content: String(p.code || '') }))
-      : [];
-    // Test-case documentation (Markdown + CSV) under docs/, so the client gets
-    // the human-readable test cases alongside the automation.
-    const docFiles: GitFile[] = buildTestCaseDocs(Array.isArray(requestedTestCases) ? requestedTestCases : []);
-    // Execution report for the run being published — the report also lives in
-    // Azure storage; this copy makes it reviewable in the repo itself.
+    // 3. Build the IP-safe client deliverable. This is a PURE transform of the
+    // pipeline's output — per-test-case specs + page objects + test cases — into
+    // the consolidated, top-level client layout (one spec per module, pages/,
+    // common/, data/testdata/, specs/, report/traces/logs, CI). ONLY this
+    // self-contained package is published — never the framework.
+    const extraFiles: GitFile[] = [];
     if (testRunId) {
+      // Execution report for the run — also lives in Azure storage; this copy
+      // makes it reviewable in the repo itself.
       const reportDoc = await buildExecutionReportDoc(user.tenantId, String(testRunId));
-      if (reportDoc) docFiles.push(reportDoc);
+      if (reportDoc) extraFiles.push(reportDoc);
     }
-
-    // Assemble scaffold + page objects + specs + docs; dedup by path (later wins
-    // so a generated file overrides a same-named scaffold placeholder if any).
-    const byPath = new Map<string, GitFile>();
-    for (const f of [...bundle, ...pageObjectFiles, ...specFiles, ...docFiles]) byPath.set(f.path, f);
-    // Guarantee the CI/CD workflow ships even when the on-disk deliverable
-    // package isn't available at runtime (specs-only fallback) — so the client
-    // repo always gets .github/workflows/playwright.yml to run the suite in
-    // GitHub Actions on every push/PR.
-    if (!byPath.has(CI_WORKFLOW_PATH)) {
-      const wf = ciWorkflowFile();
-      byPath.set(wf.path, wf);
-    }
-    const files: GitFile[] = [...byPath.values()];
-    console.log(`[git.publish] deliverable = ${bundle.length} scaffold + ${pageObjectFiles.length} page object(s) + ${specFiles.length} spec(s) + ${docFiles.length} doc(s) + CI workflow`);
+    const files: GitFile[] = assembleClientPackage({
+      scripts: Array.isArray(scripts) ? scripts : [],
+      pageObjects: requestedPageObjects,
+      testCases: requestedTestCases,
+      extraFiles,
+    });
+    const specFileCount = files.filter((f) => /^tests\/.+\.spec\.ts$/.test(f.path)).length;
+    console.log(`[git.publish] deliverable = ${files.length} file(s), ${specFileCount} consolidated module spec(s) from ${scripts.length} generated script(s)`);
 
     // 4. Defaults — branch name, PR title, commit message, PR body.
     // GitHub publishes go STRAIGHT onto the configured branch (no
@@ -267,9 +240,10 @@ router.post('/publish', async (req: Request, res: Response) => {
     const branch = (requestedBranch && String(requestedBranch).trim())
       || (coords.provider === 'github' ? config.defaultBranch : `intelliqe/tests-${ts}`);
     const title = (requestedTitle && String(requestedTitle).trim())
-      || `IntelliQE: ${specFiles.length} generated test script(s)${testRunId ? ` (run ${testRunId})` : ''}`;
+      || `IntelliQE: ${scripts.length} generated test script(s)${testRunId ? ` (run ${testRunId})` : ''}`;
     const commitMessage = (requestedCommitMessage && String(requestedCommitMessage).trim()) || title;
-    const body = (requestedDescription && String(requestedDescription).trim()) || buildDefaultPrBody(specFiles, { testRunId, username: user.username });
+    const body = (requestedDescription && String(requestedDescription).trim())
+      || buildDefaultPrBody(files, { testRunId, username: user.username, scriptCount: scripts.length });
 
     // 5. Publish.
     const result = await provider.publish(config, files, { branch, title, body, commitMessage });
@@ -312,7 +286,19 @@ router.post('/test', async (req: Request, res: Response) => {
     // Prefer explicitly-entered form values (testing before saving); otherwise
     // fall back to the stored, connected integration.
     const enteredUrl = String(repo_url || repoUrl || '').trim();
-    const enteredToken = String(access_token || accessToken || app_password || '').trim();
+    let enteredToken = String(access_token || accessToken || app_password || '').trim();
+
+    // The UI round-trips saved secrets MASKED (e.g. "git•••xy"). A masked token
+    // means "unchanged" — substitute the stored one so the test uses the real
+    // credential instead of sending bullet characters in an HTTP header.
+    if (isMaskedSecret(enteredToken)) {
+      const loaded = await loadGitConfig(user.tenantId, integrationId);
+      enteredToken = loaded?.config.accessToken || '';
+      if (!enteredToken) {
+        res.status(400).json({ ok: false, error: 'The access token shown is a masked placeholder and no saved token was found — please paste the actual token.' });
+        return;
+      }
+    }
 
     let config: GitProviderConfig;
     if (enteredUrl && enteredToken) {
@@ -339,6 +325,18 @@ router.post('/test', async (req: Request, res: Response) => {
     if (!provider) { res.status(400).json({ ok: false, error: `No provider implementation for ${coords.provider}` }); return; }
 
     const result = await provider.test(config);
+    // Surface the IP guard at TEST time too: connecting the framework repo is
+    // almost certainly a mistake, and publish will refuse it — say so up front.
+    if (result.ok && isFrameworkRepo(coords.repo)) {
+      res.json({
+        ...result,
+        frameworkRepo: true,
+        message:
+          `${result.message} WARNING: "${coords.owner}/${coords.repo}" looks like the IntelliQE FRAMEWORK repository — ` +
+          `publishing will be refused. Connect a dedicated client repository instead.`,
+      });
+      return;
+    }
     res.json(result);
   } catch (err: any) {
     // A failed test is an expected outcome, not a server error — return 200 with
@@ -347,18 +345,21 @@ router.post('/test', async (req: Request, res: Response) => {
   }
 });
 
-function buildDefaultPrBody(files: GitFile[], opts: { testRunId?: string; username: string }): string {
+function buildDefaultPrBody(files: GitFile[], opts: { testRunId?: string; username: string; scriptCount: number }): string {
   const lines: string[] = [];
   lines.push('## IntelliQE — generated Playwright test package');
   lines.push('');
-  lines.push(`Generated by **${opts.username}** via JBS IntelliQE.`);
+  lines.push(`Generated by **${opts.username}** via JBS IntelliQE (${opts.scriptCount} test script(s)).`);
   if (opts.testRunId) lines.push(`Test run: \`${opts.testRunId}\``);
   lines.push('');
-  lines.push('This PR delivers a self-contained, runnable Playwright suite:');
-  lines.push('- **Test scripts** (`tests/**/*.spec.ts`) and **page objects / POM** (`src/pages/**`)');
-  lines.push('- **Runner config** — `package.json`, `playwright.config.ts`, `tsconfig.json`, `.env.example`');
-  lines.push('- **Test-case docs** (`docs/`) and sample **test data** (`src/data/`)');
-  lines.push('- **CI/CD** — `.github/workflows/playwright.yml` runs the suite on every push/PR');
+  lines.push('This PR delivers a self-contained, runnable Playwright suite (Page Object Model):');
+  lines.push('- **Specs** — one consolidated file per module, numbered (`tests/<module>/<module>.spec.ts`)');
+  lines.push('- **Page objects / POM** (`pages/**`) with a shared `pages/base.page.ts`');
+  lines.push('- **Common utilities** (`common/**` — env, test-data loader, fixtures, logger)');
+  lines.push('- **Test plan** (`specs/basic-operations.md`) and **test-case docs** (`docs/`)');
+  lines.push('- **Test data** (`data/testdata/`)');
+  lines.push('- **Runner config** — `package.json`, `playwright.config.ts` (chromium, parallel, video + trace on), `tsconfig.json`, `.env.example`');
+  lines.push('- **CI/CD** — `.github/workflows/playwright.yml` runs the suite on every push/PR and uploads `report/`, `traces/`, `logs/`');
   lines.push('');
   lines.push(`### Files (${files.length})`);
   for (const f of files.slice(0, 50)) {
@@ -368,7 +369,7 @@ function buildDefaultPrBody(files: GitFile[], opts: { testRunId?: string; userna
   lines.push('');
   lines.push('### To run the suite');
   lines.push('1. Add a `BASE_URL` secret (and `APP_USERNAME` / `APP_PASSWORD` if your tests log in) under **Settings → Secrets and variables → Actions**.');
-  lines.push('2. GitHub Actions runs `npx playwright test` automatically — or run locally: `npm install && npx playwright install && npx playwright test`.');
+  lines.push('2. GitHub Actions runs `npx playwright test` automatically — or run locally: `npm install && npx playwright install chromium && npx playwright test`.');
   lines.push('');
   lines.push('### Review checklist');
   lines.push('- [ ] Scripts compile (`npx playwright test --list`)');

@@ -34,7 +34,6 @@ export default function Header() {
         </div>
         <div className="text-sm hidden sm:block">
           <p className="font-medium text-[#1E1B4B] capitalize">{user?.username || 'User'}</p>
-          <p className="text-[10px] text-gray-500">{user?.role || 'Guest'}</p>
         </div>
         <button
           onClick={handleLogout}

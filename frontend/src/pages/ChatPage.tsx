@@ -50,7 +50,6 @@ type Step =
   | 'welcome'
   | 'source-select'
   | 'connect-form'
-  | 'ado-mode'
   | 'app-select'
   | 'content-select'
   | 'jira-stories'
@@ -239,6 +238,17 @@ function formatHMS(ms: number): string {
   return `${s}s`;
 }
 
+/** Derive a short "owner/repo" label from a push/PR URL (falls back gracefully). */
+function gitRepoLabel(url?: string): string {
+  if (!url) return 'the repository';
+  try {
+    const parts = new URL(url).pathname.split('/').filter(Boolean);
+    return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : (parts[0] || 'the repository');
+  } catch {
+    return 'the repository';
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════
    MAIN COMPONENT
    ═══════════════════════════════════════════════════════════════ */
@@ -376,7 +386,7 @@ export default function ChatPage() {
   // that button spins and re-runs are not fired concurrently.
   const [rerunKind, setRerunKind] = useState<'' | 'failure' | 'flaky'>('');
   // One-click "Push to GitHub" state (report + results screens).
-  const [gitPush, setGitPush] = useState<{ status: 'idle' | 'pushing' | 'done' | 'error'; prUrl?: string; error?: string }>({ status: 'idle' });
+  const [gitPush, setGitPush] = useState<{ status: 'idle' | 'pushing' | 'done' | 'error'; prUrl?: string; repo?: string; branch?: string; error?: string }>({ status: 'idle' });
   // "Report to Support" state.
   const [supportState, setSupportState] = useState<{ status: 'idle' | 'sending' | 'sent' | 'error'; msg?: string }>({ status: 'idle' });
   // Rows whose ⋯ expander is open (full raw error + fix hint). Reset per run.
@@ -568,7 +578,7 @@ export default function ChatPage() {
     if (hasSavedSession) return;
 
     waitForVoices().then(() => {
-      push('tessa', `Hello ${user?.username || 'there'}! I'm Tessa, your IntelliQE TestOps Assistant.\n\nI can help you design, generate, and run intelligent tests for your applications.\n\nWhat would you like to test today?`);
+      push('tessa', `Hi ${user?.username || 'there'}. What would you like to test today?`);
     });
   }, []);
 
@@ -576,7 +586,7 @@ export default function ChatPage() {
   const pickCategory = (c: typeof CATEGORIES[number]) => {
     if (c.comingSoon) {
       push('user', c.title);
-      push('tessa', `${c.title} is coming soon — we're actively working on it. Stay tuned!`);
+      push('tessa', `${c.title} is coming soon.`);
       return;
     }
     push('user', c.title);
@@ -644,7 +654,7 @@ export default function ChatPage() {
       push('tessa', 'Please paste or type your requirements below.');
       setStep('paste-text');
     } else if (s === 'explore') {
-      push('tessa', "No problem! Please share the application URL (and login credentials if it's behind a login), and I'll explore the app to work out what to test.");
+      push('tessa', "Please share the application URL, and the login credentials if it's behind a login. I'll explore the app to work out what to test.");
       setStep('explore-form');
     } else {
       const label = REQ_SOURCES.find((r) => r.id === s)?.title || String(s);
@@ -659,7 +669,7 @@ export default function ChatPage() {
               const storiesArr = await getJiraStories(user?.username || 'admin');
               const list = Array.isArray(storiesArr) ? storiesArr : (storiesArr?.stories || storiesArr?.issues || []);
               setStories(list);
-              push('tessa', `${label} is connected. I found ${list.length} stories/tasks. Pick one from the dropdown to get started.`);
+              push('tessa', `${label} is connected. I found ${list.length} ${list.length === 1 ? 'item' : 'items'}. Pick one from the dropdown to get started.`);
               setStep('jira-stories');
             } catch (err: any) {
               console.error('JIRA stories fetch failed:', err?.response?.data || err);
@@ -669,10 +679,11 @@ export default function ChatPage() {
               push('tessa', `I couldn't fetch items from JIRA${status ? ` (error ${status})` : ''}: ${msg}. Please try again.`);
             }
           } else if (s === 'azure-devops') {
-            // ADO offers TWO modes: generate from stories, or import existing
-            // Test Cases authored in Azure DevOps. Let the user choose.
-            push('tessa', `${label} is connected. Would you like me to generate new test cases from your stories, or import the test cases already authored in Azure DevOps?`);
-            setStep('ado-mode');
+            // Same UX as JIRA: fetch the board cards immediately and show the
+            // picker dropdown. Importing existing ADO Test Cases stays available
+            // as a secondary action on the picker itself.
+            push('tessa', `${label} is connected. Fetching your board cards...`);
+            await adoFetchStories();
           } else if (s === 'confluence') {
             // Real Confluence fetch — list pages from the connected wiki.
             push('tessa', `${label} is connected. Fetching your pages...`);
@@ -687,7 +698,7 @@ export default function ChatPage() {
                 description: '',
               }));
               setStories(list);
-              push('tessa', `I found ${list.length} page(s). Please select one and I'll retrieve its content.`);
+              push('tessa', `I found ${list.length} ${list.length === 1 ? 'page' : 'pages'}. Please select one and I'll retrieve its content.`);
               setStep('content-select');
             } catch (err: any) {
               const msg = err?.response?.data?.error || err?.message || 'Could not fetch Confluence pages';
@@ -705,7 +716,7 @@ export default function ChatPage() {
                 description: '',
               }));
               setStories(list);
-              push('tessa', `I found ${list.length} document(s). Please select one to extract requirements.`);
+              push('tessa', `I found ${list.length} ${list.length === 1 ? 'document' : 'documents'}. Please select one to extract requirements.`);
               setStep('content-select');
             } catch (err: any) {
               const msg = err?.response?.data?.error || err?.message || 'Could not list SharePoint documents';
@@ -731,6 +742,7 @@ export default function ChatPage() {
         key: w.key,
         summary: w.type ? `${w.type}: ${w.summary}` : w.summary,
         title: w.summary,
+        type: w.type || '',
         description: '',
       }));
       setStories(list);
@@ -754,7 +766,7 @@ export default function ChatPage() {
     try {
       const tcs = await getAzureDevopsTestCases();
       if (!Array.isArray(tcs) || tcs.length === 0) {
-        push('tessa', "I couldn't find any Test Case work items in Azure DevOps. Please try the Stories option instead, or check the project/area path.");
+        push('tessa', "I couldn't find any Test Case work items in Azure DevOps. Please try the Stories option instead, or check the project or area path.");
         return;
       }
       const mapped = tcs.map((t, i) => {
@@ -815,7 +827,7 @@ export default function ChatPage() {
         // Backend returns StorySummary[] directly: [{key, summary}, ...]
         const list = Array.isArray(storiesArr) ? storiesArr : (storiesArr?.stories || storiesArr?.issues || []);
         setStories(list);
-        push('tessa', `Connected successfully as "${jiraName}". I found ${list.length} stories/tasks. Pick one from the dropdown to get started.`);
+        push('tessa', `Connected as ${jiraName}. I found ${list.length} ${list.length === 1 ? 'item' : 'items'}. Pick one from the dropdown to get started.`);
         setStep('jira-stories');
       } else if (source === 'confluence' || source === 'sharepoint') {
         push('tessa', `${source === 'confluence' ? 'Confluence' : 'SharePoint'} document fetching isn't available yet. Please use JIRA, upload a document, or paste your requirements instead.`);
@@ -850,7 +862,7 @@ export default function ChatPage() {
     if (source === 'jira' || source === 'azure-devops') {
       const configured = await isApplicationConfigured();
       if (!configured) {
-        push('tessa', `I've noted "${item?.key}", but the application under test isn't configured yet. Please go to System Configuration → Application Setup, add your application (name + base URL), save it, then come back and pick this story again.`);
+        push('tessa', `I've noted "${item?.key}", but the application under test isn't configured yet. Please go to System Configuration, Application Setup, add your application, then come back and pick this story again.`);
         return;
       }
     }
@@ -895,7 +907,7 @@ export default function ChatPage() {
     }
 
     setPendingRequirements(requirements);
-    push('tessa', "Great! Please choose the columns you'd like in your test cases, then click Generate.");
+    push('tessa', "Please choose the columns you'd like in your test cases, then click Generate.");
     setStep('column-select');
   };
 
@@ -934,7 +946,7 @@ export default function ChatPage() {
         result.pageCount ? `${result.pageCount} pages` : null,
       ].filter(Boolean).join(', ');
       const warn = result.warning ? ` (Note: ${result.warning})` : '';
-      push('tessa', `Got it! I extracted ${stats} from ${file.name}.${warn} Please choose the columns you'd like, then click Generate.`);
+      push('tessa', `I extracted ${stats} from ${file.name}.${warn} Please choose the columns you'd like, then click Generate.`);
       setStep('column-select');
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.message || 'Upload failed';
@@ -950,7 +962,7 @@ export default function ChatPage() {
     if (!pasteText.trim()) return;
     push('user', pasteText.trim().length > 100 ? pasteText.trim().slice(0, 100) + '...' : pasteText.trim());
     setPendingRequirements(pasteText.trim());
-    push('tessa', "Requirements received! Please choose the columns you'd like in your test cases, then click Generate.");
+    push('tessa', "Requirements received. Please choose the columns you'd like in your test cases, then click Generate.");
     setStep('column-select');
   };
 
@@ -971,7 +983,7 @@ export default function ChatPage() {
     // The literal placeholder is what we'll show in the column-select UI;
     // the real backend call uses exploreMode + roles, not this text.
     setPendingRequirements(`__EXPLORE__:${exploreUrl}`);
-    push('tessa', "Got it! I'll explore the application, identify its features, and generate test cases. Please choose the columns you'd like, then click Generate.");
+    push('tessa', "I'll explore the application, identify its features, and generate test cases. Please choose the columns you'd like, then click Generate.");
     setStep('column-select');
   };
 
@@ -981,7 +993,7 @@ export default function ChatPage() {
     const summary = `${apiMethod} ${apiUrl}`;
     push('user', summary);
     setPendingRequirements(`API Testing: ${apiMethod} ${apiUrl} - ${subCategory}`);
-    push('tessa', "API details received! Please choose the columns you'd like in your test cases, then click Generate.");
+    push('tessa', "API details received. Please choose the columns you'd like in your test cases, then click Generate.");
     setStep('column-select');
   };
 
@@ -1009,7 +1021,7 @@ export default function ChatPage() {
       const apps = await getReadyApps();
       if (apps !== null) {
         if (apps.length === 0) {
-          push('tessa', 'Before I can start Requirement Analysis, please configure your application under test in System Configuration → Application Setup (application name, base URL, and test-user roles). Once it’s saved, come back and click Generate again.');
+          push('tessa', 'Before I can start Requirement Analysis, please configure your application under test in System Configuration, Application Setup. Once it is saved, come back and click Generate again.');
           setStep('column-select');
           return;
         }
@@ -1020,7 +1032,7 @@ export default function ChatPage() {
           } else {
             setAppOptions(apps);
             setPendingGenRequirements(requirements);
-            push('tessa', 'You have more than one application configured under System Configuration → Application Setup. Which application are these test cases for?');
+            push('tessa', 'You have more than one application configured under System Configuration, Application Setup. Which application are these test cases for?');
             setStep('app-select');
             return;
           }
@@ -1176,7 +1188,7 @@ export default function ChatPage() {
     // Pipeline: Stage 2 → completed with count
     updatePipeline('test-design', 'completed', `${testCases.length} test cases generated`);
 
-    push('tessa', `I generated ${testCases.length} test cases using the AI pipeline (${res?.mode === 'async' ? 'Claude AI' : 'local agents'}). Please review, edit, or delete them as needed, then click Save when you're ready.`);
+    push('tessa', `I generated ${testCases.length} test cases. Please review, edit, or delete them as needed, then click Save when you're ready.`);
     setStep('results');
   };
 
@@ -1205,7 +1217,7 @@ export default function ChatPage() {
         testCases: results.testCases,
       });
       setSavedTestRunId(res.testRunId);
-      push('tessa', `${results.testCases.length} test cases saved successfully! You can now export them or continue to automation script generation.`);
+      // No chat message — the "Test Cases Saved!" card that renders next says it all.
       toast.success('Saved successfully');
       setStep('saved');
     } catch (err) {
@@ -1248,8 +1260,9 @@ export default function ChatPage() {
     const testCases = results?.testCases || [];
     if (testCases.length === 0) return;
 
-    push('tessa', `Generating automation scripts for ${testCases.length} test cases...`);
-    await waitForSpeech(); // Let Tessa finish speaking before starting execution
+    // No chat message here — the "Generating scripts..." progress indicator
+    // already tells the user what's happening.
+    await waitForSpeech(); // Let any ongoing Tessa speech finish first
     if (flowId !== flowIdRef.current) return; // flow discarded while speaking
     setStep('script-generating');
 
@@ -1317,7 +1330,7 @@ export default function ChatPage() {
     setAgentSteps([{ name: 'Script Writer', status: 'completed', detail: 'Automation scripts generated' }]);
     updatePipeline('script-gen', 'completed', `${scripts.length} scripts created`);
 
-    push('tessa', `I generated ${scripts.length} automation scripts. Please review the code below, then click "Execute Test Suite" to run them.`);
+    push('tessa', `Generated the automation scripts. Click "Execute Test Suite" to run them.`);
     setStep('script-review');
   };
 
@@ -1375,13 +1388,13 @@ export default function ChatPage() {
       setExecutionResults(allNotRun);
       setExecutionSummary({ total: allNotRun.length, passed: 0, failed: 0, duration: formatHMS(execWallMs), durationMs: execWallMs });
       updatePipeline('execution', 'skipped', 'Not run — no target app');
-      push('tessa', `I couldn't run the tests: ${reason} Please add your application's Base URL under System Configuration → Application Setup, or continue to the report with the generated suite.`);
+      push('tessa', `I couldn't run the tests: ${reason} Please add your application's Base URL under System Configuration, Application Setup, or continue to the report with the generated suite.`);
       setStep('execution-results');
       return;
     }
 
     if (execRes?.app?.name) {
-      push('tessa', `Running the test suite against "${execRes.app.name}"${execRes.app.targetUrl ? ` (${execRes.app.targetUrl})` : ''}...`);
+      push('tessa', `Running the test suite against ${execRes.app.name}...`);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -1431,14 +1444,14 @@ export default function ChatPage() {
     updatePipeline('execution', 'completed', `${passed}/${finalResults.length} passed`);
 
     if (failed > 0) {
-      push('tessa', `Execution complete: ${passed} of ${finalResults.length} tests passed and ${failed} failed. You can auto-heal the failing tests or continue to the report.`);
+      push('tessa', `Execution complete. ${passed} of ${finalResults.length} tests passed and ${failed} failed. You can auto-heal the failing tests or continue to the report.`);
     } else if (passed === 0) {
       // Nothing actually ran (e.g. backend returned no details). Don't pretend
       // a green run — tell the user honestly so they can investigate.
       const reason = execRes?.failureReason ? ` ${execRes.failureReason}` : '';
-      push('tessa', `No tests were executed — ${notRun} of ${finalResults.length} couldn't run.${reason} Please check the target application configuration and the generated scripts, then try again.`);
+      push('tessa', `No tests were executed. ${notRun} of ${finalResults.length} couldn't run.${reason} Please check the target application configuration and the generated scripts, then try again.`);
     } else {
-      push('tessa', `All ${passed} tests passed! You can now generate the execution report.`);
+      push('tessa', `All ${passed} tests passed. You can now generate the execution report.`);
     }
 
     // Auto-register failures in the Bug Tracker as soon as the run finishes —
@@ -1460,7 +1473,7 @@ export default function ChatPage() {
     setHealingAttempt(attempt);
     setStep('healing');
 
-    push('tessa', `Auto-healing attempt ${attempt}: fixing ${failedTests.length} failing test(s)...`);
+    push('tessa', `Auto-healing attempt ${attempt}. Fixing ${failedTests.length} failing ${failedTests.length === 1 ? 'test' : 'tests'}...`);
     await waitForSpeech(); // Let Tessa finish speaking before starting healing
     if (flowId !== flowIdRef.current) return; // flow discarded while speaking
 
@@ -1495,7 +1508,7 @@ export default function ChatPage() {
 
     if (!healRes) {
       updatePipeline('auto-healing', 'completed', 'Healing unavailable');
-      push('tessa', `Auto-healing couldn't complete${healErr ? `: ${healErr.replace(/\.+$/, '')}` : ' — the healing service could not be reached'}. You can retry, or continue to the report with the current results.`);
+      push('tessa', `Auto-healing couldn't complete${healErr ? `: ${healErr.replace(/\.+$/, '')}` : '. The healing service could not be reached'}. You can retry, or continue to the report with the current results.`);
       setStep('execution-results');
       return;
     }
@@ -1543,11 +1556,11 @@ export default function ChatPage() {
     updatePipeline('execution', 'completed', `${newPassed}/${updatedResults.length} passed`);
 
     if (newFailed > 0 && attempt < 2) {
-      push('tessa', `Re-execution complete: ${newFailed} test(s) are still failing. You can run another auto-healing cycle or continue to the report.`);
+      push('tessa', `Re-execution complete. ${newFailed} ${newFailed === 1 ? 'test is' : 'tests are'} still failing. You can run another auto-healing cycle or continue to the report.`);
     } else if (newFailed > 0) {
-      push('tessa', `Maximum auto-healing attempts reached — ${newFailed} test(s) are still failing. Please continue to the report.`);
+      push('tessa', `Maximum auto-healing attempts reached. ${newFailed} ${newFailed === 1 ? 'test is' : 'tests are'} still failing. Please continue to the report.`);
     } else {
-      push('tessa', 'All tests are passing after auto-healing! You can now generate the execution report.');
+      push('tessa', 'All tests are passing after auto-healing. You can now generate the execution report.');
     }
     // Auto-register the outcomes in the Bug Tracker: still-failing → failure,
     // failed-then-healed → flaky. Fire-and-forget so it never blocks the flow.
@@ -1590,7 +1603,7 @@ export default function ChatPage() {
           failures ? `${failures} failure${failures > 1 ? 's' : ''}` : '',
           flaky ? `${flaky} flaky` : '',
         ].filter(Boolean).join(' and ');
-        push('tessa', `Logged ${parts} in the Bug Tracker — open it to triage, or re-run flaky / failing tests separately from there.`);
+        push('tessa', `Logged ${parts} in the Bug Tracker. Open it to triage, or re-run flaky or failing tests separately from there.`);
       }
       return { created: res.created, updated: res.updated };
     } catch (err) {
@@ -1658,7 +1671,7 @@ export default function ChatPage() {
 
     const nowPassing = targets.filter((t) => byId.get(t.testCaseId)?.status === 'passed').length;
     const stillFailing = targets.length - nowPassing;
-    push('tessa', `Re-run complete: ${nowPassing} now passing, ${stillFailing} still ${kind === 'flaky' ? 'flaky/failing' : 'failing'}.`);
+    push('tessa', `Re-run complete. ${nowPassing} now passing, ${stillFailing} still ${kind === 'flaky' ? 'flaky or failing' : 'failing'}.`);
     setRerunKind('');
   };
 
@@ -1669,10 +1682,9 @@ export default function ChatPage() {
       updatePipeline('auto-healing', 'skipped', 'Not needed — all tests passed');
     }
 
-    // Pipeline: Stage 6 → running
+    // Pipeline: Stage 6 → running. No chat message — the pipeline progress
+    // panel and the toast on completion are the notifications.
     updatePipeline('report-gen', 'running', 'Generating report...');
-    push('tessa', 'Generating your test execution report...');
-    await waitForSpeech(); // Let Tessa finish speaking before generating report
     setStep('report');
 
     // No artificial wait — the report is built synchronously from existing state.
@@ -1699,7 +1711,7 @@ export default function ChatPage() {
     // existing state in ~0ms, so show the real test-run duration instead of
     // its own (near-zero) elapsed time.
     updatePipeline('report-gen', 'completed', `Report ready — ${passRate}% pass rate`, executionSummary?.durationMs);
-    push('tessa', `Your test execution report is ready. Pass rate: ${passRate}%. ${healingAttempt > 0 ? `${healingLog.filter(l => l.result === 'fixed').length} test(s) were auto-healed.` : 'No auto-healing was needed.'}`);
+    toast.success('Report generated', `${passRate}% pass rate`);
   };
 
   /* --- Auto-populate git repo from System Configuration when entering publish step --- */
@@ -1748,12 +1760,12 @@ export default function ChatPage() {
       return;
     }
     if (!selectedRepoId) {
-      push('tessa', 'Please select a connected repository first, or connect one under System Configuration → Code Repositories.');
+      push('tessa', 'Please select a connected repository first, or connect one under System Configuration, Code Repositories.');
       return;
     }
     setIsPublishing(true);
     setPublishedPrUrl('');
-    push('tessa', `Pushing ${generatedScripts.length} test script(s) to your Git repository...`);
+    push('tessa', `Pushing ${generatedScripts.length} test ${generatedScripts.length === 1 ? 'script' : 'scripts'} to your Git repository...`);
     await waitForSpeech();
     try {
       const result = await publishToGit({
@@ -1767,15 +1779,11 @@ export default function ChatPage() {
         integrationId: selectedRepoId as 'github' | 'gitlab' | 'bitbucket',
         testRunId: savedTestRunId || currentRunId || undefined,
       });
+      const repo = gitRepoLabel(result.prUrl);
       setPublishedPrUrl(result.prUrl);
       setPublishResult('success');
-      toast.success('Published successfully');
-      push(
-        'tessa',
-        result.mode === 'direct'
-          ? `Done! I pushed ${result.fileCount} file(s) to branch "${result.branch}" on ${result.provider}. You can view them at ${result.prUrl}`
-          : `Done! I opened ${result.provider === 'gitlab' ? 'MR' : 'PR'} #${result.prNumber} on ${result.provider} with ${result.fileCount} file(s). You can view it at ${result.prUrl}`,
-      );
+      toast.success('Pushed successfully', `${repo} · branch ${result.branch}`);
+      push('tessa', `Pushed to ${repo} (branch "${result.branch}").`);
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.message || 'Git publish failed';
       setPublishResult('error');
@@ -1811,10 +1819,9 @@ export default function ChatPage() {
       }
       if (!integrationId) {
         setGitPush({ status: 'error', error: 'No repository connected' });
-        push('tessa', 'No code repository is connected. Connect GitHub under System Configuration → Code Repositories, then try again.');
+        push('tessa', 'No code repository is connected. Connect GitHub under System Configuration, Code Repositories, then try again.');
         return;
       }
-      push('tessa', `Pushing ${generatedScripts.length} test script(s) and the test cases to your ${integrationId} repository...`);
       const result = await publishToGit({
         scripts: generatedScripts.map((s) => ({ fileName: s.fileName, code: s.code, path: s.path })),
         pageObjects: generatedPageObjects.map((p) => ({ path: p.path, code: p.code })),
@@ -1822,16 +1829,15 @@ export default function ChatPage() {
         integrationId: integrationId as 'github' | 'gitlab' | 'bitbucket',
         testRunId: savedTestRunId || currentRunId || undefined,
       });
+      const repo = gitRepoLabel(result.prUrl);
       setPublishedPrUrl(result.prUrl);
-      setGitPush({ status: 'done', prUrl: result.prUrl });
-      toast.success('Pushed to GitHub');
-      push('tessa', result.mode === 'direct'
-        ? `Done! I pushed ${result.fileCount} file(s) to branch "${result.branch}" on ${result.provider}: ${result.prUrl}`
-        : `Done! I opened ${result.provider === 'gitlab' ? 'MR' : 'PR'} #${result.prNumber} on ${result.provider} with ${result.fileCount} file(s): ${result.prUrl}`);
+      setGitPush({ status: 'done', prUrl: result.prUrl, repo, branch: result.branch });
+      toast.success('Pushed successfully', `${repo} · branch ${result.branch}`);
+      push('tessa', `Pushed to ${repo} (branch "${result.branch}").`);
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.message || 'Git push failed';
       setGitPush({ status: 'error', error: msg });
-      push('tessa', `I couldn't push to GitHub: ${msg}. You can still create a Pull Request from the report screen.`);
+      push('tessa', `I couldn't push to the repository: ${msg}.`);
     }
   };
 
@@ -1849,11 +1855,11 @@ export default function ChatPage() {
       .filter((r) => r.status === 'passed' && healedIds.has(r.testCaseId))
       .map((r) => ({ name: r.testName }));
     if (failures.length === 0 && flaky.length === 0) {
-      push('tessa', 'There are no failing or flaky tests to report — everything passed cleanly.');
+      push('tessa', 'There are no failing or flaky tests to report. Everything passed cleanly.');
       return;
     }
     setSupportState({ status: 'sending' });
-    push('tessa', `Reporting ${failures.length} failing and ${flaky.length} flaky test(s) to your team...`);
+    push('tessa', `Reporting ${failures.length} failing and ${flaky.length} flaky tests to your team...`);
     try {
       const res = await reportToSupport({
         runId: savedTestRunId || currentRunId || undefined,
@@ -1868,7 +1874,7 @@ export default function ChatPage() {
       });
       if (!res.configured) {
         setSupportState({ status: 'error', msg: 'No notification channel configured' });
-        push('tessa', 'No notification channel is connected yet. Add Outlook email, Slack, or Teams under System Configuration → Notifications, then try again. (The failures are already logged in the Bug Tracker.)');
+        push('tessa', 'No notification channel is connected yet. Add Outlook email, Slack, or Teams under System Configuration, Notifications, then try again. The failures are already logged in the Bug Tracker.');
         return;
       }
       const okChannels = res.results.filter((r) => r.sent).map((r) => r.channel);
@@ -2010,7 +2016,7 @@ export default function ChatPage() {
     setGitPush({ status: 'idle' });
     setSupportState({ status: 'idle' });
     clearSession(); // clear persisted session on explicit reset
-    setTimeout(() => push('tessa', `Welcome back! What would you like to test today?`), 100);
+    setTimeout(() => push('tessa', `Welcome back. What would you like to test today?`), 100);
   };
 
   /* ═══════════════════════════════════════════════════════════════
@@ -2119,45 +2125,6 @@ export default function ChatPage() {
       );
     }
 
-    /* ── AZURE DEVOPS: choose stories vs existing test cases ── */
-    if (step === 'ado-mode') {
-      return (
-        <div className="max-w-md ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm space-y-3">
-          <div className="flex items-center gap-2 mb-1 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-            <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-            <span className="text-xs font-medium text-emerald-700">Azure DevOps connected</span>
-          </div>
-          <p className="text-xs text-gray-600">What would you like to pull in?</p>
-          <button
-            onClick={runOnce(adoFetchStories)}
-            disabled={busy}
-            className="w-full text-left p-3.5 bg-white border border-gray-100 rounded-xl hover:border-violet-300 hover:shadow-md transition-all disabled:opacity-50"
-          >
-            <div className="flex items-center gap-2.5">
-              <Workflow className="w-4 h-4 text-violet-500" />
-              <div>
-                <p className="text-sm font-medium text-gray-800">Generate from Stories</p>
-                <p className="text-[11px] text-gray-400">Pull user stories / work items and let AI author new tests</p>
-              </div>
-            </div>
-          </button>
-          <button
-            onClick={runOnce(adoImportTestCases)}
-            disabled={busy}
-            className="w-full text-left p-3.5 bg-white border border-gray-100 rounded-xl hover:border-violet-300 hover:shadow-md transition-all disabled:opacity-50"
-          >
-            <div className="flex items-center gap-2.5">
-              <FileText className="w-4 h-4 text-violet-500" />
-              <div>
-                <p className="text-sm font-medium text-gray-800">Import Existing Test Cases</p>
-                <p className="text-[11px] text-gray-400">Bring in Test Cases already authored in Azure DevOps, with their steps</p>
-              </div>
-            </div>
-          </button>
-        </div>
-      );
-    }
-
     /* ── APPLICATION PICK — shown only when >1 application is configured ── */
     if (step === 'app-select') {
       return (
@@ -2235,7 +2202,7 @@ export default function ChatPage() {
             <p className="text-xs text-gray-500">No stories or tasks were found in this project.</p>
           ) : (
             <>
-              <label className="block text-xs font-medium text-gray-600 mb-2">Select a story or task</label>
+              <label className="block text-xs font-medium text-gray-600 mb-2">Select an item</label>
               <select
                 value={selectedStory}
                 onChange={e => setSelectedStory(e.target.value)}
@@ -2271,14 +2238,28 @@ export default function ChatPage() {
             {stories.map(s => {
               const full = (s.title || s.summary || '').trim();
               const display = full.length > 30 ? full.slice(0, 30).trimEnd() + '...' : full;
+              // Azure DevOps cards show their board number + work-item type,
+              // e.g. "12 · User Story — Login flow"; other sources keep "KEY: title".
+              const label = source === 'azure-devops'
+                ? `${s.key}${s.type ? ` · ${s.type}` : ''} — ${display}`
+                : `${s.key}: ${display}`;
               return (
-                <option key={s.key} value={s.key} title={`${s.key}: ${full}`}>{s.key}: {display}</option>
+                <option key={s.key} value={s.key} title={`${s.key}: ${full}`}>{label}</option>
               );
             })}
           </select>
           <button onClick={runOnce(handleStorySelect)} disabled={busy || !selectedStory} className="mt-3 w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2">
             <ArrowRight className="w-4 h-4" />Proceed
           </button>
+          {source === 'azure-devops' && (
+            <button
+              onClick={runOnce(adoImportTestCases)}
+              disabled={busy}
+              className="mt-2 w-full py-2 text-xs font-medium text-violet-600 hover:text-violet-700 hover:bg-violet-50 rounded-lg transition-colors disabled:opacity-40"
+            >
+              or import existing Test Cases from Azure DevOps instead
+            </button>
+          )}
         </div>
       );
     }
@@ -2850,64 +2831,31 @@ export default function ChatPage() {
     if (step === 'saved') {
       return (
         <div className="max-w-md ml-11 space-y-4">
-          {/* Success Message */}
-          <div className="bg-white border border-emerald-200 rounded-xl p-5 shadow-sm">
-            <div className="flex items-center gap-2 mb-2">
+          {/* Saved confirmation + generic CSV export */}
+          <div className="bg-white border border-emerald-200 rounded-xl p-5 shadow-sm flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center">
                 <CheckCircle className="w-4.5 h-4.5 text-emerald-600" />
               </div>
-              <div>
-                <p className="text-sm font-semibold text-gray-800">Test Cases Saved!</p>
-                <p className="text-xs text-gray-500">{results?.testCases?.length || 0} test cases saved to database.</p>
-              </div>
-            </div>
-          </div>
-
-          {/* Export Section */}
-          <div className="bg-white border border-gray-100 rounded-xl p-3.5 shadow-sm">
-            <div className="flex items-center gap-2 mb-2.5">
-              <Download className="w-3.5 h-3.5 text-violet-500" />
-              <span className="text-xs font-semibold text-gray-800">Export Test Cases</span>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              {[
-                { format: 'csv', label: 'Excel CSV', icon: FileText },
-                { format: 'jira', label: 'JIRA', icon: Link2 },
-                { format: 'testrail', label: 'TestRail', icon: Clipboard },
-              ].map(exp => (
-                <button
-                  key={exp.format}
-                  onClick={() => handleExport(exp.format)}
-                  disabled={isExporting}
-                  className="group flex items-center justify-center gap-1.5 px-2 py-1.5 border border-gray-200 rounded-lg hover:border-violet-300 hover:bg-violet-50 disabled:opacity-50 transition-all"
-                >
-                  <exp.icon className="w-3.5 h-3.5 text-gray-400 group-hover:text-violet-500 transition-colors" />
-                  <span className="text-xs font-medium text-gray-700">{exp.label}</span>
-                </button>
-              ))}
-            </div>
-            {isExporting && (
-              <p className="text-xs text-violet-500 mt-2 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" />Exporting...</p>
-            )}
-          </div>
-
-          {/* Proceed to Script Generation */}
-          <div className="bg-white border border-gray-100 rounded-xl p-3.5 shadow-sm flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <Code className="w-3.5 h-3.5 text-indigo-500" />
-                <span className="text-xs font-semibold text-gray-800">Automation Scripts</span>
-              </div>
-              <p className="text-[11px] text-gray-500 mt-0.5">Generate automation scripts for your saved test cases.</p>
+              <p className="text-sm font-semibold text-gray-800">Test Cases Saved!</p>
             </div>
             <button
-              onClick={runOnce(handleScriptGeneration)}
-              disabled={busy}
-              className="inline-flex flex-shrink-0 items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:opacity-40 text-white text-xs font-medium rounded-lg transition-all"
+              onClick={() => handleExport('csv')}
+              disabled={isExporting}
+              className="flex-shrink-0 px-4 py-2 border border-gray-200 rounded-lg text-xs font-medium text-gray-700 hover:border-violet-300 hover:bg-violet-50 disabled:opacity-50 transition-all"
             >
-              <Code className="w-3.5 h-3.5" />Generate Scripts
+              {isExporting ? 'Exporting...' : 'Export'}
             </button>
           </div>
+
+          {/* Proceed to script generation */}
+          <button
+            onClick={runOnce(handleScriptGeneration)}
+            disabled={busy}
+            className="w-full py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all"
+          >
+            Generate Scripts
+          </button>
 
           {/* Start New */}
           <button onClick={reset} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-xs text-gray-600 hover:border-violet-300 hover:text-violet-600 transition-all">
@@ -3109,66 +3057,44 @@ export default function ChatPage() {
             );
           })()}
 
-          {/* Decision Buttons */}
-          <div className="flex gap-2">
+          {/* Actions — one compact row. Push stays DISABLED here until the
+              report is generated (the report screen enables it). */}
+          <div className="flex flex-wrap items-center gap-2">
             {executionSummary.failed > 0 && healingAttempt < 2 && (
               <button
                 onClick={runOnce(handleAutoHeal)}
                 disabled={busy || !!rerunKind}
-                className="flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+                className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all"
               >
-                <Wrench className="w-4 h-4" />Auto-Heal & Re-Execute
+                Auto-Heal & Re-Execute
               </button>
             )}
             <button
               onClick={runOnce(handleProceedToReport)}
-              disabled={busy}
-              className={`${executionSummary.failed > 0 && healingAttempt < 2 ? 'flex-1' : 'w-full'} py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2`}
+              disabled={busy || !!reportData}
+              className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all"
             >
-              <BarChart3 className="w-4 h-4" />Generate Report
+              Generate Report
+            </button>
+            <button
+              disabled
+              className="inline-flex items-center px-4 py-2 bg-white border border-gray-300 text-gray-800 opacity-40 cursor-not-allowed text-sm font-medium rounded-lg"
+              title="Generate the report first — publishing unlocks afterwards"
+            >
+              Push to Repository
             </button>
           </div>
-
-          {/* Push generated tests + scripts straight to the connected repo, and
-              escalate failures/flaky tests to the team's notification channel.
-              Both are available as soon as the agents finish. */}
-          {(() => {
-            const healedIds = new Set(healingLog.filter((l) => l.result === 'fixed').map((l) => l.testCaseId));
-            const hasEscalatable = executionResults.some((r) => r.status === 'failed')
-              || executionResults.some((r) => r.status === 'passed' && healedIds.has(r.testCaseId));
-            return (
-              <div className="flex gap-2">
-                <button
-                  onClick={handleQuickPushToGit}
-                  disabled={gitPush.status === 'pushing' || generatedScripts.length === 0}
-                  className="flex-1 py-2 bg-white border border-gray-800 hover:bg-gray-900 hover:text-white text-gray-800 disabled:opacity-40 text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
-                  title="Push the generated test cases and scripts to your connected repository"
-                >
-                  {gitPush.status === 'pushing' ? <Loader2 className="w-4 h-4 animate-spin" />
-                    : gitPush.status === 'done' ? <CheckCircle className="w-4 h-4 text-emerald-500" />
-                    : <Github className="w-4 h-4" />}
-                  {gitPush.status === 'done' ? 'Pushed to GitHub' : gitPush.status === 'pushing' ? 'Pushing…' : 'Push to GitHub'}
-                </button>
-                {hasEscalatable && (
-                  <button
-                    onClick={handleReportToSupport}
-                    disabled={supportState.status === 'sending'}
-                    className="flex-1 py-2 bg-white border border-rose-300 hover:bg-rose-50 text-rose-600 disabled:opacity-40 text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
-                    title="Send a failure summary to your team (email / Slack / Teams)"
-                  >
-                    {supportState.status === 'sending' ? <Loader2 className="w-4 h-4 animate-spin" />
-                      : supportState.status === 'sent' ? <CheckCircle className="w-4 h-4 text-emerald-500" />
-                      : <LifeBuoy className="w-4 h-4" />}
-                    {supportState.status === 'sent' ? 'Reported' : 'Report to Support'}
-                  </button>
-                )}
-              </div>
-            );
-          })()}
-          {gitPush.status === 'done' && gitPush.prUrl && (
-            <a href={gitPush.prUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-xs font-medium text-violet-700 hover:text-violet-800 break-all">
-              <ExternalLink className="w-3.5 h-3.5 flex-shrink-0" /> {gitPush.prUrl}
-            </a>
+          {gitPush.status === 'done' && (
+            <p className="flex items-center flex-wrap gap-x-1.5 text-xs text-gray-600">
+              <CheckCircle className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
+              Pushed to <span className="font-semibold text-gray-800">{gitPush.repo}</span>
+              · branch <span className="font-semibold text-gray-800">{gitPush.branch}</span>
+              {gitPush.prUrl && (
+                <a href={gitPush.prUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-violet-700 hover:text-violet-800">
+                  <ExternalLink className="w-3 h-3" /> View
+                </a>
+              )}
+            </p>
           )}
         </div>
       );
@@ -3274,47 +3200,34 @@ export default function ChatPage() {
               </div>
             )}
           </div>
-          {/* Action buttons */}
-          <div className="flex items-center flex-wrap gap-3">
+          {/* Action buttons — report exists, so publishing is now unlocked. */}
+          <div className="flex items-center flex-wrap gap-2">
             <button
               onClick={handleQuickPushToGit}
-              disabled={gitPush.status === 'pushing' || generatedScripts.length === 0}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-gray-900 hover:bg-gray-800 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all"
+              disabled={gitPush.status === 'pushing' || gitPush.status === 'done' || generatedScripts.length === 0}
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all"
               title="Push the generated test cases and scripts to your connected repository"
             >
               {gitPush.status === 'pushing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 : gitPush.status === 'done' ? <CheckCircle className="w-3.5 h-3.5" />
-                : <Github className="w-3.5 h-3.5" />}
-              {gitPush.status === 'done' ? 'Pushed to GitHub' : gitPush.status === 'pushing' ? 'Pushing…' : 'Push to GitHub'}
+                : null}
+              {gitPush.status === 'done' ? 'Pushed to Repository' : gitPush.status === 'pushing' ? 'Pushing…' : 'Push to Repository'}
             </button>
-            {(reportData.failed > 0 || reportData.healed > 0) && (
-              <button
-                onClick={handleReportToSupport}
-                disabled={supportState.status === 'sending'}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-rose-300 text-rose-600 hover:bg-rose-50 disabled:opacity-40 text-sm font-medium rounded-lg transition-all"
-                title="Send a failure summary to your team (email / Slack / Teams)"
-              >
-                {supportState.status === 'sending' ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  : supportState.status === 'sent' ? <CheckCircle className="w-3.5 h-3.5 text-emerald-500" />
-                  : <LifeBuoy className="w-3.5 h-3.5" />}
-                {supportState.status === 'sent' ? 'Reported' : 'Report to Support'}
-              </button>
-            )}
-            <button
-              onClick={() => setStep('publish')}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-violet-300 text-violet-700 hover:bg-violet-50 text-sm font-medium rounded-lg transition-all"
-              title="Open the guided publish flow"
-            >
-              <GitBranch className="w-3.5 h-3.5" />Publish to Repo…
-            </button>
-            <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-violet-300 hover:text-violet-600 transition-all">
+            <button onClick={reset} className="inline-flex items-center gap-1.5 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-violet-300 hover:text-violet-600 transition-all">
               <RotateCcw className="w-3.5 h-3.5" />Start New Test
             </button>
           </div>
-          {gitPush.status === 'done' && gitPush.prUrl && (
-            <a href={gitPush.prUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-xs font-medium text-violet-700 hover:text-violet-800 break-all">
-              <ExternalLink className="w-3.5 h-3.5 flex-shrink-0" /> {gitPush.prUrl}
-            </a>
+          {gitPush.status === 'done' && (
+            <p className="flex items-center flex-wrap gap-x-1.5 text-xs text-gray-600">
+              <CheckCircle className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
+              Pushed to <span className="font-semibold text-gray-800">{gitPush.repo}</span>
+              · branch <span className="font-semibold text-gray-800">{gitPush.branch}</span>
+              {gitPush.prUrl && (
+                <a href={gitPush.prUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-violet-700 hover:text-violet-800">
+                  <ExternalLink className="w-3 h-3" /> View
+                </a>
+              )}
+            </p>
           )}
         </div>
       );

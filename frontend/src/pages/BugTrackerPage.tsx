@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Bug, Plus, Search, X, Trash2, Edit3, Undo2, RotateCcw, AlertTriangle,
+  Bug, Search, X, Trash2, Edit3, Undo2, RotateCcw, AlertTriangle,
   CheckCircle2, Clock, XCircle, CircleDot, Loader2, RefreshCw, Eye,
   Activity, User, CalendarDays, Layers, Monitor, Tag, ExternalLink, Upload,
   Zap, Play,
 } from 'lucide-react';
 import {
-  listBugs, getBug, createBug, updateBug, revokeBug, deleteBug,
+  listBugs, getBug, updateBug, revokeBug, deleteBug,
   subscribeToBugEvents, getBugAdoStatus, pushBugsToAdo, getBugJiraStatus, pushBugsToJira,
   rerunBugs,
 } from '@/services/api';
@@ -210,7 +210,9 @@ export default function BugTrackerPage() {
   const [revokeReason, setRevokeReason] = useState('');
   const [actionBusy, setActionBusy] = useState(false);
 
-  const [editor, setEditor] = useState<{ mode: 'create' } | { mode: 'edit'; bug: BugRow; initial: BugForm } | null>(null);
+  // Edit-only: bugs are logged automatically by failed executions; there is no
+  // manual "Report Bug" entry point.
+  const [editor, setEditor] = useState<{ bug: BugRow; initial: BugForm } | null>(null);
   const [form, setForm] = useState<BugForm>(EMPTY_FORM);
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -420,12 +422,6 @@ export default function BugTrackerPage() {
     fetchBugs(pagination.page, pagination.limit, opts);
   };
 
-  const openCreate = () => {
-    setForm(EMPTY_FORM);
-    setFormError('');
-    setEditor({ mode: 'create' });
-  };
-
   const openEdit = (bug: BugRow) => {
     const snapshot: BugForm = {
       title: bug.title || '',
@@ -445,7 +441,7 @@ export default function BugTrackerPage() {
     };
     setForm(snapshot);
     setFormError('');
-    setEditor({ mode: 'edit', bug, initial: snapshot });
+    setEditor({ bug, initial: snapshot });
   };
 
   const handleSave = async () => {
@@ -455,46 +451,28 @@ export default function BugTrackerPage() {
     setSaving(true);
     setFormError('');
     try {
-      if (editor.mode === 'create') {
-        await createBug({
-          title,
-          description: form.description,
-          severity: form.severity,
-          priority: form.priority,
-          environment: form.environment,
-          module: form.module,
-          steps_to_reproduce: form.steps_to_reproduce,
-          expected_result: form.expected_result,
-          actual_result: form.actual_result,
-          assigned_to: form.assigned_to,
-          test_case_id: form.test_case_id,
-          tags: form.tags.split(',').map((t) => t.trim()).filter(Boolean),
-        });
-        toast.success('Bug reported successfully');
-      } else {
-        // Send only fields the user actually changed so a stale editor can't
-        // clobber concurrent edits; expected_updated_at makes the server
-        // reject with 409 if the bug moved underneath us.
-        const payload: Record<string, any> = {};
-        for (const key of Object.keys(form) as (keyof BugForm)[]) {
-          if (form[key] === editor.initial[key]) continue;
-          if (key === 'tags') {
-            payload.tags = form.tags.split(',').map((t) => t.trim()).filter(Boolean);
-          } else if (key === 'title') {
-            payload.title = title;
-          } else {
-            payload[key] = form[key];
-          }
+      // Send only fields the user actually changed so a stale editor can't
+      // clobber concurrent edits; expected_updated_at makes the server
+      // reject with 409 if the bug moved underneath us.
+      const payload: Record<string, any> = {};
+      for (const key of Object.keys(form) as (keyof BugForm)[]) {
+        if (form[key] === editor.initial[key]) continue;
+        if (key === 'tags') {
+          payload.tags = form.tags.split(',').map((t) => t.trim()).filter(Boolean);
+        } else if (key === 'title') {
+          payload.title = title;
+        } else {
+          payload[key] = form[key];
         }
-        if (Object.keys(payload).length === 0) {
-          setEditor(null);
-          return;
-        }
-        payload.expected_updated_at = editor.bug.updated_at;
-        await updateBug(editor.bug.id, payload);
-        toast.success('Saved successfully');
-        if (detailIdRef.current === editor.bug.id) openDetail(editor.bug.id);
       }
+      if (Object.keys(payload).length === 0) {
+        setEditor(null);
+        return;
+      }
+      payload.expected_updated_at = editor.bug.updated_at;
+      await updateBug(editor.bug.id, payload);
+      toast.success('Saved successfully');
+      if (detailIdRef.current === editor.bug.id) openDetail(editor.bug.id);
       setEditor(null);
       refreshAll({ silent: true });
     } catch (err: any) {
@@ -668,12 +646,6 @@ export default function BugTrackerPage() {
             Raise Bug{selectedIds.size > 1 ? 's' : ''}
           </button>
 
-          <button
-            onClick={openCreate}
-            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-[#7C3AED] hover:bg-[#6D28D9] text-white rounded-lg text-sm font-medium whitespace-nowrap shrink-0 shadow-sm shadow-purple-500/25 transition-colors"
-          >
-            <Plus className="w-3.5 h-3.5" /> Report Bug
-          </button>
         </div>
       </div>
 
@@ -766,7 +738,7 @@ export default function BugTrackerPage() {
                 <tr>
                   <td colSpan={10} className="px-3 py-12 text-center text-gray-400">
                     <Bug className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-                    {hasFilters ? 'No bugs match the current filters.' : 'No bugs reported yet. Click "Report Bug" to log your first one.'}
+                    {hasFilters ? 'No bugs match the current filters.' : 'No bugs reported yet. Failed test executions are logged here automatically.'}
                   </td>
                 </tr>
               ) : bugs.map((bug) => (
@@ -1103,13 +1075,13 @@ export default function BugTrackerPage() {
         </div>
       )}
 
-      {/* Create / Edit modal */}
+      {/* Edit modal */}
       {editor && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setEditor(null)}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[88vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between p-5 border-b border-gray-100">
               <h3 className="text-lg font-bold text-gray-900">
-                {editor.mode === 'edit' ? `Edit Bug — BUG-${editor.bug.bug_number}` : 'Report New Bug'}
+                {`Edit Bug — BUG-${editor.bug.bug_number}`}
               </h3>
               <button onClick={() => setEditor(null)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400">
                 <X className="w-5 h-5" />
@@ -1127,7 +1099,7 @@ export default function BugTrackerPage() {
                 <label className={labelCls}>Description</label>
                 <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} placeholder="What happened? Include any relevant context." className={inputCls} />
               </div>
-              <div className={`grid grid-cols-2 ${editor.mode === 'edit' ? 'sm:grid-cols-3' : ''} gap-4`}>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                 <div>
                   <label className={labelCls}>Severity</label>
                   <select value={form.severity} onChange={(e) => setForm({ ...form, severity: e.target.value })} className={inputCls}>
@@ -1140,16 +1112,14 @@ export default function BugTrackerPage() {
                     {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
                   </select>
                 </div>
-                {editor.mode === 'edit' && (
-                  <div>
-                    <label className={labelCls}>Status</label>
-                    <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} className={inputCls}>
-                      {Object.entries(STATUS_CONFIG).map(([key, cfg]) => (
-                        <option key={key} value={key}>{cfg.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
+                <div>
+                  <label className={labelCls}>Status</label>
+                  <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} className={inputCls}>
+                    {Object.entries(STATUS_CONFIG).map(([key, cfg]) => (
+                      <option key={key} value={key}>{cfg.label}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -1185,12 +1155,10 @@ export default function BugTrackerPage() {
                   <textarea value={form.actual_result} onChange={(e) => setForm({ ...form, actual_result: e.target.value })} rows={2} className={inputCls} />
                 </div>
               </div>
-              {editor.mode === 'edit' && (
-                <div>
-                  <label className={labelCls}>Resolution Notes</label>
-                  <textarea value={form.resolution_notes} onChange={(e) => setForm({ ...form, resolution_notes: e.target.value })} rows={2} placeholder="How was this fixed / why was it closed?" className={inputCls} />
-                </div>
-              )}
+              <div>
+                <label className={labelCls}>Resolution Notes</label>
+                <textarea value={form.resolution_notes} onChange={(e) => setForm({ ...form, resolution_notes: e.target.value })} rows={2} placeholder="How was this fixed / why was it closed?" className={inputCls} />
+              </div>
               <div>
                 <label className={labelCls}>Tags</label>
                 <input value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} placeholder="regression, login, ui (comma-separated)" className={inputCls} />
@@ -1206,7 +1174,7 @@ export default function BugTrackerPage() {
                 className="btn-3d flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:from-[#6D28D9] hover:to-[#4F46E5] disabled:from-[#C4B5FD] disabled:to-[#C7D2FE] text-white rounded-xl text-sm font-semibold transition-all shadow-lg shadow-purple-500/25"
               >
                 {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-                {editor.mode === 'edit' ? 'Save Changes' : 'Report Bug'}
+                Save Changes
               </button>
             </div>
           </div>

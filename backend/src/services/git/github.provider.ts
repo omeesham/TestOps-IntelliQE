@@ -15,6 +15,15 @@
 import type { GitFile, GitProvider, GitProviderConfig, GitTestResult, PublishResult } from './git.types.js';
 import { parseRepoUrl } from './git.types.js';
 
+/**
+ * A brand-new client repo often has NO commits yet. The git-data API answers
+ * 409 ("Git Repository is empty") for such repos — but the Contents API still
+ * works and creates the branch with the first commit. So an empty repo is a
+ * VALID publish target (direct mode), not an error.
+ */
+const isEmptyRepo = (err: any): boolean =>
+  err?.status === 409 || /repository is empty/i.test(String(err?.message || ''));
+
 export const githubProvider: GitProvider = {
   id: 'github',
 
@@ -54,21 +63,40 @@ export const githubProvider: GitProvider = {
       throw new Error(`Could not reach ${owner}/${repo}: ${err.message || err}`);
     }
 
-    // 2. Default branch (the PR target) must exist.
+    // 2. Default branch (the PR target) must exist — EXCEPT when the repo is
+    // brand-new and empty: that's the normal client-onboarding case, and the
+    // first publish will initialize the branch with its initial commit.
     try {
       await octokit.git.getRef({ owner, repo, ref: `heads/${config.defaultBranch}` });
     } catch (err: any) {
+      if (isEmptyRepo(err)) {
+        return {
+          ok: true,
+          canPush,
+          message: canPush
+            ? `Connected to ${owner}/${repo}. The repository is empty — the first publish will initialize branch '${config.defaultBranch}' with the test suite.`
+            : `Connected to ${owner}/${repo} (empty repository), but the token cannot push. Grant Contents write access.`,
+        };
+      }
       if (err.status === 404) {
         throw new Error(`Default branch '${config.defaultBranch}' does not exist on ${owner}/${repo}. Set "Default Branch" to an existing branch (e.g. main).`);
       }
       throw new Error(`Could not read default branch '${config.defaultBranch}': ${err.message || err}`);
     }
 
+    // CAVEAT for fine-grained tokens (github_pat_*): repos.get `permissions`
+    // reflects the token OWNER's repo permission, NOT the token's own grants.
+    // A fine-grained token without "Contents: Read and write" for THIS repo
+    // still shows push:true here yet gets 403 on the actual commit — so warn.
+    const fineGrained = config.accessToken.startsWith('github_pat_');
+    const fineGrainedNote = fineGrained
+      ? ` NOTE: this is a fine-grained token — make sure the token itself grants "${owner}/${repo}" Contents (Read and write), or commits will be refused even though push access shows here.`
+      : '';
     return {
       ok: true,
       canPush,
       message: canPush
-        ? `Connected to ${owner}/${repo}. Default branch '${config.defaultBranch}' found and the token can push. Ready to raise PRs.`
+        ? `Connected to ${owner}/${repo}. Default branch '${config.defaultBranch}' found and the token can push. Ready to raise PRs.${fineGrainedNote}`
         : `Connected to ${owner}/${repo} and branch '${config.defaultBranch}' found, but the token cannot push to this repo. Grant Contents + Pull requests write access.`,
     };
   },
@@ -106,15 +134,28 @@ export const githubProvider: GitProvider = {
         `Classic token: enable the 'repo' scope. Then update the token under System Configuration → Code Repositories.`,
       );
 
-    // 1. Verify the base branch exists and get its tip SHA.
-    let baseSha: string;
+    // 1. Verify the base branch exists and get its tip SHA. An EMPTY repo has
+    // no refs at all — that's fine in direct mode (the Contents API creates the
+    // branch with the first commit), but PR mode is impossible (no base).
+    let baseSha = '';
+    let emptyRepo = false;
     try {
       const baseRef = await octokit.git.getRef({
         owner, repo, ref: `heads/${config.defaultBranch}`,
       });
       baseSha = baseRef.data.object.sha;
     } catch (err: any) {
-      throw new Error(`Could not read default branch '${config.defaultBranch}' on ${owner}/${repo}: ${err.message || err}`);
+      if (isEmptyRepo(err)) {
+        if (!direct) {
+          throw new Error(
+            `${owner}/${repo} is empty, so a PR cannot be opened (base branch '${config.defaultBranch}' does not exist yet). ` +
+            `Publish directly to '${config.defaultBranch}' first to initialize the repository.`,
+          );
+        }
+        emptyRepo = true; // first commit below will create the branch
+      } else {
+        throw new Error(`Could not read default branch '${config.defaultBranch}' on ${owner}/${repo}: ${err.message || err}`);
+      }
     }
 
     // 2. Create the new branch (PR mode only).
@@ -145,15 +186,19 @@ export const githubProvider: GitProvider = {
         // with HTTP 422 ("sha wasn't supplied") otherwise. Look it up (absent
         // for new files) so re-publishes / non-empty repos work.
         let sha: string | undefined;
-        try {
-          const existing = await octokit.repos.getContent({
-            owner, repo, path: file.path, ref: opts.branch,
-          });
-          if (!Array.isArray(existing.data) && 'sha' in existing.data) {
-            sha = existing.data.sha;
+        // Skip the lookup entirely while the repo has no commits yet — the
+        // Contents API would 404/409 on every path anyway.
+        if (!emptyRepo) {
+          try {
+            const existing = await octokit.repos.getContent({
+              owner, repo, path: file.path, ref: opts.branch,
+            });
+            if (!Array.isArray(existing.data) && 'sha' in existing.data) {
+              sha = existing.data.sha;
+            }
+          } catch (e: any) {
+            if (e?.status !== 404 && !isEmptyRepo(e)) throw e; // 404 = new file, no sha needed
           }
-        } catch (e: any) {
-          if (e?.status !== 404) throw e; // 404 = new file, no sha needed
         }
         await octokit.repos.createOrUpdateFileContents({
           owner, repo,

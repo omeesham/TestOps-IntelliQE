@@ -2,9 +2,15 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
+import { version } from './package.json'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  define: {
+    // Fallback build stamp when CI doesn't inject VITE_APP_VERSION:
+    // the package.json version, shown as "V<version>" in the sidebar.
+    'import.meta.env.VITE_PKG_VERSION': JSON.stringify(version),
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

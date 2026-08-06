@@ -19,8 +19,10 @@ interface NavItem {
 const ALL: UserRole[] = ['admin', 'qa_engineer', 'data_analyst'];
 
 // Build stamp injected at build time (Dockerfile ARG -> VITE_APP_VERSION).
-// Format: V<build>-DDMMYY (e.g. "V42-150626"). Falls back to "dev" locally.
-const APP_VERSION = (import.meta.env.VITE_APP_VERSION as string | undefined) || 'dev';
+// Format: V<build>-DDMMYY (e.g. "V42-150626"). Local/dev builds fall back to
+// the package.json version (injected via vite.config define), e.g. "V1.0.0".
+const APP_VERSION = (import.meta.env.VITE_APP_VERSION as string | undefined)
+  || `V${(import.meta.env.VITE_PKG_VERSION as string | undefined) || '1.0.0'}`;
 
 // Pages temporarily hidden from the UI (code kept intact). Remove a path from
 // this list to bring its nav item back. Keep in sync with HIDDEN_PAGES in App.tsx.
