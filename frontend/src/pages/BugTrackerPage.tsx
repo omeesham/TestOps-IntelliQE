@@ -634,26 +634,9 @@ export default function BugTrackerPage() {
         </button>
 
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {/* Re-run all failing / flaky tests. Each button re-executes just the
-              tests linked to bugs of that type and updates their status. */}
-          <button
-            onClick={() => handleRerun('failure')}
-            disabled={!!rerunning}
-            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-white hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed text-red-600 border border-red-200 rounded-lg text-sm font-medium whitespace-nowrap shrink-0 shadow-sm transition-colors"
-            title="Re-run every failing test that has an open failure bug"
-          >
-            {rerunning === 'failure' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-            Run Failures
-          </button>
-          <button
-            onClick={() => handleRerun('flaky')}
-            disabled={!!rerunning}
-            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-white hover:bg-amber-50 disabled:opacity-40 disabled:cursor-not-allowed text-amber-600 border border-amber-200 rounded-lg text-sm font-medium whitespace-nowrap shrink-0 shadow-sm transition-colors"
-            title="Re-run every flaky (auto-healed) test that has an open bug"
-          >
-            {rerunning === 'flaky' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-            Run Flaky
-          </button>
+          {/* Re-run all failing / flaky tests. The trigger buttons are hidden
+              for now, but handleRerun('failure' | 'flaky') stays wired up so the
+              functionality can be re-exposed without rebuilding it. */}
 
           {/* One generic raise button — the destination (Azure DevOps / JIRA)
               is picked in a popup so new trackers can be added without

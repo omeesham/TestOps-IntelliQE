@@ -662,6 +662,147 @@ router.post('/from-run', async (req: Request, res: Response) => {
   }
 });
 
+/* ──────────────────────────────────────────────────────────────────
+   Re-run script backfill (legacy runs).
+   The chat wizard historically executed scripts that lived only in the browser
+   and never persisted them, so runs created before script-persistence have no
+   rows in automation_scripts — their failure/flaky bugs then fail to re-run with
+   NO_SCRIPTS. For those runs we reconstruct a deterministic Playwright spec from
+   the stored test case (the SAME template the Automation Scripts page ships as
+   its non-AI fallback), keyed by tc_number so it matches how bugs were linked to
+   test cases. This touches no AI/agent/pipeline code — it only backfills a
+   missing script so the EXISTING re-run can execute. New runs persist their real
+   scripts and never reach this path.
+   ────────────────────────────────────────────────────────────────── */
+function specEsc(s: any): string {
+  return String(s ?? '').replace(/[\\'`]/g, '').replace(/\r?\n/g, ' ').trim();
+}
+
+/**
+ * Build a runnable Playwright spec from a stored test case. Returns null when the
+ * case yields no assertable check — reconstructing an assertion-less test would
+ * let it pass as a no-op and falsely resolve a real bug, so we skip it instead.
+ */
+function buildSpecFromTestCase(tc: any, targetUrl: string): string | null {
+  const rawSteps: any[] = Array.isArray(tc?.steps)
+    ? tc.steps
+    : (Array.isArray(tc?.test_steps)
+        ? tc.test_steps.map((s: any) => (typeof s === 'string' ? s : `${s?.action || ''}${s?.expected ? ` -> ${s.expected}` : ''}`))
+        : []);
+  const lines: string[] = [];
+  let assertions = 0;
+  rawSteps.forEach((step: any, i: number) => {
+    const text = String(step ?? '').trim();
+    if (!text) return;
+    const s = text.toLowerCase();
+    if (s.includes('navigate') || s.includes('go to') || s.includes('open ') || s.includes('launch')) {
+      lines.push(`  await page.goto('${targetUrl}');`);
+    } else if (s.includes('click') || s.includes('press') || s.includes('submit') || s.includes('tap')) {
+      const name = specEsc(text.replace(/click|press|submit|tap|the|button|on/gi, '').trim().slice(0, 60)) || 'Submit';
+      lines.push(`  await page.getByRole('button', { name: '${name}' }).first().click();`);
+    } else if (s.includes('enter') || s.includes('type') || s.includes('fill') || s.includes('input')) {
+      const label = specEsc(text.replace(/enter|type|fill|input|the|a|into|field|with/gi, '').trim().split(' ')[0]) || 'input';
+      lines.push(`  await page.getByLabel('${label}').first().fill('test-value');`);
+    } else if (s.includes('verify') || s.includes('assert') || s.includes('check') || s.includes('should') || s.includes('see') || s.includes('expect') || s.includes('display')) {
+      const phrase = specEsc(text.replace(/verify|assert|check|should|see|that|the|is|are|expect|displayed|display|appears?/gi, '').trim().split(/\s+/).slice(0, 3).join(' '));
+      if (phrase) { lines.push(`  await expect(page.getByText('${phrase}', { exact: false }).first()).toBeVisible();`); assertions++; }
+      else lines.push(`  // ${specEsc(text)}`);
+    } else {
+      lines.push(`  // Step ${i + 1}: ${specEsc(text)}`);
+    }
+  });
+  // Guarantee at least one real assertion; otherwise skip (see doc above).
+  if (assertions === 0) {
+    const expected = specEsc(tc?.expected || tc?.expected_result);
+    if (!expected) return null;
+    const phrase = expected.split(/\s+/).slice(0, 4).join(' ');
+    lines.push(`  await expect(page.getByText('${phrase}', { exact: false }).first()).toBeVisible();`);
+  }
+  const title = specEsc(tc?.title || tc?.tc_number || 'Test scenario') || 'Test scenario';
+  const num = specEsc(tc?.tc_number || tc?.id || 'TC');
+  return `import { test, expect } from '@playwright/test';
+
+test.describe('${title}', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('${targetUrl}');
+  });
+
+  test('${num} - ${title}', async ({ page }) => {
+${lines.join('\n') || '  // no runnable steps'}
+  });
+});
+`;
+}
+
+/**
+ * Ensure the run has a runnable script for each wanted test case, reconstructing
+ * any that are missing from the stored test cases. Best-effort: never throws, so
+ * a backfill hiccup just leaves the original NO_SCRIPTS behaviour intact. Returns
+ * the number of scripts reconstructed.
+ */
+async function ensureRunHasScripts(
+  tenantId: string,
+  isPlatform: boolean,
+  runId: string,
+  wantTestCaseIds: string[],
+): Promise<number> {
+  try {
+    const existing = await pool.query(
+      `SELECT test_case_id FROM "JBSTestOpsAI".automation_scripts
+        WHERE test_run_id = $1${isPlatform ? '' : ' AND tenant_id = $2'}
+          AND framework = 'playwright' AND code IS NOT NULL AND code <> ''`,
+      isPlatform ? [runId] : [runId, tenantId],
+    );
+    const have = new Set(existing.rows.map((r: any) => String(r.test_case_id)));
+    const missing = wantTestCaseIds.filter((id) => !have.has(String(id)));
+    if (missing.length === 0) return 0;
+
+    // Target URL from the tenant's connected application. Without it we can't
+    // build a runnable spec, so leave the bugs honestly non-runnable.
+    let targetUrl = '';
+    try {
+      const appRes = await pool.query(
+        `SELECT config_data FROM "JBSTestOpsAI".client_configurations
+          WHERE tenant_id = $1 AND integration_id LIKE 'app-%' AND status = 'connected'
+          ORDER BY updated_at DESC`,
+        [tenantId],
+      );
+      const cfg = appRes.rows[0]?.config_data;
+      targetUrl = cfg?.baseUrl || cfg?.targetUrl || cfg?.url || '';
+    } catch { /* ignore */ }
+    if (!targetUrl) return 0;
+
+    // Stored test cases, indexed by tc_number (== bug.test_case_id).
+    const casesRes = await pool.query(
+      `SELECT id, tc_number, title, steps, test_steps, expected FROM "JBSTestOpsAI".test_cases
+        WHERE test_run_id = $1`,
+      [runId],
+    );
+    const byNum = new Map<string, any>();
+    for (const r of casesRes.rows) if (r.tc_number != null) byNum.set(String(r.tc_number), r);
+
+    let reconstructed = 0;
+    for (const id of missing) {
+      const tc = byNum.get(String(id));
+      if (!tc) continue;
+      const code = buildSpecFromTestCase(tc, targetUrl);
+      if (!code) continue;
+      const fileName = `${specEsc(tc.tc_number || 'tc').toLowerCase().replace(/[^a-z0-9]+/g, '-')}.spec.ts`.slice(0, 120);
+      await pool.query(
+        `INSERT INTO "JBSTestOpsAI".automation_scripts
+           (tenant_id, test_run_id, test_case_id, tc_number, test_case_title, file_name, language, framework, code, status, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, 'typescript', 'playwright', $7, 'generated', 'rerun-reconstructed')`,
+        [tenantId, runId, String(id), String(tc.tc_number || id).slice(0, 100), String(tc.title || '').slice(0, 400), fileName, code],
+      );
+      reconstructed++;
+    }
+    return reconstructed;
+  } catch (err: any) {
+    console.warn(`Bug re-run: script backfill failed for run ${runId}:`, err?.message);
+    return 0;
+  }
+}
+
 // POST /rerun — re-execute the tests behind the selected/flaky/failure bugs.
 // Body: { bugType?: 'flaky'|'failure', ids?: string[] }. Groups the target bugs
 // by their linked test_run_id and re-runs just those test cases via Playwright,
@@ -713,6 +854,10 @@ router.post('/rerun', async (req: Request, res: Response) => {
     for (const [runId, group] of byRunId) {
       const wantIds = [...group.testCaseIds];
       try {
+        // Legacy runs that never persisted scripts would fail with NO_SCRIPTS.
+        // Reconstruct the missing scripts from the stored test cases first, so
+        // the re-run has something real to execute. No-op when scripts exist.
+        await ensureRunHasScripts(user.tenantId, user.isPlatform, runId, wantIds);
         const { results } = await runPlaywrightForRun(user.tenantId, user.isPlatform, runId, wantIds);
         const resultByTc = new Map(results.map((r) => [r.testCaseId, r]));
         let rp = 0, rf = 0;

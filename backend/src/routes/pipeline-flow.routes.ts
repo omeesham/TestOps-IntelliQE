@@ -17,6 +17,7 @@ import { archiveAndPrune } from '../services/report-archive.service.js';
 import { startJob, getJob } from '../services/async-jobs.service.js';
 import { timed } from '../services/agent-metrics.service.js';
 import { logger } from '../utils/logger.js';
+import pool from '../db.js';
 import path from 'path';
 import fs from 'fs/promises';
 import os from 'os';
@@ -300,6 +301,58 @@ function normalizePageObject(p: any): PageObjectFile | null {
   };
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Persist the run's generated / healed Playwright scripts into automation_scripts,
+ * keyed by (test_run_id, test_case_id). The chat wizard carries scripts in memory
+ * and never wrote them to the DB, so anything that later reads scripts by run —
+ * the Automation Scripts page and, critically, the Bug Tracker "Run Failures /
+ * Run Flaky" re-run — found nothing and failed with NO_SCRIPTS. Saving them here,
+ * at execute/heal time, closes that gap without touching the generation, execution
+ * or healing agents.
+ *
+ * Best-effort by design: only runs for a real saved run (UUID — ephemeral chat run
+ * ids are skipped), upserts per script (UPDATE the run/case row, else INSERT), and
+ * never throws, so a persistence hiccup can't fail an otherwise-successful run.
+ */
+async function persistRunScripts(
+  tenantId: string,
+  testRunId: string | undefined,
+  scripts: AutomationScript[],
+  testCases: TestCase[],
+): Promise<void> {
+  if (!testRunId || !UUID_RE.test(String(testRunId)) || !Array.isArray(scripts) || scripts.length === 0) return;
+  const meta = new Map((testCases || []).map((tc) => [String(tc.id), tc]));
+  for (const s of scripts) {
+    try {
+      if (!s?.testCaseId || typeof s.code !== 'string' || !s.code.trim()) continue;
+      const tcId = String(s.testCaseId);
+      const tc = meta.get(tcId);
+      const fileName = s.fileName || `${tcId}.spec.ts`;
+      const tcNumber = (tc?.id || tcId).slice(0, 100);
+      const title = (tc?.title || fileName.replace(/\.spec\.ts$/, '')).slice(0, 400);
+      // Update the existing (run, case) row if present; otherwise insert a new one.
+      const upd = await pool.query(
+        `UPDATE "JBSTestOpsAI".automation_scripts
+           SET code = $1, file_name = $2, tc_number = $3, test_case_title = $4, updated_at = now()
+         WHERE test_run_id = $5 AND test_case_id = $6 AND tenant_id = $7`,
+        [s.code, fileName, tcNumber, title, testRunId, tcId, tenantId],
+      );
+      if (!upd.rowCount) {
+        await pool.query(
+          `INSERT INTO "JBSTestOpsAI".automation_scripts
+             (tenant_id, test_run_id, test_case_id, tc_number, test_case_title, file_name, language, framework, code, status, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6, 'typescript', 'playwright', $7, 'generated', 'pipeline')`,
+          [tenantId, testRunId, tcId, tcNumber, title, fileName, s.code],
+        );
+      }
+    } catch (err) {
+      logger.warn('pipeline-flow: failed to persist automation script', { testCaseId: s?.testCaseId, error: (err as Error).message });
+    }
+  }
+}
+
 /**
  * POST /api/pipeline-flow/scripts
  * Stage 3 — generate Playwright scripts for the (possibly edited) test cases
@@ -445,6 +498,11 @@ async function executeStage(tenantId: string, body: any): Promise<any> {
       durationSeconds: Math.round(durationMs / 1000), reportUrl,
     });
   }
+
+  // Persist the executed scripts against the saved run so the Bug Tracker re-run
+  // (and the Automation Scripts page) can find them later. No-op for ephemeral
+  // chat runs; never throws.
+  await persistRunScripts(tenantId, testRunId, normalizedScripts, next.testCases);
 
   return {
     executionDetails: details,
@@ -704,6 +762,11 @@ async function healStage(tenantId: string, body: any): Promise<any> {
         durationSeconds: Math.round(durationMs / 1000), reportUrl, healed: true,
       });
     }
+
+    // Persist the HEALED scripts against the saved run so a Bug Tracker re-run
+    // uses the repaired version (matters for "Run Flaky"). No-op for ephemeral
+    // chat runs; never throws.
+    await persistRunScripts(tenantId, testRunId, reExecuted.automationScripts, reExecuted.testCases);
 
     return {
       scripts: reExecuted.automationScripts,
