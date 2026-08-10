@@ -1,5 +1,6 @@
 import type { TestOpsState, AutomationScript, PageObjectFile, TestCase, ExploredApp } from './state.js';
 import { runLLM, parseJsonFromResponse, coerceJsonArray, salvageJsonArrayObjects, llmForStage } from './claude-runner.js';
+import { decryptStored } from '../utils/crypto.js';
 
 /**
  * Parse an LLM response expected to be a JSON array, tolerating production
@@ -126,7 +127,14 @@ const LOGIN_CONTRACT = `NAVIGATION, LOGIN & READINESS ASSERTIONS — get this EX
 function buildCredentialsBlock(state: TestOpsState): string {
   const roles = (state.appContext?.roles || []).filter((r) => r.username);
   if (roles.length === 0) return '';
-  const lines = roles.map((r) => `- Role "${r.roleName}": username="${r.username}" password="${r.password}"`);
+  const lines = roles.map((r) => {
+    // Guard (additive): if a caller passes a still-encrypted password, decrypt it
+    // here so an __ENC__/__AES__ blob can never leak into the prompt or generated
+    // code. decryptStored is a no-op on already-plaintext values, so every existing
+    // (plaintext) caller is byte-for-byte unchanged.
+    const pw = /^__(ENC|AES)__/.test(String(r.password || '')) ? decryptStored(String(r.password)) : r.password;
+    return `- Role "${r.roleName}": username="${r.username}" password="${pw}"`;
+  });
   return `\nLOGIN CREDENTIALS (use these EXACT values for any sign-in — do not invent credentials; never emit encrypted-looking placeholders such as "__ENC__..." or "__AES__..."):\n${lines.join('\n')}\n`;
 }
 

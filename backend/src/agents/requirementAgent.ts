@@ -88,7 +88,18 @@ EXTRACTION RULES (read carefully — GROUND EVERYTHING IN EVIDENCE, do not inven
 10. NEVER return empty arrays for features / actors / flows — at minimum return one grounded entry each.`;
 
   const response = await runLLM(prompt, { maxTokens: 8000, llm: llmForStage(state.llm, 'requirement') });
-  const parsed = parseJsonFromResponse<ParsedRequirements>(response);
+  // Resilience guard (additive): this is the FIRST pipeline stage and must never
+  // hard-abort the whole run on an unparseable model response. parseJsonFromResponse
+  // throws on total garbage; fall back to an empty object so the defensive
+  // normalisation below still yields a minimal grounded shape. The success path is
+  // unchanged — a valid response parses exactly as before.
+  let parsed: Partial<ParsedRequirements>;
+  try {
+    parsed = parseJsonFromResponse<ParsedRequirements>(response);
+  } catch (err) {
+    console.warn('[requirementAgent] response was not parseable JSON — using grounded fallback:', (err as Error).message);
+    parsed = {};
+  }
 
   // Defensive normalisation — Claude may omit some optional sections.
   const parsedRequirements: ParsedRequirements = {

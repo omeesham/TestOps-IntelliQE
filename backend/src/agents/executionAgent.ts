@@ -223,6 +223,12 @@ async function runPlaywrightInMemory(
   const allureReporterLine = allureResultsDir
     ? `    ['allure-playwright', { resultsDir: ${JSON.stringify(allureResultsDir)}, outputFolder: ${JSON.stringify(allureResultsDir)}, detail: true, suiteTitle: false }],\n`
     : '';
+  // JUnit XML for TestRail / TestLink result-sync (authoring-standards §11). Additive:
+  // it sits alongside the existing line/json/html/allure reporters and changes no
+  // pass/fail behaviour. Written next to the persistent HTML report when one is given
+  // (so it is archived with the run), otherwise into the ephemeral workspace.
+  const junitOutput = htmlReportDir ? path.join(htmlReportDir, 'junit.xml') : './junit.xml';
+  const junitReporterLine = `    ['junit', { outputFile: ${JSON.stringify(junitOutput)} }],\n`;
   const configSrc = `const { defineConfig } = require('@playwright/test');
 module.exports = defineConfig({
   testDir: './tests',
@@ -238,12 +244,13 @@ module.exports = defineConfig({
   reporter: [
     ['line'],
     ['json', { outputFile: './pw-summary.json' }],
-${htmlReporterLine}${allureReporterLine}  ],
+${htmlReporterLine}${allureReporterLine}${junitReporterLine}  ],
   use: {
 ${baseUrlLine}    actionTimeout: 20_000,
     navigationTimeout: 45_000,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
+    video: 'retain-on-failure',
   },
   projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
 });
