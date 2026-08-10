@@ -275,7 +275,7 @@ export default function ChatPage() {
   const [selectedStory, setSelectedStory] = useState<string>('');
   // Configured application(s) under test — shown on the Jira card so it's clear
   // which app these stories will be tested against. null = not yet loaded.
-  const [readyApps, setReadyApps] = useState<{ integrationId: string; appName: string; baseUrl: string }[] | null>(null);
+  const [readyApps, setReadyApps] = useState<{ integrationId: string; appName: string; baseUrl: string; environment?: string }[] | null>(null);
   const [pasteText, setPasteText] = useState('');
   const [results, setResults] = useState<any>(null);
   const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
@@ -611,7 +611,7 @@ export default function ChatPage() {
      picking "just any configured app" let one application's stories
      (e.g. OrangeHRM) silently run against a DIFFERENT application's URL
      whenever more than one was configured. */
-  const getReadyApps = async (): Promise<{ integrationId: string; appName: string; baseUrl: string }[] | null> => {
+  const getReadyApps = async (): Promise<{ integrationId: string; appName: string; baseUrl: string; environment?: string }[] | null> => {
     try {
       const { configs } = await getConfigurations();
       return (configs || [])
@@ -620,6 +620,7 @@ export default function ChatPage() {
           integrationId: c.integrationId,
           appName: c.configData?.appName || c.integrationId,
           baseUrl: c.configData?.baseUrl,
+          environment: c.configData?.environment,
         }));
     } catch {
       return null;
@@ -1327,7 +1328,12 @@ export default function ChatPage() {
     // Runs against the Application configured in System Configuration → Application
     // Setup (resolved server-side). If none is configured, the backend reports
     // executed:false and we surface that gracefully — no blocking URL prompt.
-    push('tessa', 'Executing your test suite in the staging environment...');
+    // Resolve the real environment (dev / qa / staging / production) of the app
+    // these tests run against, from its Application Setup config — never hardcode it.
+    const appsForEnv = readyApps ?? await getReadyApps();
+    const selApp = appsForEnv?.find((a) => a.integrationId === selectedAppId) ?? appsForEnv?.[0];
+    const envName = (selApp?.environment || '').trim();
+    push('tessa', `Executing your test suite${envName ? ` in the ${envName} environment` : ''}...`);
     await waitForSpeech();
     if (flowId !== flowIdRef.current) return; // flow discarded while speaking
     setStep('executing');
@@ -1378,10 +1384,6 @@ export default function ChatPage() {
       push('tessa', `I couldn't run the tests: ${reason} Please add your application's Base URL under System Configuration → Application Setup, or continue to the report with the generated suite.`);
       setStep('execution-results');
       return;
-    }
-
-    if (execRes?.app?.name) {
-      push('tessa', `Running the test suite against "${execRes.app.name}"${execRes.app.targetUrl ? ` (${execRes.app.targetUrl})` : ''}...`);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -1582,16 +1584,6 @@ export default function ChatPage() {
     if (items.length === 0) return null;
     try {
       const res = await registerBugsFromRun({ testRunId: savedTestRunId, items });
-      const n = (res.created || 0) + (res.updated || 0);
-      if (n > 0) {
-        const failures = items.filter((i) => i.bugType === 'failure').length;
-        const flaky = items.filter((i) => i.bugType === 'flaky').length;
-        const parts = [
-          failures ? `${failures} failure${failures > 1 ? 's' : ''}` : '',
-          flaky ? `${flaky} flaky` : '',
-        ].filter(Boolean).join(' and ');
-        push('tessa', `Logged ${parts} in the Bug Tracker — open it to triage, or re-run flaky / failing tests separately from there.`);
-      }
       return { created: res.created, updated: res.updated };
     } catch (err) {
       console.error('Bug auto-registration failed:', err);
@@ -2927,7 +2919,6 @@ export default function ChatPage() {
               <div className="flex items-center gap-2">
                 <Code className="w-4 h-4 text-violet-500" />
                 <span className="text-sm font-semibold text-gray-800">Generated Scripts</span>
-                <span className="text-xs px-2 py-0.5 bg-violet-50 text-violet-600 rounded-full">{generatedScripts.length} scripts</span>
               </div>
             </div>
             {/* Script list */}
@@ -2936,8 +2927,7 @@ export default function ChatPage() {
                 <div key={i} className="px-5 py-2.5 flex items-center gap-3 hover:bg-gray-50/50">
                   <CheckCircle className="w-4 h-4 text-emerald-500 flex-shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-mono text-gray-700 truncate">{s.fileName}</p>
-                    <p className="text-[10px] text-gray-400">{s.testCaseId}</p>
+                    <p className="text-xs font-medium text-gray-700 truncate">{s.testCaseId}</p>
                   </div>
                   <span className="text-[10px] px-1.5 py-0.5 bg-[#7C3AED]/5 text-[#7C3AED] rounded border border-[#7C3AED]/10 font-mono">.spec.ts</span>
                 </div>
@@ -3011,22 +3001,22 @@ export default function ChatPage() {
       return (
         <div className="max-w-2xl ml-11 space-y-3">
           {/* Summary Cards */}
-          <div className="grid grid-cols-4 gap-2">
-            <div className="bg-white border border-gray-100 rounded-xl p-3 text-center shadow-sm">
-              <p className="text-lg font-bold text-gray-800">{executionSummary.total}</p>
-              <p className="text-[10px] text-gray-400 uppercase">Total</p>
+          <div className="grid grid-cols-4 gap-1.5">
+            <div className="bg-white border border-gray-100 rounded-lg p-1.5 text-center shadow-sm">
+              <p className="text-sm font-bold text-gray-800">{executionSummary.total}</p>
+              <p className="text-[9px] text-gray-400 uppercase">Total</p>
             </div>
-            <div className="bg-emerald-50 border border-emerald-200/60 rounded-xl p-3 text-center shadow-sm">
-              <p className="text-lg font-bold text-emerald-600">{executionSummary.passed}</p>
-              <p className="text-[10px] text-emerald-500 uppercase">Passed</p>
+            <div className="bg-emerald-50 border border-emerald-200/60 rounded-lg p-1.5 text-center shadow-sm">
+              <p className="text-sm font-bold text-emerald-600">{executionSummary.passed}</p>
+              <p className="text-[9px] text-emerald-500 uppercase">Passed</p>
             </div>
-            <div className={`border rounded-xl p-3 text-center shadow-sm ${executionSummary.failed > 0 ? 'bg-red-50 border-red-200/60' : 'bg-gray-50 border-gray-200/60'}`}>
-              <p className={`text-lg font-bold ${executionSummary.failed > 0 ? 'text-red-600' : 'text-gray-400'}`}>{executionSummary.failed}</p>
-              <p className={`text-[10px] uppercase ${executionSummary.failed > 0 ? 'text-red-500' : 'text-gray-400'}`}>Failed</p>
+            <div className={`border rounded-lg p-1.5 text-center shadow-sm ${executionSummary.failed > 0 ? 'bg-red-50 border-red-200/60' : 'bg-gray-50 border-gray-200/60'}`}>
+              <p className={`text-sm font-bold ${executionSummary.failed > 0 ? 'text-red-600' : 'text-gray-400'}`}>{executionSummary.failed}</p>
+              <p className={`text-[9px] uppercase ${executionSummary.failed > 0 ? 'text-red-500' : 'text-gray-400'}`}>Failed</p>
             </div>
-            <div className="bg-white border border-gray-100 rounded-xl p-3 text-center shadow-sm">
-              <p className="text-lg font-bold text-gray-800">{executionSummary.duration}</p>
-              <p className="text-[10px] text-gray-400 uppercase">Duration</p>
+            <div className="bg-white border border-gray-100 rounded-lg p-1.5 text-center shadow-sm">
+              <p className="text-sm font-bold text-gray-800">{executionSummary.duration}</p>
+              <p className="text-[9px] text-gray-400 uppercase">Duration</p>
             </div>
           </div>
 
@@ -3074,60 +3064,34 @@ export default function ChatPage() {
             })}
           </div>
 
-          {/* Run separately — re-execute just the failing OR just the flaky
-              (auto-healed) subset in place. Failures are auto-registered in the
-              Bug Tracker, where the same split re-run is also available. */}
+          {/* Decision Buttons */}
           {(() => {
-            const healedIds = new Set(healingLog.filter((l) => l.result === 'fixed').map((l) => l.testCaseId));
-            const failCount = executionResults.filter((r) => r.status === 'failed').length;
-            const flakyCount = executionResults.filter((r) => r.status === 'passed' && healedIds.has(r.testCaseId)).length;
-            if (failCount === 0 && flakyCount === 0) return null;
+            // Auto-heal is "enabled" (available to run) only while failing tests
+            // remain AND the 2 healing attempts haven't been spent. Once it has done
+            // its task — everything healed, or attempts exhausted — it is disabled.
+            const healingActive = executionSummary.failed > 0 && healingAttempt < 2;
             return (
-              <div className="bg-white border border-gray-100 rounded-xl p-3 shadow-sm">
-                <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Run separately</p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleRerunSubset('failure')}
-                    disabled={!!rerunKind || failCount === 0}
-                    className="flex-1 py-2 bg-red-50 hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed text-red-700 border border-red-200 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5"
-                    title={failCount === 0 ? 'No failing tests' : 'Re-run only the failing tests'}
-                  >
-                    {rerunKind === 'failure' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />}
-                    Re-run Failures{failCount > 0 ? ` (${failCount})` : ''}
-                  </button>
-                  <button
-                    onClick={() => handleRerunSubset('flaky')}
-                    disabled={!!rerunKind || flakyCount === 0}
-                    className="flex-1 py-2 bg-amber-50 hover:bg-amber-100 disabled:opacity-40 disabled:cursor-not-allowed text-amber-700 border border-amber-200 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5"
-                    title={flakyCount === 0 ? 'No flaky (auto-healed) tests yet — heal first' : 'Re-run only the flaky (auto-healed) tests'}
-                  >
-                    {rerunKind === 'flaky' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-                    Re-run Flaky{flakyCount > 0 ? ` (${flakyCount})` : ''}
-                  </button>
-                </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={runOnce(handleAutoHeal)}
+                  disabled={busy || !!rerunKind || !healingActive}
+                  title={healingActive
+                    ? 'Diagnose and fix the failing tests, then re-execute'
+                    : (healingAttempt >= 2 ? 'Auto-heal limit reached (2 attempts)' : 'Nothing left to heal')}
+                  className="flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+                >
+                  <Wrench className="w-4 h-4" />Auto-Heal &amp; Re-Execute
+                </button>
+                {/* Generate Report stays enabled throughout the results screen. */}
+                <button
+                  onClick={runOnce(handleProceedToReport)}
+                  className="flex-1 py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+                >
+                  <BarChart3 className="w-4 h-4" />Generate Report
+                </button>
               </div>
             );
           })()}
-
-          {/* Decision Buttons */}
-          <div className="flex gap-2">
-            {executionSummary.failed > 0 && healingAttempt < 2 && (
-              <button
-                onClick={runOnce(handleAutoHeal)}
-                disabled={busy || !!rerunKind}
-                className="flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
-              >
-                <Wrench className="w-4 h-4" />Auto-Heal & Re-Execute
-              </button>
-            )}
-            <button
-              onClick={runOnce(handleProceedToReport)}
-              disabled={busy}
-              className={`${executionSummary.failed > 0 && healingAttempt < 2 ? 'flex-1' : 'w-full'} py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2`}
-            >
-              <BarChart3 className="w-4 h-4" />Generate Report
-            </button>
-          </div>
 
           {/* Push generated tests + scripts straight to the connected repo, and
               escalate failures/flaky tests to the team's notification channel.
@@ -3140,9 +3104,19 @@ export default function ChatPage() {
               <div className="flex gap-2">
                 <button
                   onClick={handleQuickPushToGit}
-                  disabled={gitPush.status === 'pushing' || generatedScripts.length === 0}
-                  className="flex-1 py-2 bg-white border border-gray-800 hover:bg-gray-900 hover:text-white text-gray-800 disabled:opacity-40 text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
-                  title="Push the generated test cases and scripts to your connected repository"
+                  disabled={
+                    gitPush.status === 'pushing'
+                    || generatedScripts.length === 0
+                    || !reportData                                          // rule 3: only after a report has been generated
+                    || (executionSummary.failed > 0 && healingAttempt < 2)  // rules 4/5: only once auto-heal is disabled/done
+                  }
+                  className="flex-1 py-2 bg-white border border-gray-800 hover:bg-gray-900 hover:text-white text-gray-800 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+                  title={
+                    generatedScripts.length === 0 ? 'No scripts to push'
+                    : !reportData ? 'Generate the report first'
+                    : (executionSummary.failed > 0 && healingAttempt < 2) ? 'Finish (or skip) auto-healing first'
+                    : 'Push the generated test cases and scripts to your connected repository'
+                  }
                 >
                   {gitPush.status === 'pushing' ? <Loader2 className="w-4 h-4 animate-spin" />
                     : gitPush.status === 'done' ? <CheckCircle className="w-4 h-4 text-emerald-500" />
