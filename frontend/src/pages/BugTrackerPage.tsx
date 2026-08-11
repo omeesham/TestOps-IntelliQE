@@ -3,12 +3,11 @@ import {
   Bug, Search, X, Trash2, Edit3, Undo2, RotateCcw, AlertTriangle,
   CheckCircle2, Clock, XCircle, CircleDot, Loader2, RefreshCw, Eye,
   Activity, User, CalendarDays, Layers, Monitor, Tag, ExternalLink, Upload,
-  Zap, Play,
+  Zap,
 } from 'lucide-react';
 import {
   listBugs, getBug, updateBug, revokeBug, deleteBug,
   subscribeToBugEvents, getBugAdoStatus, pushBugsToAdo, getBugJiraStatus, pushBugsToJira,
-  rerunBugs,
 } from '@/services/api';
 import { useToast } from '@/components/feedback/ToastProvider';
 import ActionIcon from '@/components/ui/ActionIcon';
@@ -202,7 +201,6 @@ export default function BugTrackerPage() {
   const [priorityFilter, setPriorityFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   // Which re-run is in flight ('flaky' | 'failure' | ''), so only that button spins.
-  const [rerunning, setRerunning] = useState('');
 
   const [detail, setDetail] = useState<{ bug: BugRow; activity: BugActivityRow[] } | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -568,31 +566,6 @@ export default function BugTrackerPage() {
 
   const hasFilters = Boolean(search || statusFilter || severityFilter || priorityFilter || typeFilter);
 
-  // Re-run all flaky (or failure) bugs' tests server-side, then refresh the list.
-  const handleRerun = async (bugType: 'flaky' | 'failure') => {
-    if (rerunning) return;
-    setRerunning(bugType);
-    try {
-      const res = await rerunBugs({ bugType });
-      if (res.ran === 0) {
-        toast.info('Nothing to re-run', res.message || `No re-runnable ${bugType} tests are linked to a saved run.`);
-      } else {
-        toast.success(
-          `Re-ran ${res.ran} ${bugType} test${res.ran > 1 ? 's' : ''}`,
-          `${res.passed} passed (${res.resolved} resolved), ${res.failed} still failing.`,
-        );
-      }
-      const runErrors = res.byRun.filter((r) => r.error);
-      if (runErrors.length > 0) {
-        toast.error('Some runs could not execute', runErrors[0].error || 'See server logs for details.');
-      }
-      refreshAll();
-    } catch (err) {
-      toast.fromError(err);
-    } finally {
-      setRerunning('');
-    }
-  };
   const detailBug = detail?.bug;
   const canRevoke = detailBug && detailBug.status !== 'revoked';
   const canReopen = detailBug && ['resolved', 'closed', 'revoked'].includes(detailBug.status);
@@ -612,27 +585,6 @@ export default function BugTrackerPage() {
         </button>
 
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {/* Re-run all failing / flaky tests. Each button re-executes just the
-              tests linked to bugs of that type and updates their status. */}
-          <button
-            onClick={() => handleRerun('failure')}
-            disabled={!!rerunning}
-            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-white hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed text-red-600 border border-red-200 rounded-lg text-sm font-medium whitespace-nowrap shrink-0 shadow-sm transition-colors"
-            title="Re-run every failing test that has an open failure bug"
-          >
-            {rerunning === 'failure' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-            Run Failures
-          </button>
-          <button
-            onClick={() => handleRerun('flaky')}
-            disabled={!!rerunning}
-            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-white hover:bg-amber-50 disabled:opacity-40 disabled:cursor-not-allowed text-amber-600 border border-amber-200 rounded-lg text-sm font-medium whitespace-nowrap shrink-0 shadow-sm transition-colors"
-            title="Re-run every flaky (auto-healed) test that has an open bug"
-          >
-            {rerunning === 'flaky' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-            Run Flaky
-          </button>
-
           {/* One generic raise button — the destination (Azure DevOps / JIRA)
               is picked in a popup so new trackers can be added without
               crowding the header. */}
