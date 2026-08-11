@@ -6,7 +6,6 @@ import {
   getJiraStoryDetails,
   getAzureDevopsStories,
   getAzureDevopsStoryDetails,
-  getAzureDevopsTestCases,
   generateTests,
   generateScripts,
   executePipeline,
@@ -32,7 +31,7 @@ import {
   Plus, Trash2, Download, Clipboard, Cpu, Code, Search, Zap,
   BarChart3, Activity, Workflow, Box, Pencil, Save, ChevronLeft, ChevronRight,
   Play, Heart, GitBranch, Terminal, AlertTriangle, Wrench, ExternalLink, Copy, Package,
-  SkipForward, XCircle, Volume2, VolumeX, Settings, MoreHorizontal, Github, LifeBuoy,
+  SkipForward, XCircle, Volume2, VolumeX, Settings, Github, LifeBuoy,
 } from 'lucide-react';
 import { initTTS, speak, speakAsync, waitForSpeech, waitForVoices, stopSpeaking, isTTSEnabled, toggleTTS } from '@/utils/tts';
 import { useToast } from '@/components/feedback/ToastProvider';
@@ -374,7 +373,6 @@ export default function ChatPage() {
   // Script generation results (POM: specs + shared page objects)
   const [generatedScripts, setGeneratedScripts] = useState<{ testCaseId: string; fileName: string; code: string; path?: string; uses?: string[] }[]>([]);
   const [generatedPageObjects, setGeneratedPageObjects] = useState<{ path: string; className: string; module: string; methods: string[]; code: string }[]>([]);
-  const [selectedScriptIdx, setSelectedScriptIdx] = useState(0);
 
   // Execution state
   // 'not_run' is a real, distinct outcome — the backend tells us a test
@@ -384,19 +382,10 @@ export default function ChatPage() {
   const [executionSummary, setExecutionSummary] = useState<{ total: number; passed: number; failed: number; duration: string; durationMs: number } | null>(null);
   // Which in-place subset re-run is running ('failure' | 'flaky' | ''), so only
   // that button spins and re-runs are not fired concurrently.
-  const [rerunKind, setRerunKind] = useState<'' | 'failure' | 'flaky'>('');
   // One-click "Push to GitHub" state (report + results screens).
   const [gitPush, setGitPush] = useState<{ status: 'idle' | 'pushing' | 'done' | 'error'; prUrl?: string; repo?: string; branch?: string; error?: string }>({ status: 'idle' });
   // "Report to Support" state.
   const [supportState, setSupportState] = useState<{ status: 'idle' | 'sending' | 'sent' | 'error'; msg?: string }>({ status: 'idle' });
-  // Rows whose ⋯ expander is open (full raw error + fix hint). Reset per run.
-  const [expandedResults, setExpandedResults] = useState<Set<number>>(new Set());
-  const toggleResultExpanded = (i: number) => setExpandedResults((prev) => {
-    const next = new Set(prev);
-    if (next.has(i)) next.delete(i); else next.add(i);
-    return next;
-  });
-
   // Healing state
   const [healingAttempt, setHealingAttempt] = useState(0);
   // 'unchanged' = backend re-ran but the test still failed; 'unknown' =
@@ -734,7 +723,7 @@ export default function ChatPage() {
     }
   };
 
-  /* --- Azure DevOps: fetch open stories/tasks (→ generate) --- */
+  /* --- Azure DevOps: fetch stories/tasks in any state (→ generate) --- */
   const adoFetchStories = async () => {
     try {
       const storiesArr = await getAzureDevopsStories();
@@ -747,10 +736,10 @@ export default function ChatPage() {
       }));
       setStories(list);
       if (list.length === 0) {
-        push('tessa', "I couldn't find any open stories or tasks on your Azure DevOps board. Items that are done or closed aren't shown here.");
+        push('tessa', "I couldn't find any stories or tasks on your Azure DevOps board.");
         return;
       }
-      push('tessa', `I found ${list.length} open ${list.length === 1 ? 'work item' : 'work items'} on your Azure DevOps board. Please select one to generate test cases.`);
+      push('tessa', `Found ${list.length} ${list.length === 1 ? 'item' : 'items'} — stories, tasks, or subtasks. Select one to generate test cases.`);
       setStep('content-select');
     } catch (err: any) {
       const data = err?.response?.data;
@@ -759,58 +748,6 @@ export default function ChatPage() {
       push('tessa', `I couldn't reach Azure DevOps${status ? ` (error ${status})` : ''}: ${msg}. Please try again.`);
     }
   };
-
-  /* --- Azure DevOps: import existing Test Case work items (with their steps) --- */
-  const adoImportTestCases = async () => {
-    push('tessa', 'Importing test cases from Azure DevOps...');
-    try {
-      const tcs = await getAzureDevopsTestCases();
-      if (!Array.isArray(tcs) || tcs.length === 0) {
-        push('tessa', "I couldn't find any Test Case work items in Azure DevOps. Please try the Stories option instead, or check the project or area path.");
-        return;
-      }
-      const mapped = tcs.map((t, i) => {
-        const steps = Array.isArray(t.steps) ? t.steps : [];
-        return {
-          id: t.key || `ADO-TC-${i + 1}`,
-          traceabilityId: t.key || '',
-          module: 'Azure DevOps',
-          submodule: '',
-          feature: '',
-          title: t.title || `Test Case ${t.key || i + 1}`,
-          scenario: t.title || `Test Case ${t.key || i + 1}`,
-          description: '',
-          precondition: '',
-          testData: {},
-          testSteps: steps.map((s) => ({ step: s.step, action: s.action, expected: s.expected })),
-          steps: steps.map((s) => `${s.step}. ${s.action}${s.expected ? ` → Expected: ${s.expected}` : ''}`),
-          expectedResult: steps.map((s) => s.expected).filter(Boolean).join('; '),
-          type: 'positive',
-          priority: 'P2',
-          severity: '',
-          tags: ['ADO'],
-          status: 'imported',
-        };
-      });
-      setResults({ testCases: mapped });
-      setStoryMeta({ key: 'ADO', title: 'Azure DevOps Test Cases' });
-      setTcPage(1);
-      setSelectedTcIds(new Set());
-      setEditingTcId(null);
-      setGeneratedScripts([]);
-      setGeneratedPageObjects([]);
-      updatePipeline('requirements', 'completed', 'Imported from Azure DevOps');
-      updatePipeline('test-design', 'completed', `${mapped.length} test cases imported`);
-      push('tessa', `I imported ${mapped.length} test ${mapped.length === 1 ? 'case' : 'cases'} from Azure DevOps. Please review them, then click Save to continue to automation script generation.`);
-      setStep('results');
-    } catch (err: any) {
-      const data = err?.response?.data;
-      const status = data?.status ?? err?.response?.status;
-      const msg = data?.error || err?.message || 'Could not import test cases';
-      push('tessa', `I couldn't reach Azure DevOps${status ? ` (error ${status})` : ''}: ${msg}. Please try again.`);
-    }
-  };
-
 
   /* --- connection (kept for backward compat — inline connect forms are now handled via System Configuration) --- */
   const handleConnect = async () => {
@@ -1324,13 +1261,12 @@ export default function ChatPage() {
 
     setGeneratedScripts(scripts);
     setGeneratedPageObjects(pageObjects);
-    setSelectedScriptIdx(0);
 
     // Pipeline: Stage 3 → completed
     setAgentSteps([{ name: 'Script Writer', status: 'completed', detail: 'Automation scripts generated' }]);
     updatePipeline('script-gen', 'completed', `${scripts.length} scripts created`);
 
-    push('tessa', `Generated the automation scripts. Click "Execute Test Suite" to run them.`);
+    push('tessa', `Generated ${scripts.length} automation ${scripts.length === 1 ? 'script' : 'scripts'}. Click "Execute Test Suite" to run them.`);
     setStep('script-review');
   };
 
@@ -1357,7 +1293,6 @@ export default function ChatPage() {
       error: undefined as string | undefined,
     }));
     setExecutionResults([...initialResults]);
-    setExpandedResults(new Set());
 
     // Execute the SAME scripts the user reviewed against the application
     // configured in System Configuration → Application Setup (resolved
@@ -1540,7 +1475,6 @@ export default function ChatPage() {
       return { ...row, status: 'not_run' as const, duration };
     });
     setExecutionResults(updatedResults);
-    setExpandedResults(new Set());
 
     const newPassed = healRes.summary?.passed ?? updatedResults.filter((r) => r.status === 'passed').length;
     const newFailed = healRes.summary?.failed ?? updatedResults.filter((r) => r.status === 'failed').length;
@@ -1610,69 +1544,6 @@ export default function ChatPage() {
       console.error('Bug auto-registration failed:', err);
       return null;
     }
-  };
-
-  /* --- Re-run only the failing OR only the flaky tests, in place ---
-     Re-executes just that subset of the reviewed scripts and merges the fresh
-     results back into the table, then re-registers the affected bugs. */
-  const handleRerunSubset = async (kind: 'failure' | 'flaky') => {
-    if (rerunKind) return;
-    const flowId = flowIdRef.current;
-    const healedIds = new Set(
-      healingLog.filter((l) => l.result === 'fixed').map((l) => l.testCaseId),
-    );
-    const targets = executionResults.filter((r) =>
-      kind === 'failure'
-        ? r.status === 'failed'
-        : r.status === 'passed' && healedIds.has(r.testCaseId),
-    );
-    if (targets.length === 0) return;
-    const targetIds = new Set(targets.map((r) => r.testCaseId));
-    const subsetScripts = generatedScripts.filter((s) => targetIds.has(s.testCaseId));
-    if (subsetScripts.length === 0) return;
-    const subsetTestCases = (results?.testCases || []).filter((tc: any) =>
-      targetIds.has(tc.id) || targetIds.has(tc.testCaseId));
-
-    setRerunKind(kind);
-    push('tessa', `Re-running ${targets.length} ${kind === 'flaky' ? 'flaky' : 'failing'} test${targets.length > 1 ? 's' : ''}...`);
-    // Mark the targeted rows as running so the table reflects the in-flight subset.
-    setExecutionResults((prev) => prev.map((r) =>
-      targetIds.has(r.testCaseId) ? { ...r, status: 'running' as const, error: undefined } : r));
-
-    let execRes: Awaited<ReturnType<typeof executePipeline>> | null = null;
-    try {
-      execRes = await executePipeline(subsetTestCases, subsetScripts, generatedPageObjects, selectedAppId || undefined, savedTestRunId || undefined);
-    } catch (err) {
-      console.error('Subset re-run failed:', err);
-    }
-    if (flowId !== flowIdRef.current) { setRerunKind(''); return; }
-
-    const details: any[] = Array.isArray(execRes?.executionDetails) ? execRes!.executionDetails : [];
-    const byId = new Map<string, any>(details.map((d) => [d.testCaseId, d]));
-    // Merge fresh outcomes for the targeted rows onto the CURRENT table.
-    const merged = executionResults.map((r) => {
-      if (!targetIds.has(r.testCaseId)) return r;
-      const d = byId.get(r.testCaseId);
-      if (!d) return { ...r, status: 'not_run' as const, error: 'No result returned on re-run' };
-      const duration = typeof d.durationMs === 'number' ? `${(d.durationMs / 1000).toFixed(2)}s` : r.duration;
-      if (d.status === 'passed') return { ...r, status: 'passed' as const, duration, error: undefined };
-      if (d.status === 'failed') return { ...r, status: 'failed' as const, duration, error: d.error || 'Test failed (no error message returned)' };
-      return { ...r, status: 'not_run' as const, duration };
-    });
-    setExecutionResults(merged);
-    const passed = merged.filter((r) => r.status === 'passed').length;
-    const failed = merged.filter((r) => r.status === 'failed').length;
-    setExecutionSummary((s) => (s ? { ...s, passed, failed } : s));
-
-    // Refresh the Bug Tracker with the new outcomes for the re-run subset.
-    // A flaky test that now passes cleanly (no heal this run) is no longer
-    // flaky, but it stays registered; the user resolves it from the tracker.
-    void registerRunBugs(merged, healingLog);
-
-    const nowPassing = targets.filter((t) => byId.get(t.testCaseId)?.status === 'passed').length;
-    const stillFailing = targets.length - nowPassing;
-    push('tessa', `Re-run complete. ${nowPassing} now passing, ${stillFailing} still ${kind === 'flaky' ? 'flaky or failing' : 'failing'}.`);
-    setRerunKind('');
   };
 
   /* --- Proceed to Report (Stage 6) --- */
@@ -2003,7 +1874,6 @@ export default function ChatPage() {
     setPendingGenRequirements('');
     setPipelineStages(PIPELINE_STAGES.map(s => ({ key: s.key, status: 'pending' as const, detail: 'Pending' })));
     setGeneratedScripts([]);
-    setSelectedScriptIdx(0);
     setExecutionResults([]);
     setExecutionSummary(null);
     setHealingAttempt(0);
@@ -2231,7 +2101,7 @@ export default function ChatPage() {
             <span className="text-xs font-medium text-emerald-700">Connected successfully</span>
           </div>
           <label className="block text-xs font-medium text-gray-600 mb-2">
-            {source === 'azure-devops' ? 'Select a Card' : source === 'jira' ? 'Select a Story' : 'Select a Document'}
+            {source === 'azure-devops' ? 'Select an Item' : source === 'jira' ? 'Select a Story' : 'Select a Document'}
           </label>
           <select value={selectedStory} onChange={e => setSelectedStory(e.target.value)} className={inputCls + ' appearance-none'}>
             <option value="">-- Choose --</option>
@@ -2248,18 +2118,9 @@ export default function ChatPage() {
               );
             })}
           </select>
-          <button onClick={runOnce(handleStorySelect)} disabled={busy || !selectedStory} className="mt-3 w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2">
+          <button onClick={runOnce(handleStorySelect)} disabled={busy || !selectedStory} className="mt-3 inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all">
             <ArrowRight className="w-4 h-4" />Proceed
           </button>
-          {source === 'azure-devops' && (
-            <button
-              onClick={runOnce(adoImportTestCases)}
-              disabled={busy}
-              className="mt-2 w-full py-2 text-xs font-medium text-violet-600 hover:text-violet-700 hover:bg-violet-50 rounded-lg transition-colors disabled:opacity-40"
-            >
-              or import existing Test Cases from Azure DevOps instead
-            </button>
-          )}
         </div>
       );
     }
@@ -2865,34 +2726,12 @@ export default function ChatPage() {
       );
     }
 
-    /* ── SCRIPT REVIEW — Code Viewer ── */
+    /* ── SCRIPT REVIEW — Execute CTA ── */
     if (step === 'script-review' && generatedScripts.length > 0) {
+      // No script window — the chat message announces the generated scripts;
+      // this step only offers the Execute CTA.
       return (
-        <div className="max-w-2xl ml-11 space-y-3">
-          <div className="bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden">
-            {/* Header */}
-            <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Code className="w-4 h-4 text-violet-500" />
-                <span className="text-sm font-semibold text-gray-800">Generated Scripts</span>
-                <span className="text-xs px-2 py-0.5 bg-violet-50 text-violet-600 rounded-full">{generatedScripts.length} scripts</span>
-              </div>
-            </div>
-            {/* Script list */}
-            <div className="divide-y divide-gray-100 max-h-[300px] overflow-y-auto">
-              {generatedScripts.map((s, i) => (
-                <div key={i} className="px-5 py-2.5 flex items-center gap-3 hover:bg-gray-50/50">
-                  <CheckCircle className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-mono text-gray-700 truncate">{s.fileName}</p>
-                    <p className="text-[10px] text-gray-400">{s.testCaseId}</p>
-                  </div>
-                  <span className="text-[10px] px-1.5 py-0.5 bg-[#7C3AED]/5 text-[#7C3AED] rounded border border-[#7C3AED]/10 font-mono">.spec.ts</span>
-                </div>
-              ))}
-            </div>
-          </div>
-          {/* Execute CTA */}
+        <div className="max-w-2xl ml-11">
           <button
             onClick={runOnce(handleExecuteTests)}
             disabled={busy}
@@ -2918,36 +2757,10 @@ export default function ChatPage() {
               </div>
               <span className="text-xs text-gray-400">{completedCount}/{executionResults.length} completed</span>
             </div>
-            {/* Progress bar */}
-            <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden mb-4">
+            {/* Progress bar only — no per-test rows; the customer view never
+                lists script files or errors. */}
+            <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
               <div className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 rounded-full transition-all duration-500" style={{ width: `${percent}%` }} />
-            </div>
-            {/* Test list */}
-            <div className="space-y-2 max-h-[350px] overflow-y-auto">
-              {executionResults.map((r, i) => (
-                <div key={i} className={`flex items-start gap-3 p-2.5 rounded-lg border ${
-                  r.status === 'passed' ? 'bg-emerald-50/80 border-emerald-200/60' :
-                  r.status === 'failed' ? 'bg-red-50/80 border-red-200/60' :
-                  r.status === 'running' ? 'bg-violet-50/80 border-violet-200/60' :
-                  'bg-gray-50/80 border-gray-200/60'
-                }`}>
-                  <div className="flex-shrink-0 mt-0.5">
-                    {r.status === 'passed' ? <CheckCircle className="w-4 h-4 text-emerald-500" /> :
-                     r.status === 'failed' ? <XCircle className="w-4 h-4 text-red-500" /> :
-                     r.status === 'running' ? <Loader2 className="w-4 h-4 text-violet-500 animate-spin" /> :
-                     <span className="block w-4 h-4 rounded-full border-2 border-gray-300" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className={`text-xs font-medium ${r.status === 'running' ? 'text-violet-700' : 'text-gray-800'}`}>{r.testName}.spec.ts</p>
-                    {r.status === 'failed' && r.error && (
-                      <p className="text-[11px] text-red-500 mt-0.5 truncate">{diagnoseFailure(r.error).title}</p>
-                    )}
-                  </div>
-                  {(r.status === 'passed' || r.status === 'failed') && (
-                    <span className="text-[11px] text-gray-400 flex-shrink-0">{r.duration}</span>
-                  )}
-                </div>
-              ))}
             </div>
           </div>
         </div>
@@ -2978,92 +2791,18 @@ export default function ChatPage() {
             </div>
           </div>
 
-          {/* Test Result List — failed rows show a plain-English diagnosis; the
-              ⋯ button expands the fix hint + full raw Playwright error. */}
-          <div className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm space-y-2 max-h-[300px] overflow-y-auto">
-            {executionResults.map((r, i) => {
-              const diag = r.status === 'failed' ? diagnoseFailure(r.error) : null;
-              const expanded = expandedResults.has(i);
-              return (
-                <div key={i} className={`p-2 rounded-lg ${r.status === 'failed' ? 'bg-red-50/50' : r.status === 'not_run' ? 'bg-gray-50/70' : ''}`}>
-                  <div className="flex items-start gap-3">
-                    <div className="flex-shrink-0 mt-0.5">
-                      {r.status === 'passed' ? <CheckCircle className="w-4 h-4 text-emerald-500" /> :
-                       r.status === 'not_run' ? <SkipForward className="w-4 h-4 text-gray-400" /> :
-                       <XCircle className="w-4 h-4 text-red-500" />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-gray-800">{r.testName}.spec.ts</p>
-                      {diag && <p className="text-[11px] text-red-600 mt-0.5">{diag.title}</p>}
-                      {r.status === 'not_run' && (
-                        <p className="text-[11px] text-gray-500 mt-0.5">Not run{r.error ? ` — ${r.error}` : ''}</p>
-                      )}
-                    </div>
-                    <span className="text-[11px] text-gray-400 flex-shrink-0">{r.duration}</span>
-                    {diag && r.error && (
-                      <button
-                        onClick={() => toggleResultExpanded(i)}
-                        title={expanded ? 'Hide error details' : 'Show error details'}
-                        aria-expanded={expanded}
-                        className={`flex-shrink-0 p-1 rounded-md transition-colors ${expanded ? 'bg-red-100 text-red-600' : 'text-gray-400 hover:bg-red-100 hover:text-red-600'}`}
-                      >
-                        <MoreHorizontal className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                  {diag && r.error && expanded && (
-                    <div className="mt-2 ml-7 mr-1 space-y-1.5">
-                      <p className="text-[11px] text-gray-600"><span className="font-medium text-gray-700">How to fix:</span> {diag.hint}</p>
-                      <pre className="text-[10px] leading-relaxed text-red-700/90 bg-red-50 border border-red-100 rounded-md p-2 max-h-40 overflow-auto whitespace-pre-wrap break-words">{r.error}</pre>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+          {/* No per-test result list — the customer view shows only the summary
+              tiles; script files, errors, and fix hints stay internal (the Bug
+              Tracker holds the per-test detail). */}
 
-          {/* Run separately — re-execute just the failing OR just the flaky
-              (auto-healed) subset in place. Failures are auto-registered in the
-              Bug Tracker, where the same split re-run is also available. */}
-          {(() => {
-            const healedIds = new Set(healingLog.filter((l) => l.result === 'fixed').map((l) => l.testCaseId));
-            const failCount = executionResults.filter((r) => r.status === 'failed').length;
-            const flakyCount = executionResults.filter((r) => r.status === 'passed' && healedIds.has(r.testCaseId)).length;
-            if (failCount === 0 && flakyCount === 0) return null;
-            return (
-              <div className="bg-white border border-gray-100 rounded-xl p-3 shadow-sm">
-                <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Run separately</p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleRerunSubset('failure')}
-                    disabled={!!rerunKind || failCount === 0}
-                    className="flex-1 py-2 bg-red-50 hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed text-red-700 border border-red-200 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5"
-                    title={failCount === 0 ? 'No failing tests' : 'Re-run only the failing tests'}
-                  >
-                    {rerunKind === 'failure' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />}
-                    Re-run Failures{failCount > 0 ? ` (${failCount})` : ''}
-                  </button>
-                  <button
-                    onClick={() => handleRerunSubset('flaky')}
-                    disabled={!!rerunKind || flakyCount === 0}
-                    className="flex-1 py-2 bg-amber-50 hover:bg-amber-100 disabled:opacity-40 disabled:cursor-not-allowed text-amber-700 border border-amber-200 text-xs font-medium rounded-lg transition-all flex items-center justify-center gap-1.5"
-                    title={flakyCount === 0 ? 'No flaky (auto-healed) tests yet — heal first' : 'Re-run only the flaky (auto-healed) tests'}
-                  >
-                    {rerunKind === 'flaky' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-                    Re-run Flaky{flakyCount > 0 ? ` (${flakyCount})` : ''}
-                  </button>
-                </div>
-              </div>
-            );
-          })()}
-
-          {/* Actions — one compact row. Push stays DISABLED here until the
-              report is generated (the report screen enables it). */}
+          {/* Actions — one compact row. Push to Repository is not shown here;
+              it appears (enabled) on the report screen after Generate Report.
+              Generate Report is always available, so healing can be skipped. */}
           <div className="flex flex-wrap items-center gap-2">
             {executionSummary.failed > 0 && healingAttempt < 2 && (
               <button
                 onClick={runOnce(handleAutoHeal)}
-                disabled={busy || !!rerunKind}
+                disabled={busy}
                 className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all"
               >
                 Auto-Heal & Re-Execute
@@ -3075,13 +2814,6 @@ export default function ChatPage() {
               className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all"
             >
               Generate Report
-            </button>
-            <button
-              disabled
-              className="inline-flex items-center px-4 py-2 bg-white border border-gray-300 text-gray-800 opacity-40 cursor-not-allowed text-sm font-medium rounded-lg"
-              title="Generate the report first — publishing unlocks afterwards"
-            >
-              Push to Repository
             </button>
           </div>
           {gitPush.status === 'done' && (
@@ -3112,29 +2844,11 @@ export default function ChatPage() {
               </div>
               <span className="text-xs px-2 py-0.5 bg-amber-50 text-amber-600 rounded-full border border-amber-200">Attempt {healingAttempt} of 2</span>
             </div>
-            <div className="space-y-3">
-              {healingLog.map((entry, i) => (
-                <div key={i} className="bg-gray-50 rounded-lg p-3 border border-gray-100">
-                  <div className="flex items-center gap-2 mb-1.5">
-                    {entry.result === 'fixed'
-                      ? <CheckCircle className="w-3.5 h-3.5 text-emerald-500" />
-                      : <XCircle className="w-3.5 h-3.5 text-red-500" />}
-                    <span className="text-xs font-semibold text-gray-800">{entry.testCaseId}</span>
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${entry.result === 'fixed' ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>
-                      {entry.result === 'fixed' ? 'FIXED' : 'STILL FAILING'}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-red-500 mb-1"><AlertTriangle className="w-3 h-3 inline mr-1" />{entry.error}</p>
-                  <p className="text-[11px] text-amber-600"><Wrench className="w-3 h-3 inline mr-1" />{entry.fix}</p>
-                </div>
-              ))}
-              {/* Show progress indicator while still healing */}
-              {healingLog.length < executionResults.filter(r => r.status === 'failed').length && (
-                <div className="flex items-center gap-2 p-3">
-                  <Loader2 className="w-4 h-4 text-amber-500 animate-spin" />
-                  <span className="text-xs text-gray-500">Analyzing next failure...</span>
-                </div>
-              )}
+            {/* No per-test detail — the customer view never shows which scripts
+                are being changed or how; just that healing is in progress. */}
+            <div className="flex items-center gap-2">
+              <Loader2 className="w-4 h-4 text-amber-500 animate-spin" />
+              <span className="text-xs text-gray-500">Healing the failing tests and re-running the suite...</span>
             </div>
           </div>
         </div>
@@ -3182,23 +2896,13 @@ export default function ChatPage() {
               <div className="px-5 py-2.5 border-t border-amber-100 bg-amber-50/60 flex items-center gap-2">
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
                 <p className="text-[11px] text-amber-700">
-                  {reportData.notRun} of {reportData.totalTests} test(s) could not be run — open the execution results above for the reason on each test.
+                  {reportData.notRun} of {reportData.totalTests} test(s) could not be run — see the Bug Tracker for details.
                 </p>
               </div>
             )}
-            {/* Healing summary if applicable */}
-            {healingLog.length > 0 && (
-              <div className="px-5 py-3 border-t border-gray-100">
-                <p className="text-xs font-semibold text-gray-700 mb-2 flex items-center gap-1"><Wrench className="w-3.5 h-3.5 text-amber-500" />Healing Summary</p>
-                <div className="space-y-1">
-                  {healingLog.map((entry, i) => (
-                    <p key={i} className="text-[11px] text-gray-600">
-                      <span className={`font-semibold ${entry.result === 'fixed' ? 'text-emerald-600' : 'text-red-500'}`}>{entry.testCaseId}:</span> {entry.fix}
-                    </p>
-                  ))}
-                </div>
-              </div>
-            )}
+            {/* No per-test healing summary — the customer view keeps script
+                changes and fixes internal; the metrics grid's Auto-Healed count
+                is the only healing signal here. */}
           </div>
           {/* Action buttons — report exists, so publishing is now unlocked. */}
           <div className="flex items-center flex-wrap gap-2">

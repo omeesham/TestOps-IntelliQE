@@ -31,10 +31,10 @@ const ALL_TYPES = [
   'Feature', 'Issue', 'Bug', 'Test Case',
 ];
 
-// Board cards in a terminal column are finished work — not candidates for test
-// generation. Filter them in WIQL so the picker only offers open cards.
-// ('Removed' is Azure's soft-delete state and must never surface.)
-const DONE_STATES_CLAUSE = `[System.State] NOT IN ('Closed', 'Done', 'Removed')`;
+// Closed/Done items are still valid requirement sources (the picker reads the
+// item's content, not its board status), so only Azure's soft-delete state
+// 'Removed' is filtered out — those must never surface.
+const REMOVED_STATE_CLAUSE = `[System.State] <> 'Removed'`;
 
 export type AdoCreds = {
   /** Normalized org API base, e.g. https://dev.azure.com/my-org */
@@ -243,7 +243,7 @@ export async function testConnection(creds: AdoCreds): Promise<{ id: string; nam
 }
 
 export async function getStories(creds: AdoCreds): Promise<WorkItemSummary[]> {
-  const ids = await wiqlIds(creds, `${typesClause(STORY_TYPES)} AND ${DONE_STATES_CLAUSE}`, 500);
+  const ids = await wiqlIds(creds, `${typesClause(STORY_TYPES)} AND ${REMOVED_STATE_CLAUSE}`, 500);
   const items = await batchFields(creds, ids, ['System.Id', 'System.Title', 'System.WorkItemType', 'System.State']);
   return items.map((w) => ({
     key: String(w.id),
