@@ -59,6 +59,7 @@ import { authMiddleware } from './middleware/auth.middleware.js';
 import { requestContext } from './middleware/request-context.middleware.js';
 import { auditMutations } from './middleware/audit.middleware.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.middleware.js';
+import { licenseExpiryGuard, isLicenseExpired, LICENSE_EXPIRY_DATE } from './middleware/license-expiry.middleware.js';
 import { logger } from './utils/logger.js';
 import { setEventCallback } from './orchestrator/orchestrator.js';
 import { broadcastSSE } from './services/sse-manager.js';
@@ -140,10 +141,26 @@ app.use('/api/', generalLimiter);
 
 /* ─────────────────────────────────────────────────────────────
    Public routes (no auth)
+
+   Health check — kept ahead of the license gate so the deployment
+   stays diagnosable (reports expired status) even after expiry.
    ───────────────────────────────────────────────────────────── */
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString(), version: '1.0.0' });
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+    licenseExpiry: LICENSE_EXPIRY_DATE,
+    expired: isLicenseExpired(),
+  });
 });
+
+/* ─────────────────────────────────────────────────────────────
+   Trial/license expiry gate — everything below this point is
+   cut off once LICENSE_EXPIRY has passed. See middleware file for
+   the matching container-startup check (docker/entrypoint.sh).
+   ───────────────────────────────────────────────────────────── */
+app.use('/api', licenseExpiryGuard);
 
 app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {

@@ -36,10 +36,16 @@ RUN npm prune --omit=dev   # strip devDeps (tsx, typescript, @types) for runtime
 # ── Stage 3: Final Runtime Image ──────────────────────────────────
 FROM mcr.microsoft.com/playwright:v1.48.0-jammy
 
+# Trial/license expiry (YYYY-MM-DD). entrypoint.sh refuses to start the
+# container past this date; the backend's license-expiry.middleware.ts
+# enforces the same cutoff at request time as a runtime safety net.
+ARG LICENSE_EXPIRY=2026-08-25
+
 ENV NODE_ENV=production \
     PORT=3001 \
     RUN_WORKER=true \
-    BACKEND_URL=http://127.0.0.1:3001
+    BACKEND_URL=http://127.0.0.1:3001 \
+    LICENSE_EXPIRY=$LICENSE_EXPIRY
 
 # nginx + supervisor + envsubst (gettext-base) + wget for healthcheck +
 # default-jre-headless: allure-commandline (the Allure 2 `allure generate` CLI)
