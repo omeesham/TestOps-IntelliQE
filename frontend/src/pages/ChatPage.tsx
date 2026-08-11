@@ -739,7 +739,7 @@ export default function ChatPage() {
         push('tessa', "I couldn't find any stories or tasks on your Azure DevOps board.");
         return;
       }
-      push('tessa', `Found ${list.length} ${list.length === 1 ? 'item' : 'items'} — stories, tasks, or subtasks. Select one to generate test cases.`);
+      push('tessa', `Found ${list.length} ${list.length === 1 ? 'item' : 'items'}. Select one to generate test cases.`);
       setStep('content-select');
     } catch (err: any) {
       const data = err?.response?.data;
