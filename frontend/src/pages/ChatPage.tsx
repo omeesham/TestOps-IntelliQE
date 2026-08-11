@@ -319,7 +319,7 @@ export default function ChatPage() {
   // than one configured application, so generation/scripts/execution/healing
   // all ground themselves in the SAME application instead of the server
   // silently defaulting to "whichever app happens to be configured".
-  const [appOptions, setAppOptions] = useState<{ integrationId: string; appName: string; baseUrl: string }[]>([]);
+  const [appOptions, setAppOptions] = useState<{ integrationId: string; appName: string; baseUrl: string; environment?: string }[]>([]);
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
   const [pendingGenRequirements, setPendingGenRequirements] = useState<string>('');
 
@@ -363,6 +363,8 @@ export default function ChatPage() {
 
   // Script generation results (POM: specs + shared page objects)
   const [generatedScripts, setGeneratedScripts] = useState<{ testCaseId: string; fileName: string; code: string; path?: string; uses?: string[] }[]>([]);
+  // Script the user is reviewing in the Generated Scripts viewer modal (null = closed).
+  const [viewScript, setViewScript] = useState<{ testCaseId: string; fileName: string; code: string } | null>(null);
   const [generatedPageObjects, setGeneratedPageObjects] = useState<{ path: string; className: string; module: string; methods: string[]; code: string }[]>([]);
   const [selectedScriptIdx, setSelectedScriptIdx] = useState(0);
 
@@ -2153,34 +2155,66 @@ export default function ChatPage() {
     /* ── APPLICATION PICK — shown only when >1 application is configured ── */
     if (step === 'app-select') {
       return (
-        <div className="max-w-md ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm space-y-3">
-          <p className="text-xs text-gray-600">Select the application these test cases are for:</p>
-          {appOptions.map((app) => (
-            <button
-              key={app.integrationId}
-              onClick={runOnce(() => handleAppSelected(app.integrationId))}
-              disabled={busy}
-              className="w-full text-left p-3.5 bg-white border border-gray-100 rounded-xl hover:border-violet-300 hover:shadow-md transition-all disabled:opacity-50"
-            >
-              <div className="flex items-center gap-2.5">
-                <Monitor className="w-4 h-4 text-violet-500 flex-shrink-0" />
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-gray-800 truncate">{app.appName}</p>
-                  <p className="text-[11px] text-gray-400 truncate">{app.baseUrl}</p>
-                </div>
+        <div className="max-w-lg ml-11 bg-white border border-gray-100 rounded-2xl shadow-lg shadow-violet-500/5 overflow-hidden">
+          {/* Header */}
+          <div className="px-6 py-4 bg-gradient-to-r from-violet-50 via-indigo-50 to-violet-50 border-b border-violet-100/70">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center shadow-md shadow-violet-500/25 flex-shrink-0">
+                <Box className="w-4.5 h-4.5 text-white" />
               </div>
-            </button>
-          ))}
-          <p className="text-[11px] text-gray-400">
-            Don't see it? Add it under{' '}
-            <button
-              onClick={() => window.location.href = '/system-configuration'}
-              className="text-violet-500 hover:underline"
-            >
-              System Configuration → Application Setup
-            </button>
-            , then come back and click Generate again.
-          </p>
+              <div className="min-w-0">
+                <h3 className="text-sm font-bold text-[#1E1B4B]">Select Application</h3>
+                <p className="text-xs text-gray-500 mt-0.5">Which application are these test cases for?</p>
+              </div>
+            </div>
+          </div>
+
+          {/* App options */}
+          <div className="px-6 py-4 space-y-2.5">
+            {appOptions.map((app) => {
+              const env = (app.environment || '').trim();
+              const envStyle = /prod/i.test(env) ? 'bg-rose-50 text-rose-600 border-rose-200'
+                : /stag/i.test(env) ? 'bg-amber-50 text-amber-600 border-amber-200'
+                : /qa/i.test(env) ? 'bg-blue-50 text-blue-600 border-blue-200'
+                : 'bg-gray-50 text-gray-500 border-gray-200';
+              return (
+                <button
+                  key={app.integrationId}
+                  onClick={runOnce(() => handleAppSelected(app.integrationId))}
+                  disabled={busy}
+                  className="group w-full text-left p-3 bg-white border border-gray-200 rounded-xl hover:border-violet-300 hover:bg-violet-50/30 hover:shadow-md hover:shadow-violet-500/5 active:scale-[0.99] transition-all disabled:opacity-50 flex items-center gap-3"
+                >
+                  <div className="w-10 h-10 rounded-lg bg-violet-50 border border-violet-100 flex items-center justify-center flex-shrink-0 group-hover:bg-violet-100 transition-colors">
+                    <Monitor className="w-4.5 h-4.5 text-violet-500" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold text-[#1E1B4B] truncate">{app.appName}</p>
+                      {env && (
+                        <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full border flex-shrink-0 ${envStyle}`}>{env}</span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-gray-400 truncate mt-0.5">{app.baseUrl}</p>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-violet-500 group-hover:translate-x-0.5 transition-all flex-shrink-0" />
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Footer hint */}
+          <div className="px-6 py-3 border-t border-gray-100 bg-gray-50/40">
+            <p className="text-[11px] text-gray-400 leading-relaxed">
+              Don't see it? Add it under{' '}
+              <button
+                onClick={() => window.location.href = '/system-configuration'}
+                className="text-violet-600 font-medium hover:underline"
+              >
+                System Configuration → Application Setup
+              </button>
+              , then come back and click Generate again.
+            </p>
+          </div>
         </div>
       );
     }
@@ -2538,35 +2572,80 @@ export default function ChatPage() {
     /* ── COLUMN SELECT — pick columns before generation ── */
     if (step === 'column-select') {
       return (
-        <div className="max-w-md ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm">
-          <div className="flex items-center gap-2 mb-4">
-            <Layers className="w-4 h-4 text-violet-500" />
-            <span className="text-sm font-semibold text-gray-800">Select Test Case Columns</span>
+        <div className="max-w-lg ml-11 bg-white border border-gray-100 rounded-2xl shadow-lg shadow-violet-500/5 overflow-hidden">
+          {/* Header */}
+          <div className="px-6 py-4 bg-gradient-to-r from-violet-50 via-indigo-50 to-violet-50 border-b border-violet-100/70">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center shadow-md shadow-violet-500/25 flex-shrink-0">
+                <Layers className="w-4.5 h-4.5 text-white" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-sm font-bold text-[#1E1B4B]">Select Test Case Columns</h3>
+                <p className="text-xs text-gray-500 mt-0.5">Choose which columns to include in your generated test cases.</p>
+              </div>
+            </div>
           </div>
-          <p className="text-xs text-gray-500 mb-3">Choose which columns to include in your generated test cases.</p>
-          <div className="space-y-1">
-            {ALL_COLUMNS.map(col => (
-              <label key={col.key} className="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-violet-50/50 cursor-pointer transition-colors">
-                <input
-                  type="checkbox"
-                  checked={selectedColumns.includes(col.key)}
-                  onChange={() => setSelectedColumns(prev =>
-                    prev.includes(col.key) ? prev.filter(k => k !== col.key) : [...prev, col.key]
+
+          {/* Toolbar: count + select-all toggle */}
+          <div className="px-6 pt-4 flex items-center justify-between">
+            <span className="text-[11px] font-medium text-gray-500">
+              <span className="text-violet-600 font-semibold">{selectedColumns.length}</span> of {ALL_COLUMNS.length} selected
+            </span>
+            <button
+              onClick={() => setSelectedColumns(selectedColumns.length === ALL_COLUMNS.length ? [] : ALL_COLUMNS.map(c => c.key))}
+              className="text-[11px] font-semibold text-violet-600 hover:text-violet-700 transition-colors"
+            >
+              {selectedColumns.length === ALL_COLUMNS.length ? 'Clear all' : 'Select all'}
+            </button>
+          </div>
+
+          {/* Column options */}
+          <div className="px-6 py-3 space-y-2">
+            {ALL_COLUMNS.map(col => {
+              const checked = selectedColumns.includes(col.key);
+              return (
+                <label
+                  key={col.key}
+                  className={`group flex items-center gap-3 px-3.5 py-2.5 rounded-xl border cursor-pointer transition-all ${
+                    checked
+                      ? 'bg-violet-50/60 border-violet-300 shadow-sm shadow-violet-500/5'
+                      : 'bg-white border-gray-200 hover:border-violet-200 hover:bg-violet-50/30'
+                  }`}
+                >
+                  <span className={`flex items-center justify-center w-5 h-5 rounded-md border-2 transition-all flex-shrink-0 ${
+                    checked ? 'bg-violet-600 border-violet-600' : 'bg-white border-gray-300 group-hover:border-violet-400'
+                  }`}>
+                    {checked && <Check className="w-3.5 h-3.5 text-white" strokeWidth={3} />}
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => setSelectedColumns(prev =>
+                      prev.includes(col.key) ? prev.filter(k => k !== col.key) : [...prev, col.key]
+                    )}
+                    className="sr-only"
+                  />
+                  <span className={`text-sm font-medium ${checked ? 'text-[#1E1B4B]' : 'text-gray-600'}`}>{col.label}</span>
+                  {col.default && (
+                    <span className="ml-auto text-[10px] font-semibold text-violet-500 bg-violet-50 border border-violet-100 px-2 py-0.5 rounded-full flex-shrink-0">
+                      default
+                    </span>
                   )}
-                  className="w-4 h-4 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
-                />
-                <span className="text-sm text-gray-700">{col.label}</span>
-                {col.default && <span className="text-[10px] text-gray-400 ml-auto">(default)</span>}
-              </label>
-            ))}
+                </label>
+              );
+            })}
           </div>
-          <button
-            onClick={runOnce(() => { setStep('generating'); runGeneration(pendingRequirements); })}
-            disabled={busy || selectedColumns.length === 0}
-            className="mt-4 inline-flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all"
-          >
-            <Zap className="w-3.5 h-3.5" />Generate Test Cases
-          </button>
+
+          {/* Footer CTA */}
+          <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/40">
+            <button
+              onClick={runOnce(() => { setStep('generating'); runGeneration(pendingRequirements); })}
+              disabled={busy || selectedColumns.length === 0}
+              className="w-full inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none text-white text-sm font-semibold rounded-xl shadow-md shadow-violet-500/25 hover:shadow-lg hover:shadow-violet-500/30 active:scale-[0.99] transition-all"
+            >
+              <Zap className="w-4 h-4" />Generate Test Cases
+            </button>
+          </div>
         </div>
       );
     }
@@ -2590,12 +2669,12 @@ export default function ChatPage() {
         p === 'P2' ? 'bg-blue-50 text-blue-700 border-blue-200' :
         'bg-gray-50 text-gray-600 border-gray-200';
       const typeStyle = (t: string) =>
-        t === 'positive' ? 'bg-emerald-50 text-emerald-700' :
-        t === 'negative' ? 'bg-rose-50 text-rose-700' :
-        t === 'edge' ? 'bg-orange-50 text-orange-700' :
-        t === 'e2e' ? 'bg-violet-50 text-violet-700' :
-        t === 'api' ? 'bg-sky-50 text-sky-700' :
-        'bg-gray-50 text-gray-600';
+        t === 'positive' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+        t === 'negative' ? 'bg-rose-50 text-rose-700 border-rose-200' :
+        t === 'edge' ? 'bg-orange-50 text-orange-700 border-orange-200' :
+        t === 'e2e' ? 'bg-violet-50 text-violet-700 border-violet-200' :
+        t === 'api' ? 'bg-sky-50 text-sky-700 border-sky-200' :
+        'bg-gray-50 text-gray-600 border-gray-200';
       const colVisible = (key: string) => selectedColumns.includes(key);
       const allPageSelected = pagedTcs.length > 0 && pagedTcs.every((tc: any) => selectedTcIds.has(tc.id));
 
@@ -2650,9 +2729,9 @@ export default function ChatPage() {
               const isEditing = editingTcId === tc.id;
               const draft = isEditing ? editDraft : tc;
               return (
-                <div key={tc.id} className={`bg-white border ${selectedTcIds.has(tc.id) ? 'border-violet-300 bg-violet-50/30' : 'border-gray-100'} rounded-xl p-4 shadow-sm transition-colors`}>
+                <div key={tc.id} className={`group bg-white border rounded-2xl p-4 shadow-sm hover:shadow-md transition-all ${selectedTcIds.has(tc.id) ? 'border-violet-300 ring-1 ring-violet-200 bg-violet-50/20' : 'border-gray-200/70 hover:border-violet-200'}`}>
                   {/* Row header: checkbox + TC# + badges + actions */}
-                  <div className="flex items-center gap-2 mb-2 flex-wrap">
+                  <div className="flex items-center gap-2 pb-2.5 mb-2.5 border-b border-gray-100 flex-wrap">
                     <input
                       type="checkbox"
                       checked={selectedTcIds.has(tc.id)}
@@ -2660,10 +2739,10 @@ export default function ChatPage() {
                       className="w-3.5 h-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
                     />
                     {colVisible('tcNumber') && (
-                      <span className="text-xs font-mono font-bold text-violet-600 bg-violet-50 px-2 py-0.5 rounded">{tc.id}</span>
+                      <span className="text-xs font-mono font-bold text-violet-700 bg-violet-50 border border-violet-200 px-2 py-0.5 rounded-md">{tc.id}</span>
                     )}
                     {colVisible('priority') && !isEditing && (
-                      <span className={`text-[10px] px-2 py-0.5 font-semibold rounded border ${priorityStyle(tc.priority)}`}>{tc.priority}</span>
+                      <span className={`text-[10px] px-2 py-0.5 font-semibold rounded-md border ${priorityStyle(tc.priority)}`}>{tc.priority}</span>
                     )}
                     {colVisible('priority') && isEditing && (
                       <select value={draft.priority} onChange={e => setEditDraft((d: any) => ({ ...d, priority: e.target.value }))} className="text-[10px] px-1.5 py-0.5 border border-violet-300 rounded bg-white text-gray-700 outline-none">
@@ -2671,7 +2750,7 @@ export default function ChatPage() {
                       </select>
                     )}
                     {colVisible('type') && !isEditing && (
-                      <span className={`text-[10px] px-2 py-0.5 font-medium rounded ${typeStyle(tc.type)}`}>{tc.type}</span>
+                      <span className={`text-[10px] px-2 py-0.5 font-medium rounded-md border ${typeStyle(tc.type)}`}>{tc.type}</span>
                     )}
                     {colVisible('type') && isEditing && (
                       <select value={draft.type} onChange={e => setEditDraft((d: any) => ({ ...d, type: e.target.value }))} className="text-[10px] px-1.5 py-0.5 border border-violet-300 rounded bg-white text-gray-700 outline-none">
@@ -2717,7 +2796,7 @@ export default function ChatPage() {
                     <div className={`grid gap-4 ${colVisible('steps') && colVisible('expected') ? 'grid-cols-[1fr_1fr]' : 'grid-cols-1'}`}>
                       {colVisible('steps') && (
                         <div>
-                          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Test Steps</p>
+                          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">Test Steps</p>
                           {isEditing ? (
                             <textarea
                               value={(draft.steps || []).join('\n')}
@@ -2727,16 +2806,19 @@ export default function ChatPage() {
                               placeholder="One step per line"
                             />
                           ) : (
-                            <ul className="space-y-0.5 list-none">
+                            <ul className="space-y-1.5 list-none">
                               {(tc.steps || []).map((s: string, j: number) => {
                                 // The step text already carries its number (this is the value
-                                // saved to the DB). Render it as-is so the number appears ONCE.
-                                const m = s.match(/^\s*(\d+[.)])\s*(.*)$/s);
+                                // saved to the DB). Show the digit in a chip so it appears ONCE.
+                                const m = s.match(/^\s*(\d+)[.)]\s*(.*)$/s);
                                 return (
-                                  <li key={j} className="text-xs text-gray-600 leading-relaxed">
-                                    {m
-                                      ? <><span className="text-violet-500 font-semibold mr-1">{m[1]}</span>{m[2]}</>
-                                      : s}
+                                  <li key={j} className="flex gap-2 text-xs text-gray-600 leading-relaxed">
+                                    {m ? (
+                                      <>
+                                        <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] mt-0.5 rounded-md bg-violet-100 text-violet-700 text-[10px] font-bold flex-shrink-0">{m[1]}</span>
+                                        <span>{m[2]}</span>
+                                      </>
+                                    ) : <span>{s}</span>}
                                   </li>
                                 );
                               })}
@@ -2745,8 +2827,8 @@ export default function ChatPage() {
                         </div>
                       )}
                       {colVisible('expected') && (
-                        <div>
-                          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Expected Result</p>
+                        <div className={colVisible('steps') ? 'md:pl-4 md:border-l md:border-gray-100' : ''}>
+                          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1.5">Expected Result</p>
                           {isEditing ? (
                             <textarea
                               value={draft.expectedResult}
@@ -2764,10 +2846,10 @@ export default function ChatPage() {
 
                   {/* Feature / Precondition (if visible and has content) */}
                   {(colVisible('feature') || colVisible('precondition')) && (
-                    <div className="flex flex-wrap gap-4 mt-2">
+                    <div className="flex flex-wrap gap-4 mt-3 pt-3 border-t border-gray-100">
                       {colVisible('feature') && (tc.feature || isEditing) && (
                         <div className="flex-1 min-w-[120px]">
-                          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Feature</p>
+                          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Feature</p>
                           {isEditing ? (
                             <input
                               value={draft.feature}
@@ -2781,7 +2863,7 @@ export default function ChatPage() {
                       )}
                       {colVisible('precondition') && (tc.precondition || isEditing) && (
                         <div className="flex-1 min-w-[120px]">
-                          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Preconditions</p>
+                          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Preconditions</p>
                           {isEditing ? (
                             <input
                               value={draft.precondition}
@@ -2929,7 +3011,13 @@ export default function ChatPage() {
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-medium text-gray-700 truncate">{s.testCaseId}</p>
                   </div>
-                  <span className="text-[10px] px-1.5 py-0.5 bg-[#7C3AED]/5 text-[#7C3AED] rounded border border-[#7C3AED]/10 font-mono">.spec.ts</span>
+                  <button
+                    onClick={() => setViewScript(s)}
+                    className="flex items-center gap-1 text-[11px] px-2.5 py-1 bg-violet-50 hover:bg-violet-100 text-violet-700 border border-violet-200 rounded-md font-medium transition-all flex-shrink-0"
+                    title="Review the generated test script"
+                  >
+                    <Eye className="w-3.5 h-3.5" />View
+                  </button>
                 </div>
               ))}
             </div>
@@ -2942,6 +3030,38 @@ export default function ChatPage() {
           >
             <Play className="w-4 h-4" />Execute Test Suite
           </button>
+
+          {/* Script review modal — lets the user read the generated test script. */}
+          {viewScript && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={() => setViewScript(null)}>
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Code className="w-4 h-4 text-violet-500 flex-shrink-0" />
+                    <span className="text-sm font-semibold text-gray-800 flex-shrink-0">{viewScript.testCaseId}</span>
+                    <span className="text-xs text-gray-400 font-mono truncate">{viewScript.fileName}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <button
+                      onClick={() => { try { navigator.clipboard?.writeText(viewScript.code); } catch { /* clipboard unavailable */ } }}
+                      className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-all"
+                      title="Copy code"
+                    >
+                      <Copy className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => setViewScript(null)}
+                      className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-all"
+                      title="Close"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+                <pre className="flex-1 overflow-auto p-4 text-[11px] leading-relaxed font-mono text-gray-800 bg-gray-50 whitespace-pre">{viewScript.code}</pre>
+              </div>
+            </div>
+          )}
         </div>
       );
     }
@@ -3069,7 +3189,7 @@ export default function ChatPage() {
             // Auto-heal is "enabled" (available to run) only while failing tests
             // remain AND the 2 healing attempts haven't been spent. Once it has done
             // its task — everything healed, or attempts exhausted — it is disabled.
-            const healingActive = executionSummary.failed > 0 && healingAttempt < 2;
+            const healingActive = executionSummary.failed > 0 && healingAttempt < 1;
             return (
               <div className="flex gap-2">
                 <button
@@ -3077,7 +3197,7 @@ export default function ChatPage() {
                   disabled={busy || !!rerunKind || !healingActive}
                   title={healingActive
                     ? 'Diagnose and fix the failing tests, then re-execute'
-                    : (healingAttempt >= 2 ? 'Auto-heal limit reached (2 attempts)' : 'Nothing left to heal')}
+                    : (healingAttempt >= 1 ? 'Auto-heal already completed' : 'Nothing left to heal')}
                   className="flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
                 >
                   <Wrench className="w-4 h-4" />Auto-Heal &amp; Re-Execute
@@ -3108,13 +3228,13 @@ export default function ChatPage() {
                     gitPush.status === 'pushing'
                     || generatedScripts.length === 0
                     || !reportData                                          // rule 3: only after a report has been generated
-                    || (executionSummary.failed > 0 && healingAttempt < 2)  // rules 4/5: only once auto-heal is disabled/done
+                    || (executionSummary.failed > 0 && healingAttempt < 1)  // rules 4/5: only once auto-heal is disabled/done
                   }
                   className="flex-1 py-2 bg-white border border-gray-800 hover:bg-gray-900 hover:text-white text-gray-800 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
                   title={
                     generatedScripts.length === 0 ? 'No scripts to push'
                     : !reportData ? 'Generate the report first'
-                    : (executionSummary.failed > 0 && healingAttempt < 2) ? 'Finish (or skip) auto-healing first'
+                    : (executionSummary.failed > 0 && healingAttempt < 1) ? 'Finish (or skip) auto-healing first'
                     : 'Push the generated test cases and scripts to your connected repository'
                   }
                 >
@@ -3126,9 +3246,17 @@ export default function ChatPage() {
                 {hasEscalatable && (
                   <button
                     onClick={handleReportToSupport}
-                    disabled={supportState.status === 'sending'}
-                    className="flex-1 py-2 bg-white border border-rose-300 hover:bg-rose-50 text-rose-600 disabled:opacity-40 text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
-                    title="Send a failure summary to your team (email / Slack / Teams)"
+                    disabled={
+                      supportState.status === 'sending'
+                      || !reportData                                          // enable only after the report is generated
+                      || (executionSummary.failed > 0 && healingAttempt < 1)  // and only once auto-heal is done/disabled
+                    }
+                    className="flex-1 py-2 bg-white border border-rose-300 hover:bg-rose-50 text-rose-600 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
+                    title={
+                      !reportData ? 'Generate the report first'
+                      : (executionSummary.failed > 0 && healingAttempt < 1) ? 'Finish (or skip) auto-healing first'
+                      : 'Send a failure summary to your team (email / Slack / Teams)'
+                    }
                   >
                     {supportState.status === 'sending' ? <Loader2 className="w-4 h-4 animate-spin" />
                       : supportState.status === 'sent' ? <CheckCircle className="w-4 h-4 text-emerald-500" />
