@@ -2691,19 +2691,17 @@ export default function ChatPage() {
     /* ── SAVED — export + proceed to scripts ── */
     if (step === 'saved') {
       return (
-        <div className="max-w-md ml-11 space-y-4">
+        <div className="max-w-xs ml-11 space-y-3">
           {/* Saved confirmation + generic CSV export */}
-          <div className="bg-white border border-emerald-200 rounded-xl p-5 shadow-sm flex items-center justify-between gap-3">
+          <div className="bg-white border border-emerald-200 rounded-lg px-3 py-2 shadow-sm flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center">
-                <CheckCircle className="w-4.5 h-4.5 text-emerald-600" />
-              </div>
-              <p className="text-sm font-semibold text-gray-800">Test Cases Saved!</p>
+              <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+              <p className="text-xs font-semibold text-gray-800">Test Cases Saved!</p>
             </div>
             <button
               onClick={() => handleExport('csv')}
               disabled={isExporting}
-              className="flex-shrink-0 px-4 py-2 border border-gray-200 rounded-lg text-xs font-medium text-gray-700 hover:border-violet-300 hover:bg-violet-50 disabled:opacity-50 transition-all"
+              className="flex-shrink-0 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-700 hover:border-violet-300 hover:bg-violet-50 disabled:opacity-50 transition-all"
             >
               {isExporting ? 'Exporting...' : 'Export'}
             </button>
@@ -2713,7 +2711,7 @@ export default function ChatPage() {
           <button
             onClick={runOnce(handleScriptGeneration)}
             disabled={busy}
-            className="w-full py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all"
+            className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all"
           >
             Generate Scripts
           </button>
