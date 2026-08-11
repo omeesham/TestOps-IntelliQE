@@ -8,6 +8,7 @@ import {
 import {
   listBugs, getBug, updateBug, revokeBug, deleteBug,
   subscribeToBugEvents, getBugAdoStatus, pushBugsToAdo, getBugJiraStatus, pushBugsToJira,
+  raiseSdetTicket,
 } from '@/services/api';
 import { useToast } from '@/components/feedback/ToastProvider';
 import ActionIcon from '@/components/ui/ActionIcon';
@@ -175,6 +176,7 @@ function activityLabel(entry: BugActivityRow): string {
     case 'auto_updated': return 'refreshed this from a later test run';
     case 'rerun_passed': return 'passed on re-run — resolved';
     case 'rerun_failed': return 're-ran the test — still failing';
+    case 'sdet_ticket_raised': return 'raised a ticket to the JBS SDET team';
     default: return entry.action;
   }
 }
@@ -224,6 +226,7 @@ export default function BugTrackerPage() {
   const [adoStatus, setAdoStatus] = useState<{ connected: boolean; project?: string; orgUrl?: string } | null>(null);
   const [jiraStatus, setJiraStatus] = useState<{ connected: boolean; projectKey?: string } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [raisingTicket, setRaisingTicket] = useState(false);
   const [pushingAdo, setPushingAdo] = useState(false);
   const [pushingJira, setPushingJira] = useState(false);
   // The "Raise Bug" destination picker popup (Azure DevOps vs JIRA).
@@ -310,6 +313,27 @@ export default function BugTrackerPage() {
     getBugAdoStatus().then(setAdoStatus).catch(() => setAdoStatus({ connected: false }));
     getBugJiraStatus().then(setJiraStatus).catch(() => setJiraStatus({ connected: false }));
   }, []);
+
+  // Escalate the selected bugs to the JBS SDET team (automation framework
+  // fixes). Sends one card to the Teams channel connected in System
+  // Configuration; the bugs themselves are not modified.
+  const handleRaiseTicket = async () => {
+    const ids = [...selectedIds];
+    if (ids.length === 0 || raisingTicket) return;
+    setRaisingTicket(true);
+    try {
+      const res = await raiseSdetTicket(ids);
+      toast.success(
+        `Ticket raised for ${res.notified} bug${res.notified > 1 ? 's' : ''}`,
+        'The JBS SDET team has been notified on Teams.',
+      );
+      setSelectedIds(new Set());
+    } catch (err) {
+      toast.fromError(err);
+    } finally {
+      setRaisingTicket(false);
+    }
+  };
 
   const handleRaiseInAdo = async () => {
     const ids = [...selectedIds];
@@ -585,6 +609,17 @@ export default function BugTrackerPage() {
         </button>
 
         <div className="flex flex-wrap items-center justify-end gap-2">
+          {/* Escalate to the JBS SDET team via the connected Teams channel */}
+          <button
+            onClick={handleRaiseTicket}
+            disabled={selectedIds.size === 0 || raisingTicket}
+            className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-white hover:bg-violet-50 disabled:opacity-40 disabled:cursor-not-allowed text-violet-700 border border-violet-200 rounded-lg text-sm font-medium whitespace-nowrap shrink-0 shadow-sm transition-colors"
+            title={selectedIds.size === 0 ? 'Select bugs with the checkboxes first' : 'Notify the JBS SDET team on Teams to fix automation framework issues'}
+          >
+            {raisingTicket ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Bug className="w-3.5 h-3.5" />}
+            Raise Ticket
+          </button>
+
           {/* One generic raise button — the destination (Azure DevOps / JIRA)
               is picked in a popup so new trackers can be added without
               crowding the header. */}

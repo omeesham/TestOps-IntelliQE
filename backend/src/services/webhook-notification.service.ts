@@ -233,6 +233,102 @@ export async function sendWebhookTestRun(
   }
 }
 
+/* ── SDET ticket — escalate bugs to the JBS SDET team ─────────── */
+
+export interface SdetTicketBug {
+  bugNumber: number;
+  title: string;
+  severity: string;
+  priority: string;
+  bugType?: string;
+  module?: string | null;
+}
+
+export interface SdetTicketPayload {
+  bugs: SdetTicketBug[];
+  raisedBy: string;
+  tenantName?: string;
+}
+
+/** Adaptive Card asking the JBS SDET team to pick up framework fixes. */
+function buildTeamsSdetTicketBody(payload: SdetTicketPayload): Record<string, unknown> {
+  const body: Record<string, unknown>[] = [
+    {
+      type: 'Container',
+      style: 'warning',
+      bleed: true,
+      items: [
+        {
+          type: 'ColumnSet',
+          columns: [
+            { type: 'Column', width: 'auto', verticalContentAlignment: 'Center', items: [{ type: 'TextBlock', text: '🎫', size: 'ExtraLarge', spacing: 'None' }] },
+            {
+              type: 'Column',
+              width: 'stretch',
+              verticalContentAlignment: 'Center',
+              items: [
+                { type: 'TextBlock', text: 'Ticket Raised — JBS SDET Team', weight: 'Bolder', size: 'Large', wrap: true, spacing: 'None' },
+                { type: 'TextBlock', text: 'Automation framework changes requested', isSubtle: true, wrap: true, spacing: 'None' },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    ...payload.bugs.map((b) => ({
+      type: 'Container',
+      spacing: 'Medium',
+      separator: true,
+      items: [
+        { type: 'TextBlock', text: `**BUG-${b.bugNumber}** · ${b.title}`, wrap: true, spacing: 'None' },
+        {
+          type: 'TextBlock',
+          text: `Severity: ${b.severity} · Priority: ${b.priority}${b.bugType ? ` · Type: ${b.bugType}` : ''}${b.module ? ` · Module: ${b.module}` : ''}`,
+          size: 'Small',
+          isSubtle: true,
+          wrap: true,
+          spacing: 'Small',
+        },
+      ],
+    })),
+    {
+      type: 'TextBlock',
+      text: `Raised by ${payload.raisedBy}${payload.tenantName ? ` · ${payload.tenantName}` : ''} · JBS IntelliQE`,
+      size: 'Small',
+      isSubtle: true,
+      spacing: 'Medium',
+      wrap: true,
+    },
+  ];
+
+  const card: Record<string, unknown> = {
+    type: 'AdaptiveCard',
+    $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+    version: '1.4',
+    msteams: { width: 'Full' },
+    body,
+  };
+  return {
+    type: 'message',
+    attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', content: card }],
+  };
+}
+
+/** Post an SDET ticket card to the tenant's configured Teams webhook. */
+export async function sendWebhookSdetTicket(
+  tenantId: string,
+  payload: SdetTicketPayload,
+): Promise<{ sent: boolean; error?: string }> {
+  try {
+    const cfg = await loadWebhookConfig(tenantId, 'teams');
+    if (!cfg) return { sent: false, error: 'Microsoft Teams is not connected. Connect it in System Configuration first.' };
+    await postWebhook(cfg.url, buildTeamsSdetTicketBody(payload));
+    return { sent: true };
+  } catch (err) {
+    return { sent: false, error: (err as Error).message };
+  }
+}
+
 /** The sample "it works!" payload used by both saved-config and ad-hoc tests. */
 function buildSampleTestPayload(provider: WebhookProvider): TestRunEmailPayload {
   return {

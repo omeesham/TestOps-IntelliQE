@@ -1283,6 +1283,12 @@ export async function getBugAdoStatus() {
   return data as { connected: boolean; orgUrl?: string; project?: string };
 }
 
+/** Escalate the selected bug(s) to the JBS SDET team via the connected Teams channel. */
+export async function raiseSdetTicket(ids: string[]) {
+  const { data } = await api.post('/bugs/sdet-ticket', { ids });
+  return data as { ok: boolean; notified: number };
+}
+
 /** Raise the selected bug(s) in Azure DevOps as Bug work items. */
 export async function pushBugsToAdo(ids: string[]) {
   const { data } = await api.post('/bugs/ado/push', { ids });

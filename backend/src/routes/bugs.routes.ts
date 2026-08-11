@@ -15,6 +15,7 @@ import {
   deleteIssue as deleteJiraIssue,
 } from '../services/jira.service.js';
 import { runPlaywrightForRun, PlaywrightRunError } from '../services/playwright-runner.service.js';
+import { sendWebhookSdetTicket } from '../services/webhook-notification.service.js';
 
 // JIRA error payloads carry the reason in errorMessages[] or errors{field: msg}.
 function jiraErrorDetail(e: any, fallback: string): string {
@@ -241,6 +242,51 @@ router.get('/ado/status', async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('Bug ADO status error:', err.message);
     res.status(500).json({ error: 'Failed to check Azure DevOps status' });
+  }
+});
+
+// POST /sdet-ticket — escalate the selected bug(s) to the JBS SDET team for
+// automation-framework fixes. Sends one card to the tenant's connected Teams
+// webhook (System Configuration) and logs the escalation on each bug.
+// Body: { ids: string[] }.
+router.post('/sdet-ticket', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.filter((x: any) => UUID_RE.test(String(x))) : [];
+    if (ids.length === 0) { res.status(400).json({ error: 'ids (array of bug UUIDs) is required' }); return; }
+
+    const bugs: any[] = [];
+    for (const id of ids) {
+      const bug = await findBug(id, user.tenantId);
+      if (bug) bugs.push(bug);
+    }
+    if (bugs.length === 0) { res.status(404).json({ error: 'No matching bugs found' }); return; }
+
+    const sent = await sendWebhookSdetTicket(user.tenantId, {
+      bugs: bugs.map((b) => ({
+        bugNumber: b.bug_number,
+        title: b.title,
+        severity: b.severity,
+        priority: b.priority,
+        bugType: b.bug_type || undefined,
+        module: b.module || null,
+      })),
+      raisedBy: user.displayName || user.username,
+      tenantName: user.tenantName,
+    });
+    if (!sent.sent) {
+      res.status(400).json({ error: sent.error || 'Could not send the Teams notification' });
+      return;
+    }
+
+    for (const b of bugs) {
+      await logActivity(b.id, user.tenantId, 'sdet_ticket_raised', { via: 'teams' }, user.displayName || user.username);
+    }
+
+    res.json({ ok: true, notified: bugs.length });
+  } catch (err: any) {
+    console.error('Bug SDET ticket error:', err.message);
+    res.status(500).json({ error: 'Failed to raise the SDET ticket' });
   }
 });
 
