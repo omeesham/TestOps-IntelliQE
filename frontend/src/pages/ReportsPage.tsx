@@ -209,7 +209,7 @@ export default function ReportsPage() {
                     title="Open full-page report"
                   >
                     <td className="px-3 py-1.5">
-                      <div className="font-semibold text-[#1E1B4B] truncate max-w-[320px]" title={reportTitle(i)}>{reportTitle(i)}</div>
+                      <div className="text-[#1E1B4B] truncate max-w-[320px]" title={reportTitle(i)}>{reportTitle(i)}</div>
                       {i.module && (
                         <div className="text-[11px] text-[#9CA3AF] mt-0.5">
                           <span className="truncate max-w-[180px] inline-block align-bottom">{i.module}</span>
@@ -228,7 +228,7 @@ export default function ReportsPage() {
                     </td>
                     <td className="px-3 py-1.5">
                       {st ? (
-                        <span className={`text-sm font-semibold ${st.passRate >= 80 ? 'text-emerald-600' : st.passRate >= 50 ? 'text-amber-600' : 'text-red-500'}`}>{st.passRate}%</span>
+                        <span className={`text-sm ${st.passRate >= 80 ? 'text-emerald-600' : st.passRate >= 50 ? 'text-amber-600' : 'text-red-500'}`}>{st.passRate}%</span>
                       ) : <span className="text-gray-400 text-xs">—</span>}
                     </td>
                   </tr>
