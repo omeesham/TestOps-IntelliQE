@@ -1478,15 +1478,14 @@ export default function ChatPage() {
 
     const newPassed = healRes.summary?.passed ?? updatedResults.filter((r) => r.status === 'passed').length;
     const newFailed = healRes.summary?.failed ?? updatedResults.filter((r) => r.status === 'failed').length;
-    const totalSec = updatedResults.reduce((sum, r) => {
-      const v = parseFloat(r.duration || '0');
-      return sum + (Number.isFinite(v) ? v : 0);
-    }, 0);
-    // Prefer the per-test sum from the re-run; when no test reported a duration
-    // (nothing executed), fall back to the heal stage's real wall-clock time so
-    // the report never shows a bogus 0s.
-    const healMs = totalSec > 0 ? totalSec * 1000 : Date.now() - healStartedAt;
-    setExecutionSummary({ total: updatedResults.length, passed: newPassed, failed: newFailed, duration: formatHMS(healMs), durationMs: healMs });
+    // Add this heal cycle's real wall-clock time onto the running total, so the
+    // report shows the ENTIRE execution time (first run + every heal re-run).
+    // Never sum per-test durations: parallel workers overlap (sum ≠ elapsed).
+    const healMs = Date.now() - healStartedAt;
+    setExecutionSummary((s) => {
+      const totalMs = (s?.durationMs || 0) + healMs;
+      return { total: updatedResults.length, passed: newPassed, failed: newFailed, duration: formatHMS(totalMs), durationMs: totalMs };
+    });
     updatePipeline('execution', 'completed', `${newPassed}/${updatedResults.length} passed`);
 
     if (newFailed > 0 && attempt < 2) {
