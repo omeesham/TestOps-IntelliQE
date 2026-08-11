@@ -395,6 +395,7 @@ router.post('/scripts/start', (req: Request, res: Response) => {
  * continues gracefully to the report rather than stalling.
  */
 async function executeStage(tenantId: string, body: any): Promise<any> {
+  const stageStartedAt = Date.now();
   const { testCases, scripts, pageObjects, appId, testRunId } = body || {};
 
   const { ctx, appName } = applyManualTarget(await resolveAppContext(tenantId, appId), body);
@@ -426,7 +427,9 @@ async function executeStage(tenantId: string, body: any): Promise<any> {
   const passed = next.executionResults?.passed || 0;
   const failed = next.executionResults?.failed || 0;
   const total = next.testCases.length;
-  const durationMs = details.reduce((s, d) => s + (typeof d.durationMs === 'number' ? d.durationMs : 0), 0);
+  // Real wall-clock of the stage — never a per-test duration sum, which
+  // undercounts badly when tests run in parallel workers.
+  const durationMs = Date.now() - stageStartedAt;
 
   let reportUrl: string | undefined;
   if (executed) {
@@ -513,6 +516,7 @@ router.get('/jobs/:jobId', (req: Request, res: Response) => {
  * details and a per-test healing log.
  */
 async function healStage(tenantId: string, body: any): Promise<any> {
+  const stageStartedAt = Date.now();
   const { testCases, scripts, pageObjects, executionDetails, appId, testRunId } = body || {};
 
   {
@@ -676,7 +680,10 @@ async function healStage(tenantId: string, body: any): Promise<any> {
     const passed = reExecuted.executionResults?.passed || 0;
     const failed = reExecuted.executionResults?.failed || 0;
     const total = reExecuted.testCases.length;
-    const durationMs = newDetails.reduce((s, d) => s + (typeof d.durationMs === 'number' ? d.durationMs : 0), 0);
+    // Real wall-clock of the whole heal stage (all heal passes + re-runs) —
+    // never a per-test duration sum, which undercounts parallel workers and
+    // only reflects the final pass.
+    const durationMs = Date.now() - stageStartedAt;
 
     let reportUrl: string | undefined;
     if (executed) {
