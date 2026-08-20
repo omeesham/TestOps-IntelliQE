@@ -1528,16 +1528,6 @@ export default function ChatPage() {
     if (items.length === 0) return null;
     try {
       const res = await registerBugsFromRun({ testRunId: savedTestRunId, items });
-      const n = (res.created || 0) + (res.updated || 0);
-      if (n > 0) {
-        const failures = items.filter((i) => i.bugType === 'failure').length;
-        const flaky = items.filter((i) => i.bugType === 'flaky').length;
-        const parts = [
-          failures ? `${failures} failure${failures > 1 ? 's' : ''}` : '',
-          flaky ? `${flaky} flaky` : '',
-        ].filter(Boolean).join(' and ');
-        push('tessa', `Logged ${parts} in the Bug Tracker. Open it to triage, or re-run flaky or failing tests separately from there.`);
-      }
       return { created: res.created, updated: res.updated };
     } catch (err) {
       console.error('Bug auto-registration failed:', err);
@@ -1649,11 +1639,10 @@ export default function ChatPage() {
         integrationId: selectedRepoId as 'github' | 'gitlab' | 'bitbucket',
         testRunId: savedTestRunId || currentRunId || undefined,
       });
-      const repo = gitRepoLabel(result.prUrl);
       setPublishedPrUrl(result.prUrl);
       setPublishResult('success');
-      toast.success('Pushed successfully', `${repo} · branch ${result.branch}`);
-      push('tessa', `Pushed to ${repo} (branch "${result.branch}").`);
+      toast.success('Pushed to Code Repository');
+      push('tessa', 'Pushed to Code Repository.');
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.message || 'Git publish failed';
       setPublishResult('error');
@@ -1702,8 +1691,8 @@ export default function ChatPage() {
       const repo = gitRepoLabel(result.prUrl);
       setPublishedPrUrl(result.prUrl);
       setGitPush({ status: 'done', prUrl: result.prUrl, repo, branch: result.branch });
-      toast.success('Pushed successfully', `${repo} · branch ${result.branch}`);
-      push('tessa', `Pushed to ${repo} (branch "${result.branch}").`);
+      toast.success('Pushed to Code Repository');
+      push('tessa', 'Pushed to Code Repository.');
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.message || 'Git push failed';
       setGitPush({ status: 'error', error: msg });
@@ -2816,8 +2805,7 @@ export default function ChatPage() {
           {gitPush.status === 'done' && (
             <p className="flex items-center flex-wrap gap-x-1.5 text-xs text-gray-600">
               <CheckCircle className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
-              Pushed to <span className="font-semibold text-gray-800">{gitPush.repo}</span>
-              · branch <span className="font-semibold text-gray-800">{gitPush.branch}</span>
+              Pushed to Code Repository
               {gitPush.prUrl && (
                 <a href={gitPush.prUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-violet-700 hover:text-violet-800">
                   <ExternalLink className="w-3 h-3" /> View
@@ -2921,8 +2909,7 @@ export default function ChatPage() {
           {gitPush.status === 'done' && (
             <p className="flex items-center flex-wrap gap-x-1.5 text-xs text-gray-600">
               <CheckCircle className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
-              Pushed to <span className="font-semibold text-gray-800">{gitPush.repo}</span>
-              · branch <span className="font-semibold text-gray-800">{gitPush.branch}</span>
+              Pushed to Code Repository
               {gitPush.prUrl && (
                 <a href={gitPush.prUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-violet-700 hover:text-violet-800">
                   <ExternalLink className="w-3 h-3" /> View

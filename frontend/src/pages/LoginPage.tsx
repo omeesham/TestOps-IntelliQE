@@ -268,7 +268,7 @@ export default function LoginPage() {
           </div>
 
           <div className="text-center mt-5">
-            <p className="text-xs text-gray-400">&copy; Jade Business Solutions LLC.</p>
+            <p className="text-xs text-gray-400">&copy; 2026 JBS. All Rights Reserved.</p>
           </div>
         </div>
       </div>

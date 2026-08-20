@@ -68,7 +68,7 @@ export default function LandingPage() {
 
       {/* ── Copyright text ── */}
       <div className="relative z-10 py-4 px-6 text-center">
-        <span className="text-xs text-gray-600">&copy; Jade Business Solutions LLC.</span>
+        <span className="text-xs text-gray-600">&copy; 2026 JBS. All Rights Reserved.</span>
       </div>
     </div>
   );

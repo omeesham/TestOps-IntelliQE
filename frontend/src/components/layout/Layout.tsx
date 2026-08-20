@@ -33,7 +33,7 @@ export default function Layout() {
           {!isChat && <Outlet />}
         </main>
         <footer className="px-4 py-1.5 text-[11px] text-center text-gray-500 border-t border-gray-200 bg-white/60 backdrop-blur-sm">
-          Copyright &copy; Jade Business Solutions LLC.
+          &copy; 2026 JBS. All Rights Reserved.
         </footer>
       </div>
     </div>
