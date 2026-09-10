@@ -8,7 +8,7 @@ import type { Request, Response, NextFunction } from 'express';
  * even starts, so an already-running container also stops serving traffic
  * once the date passes.
  */
-const DEFAULT_EXPIRY = '2026-08-25';
+const DEFAULT_EXPIRY = '2026-09-30';
 
 export const LICENSE_EXPIRY_DATE = process.env.LICENSE_EXPIRY || DEFAULT_EXPIRY;
 
