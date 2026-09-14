@@ -1481,3 +1481,151 @@ export function subscribeToAgentPerformance(
     onStatusChange?.(false);
   };
 }
+
+// ─── ADA Compliance / website audit ──────────────────────────────────────────
+// Give it a URL; the backend crawls the site with a real browser, runs WCAG
+// (axe-core), broken-link and best-practice checks on every page, and returns a
+// scored website health report. Progress is polled — see AdaCompliancePanel.
+
+export type AdaSeverity = 'critical' | 'serious' | 'moderate' | 'minor';
+export type AdaCategory = 'accessibility' | 'links' | 'best-practice';
+
+export interface AdaScanOptions {
+  url: string;
+  username?: string;
+  password?: string;
+  maxPages?: number;
+  maxDepth?: number;
+  useSitemap?: boolean;
+  checkExternalLinks?: boolean;
+}
+
+export interface AdaProgressEvent {
+  seq: number;
+  at: string;
+  type: 'start' | 'robots' | 'sitemap' | 'navigate' | 'page' | 'login' | 'accessibility' | 'best-practice'
+    | 'links' | 'link-check' | 'summary' | 'warning' | 'error' | 'done';
+  message: string;
+  data?: Record<string, unknown>;
+}
+
+export interface AdaCategoryScore { score: number; grade: 'A' | 'B' | 'C' | 'D' | 'F'; label: string }
+export interface AdaLinkResult { url: string; status: number | null; kind: string; external: boolean; referrers: string[]; linkText?: string; error?: string; finalUrl?: string }
+
+export interface AdaSummary {
+  targetUrl: string;
+  siteName: string;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  pagesCrawled: number;
+  linksFound: number;
+  linksChecked: number;
+  loginAttempted: boolean;
+  loginSucceeded: boolean | null;
+  robots: { crawlDelay: number | null; disallowCount: number; sitemaps: string[] };
+  sitemapUrlsFound: number;
+  overall: AdaCategoryScore;
+  categories: {
+    accessibility: AdaCategoryScore & { violations: number; bySeverity: Record<AdaSeverity, number>; topRules: { ruleId: string; title: string; severity: AdaSeverity; pages: number; occurrences: number; helpUrl?: string; wcag?: string }[] };
+    links: AdaCategoryScore & { checked: number; ok: number; redirects: number; broken: number; serverErrors: number; timeouts: number; blocked: number; brokenLinks: AdaLinkResult[]; blockedLinks: AdaLinkResult[] };
+    bestPractice: AdaCategoryScore & { rulesEvaluated: number; rulesPassed: number; failingRules: { ruleId: string; title: string; severity: AdaSeverity; pages: number }[] };
+  };
+  worstPages: { url: string; title: string; a11yScore: number; bpScore: number; findings: number }[];
+  notes: string[];
+}
+
+export interface AdaScanRecord {
+  id: string;
+  target_url: string;
+  site_name?: string | null;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  overall_score?: number | null;
+  pages_crawled: number;
+  links_checked: number;
+  findings_count: number;
+  created_by?: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  created_at: string;
+  error?: string | null;
+  result?: AdaSummary | null;
+  config_data?: Record<string, unknown>;
+}
+
+export interface AdaProgress {
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  counters: { pages: number; linksFound: number; linksChecked: number; issues: number; maxPages: number; currentUrl?: string };
+  events: AdaProgressEvent[];
+  lastSeq: number;
+  elapsedMs: number;
+  summary?: AdaSummary;
+  error?: string;
+}
+
+export interface AdaFinding {
+  id: string;
+  page_url: string;
+  category: AdaCategory;
+  rule_id: string;
+  severity: AdaSeverity;
+  title: string;
+  description?: string | null;
+  wcag?: string | null;
+  element?: string | null;
+  html_snippet?: string | null;
+  help_url?: string | null;
+  occurrences: number;
+  details?: Record<string, unknown> | null;
+}
+
+export interface AdaPage {
+  url: string;
+  title: string;
+  status_code: number | null;
+  depth: number;
+  parent_url?: string | null;
+  load_ms: number;
+  links_found: number;
+  a11y_score: number;
+  bp_score: number;
+  findings_count: number;
+}
+
+export async function startAdaScan(options: AdaScanOptions): Promise<{ scanId: string; url: string }> {
+  const { data } = await api.post('/ada/scans', options);
+  return data;
+}
+
+export async function listAdaScans(): Promise<AdaScanRecord[]> {
+  const { data } = await api.get('/ada/scans');
+  return data.scans;
+}
+
+export async function getAdaScan(scanId: string, after = 0): Promise<{ scan: AdaScanRecord; progress: AdaProgress | null }> {
+  const { data } = await api.get(`/ada/scans/${encodeURIComponent(scanId)}`, { params: { after }, timeout: 30_000 });
+  return data;
+}
+
+export async function getAdaFindings(
+  scanId: string,
+  filters: { category?: AdaCategory | ''; severity?: AdaSeverity | ''; page?: string; q?: string; limit?: number; offset?: number } = {},
+): Promise<{ findings: AdaFinding[]; total: number; occurrences: number }> {
+  const params: Record<string, string | number> = {};
+  for (const [k, v] of Object.entries(filters)) if (v !== undefined && v !== '' && v !== null) params[k] = v as string | number;
+  const { data } = await api.get(`/ada/scans/${encodeURIComponent(scanId)}/findings`, { params });
+  return data;
+}
+
+export async function getAdaPages(scanId: string): Promise<AdaPage[]> {
+  const { data } = await api.get(`/ada/scans/${encodeURIComponent(scanId)}/pages`);
+  return data.pages;
+}
+
+export async function cancelAdaScan(scanId: string): Promise<void> {
+  await api.post(`/ada/scans/${encodeURIComponent(scanId)}/cancel`);
+}
+
+export async function deleteAdaScan(scanId: string): Promise<void> {
+  await api.delete(`/ada/scans/${encodeURIComponent(scanId)}`);
+}

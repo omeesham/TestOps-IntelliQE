@@ -69,6 +69,13 @@ export const FEATURE_CATALOG: FeatureDef[] = [
     group: 'Core',
     path: '/bug-tracker',
   },
+  {
+    key: 'ada-compliance',
+    name: 'ADA Compliance',
+    description: 'Website audits: accessibility (WCAG 2.2 AA), broken links, best practices and a scored health report from a single URL.',
+    group: 'Core',
+    path: '/ada-compliance',
+  },
 
   // ── Administration ────────────────────────────────────────────
   {

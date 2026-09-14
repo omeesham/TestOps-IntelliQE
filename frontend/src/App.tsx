@@ -15,6 +15,7 @@ import UserManagementPage from '@/pages/UserManagementPage';
 import BugTrackerPage from '@/pages/BugTrackerPage';
 import FeatureTogglesPage from '@/pages/FeatureTogglesPage';
 import AgentPerformancePage from '@/pages/AgentPerformancePage';
+import AdaCompliancePage from '@/pages/AdaCompliancePage';
 
 // Feature Toggles + Agent Performance are temporarily hidden from the UI.
 // Flip to true to restore their routes (and remove the matching paths from
@@ -62,6 +63,7 @@ function AppRoutes() {
         <Route path="/generated-tests" element={<FeatureRoute feature="generated-tests" name="Generated Test Cases"><GeneratedTestCasesPage /></FeatureRoute>} />
         <Route path="/reports" element={<FeatureRoute feature="reports" name="Reports"><ReportsPage /></FeatureRoute>} />
         <Route path="/bug-tracker" element={<FeatureRoute feature="bug-tracker" name="Bug Tracker"><BugTrackerPage /></FeatureRoute>} />
+        <Route path="/ada-compliance" element={<FeatureRoute feature="ada-compliance" name="ADA Compliance"><AdaCompliancePage /></FeatureRoute>} />
         <Route path="/user-management" element={<FeatureRoute feature="user-management" name="User Management"><UserManagementPage /></FeatureRoute>} />
         <Route path="/system-configuration" element={<FeatureRoute feature="system-configuration" name="System Configuration"><SystemConfigurationPage /></FeatureRoute>} />
         {/* Feature Toggles dashboard — admin control panel, never feature-gated.

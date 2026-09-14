@@ -32,11 +32,10 @@ import {
   BarChart3, Activity, Workflow, Box, Pencil, Save, ChevronLeft, ChevronRight,
   Play, Heart, GitBranch, Terminal, AlertTriangle, Wrench, ExternalLink, Copy, Package,
   SkipForward, XCircle, Volume2, VolumeX, Settings, Github, LifeBuoy,
-  Accessibility, Unlink, Palette, AlignHorizontalDistributeCenter,
-  SquareStack, BookOpen, ShieldCheck, Gauge,
-} from 'lucide-react';
+  Accessibility, } from 'lucide-react';
 import { initTTS, speak, speakAsync, waitForSpeech, waitForVoices, stopSpeaking, isTTSEnabled, toggleTTS } from '@/utils/tts';
 import { useToast } from '@/components/feedback/ToastProvider';
+import AdaCompliancePanel, { type BrownfieldHandoff } from '@/components/ada/AdaCompliancePanel';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES
@@ -58,7 +57,7 @@ type Step =
   | 'paste-text'
   | 'explore-form'
   | 'api-form'
-  | 'ada-preview'
+  | 'ada'
   | 'column-select'
   | 'generating'
   | 'results'
@@ -93,50 +92,13 @@ interface AgentStep {
 /* ═══════════════════════════════════════════════════════════════
    CONSTANTS
    ═══════════════════════════════════════════════════════════════ */
-// `comingSoon` dims the card and makes it inert. `preview` keeps a coming-soon
-// card clickable so it can open a placeholder screen describing its scope.
-const CATEGORIES: { id: Category; title: string; icon: React.ElementType; desc: string; comingSoon?: boolean; preview?: boolean }[] = [
+// `comingSoon` dims the card and makes it inert.
+const CATEGORIES: { id: Category; title: string; icon: React.ElementType; desc: string; comingSoon?: boolean }[] = [
   { id: 'application', title: 'Web Application Automation', icon: Monitor, desc: 'Validate functional workflows, E2E testing and cross-browser behavior.' },
   { id: 'api',         title: 'API Automation',     icon: Plug,        desc: 'Test REST services, endpoints, and system integrations.', comingSoon: true },
-  { id: 'ada',         title: 'ADA Compliance',     icon: Accessibility, desc: 'Audit accessibility, visual design and site health on the live app.', comingSoon: true, preview: true },
+  { id: 'ada',         title: 'ADA Compliance',     icon: Accessibility, desc: 'Enter a URL. Audit accessibility (WCAG), broken links, best practices and site health.' },
 ];
 
-/* ── ADA Compliance scope ─────────────────────────────────────────
-   Placeholder only — no agent or pipeline behind it yet. Rendered on the
-   'ada-preview' step so the scope is visible before the suite ships.
-   Shape follows how the market packages this: a crawl-and-score audit
-   (Lighthouse-style category scores), a WCAG-mapped accessibility engine
-   (axe-core / BrowserStack Accessibility), visual-diff design checks
-   (Percy / Applitools) and a project standards file the agent reads as the
-   source of truth for the design system (Kiro-style steering docs). */
-interface AdaCheck { icon: React.ElementType; title: string; desc: string }
-const ADA_SUITES: { group: string; checks: AdaCheck[] }[] = [
-  {
-    group: 'Accessibility & compliance',
-    checks: [
-      { icon: Accessibility, title: 'ADA / WCAG audit', desc: 'Alt text, ARIA roles, focus order, keyboard traps and contrast — every finding mapped to its WCAG 2.2 success criterion.' },
-      { icon: ShieldCheck,   title: 'Web best practices', desc: 'Semantic HTML, page metadata, image sizing, console errors and mixed content.' },
-    ],
-  },
-  {
-    group: 'Visual & design QA',
-    checks: [
-      { icon: AlignHorizontalDistributeCenter, title: 'UI alignment', desc: 'Misaligned elements, uneven spacing and broken grid layouts across breakpoints.' },
-      { icon: SquareStack,   title: 'Overlapping elements', desc: 'Buttons, text and controls that collide, clip or become unclickable at any viewport.' },
-      { icon: Type,          title: 'Font consistency', desc: 'Inconsistent font families, weights and sizes compared page to page.' },
-      { icon: Palette,       title: 'Color accuracy', desc: 'Rendered hex codes checked against the approved brand palette and design tokens.' },
-      { icon: BookOpen,      title: 'Style-guide adherence', desc: 'The live UI compared against your documented design standards and component rules.' },
-    ],
-  },
-  {
-    group: 'Links & site health',
-    checks: [
-      { icon: Unlink,        title: 'Broken & dead links', desc: 'Every internal and outbound link crawled — 404s, redirect chains and unreachable targets.' },
-    ],
-  },
-];
-
-const ADA_STANDARDS = ['WCAG 2.2 AA', 'Section 508', 'ADA Title III'];
 
 const REQ_SOURCES: { id: ReqSource; title: string; icon: React.ElementType; desc: string }[] = [
   { id: 'jira', title: 'JIRA', icon: Link2, desc: 'Import from JIRA stories' },
@@ -605,6 +567,13 @@ export default function ChatPage() {
     if (welcomed.current) return;
     welcomed.current = true;
 
+    // Arrived from the ADA Compliance page with a site to rebuild requirements for.
+    const handoff = sessionStorage.getItem('intelliqe_ada_brownfield');
+    if (handoff) {
+      sessionStorage.removeItem('intelliqe_ada_brownfield');
+      try { handleAdaBrownfield(JSON.parse(handoff)); return; } catch { /* fall through to the normal welcome */ }
+    }
+
     // Skip welcome if a previous session was restored (it already has messages)
     const hasSavedSession = !!sessionStorage.getItem(SESSION_KEY);
     if (hasSavedSession) return;
@@ -616,9 +585,7 @@ export default function ChatPage() {
 
   /* --- flow handlers --- */
   const pickCategory = (c: typeof CATEGORIES[number]) => {
-    // Inert coming-soon cards just acknowledge; ones with a scope preview
-    // (ADA Compliance) open their placeholder screen instead.
-    if (c.comingSoon && !c.preview) {
+    if (c.comingSoon) {
       push('user', c.title);
       push('tessa', `${c.title} is coming soon.`);
       return;
@@ -628,8 +595,8 @@ export default function ChatPage() {
     setSubCategory(c.title);
 
     if (c.id === 'ada') {
-      // Placeholder — the panel states availability, so no Tessa line here.
-      setStep('ada-preview');
+      // The panel carries its own prompt, so no Tessa line here.
+      setStep('ada');
     } else if (c.id === 'api') {
       push('tessa', 'Please provide your API details below.');
       setStep('api-form');
@@ -968,6 +935,24 @@ export default function ChatPage() {
     // The literal placeholder is what we'll show in the column-select UI;
     // the real backend call uses exploreMode + roles, not this text.
     setPendingRequirements(`__EXPLORE__:${exploreUrl}`);
+    push('tessa', "I'll explore the application, identify its features, and generate test cases. Please choose the columns you'd like, then click Generate.");
+    setStep('column-select');
+  };
+
+  /* --- ADA audit → brownfield: rebuild requirements & test cases from the crawled site.
+     Reuses the existing explore-mode flow exactly as the "Explore App" source does —
+     the audit's URL and credentials become the explore target. --- */
+  const handleAdaBrownfield = ({ url, siteName, username, password }: BrownfieldHandoff) => {
+    setCategory('application');
+    setSubCategory('Web Application Automation');
+    setSource('explore');
+    setExploreUrl(url);
+    setExploreAppName(siteName || '');
+    setExploreUsername(username || '');
+    setExplorePassword(password || '');
+    setExplorePrompt('Cover every public page and menu found during the website audit: navigation, forms, search, sign-in and account flows.');
+    push('user', `Rebuild requirements and generate test cases for ${url}`);
+    setPendingRequirements(`__EXPLORE__:${url}`);
     push('tessa', "I'll explore the application, identify its features, and generate test cases. Please choose the columns you'd like, then click Generate.");
     setStep('column-select');
   };
@@ -1972,8 +1957,7 @@ export default function ChatPage() {
           {visibleCategories.map((c) => {
             const Icon = c.icon;
             const isComingSoon = c.comingSoon === true;
-            // Coming-soon cards are inert unless they carry a scope preview.
-            const isLocked = isComingSoon && c.preview !== true;
+            const isLocked = isComingSoon;
             return (
               <button
                 key={c.id}
@@ -2425,75 +2409,9 @@ export default function ChatPage() {
       );
     }
 
-    /* ── ADA COMPLIANCE — placeholder describing what the suite will cover ── */
-    if (step === 'ada-preview') {
-      return (
-        <div className="max-w-lg ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm space-y-4">
-          <div className="flex items-center gap-2">
-            <Accessibility className="w-4 h-4 text-violet-500" />
-            <span className="text-sm font-semibold text-gray-800">ADA Compliance</span>
-            <span className="ml-auto px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full text-[10px] font-semibold uppercase tracking-wide">
-              Coming Soon
-            </span>
-          </div>
-
-          <p className="text-xs text-gray-500 leading-relaxed">
-            Point this suite at a URL and it will crawl the live application, run the checks below
-            on every page, and score the result. This suite is not available yet — here is the
-            scope it will cover.
-          </p>
-
-          <div className="flex flex-wrap gap-1.5">
-            {ADA_STANDARDS.map((s) => (
-              <span key={s} className="px-2 py-0.5 bg-violet-50 text-violet-600 rounded-full text-[10px] font-medium">
-                {s}
-              </span>
-            ))}
-          </div>
-
-          <div className="space-y-3">
-            {ADA_SUITES.map((suite) => (
-              <div key={suite.group}>
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">
-                  {suite.group}
-                </p>
-                <div className="space-y-1.5">
-                  {suite.checks.map((chk) => {
-                    const ChkIcon = chk.icon;
-                    return (
-                      <div key={chk.title} className="flex gap-2.5 p-3 bg-gray-50/70 border border-gray-100 rounded-lg">
-                        <ChkIcon className="w-4 h-4 text-violet-500 flex-shrink-0 mt-0.5" />
-                        <div>
-                          <p className="text-xs font-medium text-gray-800">{chk.title}</p>
-                          <p className="text-[11px] text-gray-400 leading-snug mt-0.5">{chk.desc}</p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="flex gap-2.5 p-3 bg-violet-50/60 border border-violet-100 rounded-lg">
-            <Gauge className="w-4 h-4 text-violet-500 flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="text-xs font-medium text-gray-800">Website health report</p>
-              <p className="text-[11px] text-gray-500 leading-snug mt-0.5">
-                One scored audit per run — a score for each category above, every finding ranked by
-                severity with the page and element it came from, and the trend across runs.
-              </p>
-            </div>
-          </div>
-
-          <button
-            onClick={() => { setStep('welcome'); setCategory(null); setSubCategory(null); }}
-            className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
-          >
-            <ChevronLeft className="w-4 h-4" />Back
-          </button>
-        </div>
-      );
+    /* ── ADA COMPLIANCE — website audit: a URL in, a scored health report out ── */
+    if (step === 'ada') {
+      return <AdaCompliancePanel embedded onBrownfield={handleAdaBrownfield} />;
     }
 
     /* ── COLUMN SELECT — pick columns before generation ── */
@@ -3376,7 +3294,7 @@ export default function ChatPage() {
           </div>
 
           {/* Breadcrumb Trail */}
-          {(category || subCategory || source) && !['ada-preview', 'results', 'saved', 'script-generating', 'script-review', 'executing', 'execution-results', 'healing', 'report', 'publish'].includes(step) && (
+          {(category || subCategory || source) && !['ada', 'results', 'saved', 'script-generating', 'script-review', 'executing', 'execution-results', 'healing', 'report', 'publish'].includes(step) && (
             <div className="flex-shrink-0 px-6 py-2 border-t border-gray-100 bg-white/60 backdrop-blur-sm">
               <div className="max-w-2xl mx-auto flex items-center gap-1.5 text-[11px] text-gray-400">
                 {category && <span className="px-2 py-0.5 bg-violet-50 text-violet-600 rounded-full">{CATEGORIES.find(c => c.id === category)?.title}</span>}

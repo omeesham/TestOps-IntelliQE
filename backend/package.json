@@ -9,6 +9,7 @@
     "worker:start": "tsx --env-file-if-exists=.env src/worker/index.ts"
   },
   "dependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@gitbeaker/rest": "^43.8.0",
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "@octokit/rest": "^22.0.1",

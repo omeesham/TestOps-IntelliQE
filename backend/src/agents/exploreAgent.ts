@@ -370,7 +370,7 @@ function looksLikeLogin(snap: PageSnapshot): boolean {
 // Hosts that indicate we're parked on an external identity provider.
 const IDP_HOST_RE = /login\.microsoftonline|okta|auth0|accounts\.google|login\.windows|\.b2clogin\.|adfs/i;
 
-async function tryLogin(
+export async function tryLogin(
   page: import('@playwright/test').Page,
   username: string,
   password: string,

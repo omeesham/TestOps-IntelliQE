@@ -9,6 +9,8 @@ const PAGE_TITLES: Record<string, string> = {
   '/login': 'Sign In',
   '/user-management': 'User Management',
   '/generated-tests': 'Generated Test Cases',
+  '/ada-compliance': 'ADA Compliance',
+  '/bug-tracker': 'Bug Tracker',
 };
 
 export default function Header() {

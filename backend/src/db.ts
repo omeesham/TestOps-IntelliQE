@@ -769,6 +769,70 @@ export async function initDb(): Promise<void> {
     await createIndex('idx_bugs_tenant_type', 'bugs', '(tenant_id, bug_type)');
     await createIndex('idx_bug_activity_bug', 'bug_activity', '(bug_id)');
 
+    // ─── 11b. ADA Compliance / website audit ───
+    // One row per scan of a public (or credentialed) site. `config_data` holds
+    // the options the scan ran with, `result` the computed summary (scores,
+    // counts, top issues) so the report renders without re-aggregating rows.
+    await createTable('ada_scans', `
+      CREATE TABLE ${SCHEMA}.ada_scans (
+        id            UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id     UNIQUEIDENTIFIER NOT NULL,
+        target_url    NVARCHAR(1000) NOT NULL,
+        site_name     NVARCHAR(200),
+        status        NVARCHAR(20) NOT NULL DEFAULT 'queued'
+                      CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
+        config_data   NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        result        NVARCHAR(MAX),
+        pages_crawled INT NOT NULL DEFAULT 0,
+        links_checked INT NOT NULL DEFAULT 0,
+        findings_count INT NOT NULL DEFAULT 0,
+        overall_score INT,
+        error         NVARCHAR(MAX),
+        created_by    NVARCHAR(100),
+        started_at    DATETIMEOFFSET,
+        finished_at   DATETIMEOFFSET,
+        created_at    DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('ada_pages', `
+      CREATE TABLE ${SCHEMA}.ada_pages (
+        id              UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        scan_id         UNIQUEIDENTIFIER NOT NULL REFERENCES ${SCHEMA}.ada_scans(id) ON DELETE CASCADE,
+        tenant_id       UNIQUEIDENTIFIER NOT NULL,
+        url             NVARCHAR(2000) NOT NULL,
+        title           NVARCHAR(500),
+        status_code     INT,
+        depth           INT NOT NULL DEFAULT 0,
+        parent_url      NVARCHAR(2000),
+        load_ms         INT,
+        links_found     INT NOT NULL DEFAULT 0,
+        a11y_score      INT,
+        bp_score        INT,
+        findings_count  INT NOT NULL DEFAULT 0,
+        created_at      DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('ada_findings', `
+      CREATE TABLE ${SCHEMA}.ada_findings (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        scan_id      UNIQUEIDENTIFIER NOT NULL REFERENCES ${SCHEMA}.ada_scans(id) ON DELETE CASCADE,
+        tenant_id    UNIQUEIDENTIFIER NOT NULL,
+        page_url     NVARCHAR(2000) NOT NULL,
+        category     NVARCHAR(30) NOT NULL,
+        rule_id      NVARCHAR(100) NOT NULL,
+        severity     NVARCHAR(20) NOT NULL,
+        title        NVARCHAR(500) NOT NULL,
+        description  NVARCHAR(MAX),
+        wcag         NVARCHAR(200),
+        element      NVARCHAR(1000),
+        html_snippet NVARCHAR(MAX),
+        help_url     NVARCHAR(1000),
+        occurrences  INT NOT NULL DEFAULT 1,
+        details      NVARCHAR(MAX),
+        created_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createIndex('idx_ada_scans_tenant_created', 'ada_scans', '(tenant_id, created_at DESC)');
+    await createIndex('idx_ada_pages_scan', 'ada_pages', '(scan_id)');
+    await createIndex('idx_ada_findings_scan', 'ada_findings', '(scan_id, category, severity)');
+
     // ─── 12. Seed: JBS platform tenant + default users ───
     await exec(`
       IF NOT EXISTS (SELECT 1 FROM ${SCHEMA}.tenants WHERE slug = 'jbs')
