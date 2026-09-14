@@ -26,7 +26,11 @@ function sanitizeFileName(raw: string): string {
  */
 function pageImportsOf(code: string): string[] {
   const out: string[] = [];
-  const re = /import\s+[^'"]*from\s+['"]([^'"]*\/pages\/[^'"]*?\.page)['"]/g;
+  // Both halves of the POM: browser page objects (`…/pages/x.page`) and API
+  // service objects (`…/api/x.api`, plus the shared `…/api/base.api`). Missing
+  // either one is the same failure — an import that cannot resolve aborts
+  // COLLECTION and zeroes the whole run — so both must be detected here.
+  const re = /import\s+[^'"]*from\s+['"]([^'"]*(?:\/pages\/[^'"]*?\.page|\/api\/[^'"]*?\.api))['"]/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(code || '')) !== null) out.push(m[1]!);
   return out;
@@ -41,10 +45,10 @@ function pageImportsOf(code: string): string[] {
 function missingPomStub(testCaseId: string, missing: string[]): string {
   const list = missing.map((m) => m.split('/').pop()).join(', ');
   return `import { test, expect } from '@playwright/test';\n\n` +
-    `test(${JSON.stringify(`${testCaseId} — page object missing`)}, async () => {\n` +
-    `  // The generated spec imported a page object that was not produced: ${list}.\n` +
+    `test(${JSON.stringify(`${testCaseId} — page/service object missing`)}, async () => {\n` +
+    `  // The generated spec imported a page or service object that was not produced: ${list}.\n` +
     `  // This is a generation/heal POM desync — regenerate scripts for this case.\n` +
-    `  expect(false, ${JSON.stringify(`Missing page object(s): ${list}. Regenerate this test's scripts.`)}).toBe(true);\n` +
+    `  expect(false, ${JSON.stringify(`Missing page/service object(s): ${list}. Regenerate this test's scripts.`)}).toBe(true);\n` +
     `});\n`;
 }
 
@@ -226,6 +230,14 @@ async function runPlaywrightInMemory(
   const configSrc = `const { defineConfig } = require('@playwright/test');
 module.exports = defineConfig({
   testDir: './tests',
+  // Per-run artifact directory. Playwright is spawned with cwd = BACKEND_ROOT,
+  // so without this every concurrent run defaults to the SAME
+  // <backend>/test-results — and Playwright empties that directory when a run
+  // starts. A second run beginning mid-flight therefore deletes the first
+  // run's in-progress trace/screenshot files, which surfaces as a spurious
+  // "ENOENT: … .playwright-artifacts-N/traces/….network" failure on a test
+  // that actually passed. Keep artifacts inside this run's own workspace.
+  outputDir: ${JSON.stringify(path.join(workspace, 'test-results'))},
   fullyParallel: true,
   retries: 0,
   timeout: 90_000,

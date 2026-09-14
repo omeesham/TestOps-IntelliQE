@@ -26,11 +26,18 @@ interface TestRun {
   module?: string | null; submodule?: string | null;
   test_case_count: number; generated_count: number; approved_count: number; scripted_count: number;
 }
+/** HTTP detail saved for API Automation cases — mirrors ApiCaseMeta on the backend. */
+interface ApiMeta {
+  endpoint?: string; method?: string; headers?: Record<string, string>;
+  queryParams?: string; requestBody?: string; expectedStatus?: string;
+}
 interface TestCase {
   id: string; test_run_id: string; tc_number: string; title: string; steps: string[];
   expected: string; priority: string; type: string; feature: string; precondition: string;
   status: string; sort_order: number; created_at: string;
   module?: string | null; submodule?: string | null; tags?: string[];
+  /** Present only on API Automation runs. */
+  api_meta?: ApiMeta | null;
 }
 interface Pagination { page: number; limit: number; total: number; totalPages: number; }
 
@@ -552,6 +559,29 @@ export default function GeneratedTestCasesPage() {
                         </button>
                         {expandedTcId === tc.id && !editingTc && (
                           <div className="mt-3 space-y-3 text-xs text-gray-600 border-t border-gray-100 pt-3">
+                            {/* API Automation: the HTTP columns saved with the case. */}
+                            {tc.api_meta && (
+                              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                                {tc.api_meta.endpoint && <div><span className="font-semibold text-gray-500">Endpoint:</span> <span className="font-mono break-all">{tc.api_meta.endpoint}</span></div>}
+                                {tc.api_meta.method && <div><span className="font-semibold text-gray-500">HTTP Method:</span> {tc.api_meta.method}</div>}
+                                {tc.api_meta.queryParams && <div><span className="font-semibold text-gray-500">Path / Query Params:</span> <span className="font-mono break-all">{tc.api_meta.queryParams}</span></div>}
+                                {tc.api_meta.expectedStatus && <div><span className="font-semibold text-gray-500">Expected Status Code:</span> {tc.api_meta.expectedStatus}</div>}
+                                {tc.api_meta.headers && Object.keys(tc.api_meta.headers).length > 0 && (
+                                  <div className="col-span-2">
+                                    <span className="font-semibold text-gray-500">Request Headers:</span>
+                                    <ul className="list-none mt-0.5 space-y-0.5 font-mono break-all">
+                                      {Object.entries(tc.api_meta.headers).map(([k, v]) => <li key={k}>{k}: {v}</li>)}
+                                    </ul>
+                                  </div>
+                                )}
+                                {tc.api_meta.requestBody && (
+                                  <div className="col-span-2">
+                                    <span className="font-semibold text-gray-500">Request Body (Payload):</span>
+                                    <pre className="mt-0.5 bg-gray-50 border border-gray-100 rounded-lg p-2 overflow-x-auto whitespace-pre-wrap break-all font-mono text-[11px]">{tc.api_meta.requestBody}</pre>
+                                  </div>
+                                )}
+                              </div>
+                            )}
                             {tc.precondition && <div><span className="font-semibold text-gray-500">Precondition:</span> {tc.precondition}</div>}
                             {(tc.steps || []).length > 0 && (
                               <div>

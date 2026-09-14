@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Loader2, FileText, BarChart3, Download, ArrowLeft,
-  CheckCircle2, XCircle, Clock, FileSpreadsheet,
+  CheckCircle2, XCircle, Clock, FileSpreadsheet, Hammer, AlertTriangle,
 } from 'lucide-react';
 import {
   getReportsHistory, downloadReportExport,
-  loadAllureReport,
+  loadAllureReport, generateAllureReport,
   type ReportHistoryItem, type ReportHistoryResponse,
 } from '@/services/api';
 import ErrorAlert from '@/components/feedback/ErrorAlert';
@@ -42,13 +42,17 @@ export default function ReportsPage() {
 
   // Full-page report view
   const [viewItem, setViewItem] = useState<ReportHistoryItem | null>(null);
-  const [viewStatus, setViewStatus] = useState<{ reportUrl?: string; allureReportUrl?: string; source?: string } | null>(null);
+  const [viewStatus, setViewStatus] = useState<{ reportUrl?: string; allureReportUrl?: string; allureError?: string; source?: string } | null>(null);
   const [viewTab, setViewTab] = useState<'allure' | 'basic'>('allure');
   const [viewLoading, setViewLoading] = useState(false);
+  const [buildingAllure, setBuildingAllure] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      // Web and API reports share ONE list — no automation-kind filter. Each row
+      // carries its own Web/API marker instead (see the Type column), so the two
+      // stay tellable apart without splitting the page into separate tabs.
       // Retention caps the total at REPORT_RETENTION (10); server paginates within it.
       const res = await getReportsHistory({ page, pageSize });
       setData(res);
@@ -76,6 +80,31 @@ export default function ReportsPage() {
       setViewStatus(null);
     } finally {
       setViewLoading(false);
+    }
+  }, [toast]);
+
+  /**
+   * Build the Allure report for a run that has none. The run's Playwright HTML
+   * ("Basic") report can exist without it — an Allure build needs a JRE, and
+   * when that step failed at execution time this is the way back to a report
+   * without re-running the suite by hand.
+   */
+  const buildAllure = useCallback(async (runId: string) => {
+    setBuildingAllure(true);
+    try {
+      await generateAllureReport(runId);
+      const s = await loadAllureReport(runId);
+      setViewStatus(s);
+      if (s.allureReportUrl) {
+        setViewTab('allure');
+        toast.success('Allure report built');
+      } else {
+        toast.error('Allure report not built', s.allureError || 'The build produced no report.');
+      }
+    } catch (err) {
+      toast.error('Could not build the Allure report', normalizeError(err).message);
+    } finally {
+      setBuildingAllure(false);
     }
   }, [toast]);
 
@@ -123,6 +152,14 @@ export default function ReportsPage() {
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
+            {/* Same Web/API marker the list row carries, so the report's
+                identity survives the click-through. */}
+            <span
+              className={`shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full ${viewItem.kind === 'api' ? 'bg-violet-100 text-violet-700' : 'bg-sky-100 text-sky-700'}`}
+              title={viewItem.kind === 'api' ? 'API Automation report' : 'Web Automation report'}
+            >
+              {viewItem.kind === 'api' ? 'API' : 'Web'}
+            </span>
             <h1 className="text-sm font-bold text-[#1E1B4B] truncate" title={reportTitle(viewItem)}>{reportTitle(viewItem)}</h1>
           </div>
           <span className="flex items-center gap-1 text-xs text-[#6B7280] flex-shrink-0"><Clock className="w-3 h-3" />{fmtDate(viewItem.generatedAt)}</span>
@@ -134,7 +171,8 @@ export default function ReportsPage() {
             <div className="flex items-center gap-1 bg-white rounded-lg p-1 border border-[#DDD6FE]/60">
               <button
                 onClick={() => setViewTab('allure')}
-                disabled={!viewStatus?.allureReportUrl}
+                disabled={!viewStatus}
+                title={viewStatus?.allureReportUrl ? 'Allure report' : 'No Allure report for this run yet'}
                 className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-md transition-colors disabled:opacity-40 ${viewTab === 'allure' ? 'bg-[#7C3AED] text-white' : 'text-[#6B7280] hover:text-[#7C3AED]'}`}
               >
                 <FileText className="w-3.5 h-3.5" />Allure
@@ -163,6 +201,33 @@ export default function ReportsPage() {
             </div>
           ) : viewUrl ? (
             <iframe key={viewUrl} src={viewUrl} className="w-full border-0" style={{ height: 'calc(100vh - 200px)', minHeight: 460 }} title="Test report" />
+          ) : viewTab === 'allure' && viewStatus?.reportUrl ? (
+            /* The run HAS a report — just not the Allure one. Say why, and offer
+               to build it, instead of greying the tab out with no explanation. */
+            <div className="flex flex-col items-center justify-center gap-3 px-6 text-center text-sm text-[#6B7280]" style={{ height: 'calc(100vh - 200px)', minHeight: 460 }}>
+              <AlertTriangle className="w-10 h-10 text-[#A5B4FC]" />
+              <p className="font-medium text-[#1E1B4B]">No Allure report for this run</p>
+              <p className="text-xs max-w-lg leading-relaxed">
+                {viewStatus.allureError || 'It was never built for this run.'}
+              </p>
+              <div className="flex items-center gap-2 mt-1">
+                <button
+                  onClick={() => buildAllure(viewItem.runId)}
+                  disabled={buildingAllure}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:from-[#6D28D9] hover:to-[#4F46E5] rounded-lg disabled:opacity-50 transition-all"
+                >
+                  {buildingAllure ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Hammer className="w-3.5 h-3.5" />}
+                  {buildingAllure ? 'Building…' : 'Build Allure report'}
+                </button>
+                <button
+                  onClick={() => setViewTab('basic')}
+                  className="px-4 py-2 text-xs font-semibold text-[#6B7280] bg-white border border-[#DDD6FE] rounded-lg hover:text-[#7C3AED] transition-colors"
+                >
+                  Open Basic HTML instead
+                </button>
+              </div>
+              {buildingAllure && <p className="text-[11px] text-[#9CA3AF]">Re-running this suite to collect results — this can take a minute.</p>}
+            </div>
           ) : (
             <div className="flex flex-col items-center justify-center gap-2 text-sm text-[#6B7280]" style={{ height: 'calc(100vh - 200px)', minHeight: 460 }}>
               <FileText className="w-10 h-10 text-[#A5B4FC]" />
@@ -178,12 +243,13 @@ export default function ReportsPage() {
   /* ════════ EXECUTIVE LIST VIEW ════════ */
   return (
     <div className="space-y-4">
-      {/* Executive table — latest 10, clickable rows */}
+      {/* Executive table — latest 10 Web AND API reports together, clickable rows */}
       <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-[#DDD6FE]/60 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-100">
+                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap w-20">Type</th>
                 <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Report</th>
                 <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Generated</th>
                 <th className="text-center px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Results</th>
@@ -192,12 +258,12 @@ export default function ReportsPage() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={4} className="px-4 py-16 text-center"><Loader2 className="w-6 h-6 text-[#7C3AED] animate-spin inline" /></td></tr>
+                <tr><td colSpan={5} className="px-4 py-16 text-center"><Loader2 className="w-6 h-6 text-[#7C3AED] animate-spin inline" /></td></tr>
               ) : items.length === 0 ? (
-                <tr><td colSpan={4} className="px-4 py-16 text-center text-[#6B7280]">
+                <tr><td colSpan={5} className="px-4 py-16 text-center text-[#6B7280]">
                   <FileText className="w-10 h-10 text-[#A5B4FC] mx-auto mb-3" />
                   <p className="font-medium text-[#1E1B4B]">No reports yet</p>
-                  <p className="text-xs mt-1">Run a test execution from the Chat flow, then reports appear here.</p>
+                  <p className="text-xs mt-1">Run a Web Application or API Automation execution from the Chat flow, then reports appear here.</p>
                 </td></tr>
               ) : items.map((i) => {
                 const st = i.stats;
@@ -208,8 +274,18 @@ export default function ReportsPage() {
                     className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors cursor-pointer"
                     title="Open full-page report"
                   >
+                    {/* Type — the row's own Web/API identity, now that the two
+                        kinds share a single unfiltered list. */}
                     <td className="px-3 py-1.5">
-                      <div className="text-[#1E1B4B] truncate max-w-[320px]" title={reportTitle(i)}>{reportTitle(i)}</div>
+                      <span
+                        className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full ${i.kind === 'api' ? 'bg-violet-100 text-violet-700' : 'bg-sky-100 text-sky-700'}`}
+                        title={i.kind === 'api' ? 'API Automation report' : 'Web Automation report'}
+                      >
+                        {i.kind === 'api' ? 'API' : 'Web'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <div className="text-[#1E1B4B] truncate max-w-[360px]" title={reportTitle(i)}>{reportTitle(i)}</div>
                       {i.module && (
                         <div className="text-[11px] text-[#9CA3AF] mt-0.5">
                           <span className="truncate max-w-[180px] inline-block align-bottom">{i.module}</span>

@@ -7,8 +7,9 @@ import { scriptAgent } from './scriptAgent.js';
 import { executionAgent } from './executionAgent.js';
 import { healingAgent } from './healingAgent.js';
 import { exploreAgent, crawlAppMap } from './exploreAgent.js';
+import { apiGeneratorAgent } from './apiGeneratorAgent.js';
 import { timed } from '../services/agent-metrics.service.js';
-import type { TestOpsState, AppContext, LlmConfig, ExploredApp } from './state.js';
+import type { TestOpsState, AppContext, LlmConfig, ExploredApp, ApiSpec } from './state.js';
 
 /**
  * Decide if the explore agent should run. We trigger it when:
@@ -126,13 +127,25 @@ export async function runPipeline(
 
 export async function runGenerationOnly(
   requirements: string,
-  options?: { maxTestCases?: number; appContext?: AppContext; llm?: LlmConfig | null; tenantId?: string },
+  options?: { maxTestCases?: number; appContext?: AppContext; llm?: LlmConfig | null; tenantId?: string; apiSpec?: ApiSpec | null },
 ): Promise<TestOpsState> {
   const tenantId = options?.tenantId;
   let state = createInitialState(requirements, options?.appContext, options?.llm);
   if (options?.maxTestCases !== undefined) {
     state.generationOptions = { maxTestCases: options.maxTestCases };
   }
+
+  // API Automation path — the user gave a concrete HTTP endpoint (method, URL,
+  // headers, auth, body). Skip the browser/UI pipeline entirely (no explore,
+  // no requirement/audit/planner UI passes) and generate real HTTP test cases
+  // plus self-contained Playwright `request` specs grounded in that endpoint.
+  if (options?.apiSpec) {
+    state.apiSpec = options.apiSpec;
+    state = await timed(tenantId, 'generator', () => apiGeneratorAgent(state),
+      (s) => ({ testCases: s.testCases.length }));
+    return state;
+  }
+
   // Path 4 — explore the live application first when the user provided
   // only a URL (no Jira story, no upload, no pasted requirements).
   if (shouldExploreFirst(state)) {

@@ -6,6 +6,8 @@ import { scriptAgent } from '../agents/scriptAgent.js';
 import { liveScriptAgent, liveHealingAgent } from '../agents/liveScriptAgent.js';
 import { executionAgent } from '../agents/executionAgent.js';
 import { healingAgent } from '../agents/healingAgent.js';
+import { apiHealingAgent, isApiRun } from '../agents/apiHealingAgent.js';
+import { sanitizeApiSpec } from '../utils/api-spec.js';
 import { crawlAppMap, snapshotEntryPage } from '../agents/exploreAgent.js';
 import { getConfigsForTenant } from '../services/configurations.service.js';
 import { getTenantLlm } from '../services/llm.service.js';
@@ -122,6 +124,18 @@ function notifyRun(tenantId: string, runId: string, args: {
  * (the run results are still returned to the UI).
  */
 async function buildAllureReport(tenantId: string, scope: string, resultsDir: string): Promise<boolean> {
+  /* The sidecar is what registers the run with the Reports page — write it
+     whichever way the Allure build goes. Previously it was written only on
+     success, so a failed build ALSO cost the run its generatedAt (and, on the
+     heal path that wipes the run dir first, its listing altogether) even though
+     the Playwright "Basic" report was sitting right there. `allureError`
+     carries the reason forward to the UI. */
+  const writeMeta = (allure: boolean, allureError?: string) =>
+    fs.writeFile(
+      path.join(reportDirFor(tenantId, scope), 'report-meta.json'),
+      JSON.stringify({ generatedAt: new Date().toISOString(), runId: scope, tenantId, real: true, allure, allureError }, null, 2),
+    ).catch(() => {});
+
   try {
     const files = await fs.readdir(resultsDir).catch(() => [] as string[]);
     if (files.length === 0) {
@@ -132,6 +146,7 @@ async function buildAllureReport(tenantId: string, scope: string, resultsDir: st
         tenantId, scope, resultsDir,
         msg: 'No allure-results were produced for this run — no report built.',
       });
+      await writeMeta(false, 'The run produced no allure-results, so no Allure report could be built.');
       return false;
     }
     // The Allure report lives in an `/allure` SUBFOLDER of the run dir. The run
@@ -139,13 +154,12 @@ async function buildAllureReport(tenantId: string, scope: string, resultsDir: st
     // separate lets the Reports page show each under its own tab. `--clean` then
     // only wipes the allure subfolder, never the Playwright report.
     await generateAllureHtml(resultsDir, path.join(reportDirFor(tenantId, scope), 'allure'));
-    await fs.writeFile(
-      path.join(reportDirFor(tenantId, scope), 'report-meta.json'),
-      JSON.stringify({ generatedAt: new Date().toISOString(), runId: scope, tenantId, real: true, allure: true }, null, 2),
-    ).catch(() => {});
+    await writeMeta(true);
     return true;
   } catch (e) {
-    logger.warn('allure.build_failed', { tenantId, scope, err: (e as Error).message });
+    const err = (e as Error).message;
+    logger.warn('allure.build_failed', { tenantId, scope, err });
+    await writeMeta(false, err);
     return false;
   }
 }
@@ -436,7 +450,10 @@ async function executeStage(tenantId: string, body: any): Promise<any> {
     const built = await buildAllureReport(tenantId, reportScope, allureResultsDir);
     reportUrl = built ? reportUrlFor(tenantId, reportScope) : undefined;
     // Durable copy + latest-10 retention (fire-and-forget; never blocks the run).
-    if (built) void archiveAndPrune(tenantId, reportScope);
+    // Unconditional: the Playwright "Basic" report is worth archiving on its own,
+    // and gating this on the Allure build meant a run whose Allure failed was
+    // never made durable — on ephemeral disk it then vanished entirely.
+    void archiveAndPrune(tenantId, reportScope);
   }
   await fs.rm(allureResultsDir, { recursive: true, force: true }).catch(() => {});
 
@@ -517,7 +534,7 @@ router.get('/jobs/:jobId', (req: Request, res: Response) => {
  */
 async function healStage(tenantId: string, body: any): Promise<any> {
   const stageStartedAt = Date.now();
-  const { testCases, scripts, pageObjects, executionDetails, appId, testRunId } = body || {};
+  const { testCases, scripts, pageObjects, executionDetails, appId, testRunId, apiSpec: rawApiSpec } = body || {};
 
   {
     const { ctx, appName } = applyManualTarget(await resolveAppContext(tenantId, appId), body);
@@ -568,11 +585,18 @@ async function healStage(tenantId: string, body: any): Promise<any> {
     const healStart = Date.now();
     const timeBudgetMs = Math.max(60_000, parseInt(process.env.HEAL_TIME_BUDGET_MS || '', 10) || 600_000);
 
+    // API Automation runs are healed by the API healer. Their specs drive the
+    // `request` fixture — there is no page, no DOM and no page object — so both
+    // browser healers (live and text) have nothing to work with. Detected from
+    // the specs themselves so it holds however the run was started; the caller
+    // may also say so outright with mode:'api'.
+    const isApi = String(body?.mode || '').toLowerCase() === 'api' || isApiRun(normalizedScripts);
+
     // LIVE healing (default when a target URL exists): replay each failing
     // scenario in a real browser and only accept heals that verified live —
     // Playwright test-healer style. SCRIPT_GEN_MODE=batch forces the text
     // healer instead.
-    const liveHeal = !!ctx?.targetUrl && process.env.SCRIPT_GEN_MODE !== 'batch';
+    const liveHeal = !isApi && !!ctx?.targetUrl && process.env.SCRIPT_GEN_MODE !== 'batch';
 
     // Text-healer grounding only: a real DOM inventory of the app's ENTRY
     // page. (The live healer observes pages itself, so the snapshot would be
@@ -580,7 +604,7 @@ async function healStage(tenantId: string, body: any): Promise<any> {
     // Azure container, so this is a single-page snapshot that fails soft —
     // set HEAL_LIGHT_CRAWL=false to disable entirely.
     let exploredApp: TestOpsState['exploredApp'] = null;
-    if (!liveHeal && ctx?.targetUrl && process.env.HEAL_LIGHT_CRAWL !== 'false') {
+    if (!isApi && !liveHeal && ctx?.targetUrl && process.env.HEAL_LIGHT_CRAWL !== 'false') {
       try {
         exploredApp = await snapshotEntryPage(ctx.targetUrl, ctx || undefined);
       } catch (err) {
@@ -590,6 +614,10 @@ async function healStage(tenantId: string, body: any): Promise<any> {
 
     const baseState: TestOpsState = {
       ...createInitialState('', ctx || undefined, llm),
+      // The endpoint's documented contract (expected status, configured auth).
+      // The API healer needs it to tell a test defect apart from an API defect
+      // — without it every failure looks like drift and would be "healed".
+      apiSpec: sanitizeApiSpec(rawApiSpec),
       testCases: cases,
       automationScripts: normalizedScripts,
       pageObjects: normalizedPageObjects,
@@ -630,10 +658,12 @@ async function healStage(tenantId: string, body: any): Promise<any> {
       }
       passesRun = pass;
       const healed = await timed(tenantId, 'healing',
-        () => (liveHeal
-          ? liveHealingAgent(workingState, { failuresByTc: currentFailures })
-          : healingAgent(workingState, { failuresByTc: currentFailures })),
-        () => ({ pass, mode: liveHeal ? 'live' : 'batch', failing: Object.keys(currentFailures).length }));
+        () => (isApi
+          ? apiHealingAgent(workingState, { failuresByTc: currentFailures })
+          : liveHeal
+            ? liveHealingAgent(workingState, { failuresByTc: currentFailures })
+            : healingAgent(workingState, { failuresByTc: currentFailures })),
+        () => ({ pass, mode: isApi ? 'api' : liveHeal ? 'live' : 'batch', failing: Object.keys(currentFailures).length }));
       Object.assign(allNotes, healed.healingNotes || {});
       // Fresh Allure results per pass so the final report reflects the last run.
       await fs.rm(allureResultsDir, { recursive: true, force: true }).catch(() => {});
@@ -700,7 +730,8 @@ async function healStage(tenantId: string, body: any): Promise<any> {
       const built = await buildAllureReport(tenantId, reportScope, allureResultsDir);
       reportUrl = built ? reportUrlFor(tenantId, reportScope) : undefined;
       // Durable copy + latest-10 retention (fire-and-forget; never blocks the run).
-      if (built) void archiveAndPrune(tenantId, reportScope);
+      // Unconditional — see the execute stage for why.
+      void archiveAndPrune(tenantId, reportScope);
     }
     await fs.rm(allureResultsDir, { recursive: true, force: true }).catch(() => {});
     await fs.rm(htmlTmpDir, { recursive: true, force: true }).catch(() => {});

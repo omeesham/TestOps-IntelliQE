@@ -39,8 +39,8 @@ router.post('/save', async (req: Request, res: Response) => {
       await pool.query(
         `INSERT INTO test_cases
          (test_run_id, tc_number, title, steps, expected, priority, type, feature, precondition, status, sort_order, module, submodule, tags,
-          description, test_steps, test_data, severity, traceability_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+          description, test_steps, test_data, severity, traceability_id, api_meta)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
         [
           testRunId,
           tc.id || `TC-${String(i + 1).padStart(3, '0')}`,
@@ -63,6 +63,8 @@ router.post('/save', async (req: Request, res: Response) => {
           JSON.stringify(tc.testData || {}),
           tc.severity || null,
           tc.traceabilityId || null,
+          // API Automation only — HTTP detail behind the API columns.
+          tc.api ? JSON.stringify(tc.api) : null,
         ]
       );
     }
@@ -383,8 +385,12 @@ router.get('/:testRunId/export', async (req: Request, res: Response) => {
     const runFilter = user.isPlatform ? '' : ' AND tenant_id = $2';
     const runParams: any[] = [testRunId];
     if (!user.isPlatform) runParams.push(user.tenantId);
-    const runRes = await pool.query(`SELECT id FROM test_runs WHERE id = $1${runFilter}`, runParams);
+    const runRes = await pool.query(`SELECT id, columns FROM test_runs WHERE id = $1${runFilter}`, runParams);
     if (runRes.rows.length === 0) { res.status(404).json({ error: 'Test run not found' }); return; }
+    // An API Automation run was saved with the API column set — export the
+    // HTTP-shaped sheet instead of the UI one. `columns` is parsed by the db shim.
+    const runColumns: string[] = Array.isArray(runRes.rows[0].columns) ? runRes.rows[0].columns : [];
+    const isApiRun = runColumns.includes('endpoint') || runColumns.includes('method');
 
     const casesRes = await pool.query(
       `SELECT * FROM test_cases WHERE test_run_id = $1 ORDER BY sort_order`,
@@ -431,6 +437,35 @@ router.get('/:testRunId/export', async (req: Request, res: Response) => {
       const csv = '\uFEFF' + header + '\n' + rows.join('\n');
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="testcases-jira-${testRunId.slice(0, 8)}.csv"`);
+      res.send(csv);
+
+    } else if (isApiRun) {
+      // API Automation: HTTP-shaped sheet matching the API test-case columns.
+      const header = 'Test Case ID,Module,Endpoint,HTTP Method,Test Scenario,Test Type,Priority,Pre-condition,Request Headers,Path / Query Params,Request Body (Payload),Expected Status Code,Expected Result';
+      const rows = cases.map(tc => {
+        const meta = (tc.api_meta && typeof tc.api_meta === 'object') ? tc.api_meta : {};
+        const headers = meta.headers && typeof meta.headers === 'object'
+          ? Object.entries(meta.headers).map(([k, v]) => `${k}: ${v}`).join('\n')
+          : '';
+        return [
+          csvEscape(tc.tc_number),
+          csvEscape(tc.feature || tc.module || ''),
+          csvEscape(meta.endpoint || ''),
+          csvEscape(meta.method || ''),
+          csvEscape(tc.title),
+          csvEscape(tc.type || ''),
+          csvEscape(tc.priority || ''),
+          csvEscape(tc.precondition || ''),
+          csvEscape(headers),
+          csvEscape(meta.queryParams || ''),
+          csvEscape(meta.requestBody || ''),
+          csvEscape(meta.expectedStatus || ''),
+          csvEscape(tc.expected || ''),
+        ].join(',');
+      });
+      const csv = '\uFEFF' + header + '\n' + rows.join('\n');
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="testcases-api-${testRunId.slice(0, 8)}.csv"`);
       res.send(csv);
 
     } else {

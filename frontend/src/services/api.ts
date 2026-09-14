@@ -235,7 +235,12 @@ export async function testAzureStorage(payload: {
 /** Load a run's report — restores it from Azure storage when not cached locally. */
 export async function loadAllureReport(runId: string) {
   const { data } = await api.post('/allure/load', { runId }, { timeout: 120_000 });
-  return data as { exists: boolean; generatedAt?: string; reportUrl?: string; allureReportUrl?: string; source?: 'local' | 'restored' | 'missing' };
+  return data as {
+    exists: boolean; generatedAt?: string; reportUrl?: string; allureReportUrl?: string;
+    /** Why this run has no Allure report, when it has none. */
+    allureError?: string;
+    source?: 'local' | 'restored' | 'missing';
+  };
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -293,7 +298,10 @@ export interface ExtractedDocument {
   sizeBytes: number;
   characterCount: number;
   pageCount?: number;
+  /** Content was lost or degraded while reading the file — a caution. */
   warning?: string;
+  /** What was read, for confirmation — information, not a problem. */
+  notice?: string;
 }
 
 export async function extractDocumentText(file: File): Promise<ExtractedDocument> {
@@ -304,6 +312,49 @@ export async function extractDocumentText(file: File): Promise<ExtractedDocument
     headers: { 'Content-Type': 'multipart/form-data' },
     // Big PDFs can take a few seconds to parse — allow a generous timeout.
     timeout: 60_000,
+  });
+  return data;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   API-spec upload — "Upload API Spec" button on the chat API form.
+   Uploads a spec in any format (OpenAPI/Swagger, Postman, XML/WSDL,
+   PDF, Word, JSON, YAML, text) and gets back a normalised endpoint
+   the form fields can be populated from.
+   ───────────────────────────────────────────────────────────── */
+export interface ParsedApiEndpoint {
+  /** Short human label for the picker, e.g. "GET /users/{id} — Get user". */
+  title: string;
+  method: string;
+  url: string;
+  headers: { key: string; value: string }[];
+  auth: { type: 'none' | 'bearer' | 'basic' | 'apikey'; value?: string };
+  body?: string;
+  expectedStatus?: number;
+  expectedResponse?: string;
+}
+
+export interface ParsedApiSpecResult {
+  /** Every endpoint found in the file (>=1). One → auto-fill; many → let the user pick. */
+  endpoints: ParsedApiEndpoint[];
+  count: number;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  /** Content was lost or degraded while reading the file — shown as a caution. */
+  warning?: string;
+  /** What was read, for confirmation — shown as plain information, not a problem. */
+  notice?: string;
+}
+
+export async function parseApiSpecFromFile(file: File, format?: string): Promise<ParsedApiSpecResult> {
+  const form = new FormData();
+  form.append('file', file);
+  if (format) form.append('format', format);
+  const { data } = await api.post('/document/parse-api-spec', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    // Parsing extracts text AND makes an LLM call — allow a generous timeout.
+    timeout: 120_000,
   });
   return data;
 }
@@ -328,6 +379,10 @@ export async function generateTests(
      *  requirements target. Required whenever the tenant has more than one
      *  application configured, so generation is grounded in the right one. */
     appId?: string;
+    /** API Automation — the structured endpoint from the chat API form. When
+     *  present the backend generates real HTTP test cases + Playwright request
+     *  specs and needs no configured browser application. */
+    apiSpec?: ApiSpecPayload;
   },
 ) {
   const body = {
@@ -340,6 +395,7 @@ export async function generateTests(
     explorePrompt: options?.explorePrompt,
     roles: options?.roles,
     appId: options?.appId,
+    apiSpec: options?.apiSpec,
   };
   const post = () => api.post('/generate', body, { timeout: PIPELINE_TIMEOUT_MS });
 
@@ -387,6 +443,28 @@ export async function executeTests(
 export interface GeneratedPageObject { path: string; className: string; module: string; methods: string[]; code: string; }
 /** A generated spec, with its POM destination path + the page objects it imports. */
 export interface GeneratedScript { testCaseId: string; fileName: string; code: string; path?: string; uses?: string[]; }
+
+/** The endpoint definition the API Studio sends to every pipeline stage. */
+export interface ApiSpecPayload {
+  method: string;
+  url: string;
+  headers?: { key: string; value: string }[];
+  auth?: { type: string; value?: string };
+  body?: string;
+  expectedStatus?: number;
+  expectedResponse?: string;
+  /** How wide a scenario net the generator should cast. */
+  coverage?: 'essential' | 'standard' | 'exhaustive';
+}
+
+/** Marks a run as API Automation and carries the endpoint's contract with it.
+ *  Execution uses the endpoint's own origin as its target (the request specs
+ *  carry absolute URLs, so this is just the baseURL); healing needs the spec to
+ *  tell an API defect apart from a test that asserted the wrong thing. */
+export interface ApiRunOptions {
+  mode: 'api';
+  apiSpec: ApiSpecPayload;
+}
 
 /** An inline target-application override for runs when no Application is
  *  configured under System Configuration. The URL/credentials the user types in
@@ -448,8 +526,8 @@ async function pollPipelineJob<T>(jobId: string, deadlineMs: number = PIPELINE_T
  *  Pass testRunId (the saved run) so the Allure report is built for that run and
  *  shows up on the Reports page. `target` supplies an inline URL when no app is configured.
  *  Runs as a detached server job + polling so long Playwright runs survive ingress timeouts. */
-export async function executePipeline(testCases: any[], scripts: any[], pageObjects: any[] = [], appId?: string, testRunId?: string, target?: TargetOverride) {
-  const body = { testCases, scripts, pageObjects, appId, testRunId, ...targetBody(target) };
+export async function executePipeline(testCases: any[], scripts: any[], pageObjects: any[] = [], appId?: string, testRunId?: string, target?: TargetOverride, apiRun?: ApiRunOptions) {
+  const body = { testCases, scripts, pageObjects, appId, testRunId, ...targetBody(target), ...(apiRun || {}) };
   const { data: started } = await api.post('/pipeline-flow/execute/start', body, { timeout: 60_000 });
   return pollPipelineJob<{
     executionDetails: { testCaseId: string; scenario: string; status: string; durationMs?: number; error?: string }[];
@@ -469,8 +547,9 @@ export async function healPipeline(
   appId?: string,
   testRunId?: string,
   target?: TargetOverride,
+  apiRun?: ApiRunOptions,
 ) {
-  const body = { testCases, scripts, executionDetails, pageObjects, appId, testRunId, ...targetBody(target) };
+  const body = { testCases, scripts, executionDetails, pageObjects, appId, testRunId, ...targetBody(target), ...(apiRun || {}) };
   const { data: started } = await api.post('/pipeline-flow/heal/start', body, { timeout: 60_000 });
   // Live healing replays each failing scenario in a real browser and then
   // re-executes the suite — allow up to 30 minutes of polling.
@@ -704,6 +783,8 @@ export interface ReportHistoryItem {
   submodule: string | null;
   createdBy: string | null;
   origin: string;
+  /** 'api' = API Automation run, 'web' = Web Application Automation run. */
+  kind: 'api' | 'web';
 }
 export interface ReportHistoryResponse {
   items: ReportHistoryItem[];
@@ -711,10 +792,10 @@ export interface ReportHistoryResponse {
   page: number;
   pageSize: number;
   totalPages: number;
-  facets: { sources: string[] };
+  facets: { sources: string[]; kinds?: { all: number; api: number; web: number } };
 }
 
-export async function getReportsHistory(params: { page?: number; pageSize?: number; source?: string; type?: string; search?: string } = {}) {
+export async function getReportsHistory(params: { page?: number; pageSize?: number; source?: string; type?: string; kind?: 'api' | 'web'; search?: string } = {}) {
   const { data } = await api.get('/reports/history', { params });
   return data as ReportHistoryResponse;
 }

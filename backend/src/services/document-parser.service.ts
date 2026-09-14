@@ -15,7 +15,20 @@ const MAX_OUTPUT_LENGTH = 200_000;   // ~50 pages — guard against runaway PDFs
 export interface DocumentParseResult {
   text: string;            // The extracted, cleaned plain-text content
   pageCount?: number;      // For PDFs only
-  warning?: string;        // Non-fatal note (e.g., "truncated to first 200k chars")
+  /**
+   * Something was LOST or DEGRADED and the caller should be cautious about the
+   * result — content truncated, a converter that complained. Surfaced as a
+   * warning in the UI because it can change what the extracted text supports.
+   */
+  warning?: string;
+  /**
+   * Nothing went wrong — this reports what was read, so the reader can confirm
+   * the scope matched what they intended (e.g. how many worksheets a workbook
+   * contributed). Presented as plain information, never as a problem: dressing
+   * "I read all of it" up as a warning teaches people to ignore the warnings
+   * that matter.
+   */
+  notice?: string;
 }
 
 /**
@@ -48,10 +61,26 @@ export async function parseDocument(
     return parseDocx(buffer);
   }
 
-  // Plain text — also catches markdown
+  // Excel (.xlsx / .xls) — flatten every sheet to CSV text so the downstream
+  // parser can read tabular API definitions (endpoint/method/headers columns).
+  if (
+    mt === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    mt === 'application/vnd.ms-excel' ||
+    ext === 'xlsx' || ext === 'xls'
+  ) {
+    return parseExcel(buffer);
+  }
+
+  // Plain text — also catches markdown, and the text-based structured formats
+  // an API spec can arrive in (JSON/YAML OpenAPI or Postman, XML/WSDL, or a
+  // Bruno `.bru` collection). These are all UTF-8 text; the API-spec parser
+  // understands their content, so here we only need to hand back the raw
+  // characters.
   if (
     mt.startsWith('text/') ||
-    ext === 'txt' || ext === 'md' || ext === 'markdown' || ext === 'csv'
+    mt === 'application/json' || mt === 'application/xml' ||
+    mt === 'application/x-yaml' || mt === 'application/yaml' ||
+    ['txt', 'md', 'markdown', 'csv', 'json', 'yaml', 'yml', 'xml', 'wsdl', 'bru'].includes(ext)
   ) {
     return parsePlainText(buffer);
   }
@@ -100,6 +129,31 @@ async function parseDocx(buffer: Buffer): Promise<DocumentParseResult> {
     text: clean(result.value),
     warning: result.messages?.length
       ? `Mammoth emitted ${result.messages.length} warning(s) during conversion.`
+      : undefined,
+  };
+}
+
+/**
+ * Excel via SheetJS — render every worksheet to CSV and concatenate, prefixing
+ * each with its sheet name. CSV keeps the row/column structure the LLM needs to
+ * read a tabular API definition, without pulling in styling or formulas.
+ */
+async function parseExcel(buffer: Buffer): Promise<DocumentParseResult> {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.read(buffer, { type: 'buffer' });
+  const parts: string[] = [];
+  for (const name of wb.SheetNames) {
+    const sheet = wb.Sheets[name];
+    if (!sheet) continue;
+    const csv = XLSX.utils.sheet_to_csv(sheet).trim();
+    if (csv) parts.push(`# Sheet: ${name}\n${csv}`);
+  }
+  return {
+    text: clean(parts.join('\n\n')),
+    // Reading every worksheet is the intended behaviour, so this reports scope
+    // rather than trouble — it belongs in `notice`, not `warning`.
+    notice: wb.SheetNames.length > 1
+      ? `Read all ${wb.SheetNames.length} sheets from this workbook.`
       : undefined,
   };
 }

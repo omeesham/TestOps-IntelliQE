@@ -81,10 +81,11 @@ function moduleOf(script: InputScript): string {
 /* ─────────────────────── page-object remapping ─────────────────────── */
 
 /**
- * Move page objects from the internal `src/pages/**` layout to the delivered
- * `pages/**` layout. The code is unchanged: a page object at
- * `pages/<module>/<name>.page.ts` still reaches the base at `pages/base.page.ts`
- * via its existing `import { BasePage } from '../base.page'`.
+ * Move page objects and API service objects from the internal `src/**` layout to
+ * the delivered top-level one (`pages/**`, `api/**`). The code is unchanged: an
+ * object at `pages/<module>/<name>.page.ts` still reaches its base at
+ * `pages/base.page.ts` via its existing `import { BasePage } from '../base.page'`,
+ * and the same holds for `api/<module>/<name>.api.ts` and `../base.api`.
  */
 export function remapPageObjects(pageObjects: InputPageObject[] | undefined): GitFile[] {
   if (!Array.isArray(pageObjects)) return [];
@@ -118,12 +119,13 @@ function splitImports(code: string): { imports: string[]; body: string } {
 }
 
 /**
- * Rewrite a page-object import specifier from the internal layout to the
- * delivered one. The consolidated spec stays at `tests/<module>/…` (same depth
- * as the original), so only the `src/pages/` segment changes to `pages/`.
+ * Rewrite a page-object or service-object import specifier from the internal
+ * layout to the delivered one. The consolidated spec stays at
+ * `tests/<module>/…` (same depth as the original), so only the leading
+ * `src/pages/` → `pages/` and `src/api/` → `api/` segments change.
  */
 function rewriteImport(line: string): string {
-  return line.replace(/src\/pages\//g, 'pages/');
+  return line.replace(/src\/pages\//g, 'pages/').replace(/src\/api\//g, 'api/');
 }
 
 /**

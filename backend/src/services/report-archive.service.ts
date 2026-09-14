@@ -217,6 +217,19 @@ const zipKey = (cfg: TenantStorageConfig, tenantId: string, runId: string) =>
 const metaKey = (cfg: TenantStorageConfig, tenantId: string, runId: string) =>
   `${cfg.prefix}reports/${tenantId}/${runId}.meta.json`;
 
+/* ── local-report probes ── */
+
+const exists = (p: string) => fs.access(p).then(() => true, () => false);
+
+/** The Playwright "Basic" HTML report at the run root. */
+const hasBasicReport = (runDir: string) => exists(path.join(runDir, 'index.html'));
+/** The Allure report in the run's `allure/` subfolder. */
+const hasAllureReport = (runDir: string) => exists(path.join(runDir, 'allure', 'index.html'));
+
+async function hasAnyReport(runDir: string): Promise<boolean> {
+  return (await hasBasicReport(runDir)) || (await hasAllureReport(runDir));
+}
+
 /* ── public API ── */
 
 /**
@@ -229,8 +242,12 @@ export async function archiveReport(tenantId: string, runId: string): Promise<bo
   const cfg = await getTenantStorageConfig(tenantId);
   if (!cfg) return false;
 
+  // Either report on its own is worth keeping: the run root holds the Playwright
+  // "Basic" HTML, allure/ holds the Allure one, and a run can legitimately have
+  // just one of them. Requiring the Basic report meant an Allure-only run was
+  // silently never archived.
   const runDir = path.join(REPORTS_ROOT, tenantId, runId);
-  try { await fs.access(path.join(runDir, 'index.html')); } catch { return false; }
+  if (!(await hasAnyReport(runDir))) return false;
 
   const container = await containerFor(cfg);
   const zip = await zipDirToBuffer(runDir);
@@ -256,16 +273,21 @@ export async function archiveReport(tenantId: string, runId: string): Promise<bo
 export async function restoreReport(tenantId: string, runId: string): Promise<'local' | 'restored' | 'missing'> {
   if (!SAFE_RUN_ID_RE.test(runId)) return 'missing';
   const runDir = path.join(REPORTS_ROOT, tenantId, runId);
-  try {
-    await fs.access(path.join(runDir, 'index.html'));
-    return 'local';
-  } catch { /* not on disk — try Azure */ }
+  // "Already local" means BOTH reports are here. Short-circuiting on the Basic
+  // report alone left a half-present run stuck that way forever: the run root
+  // survives, allure/ does not, and the Reports page shows a permanently
+  // greyed-out Allure tab while a complete copy sits in Azure. Unpacking over
+  // a partial run dir is safe — the zip holds the same run's files.
+  const [basic, allure] = await Promise.all([hasBasicReport(runDir), hasAllureReport(runDir)]);
+  if (basic && allure) return 'local';
 
   const cfg = await getTenantStorageConfig(tenantId);
-  if (!cfg) return 'missing';
+  if (!cfg) return basic || allure ? 'local' : 'missing';
   const container = await containerFor(cfg);
   const blob = container.getBlockBlobClient(zipKey(cfg, tenantId, runId));
-  if (!(await blob.exists())) return 'missing';
+  // Nothing archived: keep whatever is already on disk rather than claiming the
+  // report is missing when half of it is right here.
+  if (!(await blob.exists())) return basic || allure ? 'local' : 'missing';
   const buf = await blob.downloadToBuffer();
   await fs.mkdir(runDir, { recursive: true });
   await extractZipToDir(buf, runDir);

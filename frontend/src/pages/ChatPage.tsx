@@ -28,12 +28,13 @@ import {
   Send, Bot, Loader2, CheckCircle, Monitor, Plug,
   Globe, Layers, Shield, FileText, Upload, Type, Link2,
   ArrowRight, RotateCcw, ChevronDown, Eye, EyeOff, Check, X,
-  Plus, Trash2, Download, Clipboard, Cpu, Code, Search, Zap,
+  Trash2, Download, Clipboard, Cpu, Code, Search, Zap,
   BarChart3, Activity, Workflow, Box, Pencil, Save, ChevronLeft, ChevronRight,
   Play, Heart, GitBranch, Terminal, AlertTriangle, Wrench, ExternalLink, Copy, Package,
   SkipForward, XCircle, Volume2, VolumeX, Settings, Github, LifeBuoy,
 } from 'lucide-react';
 import { initTTS, speak, speakAsync, waitForSpeech, waitForVoices, stopSpeaking, isTTSEnabled, toggleTTS } from '@/utils/tts';
+import ApiStudio from '@/components/api-studio/ApiStudio';
 import { useToast } from '@/components/feedback/ToastProvider';
 
 /* ═══════════════════════════════════════════════════════════════
@@ -55,7 +56,6 @@ type Step =
   | 'upload-doc'
   | 'paste-text'
   | 'explore-form'
-  | 'api-form'
   | 'column-select'
   | 'generating'
   | 'results'
@@ -79,8 +79,6 @@ interface FormField {
   options?: { value: string; label: string }[];
 }
 
-interface HeaderPair { key: string; value: string }
-
 interface AgentStep {
   name: string;
   status: 'pending' | 'running' | 'completed';
@@ -92,7 +90,7 @@ interface AgentStep {
    ═══════════════════════════════════════════════════════════════ */
 const CATEGORIES: { id: Category; title: string; icon: React.ElementType; desc: string; comingSoon?: boolean }[] = [
   { id: 'application', title: 'Web Application Automation', icon: Monitor, desc: 'Validate functional workflows, E2E testing and cross-browser behavior.' },
-  { id: 'api',         title: 'API Automation',     icon: Plug,        desc: 'Test REST services, endpoints, and system integrations.', comingSoon: true },
+  { id: 'api',         title: 'API Automation',     icon: Plug,        desc: 'Test REST services, endpoints, and system integrations.' },
 ];
 
 const REQ_SOURCES: { id: ReqSource; title: string; icon: React.ElementType; desc: string }[] = [
@@ -183,7 +181,10 @@ const SCRIPT_AGENTS: { name: string; detail: string }[] = [
 ];
 
 
-const ALL_COLUMNS = [
+type ColumnDef = { key: string; label: string; default: boolean };
+
+// Web / application automation — UI-oriented columns (steps, feature, status).
+const WEB_COLUMNS: ColumnDef[] = [
   { key: 'tcNumber', label: 'TC Number', default: true },
   { key: 'title', label: 'Test Case Title', default: true },
   { key: 'steps', label: 'Test Steps', default: true },
@@ -194,6 +195,10 @@ const ALL_COLUMNS = [
   { key: 'precondition', label: 'Preconditions', default: false },
   { key: 'status', label: 'Status', default: false },
 ];
+
+const columnsFor = (): ColumnDef[] => WEB_COLUMNS;
+const defaultColumnsFor = (): string[] =>
+  columnsFor().filter((col) => col.default).map((col) => col.key);
 
 const PAGE_SIZES = [10, 25, 50];
 
@@ -237,6 +242,25 @@ function formatHMS(ms: number): string {
   return `${s}s`;
 }
 
+/**
+ * Recognise an infrastructure failure — the target was never reached, so the
+ * test never really ran. Auto-healing rewrites test code and can do nothing
+ * about DNS, a refused port or a rejected certificate, so these have to be
+ * reported as what they are instead of as N failing tests.
+ * Returns a short human phrase, or null when the error is a genuine test failure.
+ */
+function connectionFailureOf(message?: string): string | null {
+  if (!message) return null;
+  const host = /(?:ENOTFOUND|EAI_AGAIN|getaddrinfo\s+\w+)\s+([A-Za-z0-9._-]+)/.exec(message);
+  if (host) return `the host ${host[1]} could not be resolved`;
+  if (/ENOTFOUND|EAI_AGAIN|ERR_NAME_NOT_RESOLVED/i.test(message)) return 'the host could not be resolved';
+  if (/ECONNREFUSED|ERR_CONNECTION_REFUSED/i.test(message)) return 'the connection was refused';
+  if (/ECONNRESET|socket hang up/i.test(message)) return 'the connection was reset';
+  if (/ETIMEDOUT|ERR_CONNECTION_TIMED_OUT|ERR_TIMED_OUT/i.test(message)) return 'the connection timed out';
+  if (/ERR_CERT|CERT_HAS_EXPIRED|self[- ]signed certificate|UNABLE_TO_VERIFY_LEAF/i.test(message)) return 'the TLS certificate was rejected';
+  return null;
+}
+
 /** Derive a short "owner/repo" label from a push/PR URL (falls back gracefully). */
 function gitRepoLabel(url?: string): string {
   if (!url) return 'the repository';
@@ -263,7 +287,16 @@ export default function ChatPage() {
   // clicked (disabling it), and auto-cleared whenever the step advances so the
   // next screen's buttons are live. `runOnce` wraps a handler with this guard.
   const [busy, setBusy] = useState(false);
-  const runOnce = (fn: () => void) => () => { if (busy) return; setBusy(true); fn(); };
+  // Guard against double-fire: block re-entry until the handler advances the
+  // wizard. `busy` is cleared when `step` changes (below) — but a handler that
+  // REJECTS its input (validation failure) never changes step, so it must undo
+  // the flag itself or its button stays disabled forever. Handlers signal that
+  // by returning false; anything else (undefined, a promise) keeps the guard.
+  const runOnce = (fn: () => unknown) => () => {
+    if (busy) return;
+    setBusy(true);
+    if (fn() === false) setBusy(false);
+  };
   // Re-enable action buttons once the wizard moves to a new step.
   useEffect(() => { setBusy(false); }, [step]);
   // Monotonic id of the active wizard flow. Long-running handlers capture it on
@@ -310,7 +343,7 @@ export default function ChatPage() {
   const [explorePrompt, setExplorePrompt] = useState('');
 
   // Column select + results management
-  const [selectedColumns, setSelectedColumns] = useState<string[]>(ALL_COLUMNS.filter(c => c.default).map(c => c.key));
+  const [selectedColumns, setSelectedColumns] = useState<string[]>(defaultColumnsFor());
   const [pendingRequirements, setPendingRequirements] = useState<string>('');
   const [tcPage, setTcPage] = useState(1);
   const [tcPageSize, setTcPageSize] = useState(10);
@@ -418,15 +451,6 @@ export default function ChatPage() {
 
   // Voice-over state
   const [voiceEnabled, setVoiceEnabled] = useState(() => isTTSEnabled());
-
-  // API form
-  const [apiUrl, setApiUrl] = useState('');
-  const [apiMethod, setApiMethod] = useState('GET');
-  const [apiHeaders, setApiHeaders] = useState<HeaderPair[]>([{ key: '', value: '' }]);
-  const [apiAuthType, setApiAuthType] = useState('none');
-  const [apiAuthValue, setApiAuthValue] = useState('');
-  const [apiBody, setApiBody] = useState('');
-  const [apiSampleResp, setApiSampleResp] = useState('');
 
   /* --- TTS init --- */
   useEffect(() => { initTTS(); }, []);
@@ -578,17 +602,19 @@ export default function ChatPage() {
       push('tessa', `${c.title} is coming soon.`);
       return;
     }
-    push('user', c.title);
     setCategory(c.id);
     setSubCategory(c.title);
 
-    if (c.id === 'api') {
-      push('tessa', 'Please provide your API details below.');
-      setStep('api-form');
-    } else {
-      push('tessa', 'How would you like to provide your requirements?');
-      setStep('source-select');
-    }
+    // API Automation has its own workspace — a conversational wizard has
+    // nothing to add to a flow whose entire input is one HTTP request. Nothing
+    // is pushed to the chat log for it: the studio replaces this screen, so a
+    // message here would sit unanswered.
+    if (c.id === 'api') return;
+
+    push('user', c.title);
+    setSelectedColumns(defaultColumnsFor());
+    push('tessa', 'How would you like to provide your requirements?');
+    setStep('source-select');
   };
 
   /* --- application-configured guard ---
@@ -882,8 +908,11 @@ export default function ChatPage() {
         `${result.characterCount.toLocaleString()} characters`,
         result.pageCount ? `${result.pageCount} pages` : null,
       ].filter(Boolean).join(', ');
-      const warn = result.warning ? ` (Note: ${result.warning})` : '';
-      push('tessa', `I extracted ${stats} from ${file.name}.${warn} Please choose the columns you'd like, then click Generate.`);
+      // A notice states what was read; a warning says something was lost. Both
+      // belong in the sentence, phrased so the reader can tell them apart.
+      const note = result.notice ? ` ${result.notice}` : '';
+      const warn = result.warning ? ` Heads up: ${result.warning}` : '';
+      push('tessa', `I extracted ${stats} from ${file.name}.${note}${warn} Please choose the columns you'd like, then click Generate.`);
       setStep('column-select');
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.message || 'Upload failed';
@@ -921,16 +950,6 @@ export default function ChatPage() {
     // the real backend call uses exploreMode + roles, not this text.
     setPendingRequirements(`__EXPLORE__:${exploreUrl}`);
     push('tessa', "I'll explore the application, identify its features, and generate test cases. Please choose the columns you'd like, then click Generate.");
-    setStep('column-select');
-  };
-
-  /* --- API form submit --- */
-  const handleApiSubmit = () => {
-    if (!apiUrl.trim()) return;
-    const summary = `${apiMethod} ${apiUrl}`;
-    push('user', summary);
-    setPendingRequirements(`API Testing: ${apiMethod} ${apiUrl} - ${subCategory}`);
-    push('tessa', "API details received. Please choose the columns you'd like in your test cases, then click Generate.");
     setStep('column-select');
   };
 
@@ -1078,6 +1097,9 @@ export default function ChatPage() {
         priority: tc.priority || 'P1',
         severity: tc.severity || '',
         tags: Array.isArray(tc.tags) ? tc.tags : [],
+        // API Automation only — endpoint/method/headers/params/payload/status
+        // behind the API test-case columns. Absent for web runs.
+        api: tc.api || null,
         status: tc.status || 'generated',
       }));
     }
@@ -1378,13 +1400,31 @@ export default function ChatPage() {
     // Pipeline: Stage 4 → completed
     updatePipeline('execution', 'completed', `${passed}/${finalResults.length} passed`);
 
-    if (failed > 0) {
-      push('tessa', `Execution complete. ${passed} of ${finalResults.length} tests passed and ${failed} failed. You can auto-heal the failing tests or continue to the report.`);
+    // Every failure being a connection error means the target was never
+    // reached — report that instead of sending the user into auto-healing,
+    // which rewrites test code and cannot fix an unreachable host.
+    const failedRows = finalResults.filter((r) => r.status === 'failed');
+    const connIssues = failedRows.map((r) => connectionFailureOf(r.error));
+    const allConnFailures = failedRows.length > 0 && connIssues.every(Boolean);
+
+    if (allConnFailures) {
+      const reason = connIssues[0]!;
+      push('tessa', `The tests couldn't reach the target — ${reason}. ${failedRows.length} of ${finalResults.length} ${failedRows.length === 1 ? 'test' : 'tests'} failed before any assertion ran, so auto-healing won't help. Check the application's Base URL under System Configuration, Application Setup, then run again.`);
+    } else if (failed > 0 && passed === 0 && notRun === 0) {
+      // Everything failed — "0 of 5 passed and 5 failed" reads as a stat dump.
+      // Say it plainly instead.
+      push('tessa', `Execution complete. ${failed === 1 ? 'The test failed' : `All ${failed} tests failed`}. You can auto-heal the failing ${failed === 1 ? 'test' : 'tests'} or continue to the report.`);
+    } else if (failed > 0) {
+      const alsoNotRun = notRun > 0 ? `, ${notRun} couldn't run` : '';
+      push('tessa', `Execution complete. ${passed} of ${finalResults.length} tests passed and ${failed} failed${alsoNotRun}. You can auto-heal the failing tests or continue to the report.`);
     } else if (passed === 0) {
       // Nothing actually ran (e.g. backend returned no details). Don't pretend
       // a green run — tell the user honestly so they can investigate.
       const reason = execRes?.failureReason ? ` ${execRes.failureReason}` : '';
       push('tessa', `No tests were executed. ${notRun} of ${finalResults.length} couldn't run.${reason} Please check the target application configuration and the generated scripts, then try again.`);
+    } else if (notRun > 0) {
+      // Some passed, none failed, but the rest never ran — not a green run.
+      push('tessa', `Execution complete. ${passed} of ${finalResults.length} tests passed and ${notRun} couldn't run. You can continue to the report, or check the scripts that didn't execute.`);
     } else {
       push('tessa', `All ${passed} tests passed. You can now generate the execution report.`);
     }
@@ -1488,10 +1528,19 @@ export default function ChatPage() {
     });
     updatePipeline('execution', 'completed', `${newPassed}/${updatedResults.length} passed`);
 
+    // "Nothing failed" is NOT the same as "everything passed" — a re-run that
+    // produced no results at all leaves every test not_run. Count those
+    // explicitly so a 0-passed / 0-failed run is never reported as green.
+    const newNotRun = updatedResults.length - newPassed - newFailed;
+
     if (newFailed > 0 && attempt < 2) {
       push('tessa', `Re-execution complete. ${newFailed} ${newFailed === 1 ? 'test is' : 'tests are'} still failing. You can run another auto-healing cycle or continue to the report.`);
     } else if (newFailed > 0) {
       push('tessa', `Maximum auto-healing attempts reached. ${newFailed} ${newFailed === 1 ? 'test is' : 'tests are'} still failing. Please continue to the report.`);
+    } else if (newPassed === 0) {
+      push('tessa', `No tests were executed in the re-run. ${newNotRun} of ${updatedResults.length} couldn't run. Please check the target application configuration and the generated scripts, then try again.`);
+    } else if (newNotRun > 0) {
+      push('tessa', `Re-execution complete. ${newPassed} of ${updatedResults.length} tests passed and ${newNotRun} couldn't run. You can continue to the report.`);
     } else {
       push('tessa', 'All tests are passing after auto-healing. You can now generate the execution report.');
     }
@@ -1838,15 +1887,8 @@ export default function ChatPage() {
     setPasteText('');
     setAgentSteps([]);
     setResults(null);
-    setApiUrl('');
-    setApiMethod('GET');
-    setApiHeaders([{ key: '', value: '' }]);
-    setApiAuthType('none');
-    setApiAuthValue('');
-    setApiBody('');
-    setApiSampleResp('');
     setConnectError('');
-    setSelectedColumns(ALL_COLUMNS.filter(c => c.default).map(c => c.key));
+    setSelectedColumns(defaultColumnsFor());
     setPendingRequirements('');
     setTcPage(1);
     setTcPageSize(10);
@@ -2306,73 +2348,6 @@ export default function ChatPage() {
       );
     }
 
-    /* ── API FORM ── */
-    if (step === 'api-form') {
-      return (
-        <div className="max-w-lg ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm space-y-4">
-          <div className="flex items-center gap-2 mb-1">
-            <Plug className="w-4 h-4 text-violet-500" />
-            <span className="text-sm font-semibold text-gray-800">API Configuration</span>
-          </div>
-
-          {/* URL + Method */}
-          <div className="flex gap-2">
-            <select value={apiMethod} onChange={e => setApiMethod(e.target.value)} className="px-3 py-2.5 bg-violet-50 border border-violet-200 rounded-lg text-sm font-medium text-violet-700 outline-none w-28">
-              {['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map(m => <option key={m}>{m}</option>)}
-            </select>
-            <input value={apiUrl} onChange={e => setApiUrl(e.target.value)} placeholder="https://api.example.com/v1/resource" className={inputCls + ' flex-1'} />
-          </div>
-
-          {/* Headers */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-medium text-gray-600">Headers</label>
-              <button onClick={() => setApiHeaders(h => [...h, { key: '', value: '' }])} className="text-xs text-violet-500 hover:text-violet-700 flex items-center gap-0.5"><Plus className="w-3 h-3" />Add</button>
-            </div>
-            {apiHeaders.map((h, i) => (
-              <div key={i} className="flex gap-2 mb-1.5">
-                <input value={h.key} onChange={e => { const n = [...apiHeaders]; n[i].key = e.target.value; setApiHeaders(n); }} placeholder="Key" className={inputCls + ' flex-1 !py-2'} />
-                <input value={h.value} onChange={e => { const n = [...apiHeaders]; n[i].value = e.target.value; setApiHeaders(n); }} placeholder="Value" className={inputCls + ' flex-1 !py-2'} />
-                {apiHeaders.length > 1 && <button onClick={() => setApiHeaders(h => h.filter((_, idx) => idx !== i))} className="text-gray-300 hover:text-red-400"><Trash2 className="w-3.5 h-3.5" /></button>}
-              </div>
-            ))}
-          </div>
-
-          {/* Authorization */}
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1.5">Authorization</label>
-            <select value={apiAuthType} onChange={e => setApiAuthType(e.target.value)} className={inputCls + ' mb-2'}>
-              <option value="none">No Auth</option>
-              <option value="bearer">Bearer Token</option>
-              <option value="basic">Basic Auth</option>
-              <option value="apikey">API Key</option>
-            </select>
-            {apiAuthType !== 'none' && (
-              <input value={apiAuthValue} onChange={e => setApiAuthValue(e.target.value)} placeholder={apiAuthType === 'bearer' ? 'Enter Bearer token' : apiAuthType === 'basic' ? 'username:password' : 'Enter API key'} type="password" className={inputCls} />
-            )}
-          </div>
-
-          {/* Request Body */}
-          {['POST', 'PUT', 'PATCH'].includes(apiMethod) && (
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">Request Body (JSON)</label>
-              <textarea value={apiBody} onChange={e => setApiBody(e.target.value)} placeholder='{ "key": "value" }' rows={4} className={inputCls + ' resize-none font-mono text-xs'} />
-            </div>
-          )}
-
-          {/* Sample Response */}
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1.5">Expected Response <span className="text-gray-400">(optional)</span></label>
-            <textarea value={apiSampleResp} onChange={e => setApiSampleResp(e.target.value)} placeholder='{ "status": "ok", "data": [...] }' rows={3} className={inputCls + ' resize-none font-mono text-xs'} />
-          </div>
-
-          <button onClick={runOnce(handleApiSubmit)} disabled={busy || !apiUrl.trim()} className="w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2">
-            <Zap className="w-4 h-4" />Generate API Tests
-          </button>
-        </div>
-      );
-    }
-
     /* ── COLUMN SELECT — pick columns before generation ── */
     if (step === 'column-select') {
       return (
@@ -2383,7 +2358,7 @@ export default function ChatPage() {
           </div>
           <p className="text-xs text-gray-500 mb-3">Choose which columns to include in your generated test cases.</p>
           <div className="space-y-1">
-            {ALL_COLUMNS.map(col => (
+            {columnsFor().map(col => (
               <label key={col.key} className="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-violet-50/50 cursor-pointer transition-colors">
                 <input
                   type="checkbox"
@@ -2394,7 +2369,11 @@ export default function ChatPage() {
                   className="w-4 h-4 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
                 />
                 <span className="text-sm text-gray-700">{col.label}</span>
-                {col.default && <span className="text-[10px] text-gray-400 ml-auto">(default)</span>}
+                {/* Every API column is on by default — the hint only carries
+                    information when the set actually has optional columns. */}
+                {col.default && columnsFor().some(c => !c.default) && (
+                  <span className="text-[10px] text-gray-400 ml-auto">(default)</span>
+                )}
               </label>
             ))}
           </div>
@@ -2436,7 +2415,6 @@ export default function ChatPage() {
         'bg-gray-50 text-gray-600';
       const colVisible = (key: string) => selectedColumns.includes(key);
       const allPageSelected = pagedTcs.length > 0 && pagedTcs.every((tc: any) => selectedTcIds.has(tc.id));
-
       return (
         <div className="ml-11 space-y-3 max-w-[920px]">
           {/* ── Header Bar ── */}
@@ -2487,6 +2465,7 @@ export default function ChatPage() {
             {pagedTcs.map((tc: any) => {
               const isEditing = editingTcId === tc.id;
               const draft = isEditing ? editDraft : tc;
+
               return (
                 <div key={tc.id} className={`bg-white border ${selectedTcIds.has(tc.id) ? 'border-violet-300 bg-violet-50/30' : 'border-gray-100'} rounded-xl p-4 shadow-sm transition-colors`}>
                   {/* Row header: checkbox + TC# + badges + actions */}
@@ -3153,6 +3132,22 @@ export default function ChatPage() {
   /* ═══════════════════════════════════════════════════════════════
      MAIN RENDER
      ═══════════════════════════════════════════════════════════════ */
+  // API Automation runs in its own workspace. Its whole input is one HTTP
+  // request, so a conversational wizard adds nothing — the studio replaces the
+  // chat shell (and Tessa) outright rather than being embedded in it.
+  if (category === 'api') {
+    return (
+      <ApiStudio
+        onExit={() => {
+          stopSpeaking();
+          setCategory(null);
+          setSubCategory('');
+          setStep('welcome');
+        }}
+      />
+    );
+  }
+
   return (
     <div className="h-full flex flex-col bg-[#FAFAFE]">
       {/* Two-Column Layout: Chat + Pipeline Sidebar */}

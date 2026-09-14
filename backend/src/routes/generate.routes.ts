@@ -4,6 +4,7 @@ import { runGenerationOnly } from '../agents/pipeline.js';
 import { getTenantLlm } from '../services/llm.service.js';
 import { getConfiguredApplication, resolveAppConfig, getApplicationDisplayName } from '../services/configurations.service.js';
 import { decryptStored } from '../utils/crypto.js';
+import { sanitizeApiSpec } from '../utils/api-spec.js';
 
 const router = Router();
 
@@ -31,7 +32,25 @@ router.post('/', async (req: Request, res: Response) => {
     // than letting the server guess — guessing is what let one application's
     // stories silently run against a different application's URL.
     appId,
+    // API Automation — the structured endpoint the user entered in the chat
+    // API form. When present the run is grounded in this endpoint, not a
+    // browser application under test.
+    apiSpec: rawApiSpec,
   } = req.body;
+
+  // ── API Automation detection & sanitisation ──────────────────────────
+  // API mode is driven by the structured apiSpec the chat form sends (with a
+  // valid absolute URL). It grounds the run in a concrete HTTP endpoint, so it
+  // needs NO browser application under test — the app-config guard below is
+  // skipped for it, and generation routes to apiGeneratorAgent.
+  const apiSpec = sanitizeApiSpec(rawApiSpec);
+  const isApiMode = !!apiSpec;
+  if (rawApiSpec && !apiSpec) {
+    res.status(400).json({
+      error: 'The API URL is invalid. Enter a full absolute URL, e.g. https://api.example.com/v1/resource.',
+    });
+    return;
+  }
 
   // When exploreMode is requested we DELIBERATELY pass an empty requirements
   // string so the pipeline's shouldExploreFirst() guard triggers.
@@ -58,13 +77,27 @@ router.post('/', async (req: Request, res: Response) => {
       }
     : undefined;
 
+  // API Automation grounds itself in the endpoint's own origin — no browser
+  // application under test is required, so it bypasses the app-config guard and
+  // supplies its own target (used as the harmless Playwright baseURL + the
+  // executor's "something is configured" signal).
+  if (isApiMode) {
+    appContext = {
+      targetUrl: apiSpec!.baseUrl,
+      appName: 'API',
+      environment: undefined,
+      explorePrompt: undefined,
+      roles: undefined,
+    };
+  }
+
   // Requirement Analysis must target a known application. Block generation
   // unless the tenant has a properly-configured application under test in
   // System Configuration → Application Setup — mirrors the LLM guard below.
   // Explore mode / an explicit target URL supplies the application inline, so
   // it satisfies the requirement without a saved Application Setup entry.
   const hasExplicitTarget = Boolean(targetUrl && String(targetUrl).trim());
-  if (req.user && !hasExplicitTarget) {
+  if (req.user && !hasExplicitTarget && !isApiMode) {
     if (appId) {
       // A specific application was requested — it must resolve exactly, or we
       // fail loudly naming that application rather than silently substituting
@@ -116,6 +149,7 @@ router.post('/', async (req: Request, res: Response) => {
       appContext,
       llm,
       tenantId: req.user?.tenantId,
+      apiSpec,
     });
 
     res.json({

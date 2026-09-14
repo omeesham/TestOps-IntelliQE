@@ -64,6 +64,26 @@ export interface TestStep {
   testData?: string;     // Concrete value used in this step (optional, e.g., "email = user@x.com")
 }
 
+/**
+ * HTTP-level detail for an API Automation test case.
+ * API runs replace the UI-oriented test-case columns (Test Steps, Feature …)
+ * with these, so every field here backs one column in the API column set.
+ * Secrets are masked before they land here — see apiGeneratorAgent.
+ */
+export interface ApiCaseMeta {
+  /** Absolute endpoint WITHOUT the query string, e.g. https://api.x.com/posts/1 */
+  endpoint: string;
+  method: string;
+  /** Request headers as sent, with auth values masked. */
+  headers: Record<string, string>;
+  /** Raw query string for this case ("userId=1&limit=10"), '' when there is none. */
+  queryParams: string;
+  /** JSON payload for write methods; absent for GET/HEAD. */
+  requestBody?: string;
+  /** Asserted status: "200", "401 / 403", "< 500", "2xx" or "4xx". */
+  expectedStatus: string;
+}
+
 export interface TestCase {
   /** Internal sequence id, e.g., TC-001 */
   id: string;
@@ -104,6 +124,8 @@ export interface TestCase {
   severity?: 'Critical' | 'Major' | 'Moderate' | 'Minor';
   /** Free-form tags for filtering (smoke, regression, sanity, etc.) */
   tags?: string[];
+  /** Populated ONLY by apiGeneratorAgent — backs the API Automation columns. */
+  api?: ApiCaseMeta;
   status: 'generated' | 'automated' | 'executed' | 'passed' | 'failed';
 }
 
@@ -136,6 +158,91 @@ export interface PageObjectFile {
   /** Public method signatures, surfaced to the spec generator. */
   methods: string[];
   code: string;
+}
+
+/**
+ * A single response assertion for an API test, kept as a small structured
+ * union so the script renderer can emit reliable, compiling Playwright
+ * `expect(...)` lines deterministically (no LLM-authored code to mis-parse).
+ */
+export interface ApiCheck {
+  kind:
+    | 'status'            // status code equals / one-of / less-than
+    | 'ok'                // response.ok() is truthy (2xx)
+    | 'notOk'             // response.ok() is falsy (non-2xx)
+    | 'jsonProperty'      // a (dotted) path in the JSON body exists / equals / is of a type
+    | 'jsonArrayNotEmpty' // the body (or a path) is a non-empty array
+    | 'header'            // a response header exists / contains a substring
+    | 'bodyContains'      // the raw response text contains a substring
+    | 'responseTimeUnderMs'; // the round-trip completed under N ms
+  /** status: exact code */
+  equals?: number;
+  /** status: any of these codes */
+  oneOf?: number[];
+  /** status/responseTime: upper bound */
+  lessThan?: number;
+  /** jsonProperty/jsonArrayNotEmpty: dotted path, e.g. "data.0.id" ("" = root) */
+  path?: string;
+  /** jsonProperty: the path must exist */
+  exists?: boolean;
+  /** jsonProperty: deep-equals this literal value */
+  value?: unknown;
+  /** jsonProperty: the value must be of this JS type */
+  type?: 'string' | 'number' | 'boolean' | 'array' | 'object';
+  /** header: header name (case-insensitive) */
+  name?: string;
+  /** header: header value must contain this substring */
+  contains?: string;
+  /** bodyContains: substring the raw body must include */
+  text?: string;
+  /** responseTimeUnderMs: the millisecond ceiling */
+  ms?: number;
+}
+
+/**
+ * The HTTP request + assertions for one generated API test case. Produced by
+ * apiGeneratorAgent and rendered deterministically into a Playwright `request`
+ * spec — never executed in a browser.
+ */
+export interface ApiTestRequest {
+  method: string;                       // GET | POST | PUT | PATCH | DELETE | ...
+  url: string;                          // absolute URL for THIS case
+  headers?: Record<string, string>;
+  /** Raw request body (JSON text) for POST/PUT/PATCH. */
+  body?: string;
+  checks: ApiCheck[];
+}
+
+/**
+ * The user-supplied API details captured by the chat wizard's API form. This
+ * is the ground truth apiGeneratorAgent designs test cases against — distinct
+ * from AppContext, which describes a browser application under test.
+ */
+export interface ApiSpec {
+  method: string;                       // the primary method the user entered
+  url: string;                          // the full URL the user entered
+  /** Scheme + host derived from `url` server-side; used as the execution target. */
+  baseUrl?: string;
+  headers?: { key: string; value: string }[];
+  auth?: {
+    type: 'none' | 'bearer' | 'basic' | 'apikey';
+    /** Bearer token, "username:password" for basic, or the API key value. */
+    value?: string;
+  };
+  /** Raw request body (JSON text) the user entered for POST/PUT/PATCH. */
+  body?: string;
+  /** Required HTTP status code the endpoint is expected to return (100–599). */
+  expectedStatus?: number;
+  /** Required sample / expected response body the user pasted. */
+  expectedResponse?: string;
+  /**
+   * How wide a scenario net apiGeneratorAgent should cast.
+   *   essential  — the critical path only (happy path + the obvious negatives)
+   *   standard   — the default professional suite (contract, negative, auth, schema)
+   *   exhaustive — every validation angle that applies to this endpoint
+   * Defaults to 'standard' when absent.
+   */
+  coverage?: 'essential' | 'standard' | 'exhaustive';
 }
 
 export interface AppContext {
@@ -260,6 +367,12 @@ export interface ExploredApp {
 export interface TestOpsState {
   requirements: string;
   appContext: AppContext | null;
+  /**
+   * Present only for API Automation runs — the user's API details. When set,
+   * the pipeline routes to apiGeneratorAgent (real HTTP test cases + Playwright
+   * `request` specs) instead of the browser/UI generator.
+   */
+  apiSpec?: ApiSpec | null;
   /** Resolved per-tenant LLM credentials (DB-backed). Null = none configured. */
   llm?: LlmConfig | null;
   generationOptions?: GenerationOptions;
@@ -312,6 +425,7 @@ export function createInitialState(requirements: string, appContext?: AppContext
   return {
     requirements,
     appContext: appContext || null,
+    apiSpec: null,
     llm: llm || null,
     exploredApp: null,
     parsedRequirements: null,

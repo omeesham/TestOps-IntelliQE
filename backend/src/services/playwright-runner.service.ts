@@ -316,6 +316,10 @@ export async function runPlaywrightForRun(
   const configSrc = `const { defineConfig } = require('@playwright/test');
 module.exports = defineConfig({
   testDir: './tests',
+  // Per-run artifact directory — Playwright runs with cwd = BACKEND_ROOT, so
+  // the default <backend>/test-results is SHARED by every concurrent run and
+  // is emptied at each run's start, deleting another run's in-flight traces.
+  outputDir: ${JSON.stringify(path.join(workspace, 'test-results'))},
   fullyParallel: true,
   retries: 0,
   timeout: 60_000,

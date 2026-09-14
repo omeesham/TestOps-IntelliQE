@@ -34,7 +34,7 @@ const JSON_COLUMNS = new Set<string>([
   'config_data', 'metadata', 'columns', 'steps', 'test_steps', 'test_data',
   'tags', 'details', 'cascade_plan', 'result_data', 'context', 'result',
   'definition', 'capabilities', 'artifact_summary', 'auth_config',
-  'setup_config', 'fields', 'source_config', 'stages',
+  'setup_config', 'fields', 'source_config', 'stages', 'api_meta',
 ]);
 
 // ── Connection config ──
@@ -456,6 +456,9 @@ export async function initDb(): Promise<void> {
     await addColumn('test_cases', 'test_data', "NVARCHAR(MAX) DEFAULT '{}'");
     await addColumn('test_cases', 'severity', 'NVARCHAR(20)');
     await addColumn('test_cases', 'traceability_id', 'NVARCHAR(100)');
+    // API Automation only: endpoint/method/headers/params/payload/status that
+    // back the API test-case columns (see ApiCaseMeta in agents/state.ts).
+    await addColumn('test_cases', 'api_meta', 'NVARCHAR(MAX)');
 
     // ─── 7. Automation scripts ───
     await createTable('automation_scripts', `

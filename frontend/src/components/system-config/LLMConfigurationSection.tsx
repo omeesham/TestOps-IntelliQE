@@ -616,27 +616,17 @@ export default function LlmConfigurationSection() {
               {/* Actions */}
               <div className="flex flex-wrap items-center gap-4 pt-3 mt-1 border-t border-gray-100">
                 {isClaudeCode ? (
-                  <>
-                    {/* Two explicit tests so it's unambiguous which path is checked. */}
-                    <button
-                      onClick={() => handleTest('api')}
-                      disabled={testing || !canTest}
-                      title="Validate the OAuth token against the Anthropic Messages API (Bearer)"
-                      className="inline-flex items-center gap-2 px-4 py-2 border border-[#7C3AED] text-[#7C3AED] rounded-lg text-sm font-medium hover:bg-[#F5F3FF] transition-all disabled:opacity-50"
-                    >
-                      {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-                      Test API
-                    </button>
-                    <button
-                      onClick={() => handleTest('cli')}
-                      disabled={testing}
-                      title="Run the local `claude` CLI (passes your token via CLAUDE_CODE_OAUTH_TOKEN)"
-                      className="inline-flex items-center gap-2 px-4 py-2 border border-[#7C3AED] text-[#7C3AED] rounded-lg text-sm font-medium hover:bg-[#F5F3FF] transition-all disabled:opacity-50"
-                    >
-                      {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-                      Test CLI
-                    </button>
-                  </>
+                  /* Claude Code runs through the local CLI, so the CLI test is
+                     the only one that reflects how the pipeline actually calls it. */
+                  <button
+                    onClick={() => handleTest('cli')}
+                    disabled={testing}
+                    title="Run the local `claude` CLI (passes your token via CLAUDE_CODE_OAUTH_TOKEN)"
+                    className="inline-flex items-center gap-2 px-4 py-2 border border-[#7C3AED] text-[#7C3AED] rounded-lg text-sm font-medium hover:bg-[#F5F3FF] transition-all disabled:opacity-50"
+                  >
+                    {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                    Test CLI
+                  </button>
                 ) : (
                   <button
                     onClick={() => handleTest()}
