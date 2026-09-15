@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { useNavigate } from 'react-router-dom';
-import { listAdaScans, deleteAdaScan, type AdaScanRecord } from '@/services/api';
+import { listAdaScans, deleteAdaScan, cancelAdaScan, type AdaScanRecord } from '@/services/api';
 import AdaCompliancePanel, { type BrownfieldHandoff } from '@/components/ada/AdaCompliancePanel';
 import { Accessibility, Plus, Trash2, Loader2, Clock, CheckCircle2, XCircle, Square, ChevronLeft } from 'lucide-react';
 
@@ -47,6 +47,13 @@ export default function AdaCompliancePage() {
     const t = setInterval(load, 5000);
     return () => clearInterval(t);
   }, [anyRunning, load]);
+
+  const [stopping, setStopping] = useState<string | null>(null);
+  const stop = async (id: string) => {
+    setStopping(id);
+    try { await cancelAdaScan(id); setTimeout(load, 2000); } catch (err: unknown) { setError(errorMessage(err, 'Could not stop the audit')); }
+    finally { setTimeout(() => setStopping(null), 2000); }
+  };
 
   const remove = async (id: string) => {
     if (!confirm('Delete this audit and all of its findings?')) return;
@@ -138,7 +145,11 @@ export default function AdaCompliancePage() {
                       {s.created_by && <span className="block text-[11px] text-gray-400">{s.created_by}</span>}
                     </td>
                     <td className="px-4 py-3 text-right">
-                      {s.status !== 'running' && (
+                      {s.status === 'running' ? (
+                        <button onClick={() => stop(s.id)} disabled={stopping === s.id} className="inline-flex items-center gap-1.5 text-xs text-gray-600 hover:text-red-600 border border-gray-200 hover:border-red-200 bg-white rounded-lg px-2.5 py-1 transition-colors disabled:opacity-50" title="Stop now and keep the report for the pages audited so far">
+                          <Square className="w-3 h-3 fill-current" /> {stopping === s.id ? 'Stopping…' : 'Stop & report'}
+                        </button>
+                      ) : (
                         <button onClick={() => remove(s.id)} className="text-gray-300 hover:text-red-500 transition-colors" title="Delete audit"><Trash2 className="w-4 h-4" /></button>
                       )}
                     </td>

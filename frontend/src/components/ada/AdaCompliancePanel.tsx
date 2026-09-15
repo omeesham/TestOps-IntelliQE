@@ -128,6 +128,9 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [checkExternal, setCheckExternal] = useState(true);
   const [formError, setFormError] = useState('');
+  /** Id of the audit that is already running for this account (from a 409), so the form can stop or open it. */
+  const [blockingScanId, setBlockingScanId] = useState<string | null>(null);
+  const [stoppingBlocking, setStoppingBlocking] = useState(false);
   const [starting, setStarting] = useState(false);
 
   // ── scan ──
@@ -193,7 +196,7 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
   }, [events, screen]);
 
   const start = async () => {
-    setFormError('');
+    setFormError(''); setBlockingScanId(null);
     if (!url.trim()) { setFormError('Enter the website address to audit.'); return; }
     setStarting(true);
     try {
@@ -211,9 +214,42 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
       setScreen('scanning');
     } catch (err: unknown) {
       setFormError(errorMessage(err, 'Could not start the audit.'));
+      const other = (err as { response?: { data?: { scanId?: string } } } | undefined)?.response?.data?.scanId;
+      if (errorStatus(err) === 409 && other) setBlockingScanId(other);
     } finally {
       setStarting(false);
     }
+  };
+
+  /** Stop the audit that is blocking a new one, then retry automatically. */
+  const stopBlockingAndStart = async () => {
+    if (!blockingScanId) return;
+    setStoppingBlocking(true);
+    try {
+      await cancelAdaScan(blockingScanId);
+      // The engine needs a moment to finish the current page and persist the partial report.
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const p = await getAdaScan(blockingScanId).catch(() => null);
+        if (p && p.scan.status !== 'running') break;
+      }
+      setBlockingScanId(null); setFormError('');
+      await start();
+    } catch (err: unknown) {
+      setFormError(errorMessage(err, 'Could not stop the running audit.'));
+    } finally {
+      setStoppingBlocking(false);
+    }
+  };
+
+  /** Open the audit that is already running instead of starting another. */
+  const openBlocking = () => {
+    if (!blockingScanId) return;
+    lastSeq.current = 0;
+    setEvents([]); setProgress(null); setScan(null); setFindings([]); setFindingsFor('');
+    setScanId(blockingScanId); setBlockingScanId(null); setFormError('');
+    setTab('issues');
+    setScreen('scanning');
   };
 
   const cancel = async () => {
@@ -300,7 +336,19 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
           </div>
         )}
 
-        {formError && <p className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{formError}</p>}
+        {formError && (
+          <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2 flex flex-wrap items-center gap-2">
+            <span className="flex-1 min-w-[12rem]">{formError}</span>
+            {blockingScanId && (
+              <span className="flex items-center gap-2">
+                <button type="button" onClick={openBlocking} disabled={stoppingBlocking} className="px-2.5 py-1 rounded-md border border-red-200 bg-white text-red-700 hover:bg-red-100 disabled:opacity-50">View progress</button>
+                <button type="button" onClick={stopBlockingAndStart} disabled={stoppingBlocking} className="px-2.5 py-1 rounded-md bg-red-600 text-white hover:bg-red-500 disabled:opacity-50 flex items-center gap-1.5" title="Stop the running audit (its partial report is kept) and start this one">
+                  {stoppingBlocking ? <Loader2 className="w-3 h-3 animate-spin" /> : <Square className="w-3 h-3 fill-current" />} {stoppingBlocking ? 'Stopping…' : 'Stop it & start this audit'}
+                </button>
+              </span>
+            )}
+          </div>
+        )}
 
         <button
           onClick={start}
