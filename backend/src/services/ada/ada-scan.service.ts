@@ -10,6 +10,7 @@
 import pool from '../../db.js';
 import { runScan, normaliseStartUrl, type EngineControl } from './ada-engine.js';
 import { withRemediation } from './ada-remediation.js';
+import type { SiteInventory } from './ada-inventory.js';
 import type { Finding, LinkResult, PageResult, ProgressEvent, ScanOptions, ScanSummary } from './ada-types.js';
 
 interface LiveScan {
@@ -21,6 +22,7 @@ interface LiveScan {
   startedAt: number;
   finishedAt?: number;
   summary?: ScanSummary;
+  inventory?: SiteInventory;
   error?: string;
 }
 
@@ -81,6 +83,7 @@ export async function startScan(tenantId: string, createdBy: string, options: Sc
     if (e.type === 'navigate') { state.counters.currentUrl = d.url; state.counters.pages = d.crawled ?? state.counters.pages; }
     if (d.discovered !== undefined) state.counters.discovered = Math.max(state.counters.discovered, Number(d.discovered));
     if (e.type === 'sitemap' && d.count !== undefined) state.counters.discovered = Math.max(state.counters.discovered, Number(d.count));
+    if (e.type === 'sitemap' && d.inventory) state.inventory = d.inventory as SiteInventory;
     if (e.type === 'page' && d.links !== undefined) state.counters.pages += 1;
     if (e.type === 'accessibility') state.counters.issues += Number(d.violations || 0);
     if (e.type === 'best-practice') state.counters.issues += Number(d.failed || 0);
@@ -132,6 +135,7 @@ export function getProgress(tenantId: string, scanId: string, afterSeq = 0) {
     lastSeq: s.events.length ? s.events[s.events.length - 1].seq : afterSeq,
     elapsedMs: (s.finishedAt || Date.now()) - s.startedAt,
     summary: s.summary,
+    inventory: s.inventory,
     error: s.error,
   };
 }

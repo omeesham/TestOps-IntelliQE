@@ -19,7 +19,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   startAdaScan, getAdaScan, getAdaFindings, getAdaPages, cancelAdaScan,
   type AdaCategory, type AdaFinding, type AdaPage, type AdaProgress, type AdaProgressEvent,
-  type AdaScanRecord, type AdaSeverity, type AdaSummary, type AdaRemediation,
+  type AdaScanRecord, type AdaSeverity, type AdaSummary, type AdaRemediation, type AdaSiteInventory,
 } from '@/services/api';
 import {
   Accessibility, Globe, Lock, Unlock, Loader2, CheckCircle2, AlertTriangle, XCircle, Link2Off,
@@ -387,8 +387,9 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
           <div className="mt-3 h-1.5 bg-gray-100 rounded-full overflow-hidden">
             <div className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 transition-all duration-700" style={{ width: `${linkPhase ? 100 : pct}%` }} />
           </div>
+          {progress?.inventory && <InventoryLine inv={progress.inventory} className="mt-3" />}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
-            <Stat label="Pages audited" value={c ? `${c.pages} of ${Math.max(c.discovered || 0, c.pages)} found` : '—'} />
+            <Stat label="Pages audited" value={c ? c.pages : '—'} sub={c ? `of ${Math.max(c.discovered || 0, c.pages).toLocaleString()} found` : undefined} />
             <Stat label="Links found" value={c?.linksFound ?? '—'} />
             <Stat label="Links checked" value={c?.linksChecked ?? '—'} />
             <Stat label="Issues so far" value={c?.issues ?? '—'} tone={c?.issues ? 'warn' : undefined} />
@@ -464,11 +465,46 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
 
 /* ───────────────────────────── shared bits ───────────────────────────── */
 
-function Stat({ label, value, tone }: { label: string; value: string | number; tone?: 'warn' }) {
+function Chip({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
-    <div className="bg-white/70 border border-gray-100 rounded-lg px-3 py-2">
+    <span className="inline-flex items-baseline gap-1 rounded-md bg-white/80 border border-gray-100 px-2 py-1" title={title}>
+      <span className="font-semibold text-gray-800">{value}</span><span className="text-gray-500">{label}</span>
+    </span>
+  );
+}
+
+/** "9,894 URLs → 5 languages → 1,987 pages in en-us → 1,354 news articles" in one glance. */
+function InventoryLine({ inv, className = '' }: { inv: AdaSiteInventory; className?: string }) {
+  const others = inv.locales.filter((l) => !l.audited);
+  const templated = inv.sections.filter((s) => s.templated);
+  const n = (x: number) => x.toLocaleString();
+  return (
+    <div className={`flex flex-wrap items-center gap-1.5 text-[11px] ${className}`}>
+      <Chip value={n(inv.sitemapUrls)} label="URLs in sitemap" />
+      {inv.auditedLocale && (
+        <>
+          <span className="text-gray-300">→</span>
+          <Chip value={String(inv.locales.length)} label={`language${inv.locales.length === 1 ? '' : 's'}`} title={inv.locales.map((l) => `${l.code}: ${n(l.pages)}`).join('\n')} />
+        </>
+      )}
+      <span className="text-gray-300">→</span>
+      <Chip value={n(inv.pagesInScope)} label={`unique pages${inv.auditedLocale ? ` in ${inv.auditedLocale}` : ''}`} title={inv.sections.slice(0, 12).map((s) => `${s.path}: ${n(s.pages)}`).join('\n')} />
+      {templated.length > 0 && (
+        <>
+          <span className="text-gray-300">→</span>
+          <Chip value={n(inv.templatedPages)} label="templated articles (sampled)" title={templated.map((s) => `${s.path}: ${n(s.pages)}`).join('\n')} />
+        </>
+      )}
+      {others.length > 0 && <span className="text-gray-400">{others.map((l) => l.code).join(', ')} not audited — translations of the same pages</span>}
+    </div>
+  );
+}
+
+function Stat({ label, value, sub, tone }: { label: string; value: string | number; sub?: string; tone?: 'warn' }) {
+  return (
+    <div className="bg-white/70 border border-gray-100 rounded-lg px-3 py-2 min-w-0">
       <p className="text-[10px] uppercase tracking-wide text-gray-400">{label}</p>
-      <p className={`text-base font-semibold whitespace-nowrap ${tone === 'warn' ? 'text-amber-600' : 'text-gray-800'}`}>{value}</p>
+      <p className={`text-base font-semibold ${tone === 'warn' ? 'text-amber-600' : 'text-gray-800'}`}>{value}{sub && <span className="ml-1 text-[11px] font-normal text-gray-500">{sub}</span>}</p>
     </div>
   );
 }
@@ -541,6 +577,7 @@ function ReportHeader({ summary, partial, findings, onReset, onBrownfield }: {
           </div>
           <p className="text-base font-semibold text-gray-800 leading-tight mt-0.5">{summary.siteName || summary.targetUrl}</p>
           <a href={summary.targetUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-violet-600 hover:underline inline-flex items-center gap-1 break-all">{summary.targetUrl} <ExternalLink className="w-3 h-3" /></a>
+          {summary.inventory && summary.inventory.sitemapUrls > 0 && <InventoryLine inv={summary.inventory} className="mt-2" />}
           <p className="text-xs text-gray-500 mt-1">
             {summary.pagesCrawled} page{summary.pagesCrawled === 1 ? '' : 's'} audited{(summary.pagesDiscovered || 0) > summary.pagesCrawled ? ` of ${summary.pagesDiscovered} found` : ''} · {summary.linksChecked} links checked · {a.violations} accessibility violation{a.violations === 1 ? '' : 's'} · {brokenTotal} broken link{brokenTotal === 1 ? '' : 's'} · {summary.categories.bestPractice.failingRules.length} best-practice checks failing · {fmtDuration(summary.durationMs)}
           </p>
@@ -1001,6 +1038,7 @@ details{border:1px solid #e5e7eb;border-radius:8px;padding:8px 12px;margin:6px 0
 .ex{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ex pre,code.good{font-family:Consolas,monospace;font-size:11px;white-space:pre-wrap;word-break:break-all;border-radius:6px;padding:6px 8px;margin:2px 0 0}pre.bad{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}pre.good,code.good{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}code.good{display:inline-block;margin-top:4px;color:#065f46}
 .foot{margin-top:32px;font-size:11px;color:#9ca3af}</style></head><body>
 <h1>Website audit report — ${esc(s.siteName)}</h1>
+${s.inventory && s.inventory.sitemapUrls > 0 ? `<p class="muted" style="margin:4px 0">Site inventory: ${s.inventory.sitemapUrls.toLocaleString()} URLs in sitemap${s.inventory.auditedLocale ? ` · ${s.inventory.locales.length} language version${s.inventory.locales.length === 1 ? '' : 's'} (${esc(s.inventory.locales.map((l) => l.code).join(', '))})` : ''} · ${s.inventory.pagesInScope.toLocaleString()} unique pages${s.inventory.auditedLocale ? ` in ${esc(s.inventory.auditedLocale)}` : ''}${s.inventory.templatedPages ? ` · ${s.inventory.templatedPages.toLocaleString()} templated articles (${esc(s.inventory.sections.filter((x) => x.templated).map((x) => x.path).join(', '))})` : ''}</p>` : ''}
 <div class="muted" style="margin:6px 0 10px"><span class="tag ${partial ? 'part' : 'ok'}">${partial ? 'STOPPED EARLY — PARTIAL RESULTS' : 'COMPLETE'}</span><span class="tag wcag">WCAG 2.2 AA</span> ${esc(s.targetUrl)} · audited ${esc(new Date(s.finishedAt).toLocaleString())} · ${s.pagesCrawled} pages audited${(s.pagesDiscovered || 0) > s.pagesCrawled ? ` of ${s.pagesDiscovered} found` : ''} · ${s.linksChecked} links checked · ${Math.round(s.durationMs / 1000)}s</div>
 <div class="scores">${score(s.overall, 'Overall health')}${score(a, 'Accessibility (WCAG 2.2 AA)')}${score(l, 'Links')}${score(b, 'Best practices')}</div>
 <div class="summary"><div><div class="n">${totalIssues}</div><div class="muted">Issues in ${new Set(issues.map((f) => f.page_url)).size} pages and ${new Set(findings.filter((f) => f.element).map((f) => f.element)).size} components</div></div>

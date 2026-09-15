@@ -1509,6 +1509,15 @@ export interface AdaProgressEvent {
   data?: Record<string, unknown>;
 }
 
+export interface AdaSiteInventory {
+  sitemapUrls: number;
+  uniquePages: number;
+  locales: { code: string; pages: number; audited: boolean }[];
+  auditedLocale: string | null;
+  pagesInScope: number;
+  sections: { path: string; pages: number; templated: boolean }[];
+  templatedPages: number;
+}
 export interface AdaCategoryScore { score: number; grade: 'A' | 'B' | 'C' | 'D' | 'F'; label: string }
 export interface AdaLinkResult { url: string; status: number | null; kind: string; external: boolean; referrers: string[]; linkText?: string; error?: string; finalUrl?: string }
 
@@ -1526,6 +1535,7 @@ export interface AdaSummary {
   loginSucceeded: boolean | null;
   robots: { crawlDelay: number | null; disallowCount: number; sitemaps: string[] };
   sitemapUrlsFound: number;
+  inventory?: AdaSiteInventory;
   overall: AdaCategoryScore;
   categories: {
     accessibility: AdaCategoryScore & { violations: number; needsReview: number; bySeverity: Record<AdaSeverity, number>; topRules: { ruleId: string; title: string; severity: AdaSeverity; pages: number; occurrences: number; helpUrl?: string; wcag?: string }[] };
@@ -1563,6 +1573,7 @@ export interface AdaProgress {
   lastSeq: number;
   elapsedMs: number;
   summary?: AdaSummary;
+  inventory?: AdaSiteInventory;
   error?: string;
 }
 

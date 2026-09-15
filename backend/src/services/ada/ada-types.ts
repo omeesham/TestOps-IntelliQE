@@ -10,6 +10,8 @@
  */
 
 /** 'review' = axe could not decide automatically; a person must check (e.g. contrast on a gradient). */
+import type { SiteInventory } from './ada-inventory.js';
+
 export type FindingCategory = 'accessibility' | 'links' | 'best-practice' | 'review';
 export type Severity = 'critical' | 'serious' | 'moderate' | 'minor';
 
@@ -104,6 +106,8 @@ export interface ScanSummary {
   loginSucceeded: boolean | null;
   robots: { crawlDelay: number | null; disallowCount: number; sitemaps: string[] };
   sitemapUrlsFound: number;
+  /** What the site consists of: sitemap URLs, language versions, pages in scope, templated sections. */
+  inventory?: SiteInventory;
   overall: CategoryScore;
   categories: {
     accessibility: CategoryScore & { violations: number; needsReview: number; bySeverity: Record<Severity, number>; topRules: { ruleId: string; title: string; severity: Severity; pages: number; occurrences: number; helpUrl?: string; wcag?: string }[] };

@@ -14,6 +14,7 @@
  *
  * Progress is reported through `emit` so the UI can show the navigation live.
  */
+import { buildInventory, describeInventory, inAuditedLocale, orderForCrawl, type SiteInventory } from './ada-inventory.js';
 import type { Browser, BrowserContext, Page } from '@playwright/test';
 import { tryLogin } from '../../agents/exploreAgent.js';
 import { runAccessibilityCheck, runBestPracticeCheck } from './ada-checks.js';
@@ -35,8 +36,8 @@ export interface EngineControl {
 }
 
 const PAGE_TIMEOUT_MS = 30_000;
-const MAX_SITEMAP_CHILDREN = 6;
-const MAX_SITEMAP_URLS = 2000;
+const MAX_SITEMAP_CHILDREN = 50;
+const MAX_SITEMAP_URLS = 50_000;
 const MAX_ROBOTS_DELAY_MS = 3000;
 const BINARY_EXT = /\.(pdf|zip|rar|7z|gz|tar|jpe?g|png|gif|webp|svg|ico|bmp|tiff?|mp3|mp4|m4a|wav|avi|mov|wmv|webm|docx?|xlsx?|pptx?|csv|json|xml|rss|atom|css|js|woff2?|ttf|eot|exe|dmg|apk|ics)(\?.*)?$/i;
 
@@ -156,11 +157,7 @@ async function readSitemap(ctx: BrowserContext, origin: string, robots: Robots, 
     }
     if (urls.size) break;
   }
-  emit({
-    type: 'sitemap',
-    message: urls.size ? `Sitemap lists ${urls.size} page${urls.size === 1 ? '' : 's'} — using it to reach sections the menus may not link.` : 'No sitemap found — relying on links discovered while navigating.',
-    data: { count: urls.size },
-  });
+  if (!urls.size) emit({ type: 'sitemap', message: 'No sitemap found — relying on links discovered while navigating.', data: { count: 0 } });
   return [...urls];
 }
 
@@ -184,6 +181,8 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
   let loginSucceeded: boolean | null = null;
   let robots: Robots = { disallow: [], crawlDelay: null, sitemaps: [] };
   let sitemapUrls: string[] = [];
+  let inventory: SiteInventory = buildInventory([], startUrl);
+  const TEMPLATED_SAMPLE_NOTE = 8;
 
   try {
     browser = await chromium.launch({ headless: true });
@@ -200,6 +199,18 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
 
     robots = await readRobots(ctx, origin, emit);
     if (options.useSitemap) sitemapUrls = await readSitemap(ctx, origin, robots, sameSite, emit);
+    // What is this site made of? Languages, sections, templated archives — and which pages are in scope.
+    inventory = buildInventory(sitemapUrls, startUrl);
+    if (sitemapUrls.length) {
+      emit({ type: 'sitemap', message: describeInventory(inventory), data: { count: inventory.pagesInScope, inventory } });
+      if (inventory.auditedLocale && inventory.locales.length > 1) {
+        notes.push(`The site has ${inventory.locales.length} language versions (${inventory.locales.map((l) => l.code).join(', ')}); this audit covers ${inventory.auditedLocale}. The others are translations of the same pages.`);
+      }
+      if (inventory.templatedPages) {
+        notes.push(`${inventory.templatedPages.toLocaleString()} of the ${inventory.pagesInScope.toLocaleString()} pages are templated articles (${inventory.sections.filter((s) => s.templated).map((s) => s.path).join(', ')}); a sample of ${TEMPLATED_SAMPLE_NOTE} per section is audited before the rest.`);
+      }
+    }
+    sitemapUrls = orderForCrawl(sitemapUrls.filter((u) => inAuditedLocale(u, inventory)), inventory);
 
     const delayMs = Math.max(options.crawlDelayMs, Math.min(MAX_ROBOTS_DELAY_MS, (robots.crawlDelay || 0) * 1000));
     if (robots.crawlDelay && robots.crawlDelay * 1000 > MAX_ROBOTS_DELAY_MS) {
@@ -232,6 +243,7 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
       if (pages.length + queue.length >= DISCOVERY_CEILING) return;
       if (depth > options.maxDepth) return;
       if (!sameSite(href) || BINARY_EXT.test(href) || isDisallowed(href, robots)) return;
+      if (!inAuditedLocale(href, inventory)) return; // a translation of a page we already cover
       const key = normaliseUrl(href);
       if (visited.has(key)) return;
       visited.add(key);
@@ -378,7 +390,8 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
       pages, links,
       loginAttempted, loginSucceeded,
       robots: { crawlDelay: robots.crawlDelay, disallowCount: robots.disallow.length, sitemaps: robots.sitemaps },
-      sitemapUrlsFound: sitemapUrls.length,
+      sitemapUrlsFound: inventory.sitemapUrls,
+      inventory,
       pagesDiscovered: pages.length + queue.length,
       linksFound: linkMap.size,
       notes,

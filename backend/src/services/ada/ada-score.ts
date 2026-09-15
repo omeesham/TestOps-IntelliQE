@@ -7,6 +7,7 @@
  * exposure (ADA / Section 508) — a site can have a few dead links and still be
  * usable; a site keyboard users cannot navigate cannot.
  */
+import type { SiteInventory } from './ada-inventory.js';
 import type { LinkResult, PageResult, ScanSummary, Severity } from './ada-types.js';
 import { makeScore } from './ada-types.js';
 
@@ -23,6 +24,7 @@ export function buildSummary(input: {
   loginSucceeded: boolean | null;
   robots: ScanSummary['robots'];
   sitemapUrlsFound: number;
+  inventory?: SiteInventory;
   pagesDiscovered: number;
   linksFound: number;
   notes: string[];
@@ -97,6 +99,7 @@ export function buildSummary(input: {
     durationMs: input.finishedAt.getTime() - input.startedAt.getTime(),
     pagesCrawled: pages.length,
     pagesDiscovered: Math.max(input.pagesDiscovered, pages.length),
+    inventory: input.inventory,
     linksFound: input.linksFound,
     linksChecked: checked.length,
     loginAttempted: input.loginAttempted,
