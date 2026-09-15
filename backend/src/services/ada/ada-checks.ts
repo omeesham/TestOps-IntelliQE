@@ -36,7 +36,7 @@ function wcagFromTags(tags: string[]): string | undefined {
   return [criteria.join(', '), level ? `(${level})` : ''].filter(Boolean).join(' ');
 }
 
-export async function runAccessibilityCheck(page: Page, pageUrl: string): Promise<{ findings: Finding[]; score: number; violations: number }> {
+export async function runAccessibilityCheck(page: Page, pageUrl: string): Promise<{ findings: Finding[]; score: number; violations: number; needsReview: number }> {
   const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
   const findings: Finding[] = [];
   let penalty = 0;
@@ -91,10 +91,34 @@ export async function runAccessibilityCheck(page: Page, pageUrl: string): Promis
     }
   }
 
+  // axe's "incomplete" results are checks it could not settle by itself (a
+  // contrast ratio over an image, an ARIA pattern it cannot evaluate). They
+  // are surfaced as needs-review items - never counted as violations and
+  // never scored - so a person can confirm or dismiss them.
+  let needsReview = 0;
+  for (const v of results.incomplete || []) {
+    const nodes = v.nodes || [];
+    if (nodes.length === 0 || !(v.tags || []).some((t) => /^wcag\d/.test(t))) continue;
+    needsReview += nodes.length;
+    const kept = nodes.slice(0, 3);
+    for (const node of kept) {
+      findings.push({
+        pageUrl, category: 'review', ruleId: v.id,
+        severity: IMPACT_TO_SEVERITY[v.impact || 'minor'] || 'minor',
+        title: v.help, description: v.description, wcag: wcagFromTags(v.tags || []),
+        element: (node.target || []).map(String).join(' ').slice(0, 1000),
+        htmlSnippet: (node.html || '').slice(0, 2000),
+        helpUrl: v.helpUrl, occurrences: 1,
+        details: { failureSummary: node.failureSummary, tags: v.tags, needsReview: true, totalNodesOnPage: nodes.length },
+      });
+    }
+    if (nodes.length > kept.length) findings[findings.length - 1].occurrences = nodes.length - kept.length + 1;
+  }
+
   // A page with zero violations is 100. Each weighted violation chips away;
   // the cap keeps one catastrophic page from dragging the whole site to 0.
   const score = Math.max(0, 100 - penalty);
-  return { findings, score, violations };
+  return { findings, score, violations, needsReview };
 }
 
 /* ───────────────────────────── best practice ───────────────────────────── */

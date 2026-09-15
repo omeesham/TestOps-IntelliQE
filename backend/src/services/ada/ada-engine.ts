@@ -337,7 +337,7 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
         findings.push(...a11y.findings);
         axeBpFailures = a11y.findings.filter((f) => f.category === 'best-practice').length;
         a11yScore = a11y.score;
-        emit({ type: 'accessibility', message: `Accessibility: ${a11y.violations === 0 ? 'no violations' : `${a11y.violations} violation${a11y.violations === 1 ? '' : 's'}`} on ${shortUrl(finalUrl)}`, data: { url: finalUrl, violations: a11y.violations, score: a11y.score } });
+        emit({ type: 'accessibility', message: `Accessibility: ${a11y.violations === 0 ? 'no violations' : `${a11y.violations} violation${a11y.violations === 1 ? '' : 's'}`}${a11y.needsReview ? `, ${a11y.needsReview} to review` : ''} on ${shortUrl(finalUrl)}`, data: { url: finalUrl, violations: a11y.violations, needsReview: a11y.needsReview, score: a11y.score } });
       } catch (err) {
         emit({ type: 'warning', message: `Accessibility check failed on ${shortUrl(finalUrl)}: ${(err as Error).message.split('\n')[0]}` });
       }

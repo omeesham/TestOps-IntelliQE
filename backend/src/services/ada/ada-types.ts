@@ -9,7 +9,8 @@
  * and rolls the results up into a scored website health report.
  */
 
-export type FindingCategory = 'accessibility' | 'links' | 'best-practice';
+/** 'review' = axe could not decide automatically; a person must check (e.g. contrast on a gradient). */
+export type FindingCategory = 'accessibility' | 'links' | 'best-practice' | 'review';
 export type Severity = 'critical' | 'serious' | 'moderate' | 'minor';
 
 export interface ScanOptions {
@@ -103,7 +104,7 @@ export interface ScanSummary {
   sitemapUrlsFound: number;
   overall: CategoryScore;
   categories: {
-    accessibility: CategoryScore & { violations: number; bySeverity: Record<Severity, number>; topRules: { ruleId: string; title: string; severity: Severity; pages: number; occurrences: number; helpUrl?: string; wcag?: string }[] };
+    accessibility: CategoryScore & { violations: number; needsReview: number; bySeverity: Record<Severity, number>; topRules: { ruleId: string; title: string; severity: Severity; pages: number; occurrences: number; helpUrl?: string; wcag?: string }[] };
     links: CategoryScore & { checked: number; ok: number; redirects: number; broken: number; serverErrors: number; timeouts: number; blocked: number; brokenLinks: LinkResult[]; blockedLinks: LinkResult[] };
     bestPractice: CategoryScore & { rulesEvaluated: number; rulesPassed: number; failingRules: { ruleId: string; title: string; severity: Severity; pages: number }[] };
   };

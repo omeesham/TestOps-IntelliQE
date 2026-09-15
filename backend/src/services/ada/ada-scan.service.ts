@@ -89,11 +89,13 @@ export async function startScan(tenantId: string, createdBy: string, options: Sc
   (async () => {
     try {
       const result = await runScan({ ...options, url: startUrl }, emit, state.control);
-      await persist(scanId, tenantId, result.pages, result.links, result.summary);
+      const finalStatus = state.control.cancelled ? 'cancelled' : 'completed';
+      await persist(scanId, tenantId, result.pages, result.links, result.summary, finalStatus);
       state.summary = result.summary;
-      state.status = state.control.cancelled ? 'cancelled' : 'completed';
+      state.status = finalStatus;
       state.finishedAt = Date.now();
-      emit({ type: 'done', message: state.status === 'cancelled' ? 'Scan cancelled — partial results saved.' : 'Audit complete.', data: { status: state.status } });
+      emit({ type: 'done', message: finalStatus === 'cancelled' ? 'Stopped early — the report covers the pages audited so far.' : 'Audit complete.', data: { status: finalStatus } });
+      await saveLog(scanId, state.events);
     } catch (err) {
       const msg = (err as Error).message || String(err);
       state.status = 'failed';
@@ -101,6 +103,7 @@ export async function startScan(tenantId: string, createdBy: string, options: Sc
       state.finishedAt = Date.now();
       emit({ type: 'error', message: `Audit failed: ${msg}` });
       await pool.query(`UPDATE ada_scans SET status = 'failed', error = $2, finished_at = now() WHERE id = $1`, [scanId, msg]).catch(() => { /* logged below */ });
+      await saveLog(scanId, state.events);
       console.error(`[ada] scan ${scanId} failed:`, msg);
     }
   })();
@@ -131,7 +134,13 @@ export function getProgress(tenantId: string, scanId: string, afterSeq = 0) {
 
 /* ───────────────────────────── persistence ───────────────────────────── */
 
-async function persist(scanId: string, tenantId: string, pages: PageResult[], links: LinkResult[], summary: ScanSummary): Promise<void> {
+/** The workflow log is kept with the scan so a report opened later still shows how the crawl went. */
+async function saveLog(scanId: string, events: ProgressEvent[]): Promise<void> {
+  await pool.query(`UPDATE ada_scans SET progress_log = $2 WHERE id = $1`, [scanId, JSON.stringify(events.slice(-1500))])
+    .catch((err) => console.warn(`[ada] could not save workflow log for ${scanId}:`, (err as Error).message));
+}
+
+async function persist(scanId: string, tenantId: string, pages: PageResult[], links: LinkResult[], summary: ScanSummary, status: 'completed' | 'cancelled'): Promise<void> {
   const findings: Finding[] = pages.flatMap((p) => p.findings);
   // Broken links become findings too, so one table answers "what is wrong".
   for (const l of links) {
@@ -163,11 +172,11 @@ async function persist(scanId: string, tenantId: string, pages: PageResult[], li
 
   await pool.query(
     `UPDATE ada_scans
-        SET status = 'completed', result = $2, site_name = $3, pages_crawled = $4, links_checked = $5,
+        SET status = $8, result = $2, site_name = $3, pages_crawled = $4, links_checked = $5,
             findings_count = $6, overall_score = $7, finished_at = now()
       WHERE id = $1`,
     [scanId, JSON.stringify(summary), summary.siteName.slice(0, 200), pages.length, summary.linksChecked,
-      findings.reduce((a, f) => a + f.occurrences, 0), summary.overall.score],
+      findings.reduce((a, f) => a + f.occurrences, 0), summary.overall.score, status],
   );
 }
 

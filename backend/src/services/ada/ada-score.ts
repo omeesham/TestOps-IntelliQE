@@ -41,6 +41,7 @@ export function buildSummary(input: {
     byRule.set(f.ruleId, r);
   }
   const violations = Object.values(bySeverity).reduce((a, b) => a + b, 0);
+  const needsReview = pages.flatMap((p) => p.findings.filter((f) => f.category === 'review')).reduce((a, f) => a + f.occurrences, 0);
   const a11yScore = reachable.length ? reachable.reduce((a, p) => a + p.a11yScore, 0) / reachable.length : 100;
   const topRules = [...byRule.values()]
     .sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity) || b.pages.size - a.pages.size)
@@ -102,7 +103,7 @@ export function buildSummary(input: {
     sitemapUrlsFound: input.sitemapUrlsFound,
     overall: makeScore(overall),
     categories: {
-      accessibility: { ...makeScore(a11yScore), violations, bySeverity, topRules },
+      accessibility: { ...makeScore(a11yScore), violations, needsReview, bySeverity, topRules },
       links: { ...makeScore(linkScore), checked: checked.length, ok, redirects, broken, serverErrors, timeouts, blocked, brokenLinks, blockedLinks: blockedList.slice(0, 100) },
       bestPractice: { ...makeScore(bpScore), rulesEvaluated: RULES_TOTAL, rulesPassed: RULES_TOTAL - failingRules.length, failingRules },
     },

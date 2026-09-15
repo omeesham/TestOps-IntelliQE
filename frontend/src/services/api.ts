@@ -1488,7 +1488,7 @@ export function subscribeToAgentPerformance(
 // scored website health report. Progress is polled — see AdaCompliancePanel.
 
 export type AdaSeverity = 'critical' | 'serious' | 'moderate' | 'minor';
-export type AdaCategory = 'accessibility' | 'links' | 'best-practice';
+export type AdaCategory = 'accessibility' | 'links' | 'best-practice' | 'review';
 
 export interface AdaScanOptions {
   url: string;
@@ -1527,7 +1527,7 @@ export interface AdaSummary {
   sitemapUrlsFound: number;
   overall: AdaCategoryScore;
   categories: {
-    accessibility: AdaCategoryScore & { violations: number; bySeverity: Record<AdaSeverity, number>; topRules: { ruleId: string; title: string; severity: AdaSeverity; pages: number; occurrences: number; helpUrl?: string; wcag?: string }[] };
+    accessibility: AdaCategoryScore & { violations: number; needsReview: number; bySeverity: Record<AdaSeverity, number>; topRules: { ruleId: string; title: string; severity: AdaSeverity; pages: number; occurrences: number; helpUrl?: string; wcag?: string }[] };
     links: AdaCategoryScore & { checked: number; ok: number; redirects: number; broken: number; serverErrors: number; timeouts: number; blocked: number; brokenLinks: AdaLinkResult[]; blockedLinks: AdaLinkResult[] };
     bestPractice: AdaCategoryScore & { rulesEvaluated: number; rulesPassed: number; failingRules: { ruleId: string; title: string; severity: AdaSeverity; pages: number }[] };
   };
@@ -1551,6 +1551,8 @@ export interface AdaScanRecord {
   error?: string | null;
   result?: AdaSummary | null;
   config_data?: Record<string, unknown>;
+  /** Workflow log persisted with the scan (crawl events), for reports opened later. */
+  log?: AdaProgressEvent[];
 }
 
 export interface AdaProgress {

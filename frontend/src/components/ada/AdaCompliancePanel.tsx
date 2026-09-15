@@ -4,15 +4,18 @@
  * Three screens in one component:
  *   1. form      — the user types a URL (plus optional sign-in), that's all
  *   2. scanning  — a live log of the crawl: every page navigated, links found,
- *                  checks run, problems as they are discovered
- *   3. results   — the scored website health report with drill-downs for
- *                  accessibility, broken links, best practices and pages
+ *                  checks run, problems as they are discovered; can be stopped
+ *   3. report    — the issue explorer: a summary pane (issues, pages, severity
+ *                  breakdown, needs-review), a grouped issue list, and a detail
+ *                  pane for the selected issue — plus the workflow log, the
+ *                  page list, and HTML / CSV download. A stopped scan gets the
+ *                  same report for the pages it managed to audit.
  *
  * Used inside the Chat wizard (ChatPage) and on the standalone
  * /ada-compliance page. `onBrownfield` hands the crawled site to the existing
  * explore-mode pipeline so requirements and test cases are rebuilt from it.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   startAdaScan, getAdaScan, getAdaFindings, getAdaPages, cancelAdaScan,
   type AdaCategory, type AdaFinding, type AdaPage, type AdaProgress, type AdaProgressEvent,
@@ -21,11 +24,12 @@ import {
 import {
   Accessibility, Globe, Lock, Unlock, Loader2, CheckCircle2, AlertTriangle, XCircle, Link2Off,
   ShieldCheck, FileSearch, Compass, ChevronDown, ChevronRight, Download, ExternalLink, Search,
-  Square, RotateCcw, Sparkles, ListChecks, Map as MapIcon, Bot, Info,
+  Square, RotateCcw, Sparkles, ListChecks, Map as MapIcon, Bot, Info, Eye, Copy, FileText, Table2,
+  MousePointerClick,
 } from 'lucide-react';
 
 type Screen = 'form' | 'scanning' | 'results';
-type Tab = 'overview' | 'accessibility' | 'links' | 'best-practice' | 'pages';
+type Tab = 'issues' | 'log' | 'pages';
 
 export interface BrownfieldHandoff { url: string; siteName?: string; username?: string; password?: string }
 
@@ -40,11 +44,18 @@ interface Props {
   embedded?: boolean;
 }
 
+const SEVERITIES: AdaSeverity[] = ['critical', 'serious', 'moderate', 'minor'];
 const SEV_STYLE: Record<AdaSeverity, string> = {
   critical: 'bg-red-100 text-red-700 border-red-200',
   serious: 'bg-orange-100 text-orange-700 border-orange-200',
   moderate: 'bg-amber-100 text-amber-700 border-amber-200',
   minor: 'bg-gray-100 text-gray-600 border-gray-200',
+};
+const SEV_DOT: Record<AdaSeverity, string> = {
+  critical: 'bg-red-500', serious: 'bg-orange-500', moderate: 'bg-amber-400', minor: 'bg-gray-400',
+};
+const CATEGORY_LABEL: Record<AdaCategory, string> = {
+  accessibility: 'Accessibility', links: 'Broken link', 'best-practice': 'Best practice', review: 'Needs review',
 };
 const GRADE_COLOR: Record<string, string> = {
   A: 'text-emerald-600', B: 'text-green-600', C: 'text-amber-600', D: 'text-orange-600', F: 'text-red-600',
@@ -74,7 +85,6 @@ function fmtDuration(ms: number): string {
   const s = Math.round(ms / 1000);
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 }
-
 /** Message from an axios/network error without reaching for `any`. */
 function errorMessage(err: unknown, fallback: string): string {
   const e = err as { response?: { status?: number; data?: { error?: string } }; message?: string } | undefined;
@@ -82,6 +92,17 @@ function errorMessage(err: unknown, fallback: string): string {
 }
 function errorStatus(err: unknown): number | undefined {
   return (err as { response?: { status?: number } } | undefined)?.response?.status;
+}
+function downloadBlob(content: string, filename: string, type: string) {
+  const blob = new Blob([content], { type });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+function safeName(s: string): string {
+  return (s || 'site').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'site';
 }
 
 export default function AdaCompliancePanel({ initialScanId, onBrownfield, onReset, embedded }: Props) {
@@ -107,8 +128,10 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
   const logRef = useRef<HTMLDivElement>(null);
   const [cancelling, setCancelling] = useState(false);
 
-  // ── results ──
-  const [tab, setTab] = useState<Tab>('overview');
+  // ── report ──
+  const [tab, setTab] = useState<Tab>('issues');
+  const [findings, setFindings] = useState<AdaFinding[]>([]);
+  const [findingsFor, setFindingsFor] = useState<string>('');
 
   const summary: AdaSummary | null = progress?.summary || scan?.result || null;
 
@@ -126,7 +149,7 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
         if (res.progress) {
           setProgress(res.progress);
           if (res.progress.events.length) {
-            setEvents((prev) => [...prev, ...res.progress!.events].slice(-600));
+            setEvents((prev) => [...prev, ...res.progress!.events].slice(-1500));
             lastSeq.current = res.progress.lastSeq;
           }
           if (res.progress.status !== 'running') { setScreen('results'); return; }
@@ -142,6 +165,17 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
     tick();
     return () => { stopped = true; if (timer) clearTimeout(timer); };
   }, [scanId, screen]);
+
+  /* ── load every finding once the report is open ── */
+  useEffect(() => {
+    if (screen !== 'results' || !scanId || !summary || findingsFor === scanId) return;
+    let alive = true;
+    getAdaFindings(scanId, { limit: 2000 })
+      .then((r) => { if (alive) setFindings(r.findings); })
+      .catch(() => { if (alive) setFindings([]); })
+      .finally(() => { if (alive) setFindingsFor(scanId); });
+    return () => { alive = false; };
+  }, [screen, scanId, summary, findingsFor]);
 
   useEffect(() => {
     if (screen === 'scanning' && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -160,11 +194,9 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
         checkExternalLinks: checkExternal,
       });
       lastSeq.current = 0;
-      setEvents([]);
-      setProgress(null);
-      setScan(null);
+      setEvents([]); setProgress(null); setScan(null); setFindings([]); setFindingsFor('');
       setScanId(res.scanId);
-      setTab('overview');
+      setTab('issues');
       setScreen('scanning');
     } catch (err: unknown) {
       setFormError(errorMessage(err, 'Could not start the audit.'));
@@ -181,7 +213,7 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
 
   const reset = () => {
     setScanId(null); setScan(null); setProgress(null); setEvents([]); lastSeq.current = 0;
-    setCancelling(false); setScreen('form'); onReset?.();
+    setFindings([]); setFindingsFor(''); setCancelling(false); setScreen('form'); onReset?.();
   };
 
   const brownfield = () => {
@@ -217,7 +249,7 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
             />
           </div>
           <p className="text-[11px] text-gray-400 mt-1.5">
-            That's all that's needed. IntelliQE opens the site in a browser, follows every menu and link, and checks each page it reaches.
+            That's all that's needed. IntelliQE opens the site in a browser, follows every menu and link, and checks each page it reaches. You can stop at any time and keep the report for the pages done so far.
           </p>
         </div>
 
@@ -273,24 +305,24 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
   if (screen === 'scanning') {
     const c = progress?.counters;
     const pct = c ? Math.min(100, Math.round((c.pages / Math.max(1, c.maxPages)) * 100)) : 0;
-    const phase = c?.linksFound && (c.linksChecked ?? 0) > 0 && c.pages >= c.maxPages ? 'links' : 'crawl';
+    const linkPhase = !!c && c.linksFound > 0 && c.linksChecked > 0;
     return (
       <div className={`${embedded ? 'max-w-2xl ml-11' : 'max-w-4xl'} bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden`}>
         <div className="px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-violet-50/60 to-indigo-50/40">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-xs text-gray-500 flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin text-violet-500" /> Auditing</p>
+              <p className="text-xs text-gray-500 flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin text-violet-500" /> {linkPhase ? 'Checking links' : 'Auditing pages'}</p>
               <p className="text-sm font-semibold text-gray-800 truncate">{scan?.target_url || url}</p>
               <p className="text-[11px] text-gray-500 mt-0.5 truncate">
                 {c?.currentUrl ? <>Now on <span className="font-mono text-gray-700">{shortUrl(c.currentUrl)}</span></> : 'Opening the site…'}
               </p>
             </div>
-            <button onClick={cancel} disabled={cancelling} className="flex-shrink-0 text-xs text-gray-500 hover:text-red-600 border border-gray-200 hover:border-red-200 rounded-lg px-2.5 py-1.5 flex items-center gap-1 transition-colors disabled:opacity-50">
-              <Square className="w-3 h-3" /> {cancelling ? 'Stopping…' : 'Stop'}
+            <button onClick={cancel} disabled={cancelling} className="flex-shrink-0 text-xs text-gray-600 hover:text-red-600 border border-gray-200 hover:border-red-200 bg-white rounded-lg px-2.5 py-1.5 flex items-center gap-1.5 transition-colors disabled:opacity-50" title="Stop now and keep the report for the pages audited so far">
+              <Square className="w-3 h-3 fill-current" /> {cancelling ? 'Stopping…' : 'Stop & report'}
             </button>
           </div>
           <div className="mt-3 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-            <div className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 transition-all duration-700" style={{ width: `${phase === 'links' ? 100 : pct}%` }} />
+            <div className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 transition-all duration-700" style={{ width: `${linkPhase ? 100 : pct}%` }} />
           </div>
           <div className="grid grid-cols-4 gap-2 mt-3">
             <Stat label="Pages visited" value={c ? `${c.pages}/${c.maxPages}` : '—'} />
@@ -301,24 +333,16 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
         </div>
         <div ref={logRef} className="h-72 overflow-y-auto px-4 py-3 space-y-1 bg-gray-50/50 font-mono text-[11px]">
           {events.length === 0 && <p className="text-gray-400">Starting the browser…</p>}
-          {events.map((e) => {
-            const Icon = EVENT_ICON[e.type] || Info;
-            return (
-              <div key={e.seq} className="flex gap-2 items-start">
-                <Icon className={`w-3.5 h-3.5 mt-[1px] flex-shrink-0 ${EVENT_COLOR[e.type] || 'text-gray-400'}`} />
-                <span className={`break-all ${e.type === 'warning' ? 'text-amber-700' : e.type === 'error' || e.type === 'link-check' ? 'text-red-700' : e.type === 'navigate' ? 'text-gray-700' : 'text-gray-600'}`}>{e.message}</span>
-              </div>
-            );
-          })}
+          {events.map((e) => <LogLine key={e.seq} e={e} />)}
         </div>
         <p className="px-5 py-2 text-[11px] text-gray-400 border-t border-gray-100">
-          {progress ? `${fmtDuration(progress.elapsedMs)} elapsed` : ''} · Every page is opened in a real browser and checked for accessibility, broken links and best practices. You can leave this open or come back — the audit keeps running.
+          {progress ? `${fmtDuration(progress.elapsedMs)} elapsed` : ''} · Every page is opened in a real browser and checked for accessibility, broken links and best practices. Stop at any point — the report covers whatever has been audited.
         </p>
       </div>
     );
   }
 
-  /* ═════════════════════════════ RESULTS ═════════════════════════════ */
+  /* ═════════════════════════════ REPORT ═════════════════════════════ */
   if (!summary) {
     return (
       <div className={`${embedded ? 'max-w-2xl ml-11' : 'max-w-4xl'} bg-white border border-gray-100 rounded-xl p-5 shadow-sm`}>
@@ -328,48 +352,54 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
             <p className="text-xs text-gray-600 mt-1">{scan.error || progress?.error || 'Unknown error'}</p>
           </>
         ) : (
-          <p className="text-sm text-gray-500 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading results…</p>
+          <p className="text-sm text-gray-500 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading report…</p>
         )}
         <button onClick={reset} className="mt-3 text-xs text-violet-600 hover:text-violet-800 flex items-center gap-1"><RotateCcw className="w-3 h-3" /> Start another audit</button>
       </div>
     );
   }
 
+  const partial = scan?.status === 'cancelled' || progress?.status === 'cancelled';
+  const logEvents = events.length ? events : (scan?.log || []);
+  const findingsLoading = findingsFor !== scanId;
+
   return (
-    <div className={`${embedded ? 'max-w-3xl ml-11' : 'max-w-5xl'} space-y-3`}>
-      <ReportHeader summary={summary} scan={scan} onReset={reset} onBrownfield={onBrownfield ? brownfield : undefined} />
+    <div className={`${embedded ? 'max-w-3xl ml-11' : 'max-w-6xl'} space-y-3`}>
+      <ReportHeader
+        summary={summary}
+        partial={partial}
+        findings={findings}
+        onReset={reset}
+        onBrownfield={onBrownfield ? brownfield : undefined}
+      />
       <div className="bg-white border border-gray-100 rounded-xl shadow-sm">
         <div className="flex gap-1 px-2 pt-2 border-b border-gray-100 overflow-x-auto">
           {([
-            ['overview', 'Overview', null],
-            ['accessibility', 'Accessibility', summary.categories.accessibility.violations],
-            ['links', 'Broken links', summary.categories.links.broken + summary.categories.links.serverErrors + summary.categories.links.timeouts],
-            ['best-practice', 'Best practices', summary.categories.bestPractice.failingRules.length],
-            ['pages', 'Pages', summary.pagesCrawled],
-          ] as [Tab, string, number | null][]).map(([key, label, count]) => (
+            ['issues', 'Issue summary', Accessibility],
+            ['log', 'Workflow log', ListChecks],
+            ['pages', 'Pages', Compass],
+          ] as [Tab, string, React.ElementType][]).map(([key, label, Icon]) => (
             <button
               key={key}
               onClick={() => setTab(key)}
               className={`px-3 py-2 text-xs font-medium rounded-t-lg border-b-2 -mb-px whitespace-nowrap flex items-center gap-1.5 transition-colors ${tab === key ? 'border-violet-500 text-violet-700 bg-violet-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
             >
-              {label}
-              {count !== null && <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${key !== 'pages' && count > 0 ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-500'}`}>{count}</span>}
+              <Icon className="w-3.5 h-3.5" /> {label}
+              {key === 'pages' && <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-gray-100 text-gray-500">{summary.pagesCrawled}</span>}
             </button>
           ))}
         </div>
-        <div className="p-4">
-          {tab === 'overview' && <Overview summary={summary} onTab={setTab} />}
-          {tab === 'accessibility' && scanId && <FindingsTable scanId={scanId} category="accessibility" summary={summary} />}
-          {tab === 'links' && <BrokenLinks summary={summary} />}
-          {tab === 'best-practice' && scanId && <BestPractices summary={summary} scanId={scanId} />}
-          {tab === 'pages' && scanId && <PagesTable scanId={scanId} />}
-        </div>
+        {tab === 'issues' && (findingsLoading
+          ? <p className="p-5 text-xs text-gray-400 flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading issues…</p>
+          : <IssueExplorer findings={findings} summary={summary} embedded={!!embedded} />)}
+        {tab === 'log' && <WorkflowLog events={logEvents} summary={summary} partial={partial} />}
+        {tab === 'pages' && scanId && <PagesTable scanId={scanId} />}
       </div>
     </div>
   );
 }
 
-/* ───────────────────────────── pieces ───────────────────────────── */
+/* ───────────────────────────── shared bits ───────────────────────────── */
 
 function Stat({ label, value, tone }: { label: string; value: string | number; tone?: 'warn' }) {
   return (
@@ -380,48 +410,76 @@ function Stat({ label, value, tone }: { label: string; value: string | number; t
   );
 }
 
-function ScoreRing({ score, grade, size = 96, label }: { score: number; grade: string; size?: number; label?: string }) {
-  const r = (size - 10) / 2;
-  const circ = 2 * Math.PI * r;
-  const dash = (score / 100) * circ;
+function LogLine({ e }: { e: AdaProgressEvent }) {
+  const Icon = EVENT_ICON[e.type] || Info;
   return (
-    <div className="flex flex-col items-center">
-      <svg width={size} height={size} className="-rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={r} stroke="#E5E7EB" strokeWidth="8" fill="none" />
-        <circle cx={size / 2} cy={size / 2} r={r} stroke={GRADE_RING[grade]} strokeWidth="8" fill="none" strokeLinecap="round" strokeDasharray={`${dash} ${circ - dash}`} />
-      </svg>
-      <div className="-mt-[calc(50%+14px)] text-center" style={{ marginTop: -(size / 2 + 14) }}>
-        <p className={`font-bold leading-none ${GRADE_COLOR[grade]}`} style={{ fontSize: size / 3.2 }}>{score}</p>
-        <p className="text-[10px] text-gray-400 mt-0.5">{grade}</p>
-      </div>
-      {label && <p className="text-[11px] text-gray-600 font-medium mt-[calc(50%-8px)]" style={{ marginTop: size / 2 - 6 }}>{label}</p>}
+    <div className="flex gap-2 items-start">
+      <Icon className={`w-3.5 h-3.5 mt-[1px] flex-shrink-0 ${EVENT_COLOR[e.type] || 'text-gray-400'}`} />
+      <span className={`break-all ${e.type === 'warning' ? 'text-amber-700' : e.type === 'error' || e.type === 'link-check' ? 'text-red-700' : e.type === 'navigate' ? 'text-gray-700' : 'text-gray-600'}`}>{e.message}</span>
     </div>
   );
 }
 
-function ReportHeader({ summary, scan, onReset, onBrownfield }: { summary: AdaSummary; scan: AdaScanRecord | null; onReset: () => void; onBrownfield?: () => void }) {
-  const brokenTotal = summary.categories.links.broken + summary.categories.links.serverErrors + summary.categories.links.timeouts;
-  const download = () => {
-    const html = buildHtmlReport(summary);
-    const blob = new Blob([html], { type: 'text/html' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `website-audit-${(summary.siteName || 'site').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.html`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+function ScoreRing({ score, grade, size = 84 }: { score: number; grade: string; size?: number }) {
+  const r = (size - 10) / 2;
+  const circ = 2 * Math.PI * r;
+  const dash = (score / 100) * circ;
+  return (
+    <div className="relative flex-shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="-rotate-90">
+        <circle cx={size / 2} cy={size / 2} r={r} stroke="#E5E7EB" strokeWidth="8" fill="none" />
+        <circle cx={size / 2} cy={size / 2} r={r} stroke={GRADE_RING[grade]} strokeWidth="8" fill="none" strokeLinecap="round" strokeDasharray={`${dash} ${circ - dash}`} />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <p className={`font-bold leading-none ${GRADE_COLOR[grade]}`} style={{ fontSize: size / 3.2 }}>{score}</p>
+        <p className="text-[10px] text-gray-400 mt-0.5">Health · {grade}</p>
+      </div>
+    </div>
+  );
+}
+
+function SevChip({ s, count, active, onClick }: { s: AdaSeverity; count: number; active?: boolean; onClick?: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full border text-[11px] font-medium transition-all ${active ? 'ring-2 ring-violet-400 ring-offset-1' : ''} ${SEV_STYLE[s]} ${onClick ? 'hover:brightness-95' : ''}`}
+    >
+      <span className={`w-2 h-2 rounded-full ${SEV_DOT[s]}`} /> {count} {s.charAt(0).toUpperCase() + s.slice(1)}
+    </button>
+  );
+}
+
+/* ───────────────────────────── report header ───────────────────────────── */
+
+function ReportHeader({ summary, partial, findings, onReset, onBrownfield }: {
+  summary: AdaSummary; partial: boolean; findings: AdaFinding[]; onReset: () => void; onBrownfield?: () => void;
+}) {
+  const [menu, setMenu] = useState(false);
+  const a = summary.categories.accessibility;
+  const l = summary.categories.links;
+  const brokenTotal = l.broken + l.serverErrors + l.timeouts;
+  const dl = (kind: 'html' | 'csv') => {
+    setMenu(false);
+    const base = `website-audit-${safeName(summary.siteName)}-${summary.finishedAt.slice(0, 10)}`;
+    if (kind === 'html') downloadBlob(buildHtmlReport(summary, partial, findings), `${base}.html`, 'text/html');
+    else downloadBlob(buildCsv(findings), `${base}-issues.csv`, 'text/csv');
   };
   return (
-    <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-5">
-      <div className="flex flex-wrap items-start gap-5">
-        <ScoreRing score={summary.overall.score} grade={summary.overall.grade} size={108} />
+    <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-4">
+      <div className="flex flex-wrap items-center gap-4">
+        <ScoreRing score={summary.overall.score} grade={summary.overall.grade} />
         <div className="flex-1 min-w-[220px]">
-          <p className="text-[11px] uppercase tracking-wide text-gray-400">Website health report</p>
-          <p className="text-base font-semibold text-gray-800 leading-tight">{summary.siteName || summary.targetUrl}</p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="text-[11px] uppercase tracking-wide text-gray-400">Website audit report</p>
+            {partial
+              ? <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-semibold">STOPPED EARLY — PARTIAL</span>
+              : <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold">COMPLETE</span>}
+            <span className="px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200 text-[10px] font-semibold">WCAG 2.2 AA</span>
+          </div>
+          <p className="text-base font-semibold text-gray-800 leading-tight mt-0.5">{summary.siteName || summary.targetUrl}</p>
           <a href={summary.targetUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-violet-600 hover:underline inline-flex items-center gap-1 break-all">{summary.targetUrl} <ExternalLink className="w-3 h-3" /></a>
-          <p className={`text-sm font-medium mt-2 ${GRADE_COLOR[summary.overall.grade]}`}>{summary.overall.label}</p>
           <p className="text-xs text-gray-500 mt-1">
-            {summary.pagesCrawled} pages visited · {summary.linksChecked} links checked · {summary.categories.accessibility.violations} accessibility violations · {brokenTotal} broken links · {fmtDuration(summary.durationMs)}
-            {scan?.status === 'cancelled' && <span className="ml-1 text-amber-600">(stopped early — partial results)</span>}
+            {summary.pagesCrawled} page{summary.pagesCrawled === 1 ? '' : 's'} audited · {summary.linksChecked} links checked · {a.violations} accessibility violation{a.violations === 1 ? '' : 's'} · {brokenTotal} broken link{brokenTotal === 1 ? '' : 's'} · {summary.categories.bestPractice.failingRules.length} best-practice checks failing · {fmtDuration(summary.durationMs)}
           </p>
           {summary.loginAttempted && (
             <p className="text-[11px] text-gray-500 mt-1 flex items-center gap-1">
@@ -430,14 +488,24 @@ function ReportHeader({ summary, scan, onReset, onBrownfield }: { summary: AdaSu
             </p>
           )}
         </div>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-3 gap-2">
           <MiniScore label="Accessibility" cat={summary.categories.accessibility} Icon={Accessibility} />
           <MiniScore label="Links" cat={summary.categories.links} Icon={Link2Off} />
-          <MiniScore label="Best practices" cat={summary.categories.bestPractice} Icon={ShieldCheck} />
+          <MiniScore label="Practices" cat={summary.categories.bestPractice} Icon={ShieldCheck} />
         </div>
       </div>
-      <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-gray-100">
-        <button onClick={download} className="text-xs px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg flex items-center gap-1.5 transition-colors"><Download className="w-3.5 h-3.5" /> Download report</button>
+      <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-gray-100 relative">
+        <div className="relative">
+          <button onClick={() => setMenu((v) => !v)} className="text-xs px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg flex items-center gap-1.5 transition-colors">
+            <Download className="w-3.5 h-3.5" /> Download report <ChevronDown className="w-3 h-3" />
+          </button>
+          {menu && (
+            <div className="absolute z-10 mt-1 w-56 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+              <button onClick={() => dl('html')} className="w-full text-left px-3 py-2 text-xs hover:bg-violet-50 flex items-center gap-2"><FileText className="w-3.5 h-3.5 text-violet-500" /> Full report (HTML)</button>
+              <button onClick={() => dl('csv')} className="w-full text-left px-3 py-2 text-xs hover:bg-violet-50 flex items-center gap-2"><Table2 className="w-3.5 h-3.5 text-emerald-600" /> All issues (CSV / Excel)</button>
+            </div>
+          )}
+        </div>
         {onBrownfield && (
           <button onClick={onBrownfield} className="text-xs px-3 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-lg flex items-center gap-1.5 transition-all">
             <Bot className="w-3.5 h-3.5" /> Rebuild requirements &amp; generate test cases from this site
@@ -451,303 +519,330 @@ function ReportHeader({ summary, scan, onReset, onBrownfield }: { summary: AdaSu
 
 function MiniScore({ label, cat, Icon }: { label: string; cat: { score: number; grade: string }; Icon: React.ElementType }) {
   return (
-    <div className="text-center bg-gray-50/70 border border-gray-100 rounded-lg px-3 py-2 min-w-[92px]">
+    <div className="text-center bg-gray-50/70 border border-gray-100 rounded-lg px-3 py-2 min-w-[84px]">
       <Icon className="w-4 h-4 text-gray-400 mx-auto" />
-      <p className={`text-xl font-bold leading-tight ${GRADE_COLOR[cat.grade]}`}>{cat.score}</p>
+      <p className={`text-lg font-bold leading-tight ${GRADE_COLOR[cat.grade]}`}>{cat.score}</p>
       <p className="text-[10px] text-gray-500">{label}</p>
     </div>
   );
 }
 
-function Overview({ summary, onTab }: { summary: AdaSummary; onTab: (t: Tab) => void }) {
-  const a = summary.categories.accessibility;
-  const l = summary.categories.links;
-  const b = summary.categories.bestPractice;
-  const brokenTotal = l.broken + l.serverErrors + l.timeouts;
-  return (
-    <div className="space-y-4">
-      <div className="grid sm:grid-cols-3 gap-3">
-        <Card title="Accessibility (WCAG 2.2 AA)" Icon={Accessibility} onClick={() => onTab('accessibility')}>
-          <p className="text-2xl font-bold text-gray-800">{a.violations} <span className="text-xs font-normal text-gray-500">violations</span></p>
-          <div className="flex flex-wrap gap-1 mt-1.5">
-            {(['critical', 'serious', 'moderate', 'minor'] as AdaSeverity[]).map((s) => (
-              <span key={s} className={`px-1.5 py-0.5 rounded border text-[10px] font-medium ${SEV_STYLE[s]}`}>{a.bySeverity[s]} {s}</span>
-            ))}
-          </div>
-        </Card>
-        <Card title="Links" Icon={Link2Off} onClick={() => onTab('links')}>
-          <p className="text-2xl font-bold text-gray-800">{brokenTotal} <span className="text-xs font-normal text-gray-500">broken of {l.checked}</span></p>
-          <p className="text-[11px] text-gray-500 mt-1.5">{l.broken} not found · {l.serverErrors} server errors · {l.timeouts} unreachable · {l.redirects} redirects</p>
-        </Card>
-        <Card title="Best practices" Icon={ShieldCheck} onClick={() => onTab('best-practice')}>
-          <p className="text-2xl font-bold text-gray-800">{b.failingRules.length} <span className="text-xs font-normal text-gray-500">of {b.rulesEvaluated} checks failing</span></p>
-          <p className="text-[11px] text-gray-500 mt-1.5 truncate">{b.failingRules.slice(0, 3).map((r) => r.title).join(' · ') || 'All checks pass'}</p>
-        </Card>
-      </div>
+/* ───────────────────────────── issue explorer ───────────────────────────── */
 
-      <div className="grid md:grid-cols-2 gap-4">
-        <div>
-          <p className="text-xs font-semibold text-gray-700 mb-2">Top accessibility issues</p>
-          {a.topRules.length === 0 ? <p className="text-xs text-gray-400">No violations found.</p> : (
-            <ul className="space-y-1.5">
-              {a.topRules.slice(0, 6).map((r) => (
-                <li key={r.ruleId} className="flex items-start gap-2 text-xs">
-                  <span className={`px-1.5 py-0.5 rounded border text-[10px] font-medium flex-shrink-0 ${SEV_STYLE[r.severity]}`}>{r.severity}</span>
-                  <span className="text-gray-700 flex-1">
-                    {r.title}
-                    <span className="text-gray-400"> — {r.pages} page{r.pages === 1 ? '' : 's'}, {r.occurrences} element{r.occurrences === 1 ? '' : 's'}{r.wcag ? ` · WCAG ${r.wcag}` : ''}</span>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        <div>
-          <p className="text-xs font-semibold text-gray-700 mb-2">Pages needing the most attention</p>
-          <ul className="space-y-1.5">
-            {summary.worstPages.slice(0, 6).map((p) => (
-              <li key={p.url} className="text-xs flex items-center gap-2">
-                <span className={`font-mono text-[10px] w-8 text-right ${p.a11yScore < 70 ? 'text-red-600' : p.a11yScore < 90 ? 'text-amber-600' : 'text-emerald-600'}`}>{p.a11yScore}</span>
-                <span className="truncate text-gray-700" title={p.url}>{p.title || shortUrl(p.url)}</span>
-                <span className="text-gray-400 flex-shrink-0">{p.findings} issues</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
-
-      {summary.notes.length > 0 && (
-        <div className="text-[11px] text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 space-y-0.5">
-          {summary.notes.map((n, i) => <p key={i} className="flex gap-1.5"><Info className="w-3 h-3 mt-[2px] flex-shrink-0 text-gray-400" />{n}</p>)}
-        </div>
-      )}
-    </div>
-  );
+interface IssueGroup {
+  key: string;
+  category: AdaCategory;
+  ruleId: string;
+  title: string;
+  severity: AdaSeverity;
+  wcag?: string | null;
+  helpUrl?: string | null;
+  rows: AdaFinding[];
+  occurrences: number;
+  pages: number;
 }
 
-function Card({ title, Icon, children, onClick }: { title: string; Icon: React.ElementType; children: React.ReactNode; onClick?: () => void }) {
-  return (
-    <button onClick={onClick} className="text-left bg-gray-50/70 hover:bg-violet-50/40 border border-gray-100 hover:border-violet-200 rounded-lg p-3 transition-colors">
-      <p className="text-[11px] font-medium text-gray-500 flex items-center gap-1.5 mb-1"><Icon className="w-3.5 h-3.5" /> {title}</p>
-      {children}
-    </button>
-  );
-}
+const SEV_ORDER: Record<AdaSeverity, number> = { critical: 0, serious: 1, moderate: 2, minor: 3 };
 
-function FindingsTable({ scanId, category, summary }: { scanId: string; category: AdaCategory; summary: AdaSummary }) {
-  const [severity, setSeverity] = useState<AdaSeverity | ''>('');
+function IssueExplorer({ findings, summary, embedded }: { findings: AdaFinding[]; summary: AdaSummary; embedded: boolean }) {
+  const [sev, setSev] = useState<AdaSeverity | ''>('');
+  const [cat, setCat] = useState<AdaCategory | 'all'>('all');
   const [q, setQ] = useState('');
-  const [rows, setRows] = useState<AdaFinding[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loadedKey, setLoadedKey] = useState('');
-  const [open, setOpen] = useState<string | null>(null);
-  const key = `${scanId}|${category}|${severity}|${q}`;
-  const loading = loadedKey !== key;
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<AdaFinding | null>(null);
 
-  useEffect(() => {
-    let alive = true;
-    getAdaFindings(scanId, { category, severity, q, limit: 300 })
-      .then((r) => { if (alive) { setRows(r.findings); setTotal(r.total); } })
-      .catch(() => { if (alive) { setRows([]); setTotal(0); } })
-      .finally(() => { if (alive) setLoadedKey(key); });
-    return () => { alive = false; };
-  }, [scanId, category, severity, q, key]);
+  // Totals are over the whole report, not the current filter, so the summary
+  // pane always reads the same regardless of what the user is looking at.
+  const totals = useMemo(() => {
+    const issues = findings.filter((f) => f.category !== 'review');
+    const bySeverity: Record<AdaSeverity, number> = { critical: 0, serious: 0, moderate: 0, minor: 0 };
+    for (const f of issues) bySeverity[f.severity] += f.occurrences;
+    const byCat: Record<AdaCategory, number> = { accessibility: 0, links: 0, 'best-practice': 0, review: 0 };
+    for (const f of findings) byCat[f.category] += f.occurrences;
+    return {
+      issues: issues.reduce((a, f) => a + f.occurrences, 0),
+      review: byCat.review,
+      pages: new Set(issues.map((f) => f.page_url)).size,
+      components: new Set(findings.filter((f) => f.element).map((f) => f.element)).size,
+      bySeverity, byCat,
+    };
+  }, [findings]);
 
-  const grouped = useMemo(() => {
-    const m = new Map<string, AdaFinding[]>();
-    for (const f of rows) { const k = f.rule_id; if (!m.has(k)) m.set(k, []); m.get(k)!.push(f); }
-    return [...m.entries()];
-  }, [rows]);
+  const groups = useMemo<IssueGroup[]>(() => {
+    const needle = q.trim().toLowerCase();
+    const filtered = findings.filter((f) =>
+      (cat === 'all' ? f.category !== 'review' : f.category === cat)
+      && (!sev || f.severity === sev)
+      && (!needle || [f.title, f.rule_id, f.page_url, f.element, f.description].some((s) => (s || '').toLowerCase().includes(needle))));
+    const m = new Map<string, IssueGroup>();
+    for (const f of filtered) {
+      const key = `${f.category}|${f.rule_id}`;
+      const g = m.get(key) || { key, category: f.category, ruleId: f.rule_id, title: f.title, severity: f.severity, wcag: f.wcag, helpUrl: f.help_url, rows: [], occurrences: 0, pages: 0 };
+      g.rows.push(f);
+      g.occurrences += f.occurrences;
+      m.set(key, g);
+    }
+    for (const g of m.values()) g.pages = new Set(g.rows.map((r) => r.page_url)).size;
+    return [...m.values()].sort((x, y) => SEV_ORDER[x.severity] - SEV_ORDER[y.severity] || y.occurrences - x.occurrences);
+  }, [findings, cat, sev, q]);
 
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap gap-2 items-center">
-        <select value={severity} onChange={(e) => setSeverity(e.target.value as AdaSeverity | '')} className={inputCls + ' !w-auto !py-1.5 text-xs'}>
-          <option value="">All severities</option>
-          {(['critical', 'serious', 'moderate', 'minor'] as AdaSeverity[]).map((s) => <option key={s} value={s}>{s} ({summary.categories.accessibility.bySeverity[s]})</option>)}
-        </select>
-        <div className="relative flex-1 min-w-[160px]">
-          <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by rule, page or element" className={inputCls + ' !py-1.5 pl-8 text-xs'} />
+  const shown = groups.reduce((a, g) => a + g.occurrences, 0);
+  const shownPages = new Set(groups.flatMap((g) => g.rows.map((r) => r.page_url))).size;
+  const toggle = (key: string) => setOpen((prev) => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
+
+  const summaryPane = (
+    <div className={`${embedded ? 'grid grid-cols-2 gap-3' : 'space-y-4'}`}>
+      <div>
+        <p className="text-4xl font-bold text-gray-800 leading-none">{totals.issues}</p>
+        <p className="text-xs text-gray-600 mt-1">Issues in {totals.pages} page{totals.pages === 1 ? '' : 's'} and {totals.components} component{totals.components === 1 ? '' : 's'}</p>
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          <span className="px-2 py-0.5 rounded border border-gray-200 text-[10px] text-gray-600 font-medium">WCAG 2.2 AA</span>
+          <span className={`px-2 py-0.5 rounded border border-gray-200 text-[10px] font-medium ${GRADE_COLOR[summary.overall.grade]}`}>Health {summary.overall.score}/100</span>
         </div>
-        <span className="text-[11px] text-gray-400">{total} finding{total === 1 ? '' : 's'}</span>
       </div>
-      {loading ? <p className="text-xs text-gray-400 flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</p> : grouped.length === 0 ? (
-        <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2 flex items-center gap-2"><CheckCircle2 className="w-4 h-4" /> No accessibility violations match.</p>
-      ) : (
-        <div className="space-y-2">
-          {grouped.map(([ruleId, list]) => {
-            const first = list[0];
-            const pages = new Set(list.map((f) => f.page_url)).size;
-            const occ = list.reduce((a, f) => a + f.occurrences, 0);
-            const isOpen = open === ruleId;
-            return (
-              <div key={ruleId} className="border border-gray-100 rounded-lg overflow-hidden">
-                <button onClick={() => setOpen(isOpen ? null : ruleId)} className="w-full text-left px-3 py-2.5 flex items-start gap-2 hover:bg-gray-50">
-                  {isOpen ? <ChevronDown className="w-3.5 h-3.5 mt-0.5 text-gray-400 flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 mt-0.5 text-gray-400 flex-shrink-0" />}
-                  <span className={`px-1.5 py-0.5 rounded border text-[10px] font-medium flex-shrink-0 ${SEV_STYLE[first.severity]}`}>{first.severity}</span>
-                  <span className="flex-1 min-w-0">
-                    <span className="text-xs font-medium text-gray-800">{first.title}</span>
-                    <span className="block text-[11px] text-gray-500">{pages} page{pages === 1 ? '' : 's'} · {occ} element{occ === 1 ? '' : 's'}{first.wcag ? ` · WCAG ${first.wcag}` : ''} · <span className="font-mono">{ruleId}</span></span>
-                  </span>
-                  {first.help_url && <a href={first.help_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-[11px] text-violet-600 hover:underline flex items-center gap-1 flex-shrink-0">How to fix <ExternalLink className="w-3 h-3" /></a>}
-                </button>
-                {isOpen && (
-                  <div className="border-t border-gray-100 bg-gray-50/60 px-3 py-2 space-y-2">
-                    {first.description && <p className="text-[11px] text-gray-600">{first.description}</p>}
-                    {list.slice(0, 40).map((f) => (
-                      <div key={f.id} className="text-[11px] bg-white border border-gray-100 rounded px-2.5 py-2">
-                        <p className="text-gray-500 truncate" title={f.page_url}><Compass className="w-3 h-3 inline mr-1 text-gray-400" />{shortUrl(f.page_url)}{f.occurrences > 1 ? ` · ${f.occurrences} occurrences` : ''}</p>
-                        {f.element && <p className="font-mono text-violet-700 break-all mt-0.5">{f.element}</p>}
-                        {f.html_snippet && <pre className="font-mono text-gray-600 bg-gray-50 rounded px-2 py-1 mt-1 whitespace-pre-wrap break-all max-h-24 overflow-auto">{f.html_snippet}</pre>}
-                        {typeof f.details?.failureSummary === 'string' && <p className="text-gray-600 mt-1 whitespace-pre-line">{f.details.failureSummary}</p>}
-                      </div>
-                    ))}
-                    {list.length > 40 && <p className="text-[11px] text-gray-400">…and {list.length - 40} more</p>}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+      <div>
+        <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Severity breakdown</p>
+        <div className="flex flex-wrap gap-1.5">
+          {SEVERITIES.map((s) => <SevChip key={s} s={s} count={totals.bySeverity[s]} active={sev === s} onClick={() => setSev(sev === s ? '' : s)} />)}
         </div>
-      )}
-    </div>
-  );
-}
-
-function BrokenLinks({ summary }: { summary: AdaSummary }) {
-  const l = summary.categories.links;
-  const [filter, setFilter] = useState<'all' | 'internal' | 'external'>('all');
-  const rows = l.brokenLinks.filter((x) => filter === 'all' || (filter === 'internal' ? !x.external : x.external));
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-3 text-xs">
-        <span className="text-gray-600">{l.checked} links checked · <span className="text-emerald-600">{l.ok} OK</span> · <span className="text-gray-500">{l.redirects} redirects</span> · <span className="text-red-600">{l.broken + l.serverErrors + l.timeouts} broken</span>{l.blocked > 0 && <> · <span className="text-gray-400">{l.blocked} could not be verified</span></>}</span>
-        <div className="flex gap-1 ml-auto">
-          {(['all', 'internal', 'external'] as const).map((f) => (
-            <button key={f} onClick={() => setFilter(f)} className={`px-2 py-1 rounded text-[11px] ${filter === f ? 'bg-violet-100 text-violet-700' : 'text-gray-500 hover:bg-gray-100'}`}>{f}</button>
+      </div>
+      <div>
+        <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Category</p>
+        <div className="flex flex-wrap gap-1.5">
+          {([['all', 'All issues', totals.issues], ['accessibility', 'Accessibility', totals.byCat.accessibility], ['links', 'Broken links', totals.byCat.links], ['best-practice', 'Best practices', totals.byCat['best-practice']]] as [AdaCategory | 'all', string, number][]).map(([k, label, n]) => (
+            <button key={k} onClick={() => setCat(k)} className={`px-2 py-1 rounded-full border text-[11px] font-medium transition-colors ${cat === k ? 'bg-violet-600 border-violet-600 text-white' : 'bg-white border-gray-200 text-gray-600 hover:border-violet-300'}`}>{label} <span className={cat === k ? 'text-violet-100' : 'text-gray-400'}>{n}</span></button>
           ))}
         </div>
       </div>
-      {rows.length === 0 ? (
-        <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2 flex items-center gap-2"><CheckCircle2 className="w-4 h-4" /> No broken links found.</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-left text-[11px] text-gray-400 border-b border-gray-100">
-                <th className="py-1.5 pr-3 font-medium">Status</th>
-                <th className="py-1.5 pr-3 font-medium">Link</th>
-                <th className="py-1.5 pr-3 font-medium">Found on</th>
-                <th className="py-1.5 font-medium">Type</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.url} className="border-b border-gray-50 align-top">
-                  <td className="py-2 pr-3"><span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono font-medium ${r.kind === 'server-error' ? SEV_STYLE.critical : r.kind === 'broken' ? SEV_STYLE.serious : SEV_STYLE.moderate}`}>{r.status ?? r.kind}</span></td>
-                  <td className="py-2 pr-3 max-w-[320px]">
-                    <a href={r.url} target="_blank" rel="noopener noreferrer" className="text-violet-700 hover:underline break-all">{r.url}</a>
-                    {r.linkText && <p className="text-gray-400">"{r.linkText}"</p>}
-                    {r.error && <p className="text-gray-400">{r.error}</p>}
-                  </td>
-                  <td className="py-2 pr-3 max-w-[240px] text-gray-600">
-                    {r.referrers.slice(0, 3).map((ref) => <p key={ref} className="truncate" title={ref}>{shortUrl(ref)}</p>)}
-                    {r.referrers.length > 3 && <p className="text-gray-400">+{r.referrers.length - 3} more</p>}
-                  </td>
-                  <td className="py-2 text-gray-500">{r.external ? 'external' : 'internal'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <div className={`rounded-lg border px-3 py-2 ${totals.review > 0 ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-100'} ${embedded ? 'col-span-2' : ''}`}>
+        <p className="text-xs text-gray-700 flex items-center gap-1.5"><Eye className={`w-3.5 h-3.5 ${totals.review > 0 ? 'text-amber-500' : 'text-gray-400'}`} /> {totals.review} issue{totals.review === 1 ? '' : 's'} need review</p>
+        <p className="text-[10px] text-gray-500 mt-0.5">Checks the scanner could not settle by itself — a person has to confirm.</p>
+        {totals.review > 0 && <button onClick={() => { setCat('review'); setSev(''); }} className={`text-[11px] font-medium mt-1 ${cat === 'review' ? 'text-violet-700' : 'text-amber-700 hover:underline'}`}>Review all →</button>}
+      </div>
+    </div>
+  );
+
+  const listPane = (
+    <div className="flex flex-col min-h-0">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-100">
+        <p className="text-xs text-gray-600 whitespace-nowrap">Showing <span className="font-semibold text-gray-800">{shown}</span> {cat === 'review' ? 'items to review' : 'issues'} in {shownPages} page{shownPages === 1 ? '' : 's'}</p>
+        <div className="relative flex-1 min-w-[120px]">
+          <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter issues" className={inputCls + ' !py-1.5 pl-8 text-xs'} />
         </div>
+      </div>
+      <div className={`${embedded ? 'max-h-[420px]' : 'max-h-[560px]'} overflow-y-auto divide-y divide-gray-100`}>
+        {groups.length === 0 && (
+          <p className="px-4 py-6 text-xs text-emerald-700 flex items-center gap-2"><CheckCircle2 className="w-4 h-4" /> Nothing matches — {findings.length === 0 ? 'no issues were found.' : 'try clearing a filter.'}</p>
+        )}
+        {groups.map((g) => {
+          const isOpen = open.has(g.key);
+          return (
+            <div key={g.key}>
+              <button onClick={() => toggle(g.key)} className={`w-full text-left px-3 py-2.5 flex items-center gap-2 hover:bg-gray-50 ${isOpen ? 'bg-violet-50/40' : ''}`}>
+                <span className="flex-1 min-w-0">
+                  <span className="text-xs text-gray-800">{g.title} <span className="font-semibold">({g.occurrences})</span></span>
+                  <span className="block text-[10px] text-gray-400">{CATEGORY_LABEL[g.category]} · {g.pages} page{g.pages === 1 ? '' : 's'}{g.wcag ? ` · WCAG ${g.wcag}` : ''}</span>
+                </span>
+                <span className={`px-2 py-0.5 rounded border text-[10px] font-medium flex-shrink-0 ${SEV_STYLE[g.severity]}`}>{g.severity.charAt(0).toUpperCase() + g.severity.slice(1)}</span>
+                {isOpen ? <ChevronDown className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />}
+              </button>
+              {isOpen && (
+                <div className="bg-gray-50/70 border-t border-gray-100">
+                  {g.rows.slice(0, 80).map((f) => {
+                    const active = selected?.id === f.id;
+                    return (
+                      <button key={f.id} onClick={() => setSelected(f)} className={`w-full text-left px-4 py-1.5 pl-6 flex items-start gap-2 text-[11px] border-l-2 ${active ? 'border-violet-500 bg-violet-50' : 'border-transparent hover:bg-white'}`}>
+                        <MousePointerClick className={`w-3 h-3 mt-[2px] flex-shrink-0 ${active ? 'text-violet-500' : 'text-gray-300'}`} />
+                        <span className="min-w-0">
+                          <span className="block text-gray-700 truncate">{g.category === 'links' ? String(f.details?.link || f.element || '') : shortUrl(f.page_url)}</span>
+                          <span className="block text-gray-400 font-mono truncate">{g.category === 'links' ? `on ${shortUrl(f.page_url)}` : (f.element || f.description || '')}</span>
+                        </span>
+                        {f.occurrences > 1 && <span className="ml-auto text-gray-400 flex-shrink-0">×{f.occurrences}</span>}
+                      </button>
+                    );
+                  })}
+                  {g.rows.length > 80 && <p className="px-6 py-1.5 text-[11px] text-gray-400">…and {g.rows.length - 80} more instances (all included in the CSV).</p>}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  const detailPane = <IssueDetail finding={selected} />;
+
+  if (embedded) {
+    return (
+      <div className="p-4 space-y-3">
+        {summaryPane}
+        <div className="border border-gray-100 rounded-lg overflow-hidden">{listPane}</div>
+        <div className="border border-gray-100 rounded-lg">{detailPane}</div>
+      </div>
+    );
+  }
+  // Three panes side by side on wide screens; the detail pane drops below the
+  // list on laptops so the issue list is never squeezed to a sliver.
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[240px_minmax(0,1fr)_340px] lg:divide-x divide-gray-100">
+      <div className="p-4 border-b lg:border-b-0 border-gray-100">{summaryPane}</div>
+      <div className="min-w-0">{listPane}</div>
+      <div className="min-h-[220px] lg:col-span-2 xl:col-span-1 border-t xl:border-t-0 border-gray-100">{detailPane}</div>
+    </div>
+  );
+}
+
+function IssueDetail({ finding }: { finding: AdaFinding | null }) {
+  const [copied, setCopied] = useState(false);
+  if (!finding) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center text-center p-6 text-gray-400">
+        <MousePointerClick className="w-8 h-8 mb-2 text-gray-300" />
+        <p className="text-xs">Select an issue to view details</p>
+        <p className="text-[10px] mt-1">Expand a rule on the left, then pick an instance.</p>
+      </div>
+    );
+  }
+  const d = finding.details || {};
+  const isLink = finding.category === 'links';
+  const copy = (text: string) => { navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); };
+  return (
+    <div className="p-4 space-y-3 text-xs">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className={`px-2 py-0.5 rounded border text-[10px] font-medium ${SEV_STYLE[finding.severity]}`}>{finding.severity}</span>
+        <span className="px-2 py-0.5 rounded border border-gray-200 text-[10px] text-gray-600">{CATEGORY_LABEL[finding.category]}</span>
+        {finding.wcag && <span className="px-2 py-0.5 rounded border border-violet-200 bg-violet-50 text-[10px] text-violet-700">WCAG {finding.wcag}</span>}
+      </div>
+      <p className="text-sm font-semibold text-gray-800 leading-snug">{finding.title}</p>
+      {finding.description && <p className="text-gray-600">{finding.description}</p>}
+      {finding.category === 'review' && (
+        <p className="text-amber-700 bg-amber-50 border border-amber-100 rounded px-2.5 py-1.5 text-[11px]">The scanner could not decide this one automatically. Open the page and confirm whether it is a real problem.</p>
       )}
-      {l.blocked > 0 && (
-        <details className="text-[11px] text-gray-500">
-          <summary className="cursor-pointer hover:text-gray-700">{l.blocked} link{l.blocked === 1 ? '' : 's'} could not be verified — the destination blocks automated checks (HTTP 401/403/429). They are not counted as broken.</summary>
-          <ul className="mt-1.5 space-y-0.5 pl-4 list-disc">
-            {l.blockedLinks.map((x) => <li key={x.url} className="break-all"><span className="font-mono text-gray-400">{x.status}</span> {x.url}</li>)}
-          </ul>
-        </details>
+      {finding.help_url && <a href={finding.help_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-violet-600 hover:underline">How to fix this <ExternalLink className="w-3 h-3" /></a>}
+
+      <Field label={isLink ? 'Found on page' : 'Page'}>
+        <a href={finding.page_url} target="_blank" rel="noopener noreferrer" className="text-violet-700 hover:underline break-all inline-flex items-center gap-1">{finding.page_url} <ExternalLink className="w-3 h-3 flex-shrink-0" /></a>
+      </Field>
+      {isLink && (
+        <>
+          <Field label="Link">
+            <a href={String(d.link || finding.element || '')} target="_blank" rel="noopener noreferrer" className="text-violet-700 hover:underline break-all">{String(d.link || finding.element || '')}</a>
+            {typeof d.linkText === 'string' && d.linkText && <p className="text-gray-500 mt-0.5">Link text: "{d.linkText}"</p>}
+          </Field>
+          <Field label="Response">
+            <span className="font-mono">{d.status ? `HTTP ${String(d.status)}` : String(finding.rule_id)}</span>
+            {typeof d.finalUrl === 'string' && d.finalUrl && <p className="text-gray-500 break-all mt-0.5">Redirected to {d.finalUrl}</p>}
+          </Field>
+          {Array.isArray(d.referrers) && d.referrers.length > 1 && (
+            <Field label={`Also referenced from ${d.referrers.length - 1} other page${d.referrers.length - 1 === 1 ? '' : 's'}`}>
+              {(d.referrers as string[]).slice(1, 8).map((r) => <p key={r} className="text-gray-600 truncate" title={r}>{shortUrl(r)}</p>)}
+            </Field>
+          )}
+        </>
+      )}
+      {!isLink && finding.element && (
+        <Field label="Element" action={<button onClick={() => copy(finding.element!)} className="text-[10px] text-gray-400 hover:text-violet-600 flex items-center gap-1"><Copy className="w-3 h-3" /> {copied ? 'Copied' : 'Copy selector'}</button>}>
+          <code className="block font-mono text-[11px] text-violet-700 bg-violet-50/60 rounded px-2 py-1 break-all">{finding.element}</code>
+        </Field>
+      )}
+      {finding.html_snippet && (
+        <Field label="HTML">
+          <pre className="font-mono text-[10.5px] text-gray-700 bg-gray-50 border border-gray-100 rounded px-2 py-1.5 whitespace-pre-wrap break-all max-h-40 overflow-auto">{finding.html_snippet}</pre>
+        </Field>
+      )}
+      {typeof d.failureSummary === 'string' && d.failureSummary && (
+        <Field label="What failed">
+          <p className="text-gray-700 whitespace-pre-line">{d.failureSummary}</p>
+        </Field>
+      )}
+      {finding.occurrences > 1 && <p className="text-[11px] text-gray-400">This entry stands for {finding.occurrences} matching elements on the page.</p>}
+    </div>
+  );
+}
+
+function Field({ label, children, action }: { label: string; children: React.ReactNode; action?: React.ReactNode }) {
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-0.5">
+        <p className="text-[10px] uppercase tracking-wide text-gray-400">{label}</p>
+        {action}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/* ───────────────────────────── workflow log ───────────────────────────── */
+
+function WorkflowLog({ events, summary, partial }: { events: AdaProgressEvent[]; summary: AdaSummary; partial: boolean }) {
+  const counts = useMemo(() => {
+    const c = { navigate: 0, warning: 0, 'link-check': 0 };
+    for (const e of events) if (e.type in c) c[e.type as keyof typeof c]++;
+    return c;
+  }, [events]);
+  return (
+    <div>
+      <div className="px-4 py-2.5 border-b border-gray-100 text-xs text-gray-600 flex flex-wrap gap-x-4 gap-y-1">
+        <span><span className="font-semibold text-gray-800">{summary.pagesCrawled}</span> pages audited</span>
+        <span><span className="font-semibold text-gray-800">{summary.linksChecked}</span> links checked</span>
+        <span><span className="font-semibold text-gray-800">{counts['link-check']}</span> link problems logged</span>
+        <span><span className="font-semibold text-gray-800">{counts.warning}</span> warnings</span>
+        <span>{fmtDuration(summary.durationMs)}</span>
+        {partial && <span className="text-amber-700">stopped early</span>}
+        {summary.robots.crawlDelay ? <span className="text-gray-400">robots.txt crawl-delay {summary.robots.crawlDelay}s honoured</span> : null}
+      </div>
+      {events.length === 0 ? (
+        <p className="px-4 py-6 text-xs text-gray-400">No workflow log was kept for this audit.</p>
+      ) : (
+        <div className="max-h-[560px] overflow-y-auto px-4 py-3 space-y-1 bg-gray-50/50 font-mono text-[11px]">
+          {events.map((e) => (
+            <div key={e.seq} className="flex gap-2 items-start">
+              <span className="text-gray-300 w-14 flex-shrink-0 tabular-nums">{new Date(e.at).toLocaleTimeString([], { hour12: false })}</span>
+              <LogLine e={e} />
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
 }
 
-function BestPractices({ summary, scanId }: { summary: AdaSummary; scanId: string }) {
-  const b = summary.categories.bestPractice;
-  const [open, setOpen] = useState<string | null>(null);
-  const [rows, setRows] = useState<Record<string, AdaFinding[]>>({});
-  const load = useCallback(async (ruleId: string) => {
-    if (rows[ruleId]) return;
-    const r = await getAdaFindings(scanId, { category: 'best-practice', q: ruleId, limit: 200 });
-    setRows((prev) => ({ ...prev, [ruleId]: r.findings.filter((f) => f.rule_id === ruleId) }));
-  }, [rows, scanId]);
-  return (
-    <div className="space-y-3">
-      <p className="text-xs text-gray-600">{b.rulesPassed} of {b.rulesEvaluated} checks pass on every page. Checks failing on at least one page:</p>
-      {b.failingRules.length === 0 ? (
-        <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2 flex items-center gap-2"><CheckCircle2 className="w-4 h-4" /> Every check passed on every page.</p>
-      ) : (
-        <div className="space-y-2">
-          {b.failingRules.map((r) => {
-            const isOpen = open === r.ruleId;
-            return (
-              <div key={r.ruleId} className="border border-gray-100 rounded-lg overflow-hidden">
-                <button onClick={() => { setOpen(isOpen ? null : r.ruleId); load(r.ruleId); }} className="w-full text-left px-3 py-2.5 flex items-center gap-2 hover:bg-gray-50">
-                  {isOpen ? <ChevronDown className="w-3.5 h-3.5 text-gray-400" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-400" />}
-                  <span className={`px-1.5 py-0.5 rounded border text-[10px] font-medium ${SEV_STYLE[r.severity]}`}>{r.severity}</span>
-                  <span className="text-xs font-medium text-gray-800 flex-1">{r.title}</span>
-                  <span className="text-[11px] text-gray-400">{r.pages} page{r.pages === 1 ? '' : 's'}</span>
-                </button>
-                {isOpen && (
-                  <div className="border-t border-gray-100 bg-gray-50/60 px-3 py-2 space-y-1">
-                    {!rows[r.ruleId] ? <p className="text-[11px] text-gray-400">Loading…</p> : rows[r.ruleId].map((f) => (
-                      <p key={f.id} className="text-[11px] text-gray-600"><span className="text-gray-500 font-mono">{shortUrl(f.page_url)}</span> — {f.description}</p>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
+/* ───────────────────────────── pages ───────────────────────────── */
 
 function PagesTable({ scanId }: { scanId: string }) {
   const [pages, setPages] = useState<AdaPage[] | null>(null);
   useEffect(() => { getAdaPages(scanId).then(setPages).catch(() => setPages([])); }, [scanId]);
-  if (!pages) return <p className="text-xs text-gray-400 flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</p>;
+  if (!pages) return <p className="p-4 text-xs text-gray-400 flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</p>;
   const tone = (s: number) => s < 70 ? 'text-red-600' : s < 90 ? 'text-amber-600' : 'text-emerald-600';
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto p-2">
       <table className="w-full text-xs">
         <thead>
           <tr className="text-left text-[11px] text-gray-400 border-b border-gray-100">
-            <th className="py-1.5 pr-3 font-medium">Page</th>
-            <th className="py-1.5 pr-3 font-medium">HTTP</th>
-            <th className="py-1.5 pr-3 font-medium text-right">Load</th>
-            <th className="py-1.5 pr-3 font-medium text-right">Links</th>
-            <th className="py-1.5 pr-3 font-medium text-right">A11y</th>
-            <th className="py-1.5 pr-3 font-medium text-right">Practices</th>
-            <th className="py-1.5 font-medium text-right">Issues</th>
+            <th className="py-1.5 px-2 font-medium">Page</th>
+            <th className="py-1.5 px-2 font-medium">HTTP</th>
+            <th className="py-1.5 px-2 font-medium text-right">Load</th>
+            <th className="py-1.5 px-2 font-medium text-right">Links</th>
+            <th className="py-1.5 px-2 font-medium text-right">A11y</th>
+            <th className="py-1.5 px-2 font-medium text-right">Practices</th>
+            <th className="py-1.5 px-2 font-medium text-right">Issues</th>
           </tr>
         </thead>
         <tbody>
           {pages.map((p) => (
             <tr key={p.url} className="border-b border-gray-50">
-              <td className="py-2 pr-3 max-w-[360px]">
+              <td className="py-2 px-2 max-w-[360px]">
                 <p className="text-gray-800 truncate" title={p.url}>{'· '.repeat(p.depth)}{p.title || shortUrl(p.url)}</p>
                 <a href={p.url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-gray-400 hover:text-violet-600 truncate block">{shortUrl(p.url)}</a>
               </td>
-              <td className="py-2 pr-3"><span className={`font-mono ${p.status_code && p.status_code < 400 ? 'text-gray-600' : 'text-red-600'}`}>{p.status_code ?? 'ERR'}</span></td>
-              <td className="py-2 pr-3 text-right text-gray-600">{(p.load_ms / 1000).toFixed(1)}s</td>
-              <td className="py-2 pr-3 text-right text-gray-600">{p.links_found}</td>
-              <td className={`py-2 pr-3 text-right font-medium ${tone(p.a11y_score)}`}>{p.a11y_score}</td>
-              <td className={`py-2 pr-3 text-right font-medium ${tone(p.bp_score)}`}>{p.bp_score}</td>
-              <td className="py-2 text-right text-gray-600">{p.findings_count}</td>
+              <td className="py-2 px-2"><span className={`font-mono ${p.status_code && p.status_code < 400 ? 'text-gray-600' : 'text-red-600'}`}>{p.status_code ?? 'ERR'}</span></td>
+              <td className="py-2 px-2 text-right text-gray-600">{(p.load_ms / 1000).toFixed(1)}s</td>
+              <td className="py-2 px-2 text-right text-gray-600">{p.links_found}</td>
+              <td className={`py-2 px-2 text-right font-medium ${tone(p.a11y_score)}`}>{p.a11y_score}</td>
+              <td className={`py-2 px-2 text-right font-medium ${tone(p.bp_score)}`}>{p.bp_score}</td>
+              <td className="py-2 px-2 text-right text-gray-600">{p.findings_count}</td>
             </tr>
           ))}
         </tbody>
@@ -756,44 +851,72 @@ function PagesTable({ scanId }: { scanId: string }) {
   );
 }
 
-/* ───────────────────────────── HTML export ───────────────────────────── */
+/* ───────────────────────────── exports ───────────────────────────── */
 
 function esc(s: unknown): string {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 }
 
-function buildHtmlReport(s: AdaSummary): string {
+function buildCsv(findings: AdaFinding[]): string {
+  const cell = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""').replace(/\r?\n/g, ' ')}"`;
+  const head = ['Category', 'Severity', 'Rule', 'Issue', 'WCAG', 'Page', 'Element / Link', 'Occurrences', 'Detail', 'How to fix'];
+  const rows = findings.map((f) => [
+    CATEGORY_LABEL[f.category], f.severity, f.rule_id, f.title, f.wcag || '', f.page_url,
+    f.category === 'links' ? String(f.details?.link || f.element || '') : (f.element || ''),
+    f.occurrences, f.description || (typeof f.details?.failureSummary === 'string' ? f.details.failureSummary : ''), f.help_url || '',
+  ]);
+  return '﻿' + [head, ...rows].map((r) => r.map(cell).join(',')).join('\r\n');
+}
+
+function buildHtmlReport(s: AdaSummary, partial: boolean, findings: AdaFinding[]): string {
   const a = s.categories.accessibility, l = s.categories.links, b = s.categories.bestPractice;
   const broken = l.broken + l.serverErrors + l.timeouts;
   const gradeColor: Record<string, string> = { A: '#059669', B: '#16a34a', C: '#d97706', D: '#ea580c', F: '#dc2626' };
   const score = (c: { score: number; grade: string }, label: string) =>
     `<div class="score"><div class="big" style="color:${gradeColor[c.grade]}">${c.score}</div><div class="lbl">${esc(label)}</div><div class="grade">Grade ${c.grade}</div></div>`;
+  const issues = findings.filter((f) => f.category !== 'review');
+  const totalIssues = issues.reduce((x, f) => x + f.occurrences, 0);
+  const bySev: Record<AdaSeverity, number> = { critical: 0, serious: 0, moderate: 0, minor: 0 };
+  for (const f of issues) bySev[f.severity] += f.occurrences;
+  const groups = new Map<string, { title: string; category: AdaCategory; severity: AdaSeverity; wcag?: string | null; helpUrl?: string | null; occ: number; pages: Set<string>; rows: AdaFinding[] }>();
+  for (const f of findings) {
+    const k = `${f.category}|${f.rule_id}`;
+    const g = groups.get(k) || { title: f.title, category: f.category, severity: f.severity, wcag: f.wcag, helpUrl: f.help_url, occ: 0, pages: new Set<string>(), rows: [] };
+    g.occ += f.occurrences; g.pages.add(f.page_url); g.rows.push(f); groups.set(k, g);
+  }
+  const sorted = [...groups.values()].sort((x, y) => SEV_ORDER[x.severity] - SEV_ORDER[y.severity] || y.occ - x.occ);
+  const section = (cat: AdaCategory, heading: string) => {
+    const gs = sorted.filter((g) => g.category === cat);
+    if (!gs.length) return `<h2>${esc(heading)}</h2><p class="muted">None found.</p>`;
+    return `<h2>${esc(heading)}</h2>` + gs.map((g) => `
+<details><summary><span class="sev ${g.severity}">${g.severity}</span> ${esc(g.title)} <b>(${g.occ})</b> <span class="muted">— ${g.pages.size} page${g.pages.size === 1 ? '' : 's'}${g.wcag ? ` · WCAG ${esc(g.wcag)}` : ''}${g.helpUrl ? ` · <a href="${esc(g.helpUrl)}">how to fix</a>` : ''}</span></summary>
+<table><tr><th>Page</th><th>${cat === 'links' ? 'Link' : 'Element'}</th><th>Detail</th></tr>
+${g.rows.slice(0, 200).map((f) => `<tr><td><a href="${esc(f.page_url)}">${esc(shortUrl(f.page_url))}</a></td><td><code>${esc(cat === 'links' ? String(f.details?.link || f.element || '') : (f.element || ''))}</code></td><td>${esc(f.description || (typeof f.details?.failureSummary === 'string' ? f.details.failureSummary : ''))}${f.occurrences > 1 ? ` <span class="muted">(×${f.occurrences})</span>` : ''}</td></tr>`).join('')}
+</table></details>`).join('');
+  };
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Website audit — ${esc(s.siteName)}</title>
-<style>body{font-family:Segoe UI,Arial,sans-serif;color:#1f2937;margin:0;padding:32px;max-width:1000px}h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;margin:28px 0 8px;border-bottom:1px solid #e5e7eb;padding-bottom:4px}
-.muted{color:#6b7280;font-size:12px}.scores{display:flex;gap:16px;margin:20px 0}.score{flex:1;border:1px solid #e5e7eb;border-radius:10px;padding:14px;text-align:center}.big{font-size:34px;font-weight:700}.lbl{font-size:12px;color:#6b7280}.grade{font-size:11px;color:#9ca3af}
-table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #f3f4f6;vertical-align:top}th{color:#6b7280;font-weight:600;font-size:11px}
-.sev{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600}.critical{background:#fee2e2;color:#b91c1c}.serious{background:#ffedd5;color:#c2410c}.moderate{background:#fef3c7;color:#b45309}.minor{background:#f3f4f6;color:#4b5563}
+<style>body{font-family:Segoe UI,Arial,sans-serif;color:#1f2937;margin:0;padding:32px;max-width:1100px}h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;margin:28px 0 8px;border-bottom:1px solid #e5e7eb;padding-bottom:4px}
+.muted{color:#6b7280;font-size:12px}.tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;margin-right:6px}.ok{background:#d1fae5;color:#065f46}.part{background:#fef3c7;color:#92400e}.wcag{background:#ede9fe;color:#5b21b6}
+.scores{display:flex;gap:16px;margin:20px 0}.score{flex:1;border:1px solid #e5e7eb;border-radius:10px;padding:14px;text-align:center}.big{font-size:34px;font-weight:700}.lbl{font-size:12px;color:#6b7280}.grade{font-size:11px;color:#9ca3af}
+.summary{display:flex;gap:24px;align-items:flex-start;border:1px solid #e5e7eb;border-radius:10px;padding:16px;margin:16px 0}.summary .n{font-size:40px;font-weight:700;line-height:1}
+table{width:100%;border-collapse:collapse;font-size:12px;margin:6px 0 10px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #f3f4f6;vertical-align:top}th{color:#6b7280;font-weight:600;font-size:11px}code{font-family:Consolas,monospace;font-size:11px;color:#5b21b6;word-break:break-all}
+details{border:1px solid #e5e7eb;border-radius:8px;padding:8px 12px;margin:6px 0}summary{cursor:pointer;font-size:13px}
+.sev{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;margin-right:4px}.critical{background:#fee2e2;color:#b91c1c}.serious{background:#ffedd5;color:#c2410c}.moderate{background:#fef3c7;color:#b45309}.minor{background:#f3f4f6;color:#4b5563}
 .foot{margin-top:32px;font-size:11px;color:#9ca3af}</style></head><body>
-<h1>Website health report — ${esc(s.siteName)}</h1>
-<div class="muted">${esc(s.targetUrl)} · audited ${esc(new Date(s.finishedAt).toLocaleString())} · ${s.pagesCrawled} pages · ${s.linksChecked} links checked · ${Math.round(s.durationMs / 1000)}s</div>
+<h1>Website audit report — ${esc(s.siteName)}</h1>
+<div class="muted" style="margin:6px 0 10px"><span class="tag ${partial ? 'part' : 'ok'}">${partial ? 'STOPPED EARLY — PARTIAL RESULTS' : 'COMPLETE'}</span><span class="tag wcag">WCAG 2.2 AA</span> ${esc(s.targetUrl)} · audited ${esc(new Date(s.finishedAt).toLocaleString())} · ${s.pagesCrawled} pages · ${s.linksChecked} links checked · ${Math.round(s.durationMs / 1000)}s</div>
 <div class="scores">${score(s.overall, 'Overall health')}${score(a, 'Accessibility (WCAG 2.2 AA)')}${score(l, 'Links')}${score(b, 'Best practices')}</div>
-<h2>Accessibility — ${a.violations} violations (${a.bySeverity.critical} critical, ${a.bySeverity.serious} serious, ${a.bySeverity.moderate} moderate, ${a.bySeverity.minor} minor)</h2>
-<table><tr><th>Severity</th><th>Issue</th><th>WCAG</th><th>Pages</th><th>Elements</th><th>Guidance</th></tr>
-${a.topRules.map((r) => `<tr><td><span class="sev ${r.severity}">${r.severity}</span></td><td>${esc(r.title)}<br><span class="muted">${esc(r.ruleId)}</span></td><td>${esc(r.wcag || '')}</td><td>${r.pages}</td><td>${r.occurrences}</td><td>${r.helpUrl ? `<a href="${esc(r.helpUrl)}">How to fix</a>` : ''}</td></tr>`).join('')}
-</table>
-<h2>Broken links — ${broken} of ${l.checked} checked (${l.broken} not found, ${l.serverErrors} server errors, ${l.timeouts} unreachable)</h2>
-<table><tr><th>Status</th><th>Link</th><th>Found on</th><th>Type</th></tr>
-${l.brokenLinks.map((x) => `<tr><td>${esc(x.status ?? x.kind)}</td><td>${esc(x.url)}${x.linkText ? `<br><span class="muted">"${esc(x.linkText)}"</span>` : ''}</td><td>${x.referrers.slice(0, 3).map(esc).join('<br>')}</td><td>${x.external ? 'external' : 'internal'}</td></tr>`).join('') || '<tr><td colspan="4">None</td></tr>'}
-</table>
-<h2>Best practices — ${b.rulesPassed} of ${b.rulesEvaluated} checks pass everywhere</h2>
-<table><tr><th>Severity</th><th>Check</th><th>Pages failing</th></tr>
-${b.failingRules.map((r) => `<tr><td><span class="sev ${r.severity}">${r.severity}</span></td><td>${esc(r.title)}</td><td>${r.pages}</td></tr>`).join('') || '<tr><td colspan="3">All checks pass</td></tr>'}
-</table>
-<h2>Pages needing the most attention</h2>
+<div class="summary"><div><div class="n">${totalIssues}</div><div class="muted">Issues in ${new Set(issues.map((f) => f.page_url)).size} pages and ${new Set(findings.filter((f) => f.element).map((f) => f.element)).size} components</div></div>
+<div><div class="muted" style="font-weight:600;margin-bottom:4px">Severity breakdown</div><span class="sev critical">${bySev.critical} critical</span> <span class="sev serious">${bySev.serious} serious</span> <span class="sev moderate">${bySev.moderate} moderate</span> <span class="sev minor">${bySev.minor} minor</span><div class="muted" style="margin-top:8px">${a.needsReview} issue${a.needsReview === 1 ? '' : 's'} need manual review · ${a.violations} accessibility violation${a.violations === 1 ? '' : 's'} · ${broken} broken link${broken === 1 ? '' : 's'} · ${b.failingRules.length} best-practice check${b.failingRules.length === 1 ? '' : 's'} failing</div></div></div>
+${section('accessibility', `Accessibility violations (WCAG) — ${a.violations}`)}
+${section('links', `Broken links — ${broken} of ${l.checked} checked${l.blocked ? ` (${l.blocked} could not be verified)` : ''}`)}
+${section('best-practice', `Best-practice issues — ${b.failingRules.length} checks failing`)}
+${section('review', `Needs manual review — ${a.needsReview}`)}
+<h2>Pages audited</h2>
 <table><tr><th>Page</th><th>Accessibility</th><th>Best practices</th><th>Issues</th></tr>
 ${s.worstPages.map((p) => `<tr><td>${esc(p.title || p.url)}<br><span class="muted">${esc(p.url)}</span></td><td>${p.a11yScore}</td><td>${p.bpScore}</td><td>${p.findings}</td></tr>`).join('')}
 </table>
 ${s.notes.length ? `<h2>Notes</h2><ul class="muted">${s.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
-<div class="foot">Generated by IntelliQE. Accessibility rules by axe-core (Deque). Scores: accessibility 45%, links 30%, best practices 25%.</div>
+<div class="foot">Generated by IntelliQE. Accessibility rules by axe-core (Deque). Health score = accessibility 45% · links 30% · best practices 25%.</div>
 </body></html>`;
 }

@@ -20,7 +20,7 @@ import type { ScanOptions } from '../services/ada/ada-types.js';
 
 const router = Router();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const CATEGORIES = ['accessibility', 'links', 'best-practice'];
+const CATEGORIES = ['accessibility', 'links', 'best-practice', 'review'];
 const SEVERITIES = ['critical', 'serious', 'moderate', 'minor'];
 const escapeLike = (s: string) => s.replace(/[[%_]/g, (c) => `[${c}]`);
 
@@ -100,6 +100,10 @@ router.get('/scans/:id', async (req: Request, res: Response) => {
     const { rows } = await pool.query(`SELECT * FROM ada_scans WHERE id = $1 AND tenant_id = $2`, [id, tenantId]);
     if (rows.length === 0) { res.status(404).json({ error: 'Audit not found' }); return; }
     const scan = rows[0];
+    // progress_log is stored as text (not in the shim's JSON column list) - parse it here.
+    if (typeof scan.progress_log === 'string') { try { scan.log = JSON.parse(scan.progress_log); } catch { scan.log = []; } }
+    else scan.log = Array.isArray(scan.progress_log) ? scan.progress_log : [];
+    delete scan.progress_log;
     const after = Number(req.query.after) || 0;
     const progress = getProgress(tenantId, id, after);
     // A scan that was running when the server restarted has no live state and
@@ -130,7 +134,7 @@ router.get('/scans/:id/findings', async (req: Request, res: Response) => {
     if (SEVERITIES.includes(severity)) { params.push(severity); where.push(`severity = $${params.length}`); }
     if (pageUrl) { params.push(pageUrl); where.push(`page_url = $${params.length}`); }
     if (q) { params.push(`%${escapeLike(q)}%`); where.push(`(title LIKE $${params.length} OR rule_id LIKE $${params.length} OR page_url LIKE $${params.length} OR element LIKE $${params.length})`); }
-    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+    const limit = Math.min(2000, Math.max(1, Number(req.query.limit) || 200));
     const offset = Math.max(0, Number(req.query.offset) || 0);
 
     const count = await pool.query(`SELECT COUNT(*) AS n, COALESCE(SUM(occurrences), 0) AS occ FROM ada_findings WHERE ${where.join(' AND ')}`, params);
