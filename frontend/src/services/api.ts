@@ -1519,6 +1519,7 @@ export interface AdaSummary {
   finishedAt: string;
   durationMs: number;
   pagesCrawled: number;
+  pagesDiscovered?: number;
   linksFound: number;
   linksChecked: number;
   loginAttempted: boolean;
@@ -1557,7 +1558,7 @@ export interface AdaScanRecord {
 
 export interface AdaProgress {
   status: 'running' | 'completed' | 'failed' | 'cancelled';
-  counters: { pages: number; linksFound: number; linksChecked: number; issues: number; maxPages: number; currentUrl?: string };
+  counters: { pages: number; discovered?: number; linksFound: number; linksChecked: number; issues: number; maxPages: number; currentUrl?: string };
   events: AdaProgressEvent[];
   lastSeq: number;
   elapsedMs: number;

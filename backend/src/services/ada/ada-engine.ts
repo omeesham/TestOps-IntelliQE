@@ -226,8 +226,10 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
       linkMap.set(key, { url: key, external: !sameSite(href), referrers: new Set([referrer]), text: text?.slice(0, 120) });
     };
 
+    // Discovery keeps going past the audit cap so the user sees how big the site really is.
+    const DISCOVERY_CEILING = 5000;
     const enqueue = (href: string, depth: number, parent: string) => {
-      if (pages.length + queue.length >= options.maxPages) return;
+      if (pages.length + queue.length >= DISCOVERY_CEILING) return;
       if (depth > options.maxDepth) return;
       if (!sameSite(href) || BINARY_EXT.test(href) || isDisallowed(href, robots)) return;
       const key = normaliseUrl(href);
@@ -240,7 +242,7 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
       if (control.cancelled) { notes.push('Scan cancelled by user.'); break; }
       const item = queue.shift()!;
       consoleErrors = []; pageErrors = [];
-      emit({ type: 'navigate', message: `Navigating to ${item.url}`, data: { url: item.url, depth: item.depth, crawled: pages.length, queued: queue.length, max: options.maxPages } });
+      emit({ type: 'navigate', message: `Navigating to ${item.url}`, data: { url: item.url, depth: item.depth, crawled: pages.length, queued: queue.length, discovered: pages.length + queue.length + 1, max: options.maxPages } });
 
       const t0 = Date.now();
       let loadMsMeasured = 0;
@@ -325,7 +327,7 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
         for (const u of sitemapUrls) enqueue(u, 1, 'sitemap');
       }
       const internal = found.filter((l) => sameSite(l.href)).length;
-      emit({ type: 'page', message: `${title || finalUrl} — ${found.length} links (${internal} internal, ${found.length - internal} external)`, data: { url: finalUrl, title, links: found.length, internal, status: statusCode } });
+      emit({ type: 'page', message: `${title || finalUrl} — ${found.length} links (${internal} internal, ${found.length - internal} external) · ${pages.length + 1 + queue.length} pages found so far`, data: { url: finalUrl, title, links: found.length, internal, status: statusCode, discovered: pages.length + 1 + queue.length } });
 
       // ── Checks ──
       const findings: Finding[] = [];
@@ -359,7 +361,7 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
     }
 
     if (queue.length && pages.length >= options.maxPages) {
-      notes.push(`Page cap of ${options.maxPages} reached with ${queue.length} more page${queue.length === 1 ? '' : 's'} still queued. Raise the cap for a fuller audit.`);
+      notes.push(`Audited ${pages.length} of ${pages.length + queue.length} pages found. ${queue.length} page${queue.length === 1 ? '' : 's'} discovered but not audited (safety limit of ${options.maxPages} pages per audit).`);
     }
 
     // ── Link check ──
@@ -377,6 +379,7 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
       loginAttempted, loginSucceeded,
       robots: { crawlDelay: robots.crawlDelay, disallowCount: robots.disallow.length, sitemaps: robots.sitemaps },
       sitemapUrlsFound: sitemapUrls.length,
+      pagesDiscovered: pages.length + queue.length,
       linksFound: linkMap.size,
       notes,
     });

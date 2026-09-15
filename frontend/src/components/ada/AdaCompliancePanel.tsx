@@ -124,7 +124,7 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
   const [needsLogin, setNeedsLogin] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [maxPages, setMaxPages] = useState(40);
+  const [quickSample, setQuickSample] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [checkExternal, setCheckExternal] = useState(true);
   const [formError, setFormError] = useState('');
@@ -201,7 +201,7 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
         url: url.trim(),
         username: needsLogin && username ? username : undefined,
         password: needsLogin && password ? password : undefined,
-        maxPages,
+        maxPages: quickSample ? 15 : undefined,
         checkExternalLinks: checkExternal,
       });
       lastSeq.current = 0;
@@ -278,23 +278,25 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
         )}
 
         <button onClick={() => setShowAdvanced((v) => !v)} className="text-[11px] text-violet-500 hover:text-violet-700 flex items-center gap-1">
-          {showAdvanced ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />} Scan size
+          {showAdvanced ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />} Scan options
         </button>
         {showAdvanced && (
-          <div className="grid grid-cols-2 gap-3 pl-1">
-            <div>
-              <label className="block text-[11px] font-medium text-gray-600 mb-1">Pages to visit</label>
-              <select value={maxPages} onChange={(e) => setMaxPages(Number(e.target.value))} className={inputCls + ' !py-2'}>
-                <option value={15}>15 pages — quick look (~3 min)</option>
-                <option value={40}>40 pages — standard (~8 min)</option>
-                <option value={80}>80 pages — thorough (~15 min)</option>
-                <option value={150}>150 pages — full site (~30 min)</option>
-              </select>
+          <div className="space-y-2 pl-1">
+            <div className="grid grid-cols-2 gap-2">
+              <button type="button" onClick={() => setQuickSample(false)} className={`text-left rounded-lg border px-3 py-2 transition-colors ${!quickSample ? 'border-violet-400 bg-violet-50/60' : 'border-gray-200 hover:border-gray-300'}`}>
+                <p className="text-xs font-semibold text-gray-800">Whole website <span className="text-[10px] font-normal text-violet-600">recommended</span></p>
+                <p className="text-[11px] text-gray-500 mt-0.5">IntelliQE finds every page itself from the menus, links and sitemap. The page count shows live while it scans.</p>
+              </button>
+              <button type="button" onClick={() => setQuickSample(true)} className={`text-left rounded-lg border px-3 py-2 transition-colors ${quickSample ? 'border-violet-400 bg-violet-50/60' : 'border-gray-200 hover:border-gray-300'}`}>
+                <p className="text-xs font-semibold text-gray-800">Quick sample</p>
+                <p className="text-[11px] text-gray-500 mt-0.5">First 15 pages only, for a fast first impression (~3 min).</p>
+              </button>
             </div>
-            <label className="flex items-end gap-2 text-[11px] text-gray-600 pb-2.5 cursor-pointer">
+            <label className="flex items-center gap-2 text-[11px] text-gray-600 cursor-pointer">
               <input type="checkbox" checked={checkExternal} onChange={(e) => setCheckExternal(e.target.checked)} className="w-4 h-4 rounded border-gray-300 text-violet-600" />
               Also check links to other websites
             </label>
+            <p className="text-[11px] text-gray-400">You can stop at any time — the report always covers the pages audited so far.</p>
           </div>
         )}
 
@@ -315,7 +317,9 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
   /* ═════════════════════════════ SCANNING ═════════════════════════════ */
   if (screen === 'scanning') {
     const c = progress?.counters;
-    const pct = c ? Math.min(100, Math.round((c.pages / Math.max(1, c.maxPages)) * 100)) : 0;
+    // Progress is measured against pages found so far; the total grows as new links are discovered.
+    const target = c ? Math.min(c.maxPages, Math.max(c.discovered || 0, c.pages, 1)) : 1;
+    const pct = c ? Math.min(100, Math.round((c.pages / target) * 100)) : 0;
     const linkPhase = !!c && c.linksFound > 0 && c.linksChecked > 0;
     return (
       <div className={`${embedded ? 'max-w-2xl ml-11' : 'max-w-4xl'} bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden`}>
@@ -335,8 +339,8 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
           <div className="mt-3 h-1.5 bg-gray-100 rounded-full overflow-hidden">
             <div className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 transition-all duration-700" style={{ width: `${linkPhase ? 100 : pct}%` }} />
           </div>
-          <div className="grid grid-cols-4 gap-2 mt-3">
-            <Stat label="Pages visited" value={c ? `${c.pages}/${c.maxPages}` : '—'} />
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
+            <Stat label="Pages audited" value={c ? `${c.pages} of ${Math.max(c.discovered || 0, c.pages)} found` : '—'} />
             <Stat label="Links found" value={c?.linksFound ?? '—'} />
             <Stat label="Links checked" value={c?.linksChecked ?? '—'} />
             <Stat label="Issues so far" value={c?.issues ?? '—'} tone={c?.issues ? 'warn' : undefined} />
@@ -416,7 +420,7 @@ function Stat({ label, value, tone }: { label: string; value: string | number; t
   return (
     <div className="bg-white/70 border border-gray-100 rounded-lg px-3 py-2">
       <p className="text-[10px] uppercase tracking-wide text-gray-400">{label}</p>
-      <p className={`text-base font-semibold ${tone === 'warn' ? 'text-amber-600' : 'text-gray-800'}`}>{value}</p>
+      <p className={`text-base font-semibold whitespace-nowrap ${tone === 'warn' ? 'text-amber-600' : 'text-gray-800'}`}>{value}</p>
     </div>
   );
 }
@@ -490,7 +494,7 @@ function ReportHeader({ summary, partial, findings, onReset, onBrownfield }: {
           <p className="text-base font-semibold text-gray-800 leading-tight mt-0.5">{summary.siteName || summary.targetUrl}</p>
           <a href={summary.targetUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-violet-600 hover:underline inline-flex items-center gap-1 break-all">{summary.targetUrl} <ExternalLink className="w-3 h-3" /></a>
           <p className="text-xs text-gray-500 mt-1">
-            {summary.pagesCrawled} page{summary.pagesCrawled === 1 ? '' : 's'} audited · {summary.linksChecked} links checked · {a.violations} accessibility violation{a.violations === 1 ? '' : 's'} · {brokenTotal} broken link{brokenTotal === 1 ? '' : 's'} · {summary.categories.bestPractice.failingRules.length} best-practice checks failing · {fmtDuration(summary.durationMs)}
+            {summary.pagesCrawled} page{summary.pagesCrawled === 1 ? '' : 's'} audited{(summary.pagesDiscovered || 0) > summary.pagesCrawled ? ` of ${summary.pagesDiscovered} found` : ''} · {summary.linksChecked} links checked · {a.violations} accessibility violation{a.violations === 1 ? '' : 's'} · {brokenTotal} broken link{brokenTotal === 1 ? '' : 's'} · {summary.categories.bestPractice.failingRules.length} best-practice checks failing · {fmtDuration(summary.durationMs)}
           </p>
           {summary.loginAttempted && (
             <p className="text-[11px] text-gray-500 mt-1 flex items-center gap-1">
@@ -820,7 +824,7 @@ function WorkflowLog({ events, summary, partial }: { events: AdaProgressEvent[];
   return (
     <div>
       <div className="px-4 py-2.5 border-b border-gray-100 text-xs text-gray-600 flex flex-wrap gap-x-4 gap-y-1">
-        <span><span className="font-semibold text-gray-800">{summary.pagesCrawled}</span> pages audited</span>
+        <span><span className="font-semibold text-gray-800">{summary.pagesCrawled}</span> pages audited{(summary.pagesDiscovered || 0) > summary.pagesCrawled ? <span className="text-gray-400"> of {summary.pagesDiscovered} found</span> : null}</span>
         <span><span className="font-semibold text-gray-800">{summary.linksChecked}</span> links checked</span>
         <span><span className="font-semibold text-gray-800">{counts['link-check']}</span> link problems logged</span>
         <span><span className="font-semibold text-gray-800">{counts.warning}</span> warnings</span>
@@ -949,7 +953,7 @@ details{border:1px solid #e5e7eb;border-radius:8px;padding:8px 12px;margin:6px 0
 .ex{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ex pre,code.good{font-family:Consolas,monospace;font-size:11px;white-space:pre-wrap;word-break:break-all;border-radius:6px;padding:6px 8px;margin:2px 0 0}pre.bad{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}pre.good,code.good{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}code.good{display:inline-block;margin-top:4px;color:#065f46}
 .foot{margin-top:32px;font-size:11px;color:#9ca3af}</style></head><body>
 <h1>Website audit report — ${esc(s.siteName)}</h1>
-<div class="muted" style="margin:6px 0 10px"><span class="tag ${partial ? 'part' : 'ok'}">${partial ? 'STOPPED EARLY — PARTIAL RESULTS' : 'COMPLETE'}</span><span class="tag wcag">WCAG 2.2 AA</span> ${esc(s.targetUrl)} · audited ${esc(new Date(s.finishedAt).toLocaleString())} · ${s.pagesCrawled} pages · ${s.linksChecked} links checked · ${Math.round(s.durationMs / 1000)}s</div>
+<div class="muted" style="margin:6px 0 10px"><span class="tag ${partial ? 'part' : 'ok'}">${partial ? 'STOPPED EARLY — PARTIAL RESULTS' : 'COMPLETE'}</span><span class="tag wcag">WCAG 2.2 AA</span> ${esc(s.targetUrl)} · audited ${esc(new Date(s.finishedAt).toLocaleString())} · ${s.pagesCrawled} pages audited${(s.pagesDiscovered || 0) > s.pagesCrawled ? ` of ${s.pagesDiscovered} found` : ''} · ${s.linksChecked} links checked · ${Math.round(s.durationMs / 1000)}s</div>
 <div class="scores">${score(s.overall, 'Overall health')}${score(a, 'Accessibility (WCAG 2.2 AA)')}${score(l, 'Links')}${score(b, 'Best practices')}</div>
 <div class="summary"><div><div class="n">${totalIssues}</div><div class="muted">Issues in ${new Set(issues.map((f) => f.page_url)).size} pages and ${new Set(findings.filter((f) => f.element).map((f) => f.element)).size} components</div></div>
 <div><div class="muted" style="font-weight:600;margin-bottom:4px">Severity breakdown</div><span class="sev critical">${bySev.critical} critical</span> <span class="sev serious">${bySev.serious} serious</span> <span class="sev moderate">${bySev.moderate} moderate</span> <span class="sev minor">${bySev.minor} minor</span><div class="muted" style="margin-top:8px">${a.needsReview} issue${a.needsReview === 1 ? '' : 's'} need manual review · ${a.violations} accessibility violation${a.violations === 1 ? '' : 's'} · ${broken} broken link${broken === 1 ? '' : 's'} · ${b.failingRules.length} best-practice check${b.failingRules.length === 1 ? '' : 's'} failing</div></div></div>

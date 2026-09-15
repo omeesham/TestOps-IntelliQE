@@ -23,6 +23,7 @@ export function buildSummary(input: {
   loginSucceeded: boolean | null;
   robots: ScanSummary['robots'];
   sitemapUrlsFound: number;
+  pagesDiscovered: number;
   linksFound: number;
   notes: string[];
 }): ScanSummary {
@@ -95,6 +96,7 @@ export function buildSummary(input: {
     finishedAt: input.finishedAt.toISOString(),
     durationMs: input.finishedAt.getTime() - input.startedAt.getTime(),
     pagesCrawled: pages.length,
+    pagesDiscovered: Math.max(input.pagesDiscovered, pages.length),
     linksFound: input.linksFound,
     linksChecked: checked.length,
     loginAttempted: input.loginAttempted,

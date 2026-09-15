@@ -16,7 +16,7 @@ interface LiveScan {
   tenantId: string;
   status: 'running' | 'completed' | 'failed' | 'cancelled';
   events: ProgressEvent[];
-  counters: { pages: number; linksFound: number; linksChecked: number; issues: number; maxPages: number; currentUrl?: string };
+  counters: { pages: number; discovered: number; linksFound: number; linksChecked: number; issues: number; maxPages: number; currentUrl?: string };
   control: EngineControl;
   startedAt: number;
   finishedAt?: number;
@@ -43,9 +43,10 @@ export function tenantHasRunningScan(tenantId: string): string | null {
   return null;
 }
 
+/** Whole-site by default: the crawler discovers the pages itself; maxPages is only a safety ceiling. */
 export const DEFAULT_OPTIONS: Omit<ScanOptions, 'url'> = {
-  maxPages: 40,
-  maxDepth: 3,
+  maxPages: 500,
+  maxDepth: 12,
   useSitemap: true,
   checkExternalLinks: true,
   crawlDelayMs: 400,
@@ -67,7 +68,7 @@ export async function startScan(tenantId: string, createdBy: string, options: Sc
 
   const state: LiveScan = {
     tenantId, status: 'running', events: [], control: { cancelled: false },
-    counters: { pages: 0, linksFound: 0, linksChecked: 0, issues: 0, maxPages: options.maxPages },
+    counters: { pages: 0, discovered: 0, linksFound: 0, linksChecked: 0, issues: 0, maxPages: options.maxPages },
     startedAt: Date.now(),
   };
   live.set(scanId, state);
@@ -78,6 +79,8 @@ export async function startScan(tenantId: string, createdBy: string, options: Sc
     if (state.events.length > MAX_EVENTS_KEPT) state.events.splice(0, state.events.length - MAX_EVENTS_KEPT);
     const d = (e.data || {}) as Record<string, any>;
     if (e.type === 'navigate') { state.counters.currentUrl = d.url; state.counters.pages = d.crawled ?? state.counters.pages; }
+    if (d.discovered !== undefined) state.counters.discovered = Math.max(state.counters.discovered, Number(d.discovered));
+    if (e.type === 'sitemap' && d.count !== undefined) state.counters.discovered = Math.max(state.counters.discovered, Number(d.count));
     if (e.type === 'page' && d.links !== undefined) state.counters.pages += 1;
     if (e.type === 'accessibility') state.counters.issues += Number(d.violations || 0);
     if (e.type === 'best-practice') state.counters.issues += Number(d.failed || 0);

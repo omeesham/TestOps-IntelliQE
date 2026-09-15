@@ -96,6 +96,8 @@ export interface ScanSummary {
   finishedAt: string;
   durationMs: number;
   pagesCrawled: number;
+  /** Pages found (audited + still queued) — how big the site is, regardless of how far the audit got. */
+  pagesDiscovered: number;
   linksFound: number;
   linksChecked: number;
   loginAttempted: boolean;
