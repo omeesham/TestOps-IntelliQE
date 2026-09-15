@@ -9,6 +9,7 @@
  */
 import pool from '../../db.js';
 import { runScan, normaliseStartUrl, type EngineControl } from './ada-engine.js';
+import { withRemediation } from './ada-remediation.js';
 import type { Finding, LinkResult, PageResult, ProgressEvent, ScanOptions, ScanSummary } from './ada-types.js';
 
 interface LiveScan {
@@ -164,10 +165,13 @@ async function persist(scanId: string, tenantId: string, pages: PageResult[], li
     ['scan_id', 'tenant_id', 'url', 'title', 'status_code', 'depth', 'parent_url', 'load_ms', 'links_found', 'a11y_score', 'bp_score', 'findings_count'],
     pages.map((p) => [scanId, tenantId, p.url.slice(0, 2000), (p.title || '').slice(0, 500), p.statusCode, p.depth, (p.parentUrl || '').slice(0, 2000) || null, p.loadMs, p.linksFound, p.a11yScore, p.bpScore, p.findings.reduce((a, f) => a + f.occurrences, 0)]),
   );
+  // Every finding carries its own problem / fix / example so the report is self-contained.
+  const enriched = findings.map(withRemediation);
+
   await batchInsert(
     'ada_findings',
     ['scan_id', 'tenant_id', 'page_url', 'category', 'rule_id', 'severity', 'title', 'description', 'wcag', 'element', 'html_snippet', 'help_url', 'occurrences', 'details'],
-    findings.map((f) => [scanId, tenantId, f.pageUrl.slice(0, 2000), f.category, f.ruleId.slice(0, 100), f.severity, f.title.slice(0, 500), f.description || null, f.wcag || null, f.element || null, f.htmlSnippet || null, f.helpUrl || null, f.occurrences, f.details ? JSON.stringify(f.details) : null]),
+    enriched.map((f) => [scanId, tenantId, f.pageUrl.slice(0, 2000), f.category, f.ruleId.slice(0, 100), f.severity, f.title.slice(0, 500), f.description || null, f.wcag || null, f.element || null, f.htmlSnippet || null, f.helpUrl || null, f.occurrences, f.details ? JSON.stringify(f.details) : null]),
   );
 
   await pool.query(

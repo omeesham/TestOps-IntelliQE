@@ -1565,6 +1565,14 @@ export interface AdaProgress {
   error?: string;
 }
 
+export interface AdaRemediation {
+  problem: string;
+  steps: string[];
+  example?: { before: string; after: string; note?: string };
+  effort: 'quick' | 'moderate' | 'involved';
+  impact?: string;
+}
+
 export interface AdaFinding {
   id: string;
   page_url: string;
@@ -1578,7 +1586,7 @@ export interface AdaFinding {
   html_snippet?: string | null;
   help_url?: string | null;
   occurrences: number;
-  details?: Record<string, unknown> | null;
+  details?: (Record<string, unknown> & { remediation?: AdaRemediation }) | null;
 }
 
 export interface AdaPage {

@@ -19,14 +19,25 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   startAdaScan, getAdaScan, getAdaFindings, getAdaPages, cancelAdaScan,
   type AdaCategory, type AdaFinding, type AdaPage, type AdaProgress, type AdaProgressEvent,
-  type AdaScanRecord, type AdaSeverity, type AdaSummary,
+  type AdaScanRecord, type AdaSeverity, type AdaSummary, type AdaRemediation,
 } from '@/services/api';
 import {
   Accessibility, Globe, Lock, Unlock, Loader2, CheckCircle2, AlertTriangle, XCircle, Link2Off,
   ShieldCheck, FileSearch, Compass, ChevronDown, ChevronRight, Download, ExternalLink, Search,
   Square, RotateCcw, Sparkles, ListChecks, Map as MapIcon, Bot, Info, Eye, Copy, FileText, Table2,
-  MousePointerClick,
+  MousePointerClick, Wrench, Timer,
 } from 'lucide-react';
+
+const EFFORT_STYLE: Record<AdaRemediation['effort'], string> = {
+  quick: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  moderate: 'bg-amber-50 text-amber-700 border-amber-200',
+  involved: 'bg-red-50 text-red-700 border-red-200',
+};
+const EFFORT_LABEL: Record<AdaRemediation['effort'], string> = { quick: 'Quick fix', moderate: 'Moderate', involved: 'Involved' };
+function remediationOf(f: AdaFinding | null | undefined): AdaRemediation | undefined {
+  const r = f?.details?.remediation;
+  return r && typeof r === 'object' && Array.isArray((r as AdaRemediation).steps) ? (r as AdaRemediation) : undefined;
+}
 
 type Screen = 'form' | 'scanning' | 'results';
 type Tab = 'issues' | 'log' | 'pages';
@@ -644,6 +655,7 @@ function IssueExplorer({ findings, summary, embedded }: { findings: AdaFinding[]
                   <span className="text-xs text-gray-800">{g.title} <span className="font-semibold">({g.occurrences})</span></span>
                   <span className="block text-[10px] text-gray-400">{CATEGORY_LABEL[g.category]} · {g.pages} page{g.pages === 1 ? '' : 's'}{g.wcag ? ` · WCAG ${g.wcag}` : ''}</span>
                 </span>
+                {remediationOf(g.rows[0]) && <span className={`px-1.5 py-0.5 rounded border text-[10px] flex-shrink-0 hidden sm:inline ${EFFORT_STYLE[remediationOf(g.rows[0])!.effort]}`}>{EFFORT_LABEL[remediationOf(g.rows[0])!.effort]}</span>}
                 <span className={`px-2 py-0.5 rounded border text-[10px] font-medium flex-shrink-0 ${SEV_STYLE[g.severity]}`}>{g.severity.charAt(0).toUpperCase() + g.severity.slice(1)}</span>
                 {isOpen ? <ChevronDown className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />}
               </button>
@@ -696,6 +708,7 @@ function IssueExplorer({ findings, summary, embedded }: { findings: AdaFinding[]
 
 function IssueDetail({ finding }: { finding: AdaFinding | null }) {
   const [copied, setCopied] = useState(false);
+  const rem = remediationOf(finding);
   if (!finding) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-center p-6 text-gray-400">
@@ -716,11 +729,33 @@ function IssueDetail({ finding }: { finding: AdaFinding | null }) {
         {finding.wcag && <span className="px-2 py-0.5 rounded border border-violet-200 bg-violet-50 text-[10px] text-violet-700">WCAG {finding.wcag}</span>}
       </div>
       <p className="text-sm font-semibold text-gray-800 leading-snug">{finding.title}</p>
-      {finding.description && <p className="text-gray-600">{finding.description}</p>}
+      {rem ? (
+        <div className="space-y-3 rounded-lg border border-violet-100 bg-violet-50/40 p-3">
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-red-500 font-semibold flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Problem</p>
+            <p className="text-gray-800 mt-0.5">{rem.problem}</p>
+            {rem.impact && <p className="text-gray-500 mt-1">{rem.impact}</p>}
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-emerald-600 font-semibold flex items-center gap-1"><Wrench className="w-3 h-3" /> How to fix <span className={`ml-auto normal-case tracking-normal px-1.5 py-0.5 rounded border font-medium ${EFFORT_STYLE[rem.effort]}`}><Timer className="w-3 h-3 inline mr-0.5" />{EFFORT_LABEL[rem.effort]}</span></p>
+            <ol className="list-decimal pl-4 mt-1 space-y-0.5 text-gray-700">{rem.steps.map((s, i) => <li key={i}>{s}</li>)}</ol>
+          </div>
+          {rem.example && (
+            <div>
+              <p className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Example</p>
+              <p className="text-[10px] text-gray-400 mt-1">Before</p>
+              <pre className="font-mono text-[10.5px] text-red-800 bg-red-50 border border-red-100 rounded px-2 py-1.5 whitespace-pre-wrap break-all max-h-32 overflow-auto">{rem.example.before}</pre>
+              <p className="text-[10px] text-gray-400 mt-1.5">After</p>
+              <pre className="font-mono text-[10.5px] text-emerald-800 bg-emerald-50 border border-emerald-100 rounded px-2 py-1.5 whitespace-pre-wrap break-all max-h-32 overflow-auto">{rem.example.after}</pre>
+              {rem.example.note && <p className="text-[10px] text-gray-500 mt-1">{rem.example.note}</p>}
+            </div>
+          )}
+        </div>
+      ) : finding.description && <p className="text-gray-600">{finding.description}</p>}
       {finding.category === 'review' && (
         <p className="text-amber-700 bg-amber-50 border border-amber-100 rounded px-2.5 py-1.5 text-[11px]">The scanner could not decide this one automatically. Open the page and confirm whether it is a real problem.</p>
       )}
-      {finding.help_url && <a href={finding.help_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-violet-600 hover:underline">How to fix this <ExternalLink className="w-3 h-3" /></a>}
+      {finding.help_url && <a href={finding.help_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-violet-600 hover:underline">Reference: full rule description <ExternalLink className="w-3 h-3" /></a>}
 
       <Field label={isLink ? 'Found on page' : 'Page'}>
         <a href={finding.page_url} target="_blank" rel="noopener noreferrer" className="text-violet-700 hover:underline break-all inline-flex items-center gap-1">{finding.page_url} <ExternalLink className="w-3 h-3 flex-shrink-0" /></a>
@@ -752,7 +787,7 @@ function IssueDetail({ finding }: { finding: AdaFinding | null }) {
           <pre className="font-mono text-[10.5px] text-gray-700 bg-gray-50 border border-gray-100 rounded px-2 py-1.5 whitespace-pre-wrap break-all max-h-40 overflow-auto">{finding.html_snippet}</pre>
         </Field>
       )}
-      {typeof d.failureSummary === 'string' && d.failureSummary && (
+      {!rem && typeof d.failureSummary === 'string' && d.failureSummary && (
         <Field label="What failed">
           <p className="text-gray-700 whitespace-pre-line">{d.failureSummary}</p>
         </Field>
@@ -859,12 +894,15 @@ function esc(s: unknown): string {
 
 function buildCsv(findings: AdaFinding[]): string {
   const cell = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""').replace(/\r?\n/g, ' ')}"`;
-  const head = ['Category', 'Severity', 'Rule', 'Issue', 'WCAG', 'Page', 'Element / Link', 'Occurrences', 'Detail', 'How to fix'];
-  const rows = findings.map((f) => [
-    CATEGORY_LABEL[f.category], f.severity, f.rule_id, f.title, f.wcag || '', f.page_url,
-    f.category === 'links' ? String(f.details?.link || f.element || '') : (f.element || ''),
-    f.occurrences, f.description || (typeof f.details?.failureSummary === 'string' ? f.details.failureSummary : ''), f.help_url || '',
-  ]);
+  const head = ['Category', 'Severity', 'Effort', 'Rule', 'Issue', 'WCAG', 'Page', 'Element / Link', 'Occurrences', 'Problem', 'How to fix', 'Example (after)', 'Reference'];
+  const rows = findings.map((f) => {
+    const r = remediationOf(f);
+    return [
+      CATEGORY_LABEL[f.category], f.severity, r ? EFFORT_LABEL[r.effort] : '', f.rule_id, f.title, f.wcag || '', f.page_url,
+      f.category === 'links' ? String(f.details?.link || f.element || '') : (f.element || ''),
+      f.occurrences, r?.problem || f.description || '', r ? r.steps.map((s, i) => `${i + 1}. ${s}`).join(' ') : '', r?.example?.after || '', f.help_url || '',
+    ];
+  });
   return '﻿' + [head, ...rows].map((r) => r.map(cell).join(',')).join('\r\n');
 }
 
@@ -888,11 +926,15 @@ function buildHtmlReport(s: AdaSummary, partial: boolean, findings: AdaFinding[]
   const section = (cat: AdaCategory, heading: string) => {
     const gs = sorted.filter((g) => g.category === cat);
     if (!gs.length) return `<h2>${esc(heading)}</h2><p class="muted">None found.</p>`;
-    return `<h2>${esc(heading)}</h2>` + gs.map((g) => `
-<details><summary><span class="sev ${g.severity}">${g.severity}</span> ${esc(g.title)} <b>(${g.occ})</b> <span class="muted">— ${g.pages.size} page${g.pages.size === 1 ? '' : 's'}${g.wcag ? ` · WCAG ${esc(g.wcag)}` : ''}${g.helpUrl ? ` · <a href="${esc(g.helpUrl)}">how to fix</a>` : ''}</span></summary>
-<table><tr><th>Page</th><th>${cat === 'links' ? 'Link' : 'Element'}</th><th>Detail</th></tr>
-${g.rows.slice(0, 200).map((f) => `<tr><td><a href="${esc(f.page_url)}">${esc(shortUrl(f.page_url))}</a></td><td><code>${esc(cat === 'links' ? String(f.details?.link || f.element || '') : (f.element || ''))}</code></td><td>${esc(f.description || (typeof f.details?.failureSummary === 'string' ? f.details.failureSummary : ''))}${f.occurrences > 1 ? ` <span class="muted">(×${f.occurrences})</span>` : ''}</td></tr>`).join('')}
-</table></details>`).join('');
+    return `<h2>${esc(heading)}</h2>` + gs.map((g) => {
+      const r = remediationOf(g.rows[0]);
+      const fix = r ? `<div class="fix"><div class="fixh"><span class="eff ${r.effort}">${esc(EFFORT_LABEL[r.effort])}</span> How to fix</div><p class="prob"><b>Problem:</b> ${esc(r.problem)}${r.impact ? ` <span class="muted">${esc(r.impact)}</span>` : ''}</p><ol>${r.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>${r.example ? `<div class="ex"><div><span class="muted">Before</span><pre class="bad">${esc(r.example.before)}</pre></div><div><span class="muted">After</span><pre class="good">${esc(r.example.after)}</pre></div></div>${r.example.note ? `<p class="muted">${esc(r.example.note)}</p>` : ''}` : ''}${g.helpUrl ? `<p class="muted">Reference: <a href="${esc(g.helpUrl)}">${esc(g.helpUrl)}</a></p>` : ''}</div>` : (g.helpUrl ? `<p class="muted">Reference: <a href="${esc(g.helpUrl)}">${esc(g.helpUrl)}</a></p>` : '');
+      return `
+<details open><summary><span class="sev ${g.severity}">${g.severity}</span> ${esc(g.title)} <b>(${g.occ})</b> <span class="muted">— ${g.pages.size} page${g.pages.size === 1 ? '' : 's'}${g.wcag ? ` · WCAG ${esc(g.wcag)}` : ''}</span></summary>
+${fix}
+<table><tr><th>Page</th><th>${cat === 'links' ? 'Link' : 'Element'}</th><th>Problem on this page</th></tr>
+${g.rows.slice(0, 200).map((f) => { const fr = remediationOf(f); return `<tr><td><a href="${esc(f.page_url)}">${esc(shortUrl(f.page_url))}</a></td><td><code>${esc(cat === 'links' ? String(f.details?.link || f.element || '') : (f.element || ''))}</code></td><td>${esc(fr?.problem || f.description || '')}${fr?.example && cat !== 'links' && fr.example.after !== fr.example.before ? `<br><code class="good">${esc(fr.example.after)}</code>` : ''}${f.occurrences > 1 ? ` <span class="muted">(×${f.occurrences})</span>` : ''}</td></tr>`; }).join('')}
+</table></details>`; }).join('');
   };
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Website audit — ${esc(s.siteName)}</title>
 <style>body{font-family:Segoe UI,Arial,sans-serif;color:#1f2937;margin:0;padding:32px;max-width:1100px}h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;margin:28px 0 8px;border-bottom:1px solid #e5e7eb;padding-bottom:4px}
@@ -902,6 +944,9 @@ ${g.rows.slice(0, 200).map((f) => `<tr><td><a href="${esc(f.page_url)}">${esc(sh
 table{width:100%;border-collapse:collapse;font-size:12px;margin:6px 0 10px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #f3f4f6;vertical-align:top}th{color:#6b7280;font-weight:600;font-size:11px}code{font-family:Consolas,monospace;font-size:11px;color:#5b21b6;word-break:break-all}
 details{border:1px solid #e5e7eb;border-radius:8px;padding:8px 12px;margin:6px 0}summary{cursor:pointer;font-size:13px}
 .sev{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;margin-right:4px}.critical{background:#fee2e2;color:#b91c1c}.serious{background:#ffedd5;color:#c2410c}.moderate{background:#fef3c7;color:#b45309}.minor{background:#f3f4f6;color:#4b5563}
+.fix{background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;padding:10px 12px;margin:8px 0;font-size:12px}.fixh{font-weight:600;color:#5b21b6;margin-bottom:4px}.fix ol{margin:4px 0 6px 18px;padding:0}.fix li{margin:2px 0}.prob{margin:0 0 4px}
+.eff{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;margin-right:6px;border:1px solid}.quick{background:#ecfdf5;color:#047857;border-color:#a7f3d0}.moderate.eff{background:#fffbeb;color:#b45309;border-color:#fde68a}.involved{background:#fef2f2;color:#b91c1c;border-color:#fecaca}
+.ex{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ex pre,code.good{font-family:Consolas,monospace;font-size:11px;white-space:pre-wrap;word-break:break-all;border-radius:6px;padding:6px 8px;margin:2px 0 0}pre.bad{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}pre.good,code.good{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}code.good{display:inline-block;margin-top:4px;color:#065f46}
 .foot{margin-top:32px;font-size:11px;color:#9ca3af}</style></head><body>
 <h1>Website audit report — ${esc(s.siteName)}</h1>
 <div class="muted" style="margin:6px 0 10px"><span class="tag ${partial ? 'part' : 'ok'}">${partial ? 'STOPPED EARLY — PARTIAL RESULTS' : 'COMPLETE'}</span><span class="tag wcag">WCAG 2.2 AA</span> ${esc(s.targetUrl)} · audited ${esc(new Date(s.finishedAt).toLocaleString())} · ${s.pagesCrawled} pages · ${s.linksChecked} links checked · ${Math.round(s.durationMs / 1000)}s</div>

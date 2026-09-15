@@ -16,6 +16,7 @@ import {
   startScan, getProgress, cancelScan, tenantHasRunningScan, DEFAULT_OPTIONS,
 } from '../services/ada/ada-scan.service.js';
 import { normaliseStartUrl } from '../services/ada/ada-engine.js';
+import { remediate } from '../services/ada/ada-remediation.js';
 import type { ScanOptions } from '../services/ada/ada-types.js';
 
 const router = Router();
@@ -145,6 +146,18 @@ router.get('/scans/:id/findings', async (req: Request, res: Response) => {
         OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY`,
       params,
     );
+    // Findings stored before remediation existed get it computed on the way out.
+    for (const r of rows) {
+      const details = (r.details && typeof r.details === 'object') ? r.details : {};
+      if (!details.remediation) {
+        details.remediation = remediate({
+          pageUrl: r.page_url, category: r.category, ruleId: r.rule_id, severity: r.severity, title: r.title,
+          description: r.description || undefined, wcag: r.wcag || undefined, element: r.element || undefined,
+          htmlSnippet: r.html_snippet || undefined, helpUrl: r.help_url || undefined, occurrences: r.occurrences, details,
+        });
+        r.details = details;
+      }
+    }
     res.json({ findings: rows, total: Number(count.rows[0]?.n || 0), occurrences: Number(count.rows[0]?.occ || 0), limit, offset });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to load findings' });
