@@ -3238,7 +3238,8 @@ export default function ChatPage() {
             >
               {voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
             </button>
-            {step !== 'welcome' && (
+            {/* Hidden during the website audit: the report has its own "New audit" control. */}
+            {step !== 'welcome' && step !== 'ada' && (
               <button
                 onClick={requestReset}
                 title="New chat"
