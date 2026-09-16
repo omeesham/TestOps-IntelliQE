@@ -19,7 +19,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   startAdaScan, getAdaScan, getAdaFindings, getAdaPages, cancelAdaScan,
   type AdaCategory, type AdaFinding, type AdaPage, type AdaProgress, type AdaProgressEvent,
-  type AdaScanRecord, type AdaSeverity, type AdaSummary, type AdaRemediation, type AdaSiteInventory,
+  type AdaScanRecord, type AdaSeverity, type AdaSummary, type AdaRemediation, type AdaSiteInventory, type AdaCoverage,
 } from '@/services/api';
 import {
   Accessibility, Globe, Lock, Unlock, Loader2, CheckCircle2, AlertTriangle, XCircle, Link2Off,
@@ -40,7 +40,7 @@ function remediationOf(f: AdaFinding | null | undefined): AdaRemediation | undef
 }
 
 type Screen = 'form' | 'scanning' | 'results';
-type Tab = 'issues' | 'log' | 'pages';
+type Tab = 'issues' | 'log' | 'coverage' | 'pages';
 
 export interface BrownfieldHandoff { url: string; siteName?: string; username?: string; password?: string }
 
@@ -389,8 +389,8 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
           </div>
           {progress?.inventory && <InventoryLine inv={progress.inventory} className="mt-3" />}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
-            <Stat label="Pages audited" value={c ? c.pages : '—'} sub={c ? `of ${Math.max(c.discovered || 0, c.pages).toLocaleString()} found` : undefined} />
-            <Stat label="Links found" value={c?.linksFound ?? '—'} />
+            <Stat label="Pages audited" value={c ? c.pages : '—'} sub={c ? `of ${Math.max(c.discovered || 0, c.pages).toLocaleString()} found` : undefined} title="Audited = opened in the browser with every check finished. Found = start page + sitemap pages in scope + pages linked from audited pages." />
+            <Stat label="Links found" value={c?.linksFound ?? '—'} sub={c && c.linksFound ? `${(c.linksInternal || 0).toLocaleString()} internal · ${(c.linksExternal || 0).toLocaleString()} external` : undefined} title="Unique links seen on the pages audited so far." />
             <Stat label="Links checked" value={c?.linksChecked ?? '—'} />
             <Stat label="Issues so far" value={c?.issues ?? '—'} tone={c?.issues ? 'warn' : undefined} />
           </div>
@@ -430,6 +430,7 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
   return (
     <div className={`${embedded ? 'max-w-3xl ml-11' : 'max-w-6xl'} space-y-3`}>
       <ReportHeader
+        scanId={scanId}
         summary={summary}
         partial={partial}
         findings={findings}
@@ -441,6 +442,7 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
           {([
             ['issues', 'Issue summary', Accessibility],
             ['log', 'Workflow log', ListChecks],
+            ['coverage', 'Coverage', MapIcon],
             ['pages', 'Pages', Compass],
           ] as [Tab, string, React.ElementType][]).map(([key, label, Icon]) => (
             <button
@@ -457,6 +459,7 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
           ? <p className="p-5 text-xs text-gray-400 flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading issues…</p>
           : <IssueExplorer findings={findings} summary={summary} embedded={!!embedded} />)}
         {tab === 'log' && <WorkflowLog events={logEvents} summary={summary} partial={partial} />}
+        {tab === 'coverage' && <CoverageView summary={summary} />}
         {tab === 'pages' && scanId && <PagesTable scanId={scanId} />}
       </div>
     </div>
@@ -500,9 +503,9 @@ function InventoryLine({ inv, className = '' }: { inv: AdaSiteInventory; classNa
   );
 }
 
-function Stat({ label, value, sub, tone }: { label: string; value: string | number; sub?: string; tone?: 'warn' }) {
+function Stat({ label, value, sub, tone, title }: { label: string; value: string | number; sub?: string; tone?: 'warn'; title?: string }) {
   return (
-    <div className="bg-white/70 border border-gray-100 rounded-lg px-3 py-2 min-w-0">
+    <div className="bg-white/70 border border-gray-100 rounded-lg px-3 py-2 min-w-0" title={title}>
       <p className="text-[10px] uppercase tracking-wide text-gray-400">{label}</p>
       <p className={`text-base font-semibold ${tone === 'warn' ? 'text-amber-600' : 'text-gray-800'}`}>{value}{sub && <span className="ml-1 text-[11px] font-normal text-gray-500">{sub}</span>}</p>
     </div>
@@ -550,18 +553,21 @@ function SevChip({ s, count, active, onClick }: { s: AdaSeverity; count: number;
 
 /* ───────────────────────────── report header ───────────────────────────── */
 
-function ReportHeader({ summary, partial, findings, onReset, onBrownfield }: {
-  summary: AdaSummary; partial: boolean; findings: AdaFinding[]; onReset: () => void; onBrownfield?: () => void;
+function ReportHeader({ scanId, summary, partial, findings, onReset, onBrownfield }: {
+  scanId: string | null; summary: AdaSummary; partial: boolean; findings: AdaFinding[]; onReset: () => void; onBrownfield?: () => void;
 }) {
   const [menu, setMenu] = useState(false);
   const a = summary.categories.accessibility;
   const l = summary.categories.links;
   const brokenTotal = l.broken + l.serverErrors + l.timeouts;
-  const dl = (kind: 'html' | 'csv') => {
+  const dl = async (kind: 'html' | 'csv' | 'pages') => {
     setMenu(false);
     const base = `website-audit-${safeName(summary.siteName)}-${summary.finishedAt.slice(0, 10)}`;
-    if (kind === 'html') downloadBlob(buildHtmlReport(summary, partial, findings), `${base}.html`, 'text/html');
-    else downloadBlob(buildCsv(findings), `${base}-issues.csv`, 'text/csv');
+    if (kind === 'csv') { downloadBlob(buildCsv(findings), `${base}-issues.csv`, 'text/csv'); return; }
+    // The page list is stored per page in the database; fetch it so the download names every page visited.
+    const pages = scanId ? await getAdaPages(scanId).catch(() => [] as AdaPage[]) : [];
+    if (kind === 'html') downloadBlob(buildHtmlReport(summary, partial, findings, pages), `${base}.html`, 'text/html');
+    else downloadBlob(buildPagesCsv(pages, summary.coverage), `${base}-pages.csv`, 'text/csv');
   };
   return (
     <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-4">
@@ -603,6 +609,7 @@ function ReportHeader({ summary, partial, findings, onReset, onBrownfield }: {
             <div className="absolute z-10 mt-1 w-56 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
               <button onClick={() => dl('html')} className="w-full text-left px-3 py-2 text-xs hover:bg-violet-50 flex items-center gap-2"><FileText className="w-3.5 h-3.5 text-violet-500" /> Full report (HTML)</button>
               <button onClick={() => dl('csv')} className="w-full text-left px-3 py-2 text-xs hover:bg-violet-50 flex items-center gap-2"><Table2 className="w-3.5 h-3.5 text-emerald-600" /> All issues (CSV / Excel)</button>
+              <button onClick={() => dl('pages')} className="w-full text-left px-3 py-2 text-xs hover:bg-violet-50 flex items-center gap-2"><Compass className="w-3.5 h-3.5 text-indigo-500" /> Pages visited &amp; not visited (CSV)</button>
             </div>
           )}
         </div>
@@ -946,6 +953,7 @@ function PagesTable({ scanId }: { scanId: string }) {
         <thead>
           <tr className="text-left text-[11px] text-gray-400 border-b border-gray-100">
             <th className="py-1.5 px-2 font-medium">Page</th>
+            <th className="py-1.5 px-2 font-medium">Found via</th>
             <th className="py-1.5 px-2 font-medium">HTTP</th>
             <th className="py-1.5 px-2 font-medium text-right">Load</th>
             <th className="py-1.5 px-2 font-medium text-right">Links</th>
@@ -961,6 +969,7 @@ function PagesTable({ scanId }: { scanId: string }) {
                 <p className="text-gray-800 truncate" title={p.url}>{'· '.repeat(p.depth)}{p.title || shortUrl(p.url)}</p>
                 <a href={p.url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-gray-400 hover:text-violet-600 truncate block">{shortUrl(p.url)}</a>
               </td>
+              <td className="py-2 px-2 text-gray-500 whitespace-nowrap" title={p.parent_url ? `Linked from ${p.parent_url}` : undefined}>{SOURCE_LABEL[p.source || 'link']}{p.depth ? <span className="text-gray-400"> · depth {p.depth}</span> : null}</td>
               <td className="py-2 px-2"><span className={`font-mono ${p.status_code && p.status_code < 400 ? 'text-gray-600' : 'text-red-600'}`}>{p.status_code ?? 'ERR'}</span></td>
               <td className="py-2 px-2 text-right text-gray-600">{(p.load_ms / 1000).toFixed(1)}s</td>
               <td className="py-2 px-2 text-right text-gray-600">{p.links_found}</td>
@@ -975,7 +984,157 @@ function PagesTable({ scanId }: { scanId: string }) {
   );
 }
 
+/* ───────────────────────────── coverage ───────────────────────────── */
+
+const SOURCE_LABEL: Record<string, string> = { start: 'Start page', sitemap: 'Sitemap', link: 'Link on an audited page' };
+
+function stoppedReason(c: AdaCoverage): string {
+  if (c.stoppedBecause === 'every-page-audited') return 'Every page found was audited.';
+  if (c.stoppedBecause === 'cancelled') return `Stopped by the user; ${c.notAuditedTotal.toLocaleString()} page${c.notAuditedTotal === 1 ? ' was' : 's were'} found but not audited.`;
+  return `Stopped at the per-audit page limit; ${c.notAuditedTotal.toLocaleString()} page${c.notAuditedTotal === 1 ? ' was' : 's were'} found but not audited.`;
+}
+
+function CoverageBar({ audited, found }: { audited: number; found: number }) {
+  const pct = found ? Math.round((audited / found) * 100) : 0;
+  return (
+    <div className="flex items-center gap-2 min-w-[120px]">
+      <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden"><div className="h-full bg-violet-500" style={{ width: `${pct}%` }} /></div>
+      <span className="text-gray-500 tabular-nums w-9 text-right">{pct}%</span>
+    </div>
+  );
+}
+
+/** What was visited: pages by source, depth and section, links seen, and the pages left unaudited. */
+function CoverageView({ summary }: { summary: AdaSummary }) {
+  const c = summary.coverage;
+  const [showUnaudited, setShowUnaudited] = useState(false);
+  const [filter, setFilter] = useState('');
+  if (!c) {
+    return (
+      <p className="px-4 py-6 text-xs text-gray-400">
+        This audit ran before coverage tracking was added. {summary.pagesCrawled} page{summary.pagesCrawled === 1 ? '' : 's'} audited{(summary.pagesDiscovered || 0) > summary.pagesCrawled ? ` of ${summary.pagesDiscovered} found` : ''} · {summary.linksChecked} links checked. Run the audit again for the full breakdown.
+      </p>
+    );
+  }
+  const pct = c.found ? Math.round((c.audited / c.found) * 100) : 100;
+  const q = filter.trim().toLowerCase();
+  const unaudited = q ? c.notAudited.filter((p) => p.url.toLowerCase().includes(q)) : c.notAudited;
+  const th = 'py-1.5 px-2 font-medium text-[11px] text-gray-400 text-left';
+  const num = 'py-1.5 px-2 text-right tabular-nums text-gray-700';
+  return (
+    <div className="p-4 space-y-4 text-xs">
+      <p className="text-gray-600">Every number below is a count of real browser visits and real links collected from those pages. Nothing is sampled or estimated. {stoppedReason(c)}</p>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <Stat label="Pages audited" value={c.audited.toLocaleString()} sub={`of ${c.found.toLocaleString()} found (${pct}%)`} />
+        <Stat label="Could not load" value={c.unreachable.toLocaleString()} sub="counted as audited, scored 0" tone={c.unreachable ? 'warn' : undefined} />
+        <Stat label="Unique links seen" value={c.links.unique.toLocaleString()} sub={`${c.links.internal.toLocaleString()} internal · ${c.links.external.toLocaleString()} external`} />
+        <Stat label="Links checked" value={c.links.checked.toLocaleString()} sub={c.links.skipped ? `${c.links.skipped.toLocaleString()} external skipped` : 'every link fetched once'} />
+      </div>
+      {(c.redirectedOffSite > 0 || c.skippedNonHtml > 0) && (
+        <p className="text-gray-500">
+          {c.redirectedOffSite > 0 && `${c.redirectedOffSite} page${c.redirectedOffSite === 1 ? '' : 's'} redirected off-site (recorded, not crawled further)`}
+          {c.redirectedOffSite > 0 && c.skippedNonHtml > 0 && ' · '}
+          {c.skippedNonHtml > 0 && `${c.skippedNonHtml} non-HTML URL${c.skippedNonHtml === 1 ? '' : 's'} skipped (PDF, images…) and checked as links instead`}
+        </p>
+      )}
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <div>
+          <p className="font-semibold text-gray-700 mb-1">Where the pages came from</p>
+          <table className="w-full">
+            <thead><tr className="border-b border-gray-100"><th className={th}>Source</th><th className={`${th} text-right`}>Found</th><th className={`${th} text-right`}>Audited</th><th className={th}></th></tr></thead>
+            <tbody>
+              {(['start', 'sitemap', 'link'] as const).map((k) => (
+                <tr key={k} className="border-b border-gray-50">
+                  <td className="py-1.5 px-2 text-gray-700">{SOURCE_LABEL[k]}</td>
+                  <td className={num}>{c.bySource[k].found.toLocaleString()}</td>
+                  <td className={num}>{c.bySource[k].audited.toLocaleString()}</td>
+                  <td className="py-1.5 px-2"><CoverageBar audited={c.bySource[k].audited} found={c.bySource[k].found} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <p className="font-semibold text-gray-700 mb-1">How deep the crawl went</p>
+          <table className="w-full">
+            <thead><tr className="border-b border-gray-100"><th className={th}>Depth</th><th className={`${th} text-right`}>Found</th><th className={`${th} text-right`}>Audited</th><th className={th}></th></tr></thead>
+            <tbody>
+              {c.byDepth.map((d) => (
+                <tr key={d.depth} className="border-b border-gray-50">
+                  <td className="py-1.5 px-2 text-gray-700">{d.depth === 0 ? 'Start page' : d.depth === 1 ? 'Menu, sitemap & home-page links' : `${d.depth} clicks from home`}</td>
+                  <td className={num}>{d.found.toLocaleString()}</td>
+                  <td className={num}>{d.audited.toLocaleString()}</td>
+                  <td className="py-1.5 px-2"><CoverageBar audited={d.audited} found={d.found} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <p className="font-semibold text-gray-700 mb-1">By site section <span className="font-normal text-gray-400">({c.bySection.length} section{c.bySection.length === 1 ? '' : 's'} — first two path segments)</span></p>
+        <div className="max-h-[360px] overflow-y-auto">
+          <table className="w-full">
+            <thead className="sticky top-0 bg-white"><tr className="border-b border-gray-100"><th className={th}>Section</th><th className={`${th} text-right`}>Found</th><th className={`${th} text-right`}>Audited</th><th className={th}></th></tr></thead>
+            <tbody>
+              {c.bySection.map((s) => (
+                <tr key={s.path} className="border-b border-gray-50">
+                  <td className="py-1.5 px-2 font-mono text-gray-700">{s.path}{s.templated && <span className="ml-1.5 px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-sans">templated · sampled first</span>}</td>
+                  <td className={num}>{s.found.toLocaleString()}</td>
+                  <td className={num}>{s.audited.toLocaleString()}</td>
+                  <td className="py-1.5 px-2"><CoverageBar audited={s.audited} found={s.found} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {c.notAuditedTotal > 0 && (
+        <div>
+          <button onClick={() => setShowUnaudited((v) => !v)} className="flex items-center gap-1.5 font-semibold text-gray-700 hover:text-violet-700">
+            {showUnaudited ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+            {c.notAuditedTotal.toLocaleString()} page{c.notAuditedTotal === 1 ? '' : 's'} found but not audited
+          </button>
+          {showUnaudited && (
+            <div className="mt-2 border border-gray-100 rounded-lg overflow-hidden">
+              <div className="px-2 py-1.5 border-b border-gray-100 bg-gray-50/60 flex items-center gap-2">
+                <Search className="w-3.5 h-3.5 text-gray-400" />
+                <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter by URL…" className="flex-1 bg-transparent outline-none text-xs" />
+                <span className="text-gray-400">{unaudited.length.toLocaleString()}{c.notAudited.length < c.notAuditedTotal ? ` of first ${c.notAudited.length.toLocaleString()}` : ''}</span>
+              </div>
+              <div className="max-h-[320px] overflow-y-auto font-mono text-[11px]">
+                {unaudited.slice(0, 1000).map((p) => (
+                  <div key={p.url} className="px-2 py-1 border-b border-gray-50 flex items-center gap-2" title={p.parentUrl ? `Linked from ${p.parentUrl}` : SOURCE_LABEL[p.source]}>
+                    <a href={p.url} target="_blank" rel="noopener noreferrer" className="text-gray-700 hover:text-violet-600 truncate flex-1">{shortUrl(p.url)}</a>
+                    <span className="text-gray-400 font-sans whitespace-nowrap">{SOURCE_LABEL[p.source]}</span>
+                  </div>
+                ))}
+                {unaudited.length > 1000 && <p className="px-2 py-1.5 text-gray-400 font-sans">Showing the first 1,000 — narrow the filter or download the pages CSV for the full list.</p>}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ───────────────────────────── exports ───────────────────────────── */
+
+/** One row per page visited, then one per page found but not audited — the full trail of the crawl. */
+function buildPagesCsv(pages: AdaPage[], coverage?: AdaCoverage): string {
+  const cell = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""').replace(/\r?\n/g, ' ')}"`;
+  const head = ['Status', 'Page', 'Title', 'Found via', 'Linked from', 'Depth', 'HTTP', 'Load (s)', 'Links on page', 'Accessibility score', 'Best-practice score', 'Issues'];
+  const rows: unknown[][] = pages.map((p) => [
+    p.status_code === null ? 'Audited — could not load' : 'Audited', p.url, p.title, SOURCE_LABEL[p.source || 'link'], p.parent_url || '', p.depth,
+    p.status_code ?? 'ERR', (p.load_ms / 1000).toFixed(1), p.links_found, p.a11y_score, p.bp_score, p.findings_count,
+  ]);
+  for (const p of coverage?.notAudited || []) rows.push(['Found — not audited', p.url, '', SOURCE_LABEL[p.source], p.parentUrl || '', p.depth, '', '', '', '', '', '']);
+  return '\ufeff' + [head, ...rows].map((r) => r.map(cell).join(',')).join('\r\n');
+}
 
 function esc(s: unknown): string {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
@@ -995,7 +1154,24 @@ function buildCsv(findings: AdaFinding[]): string {
   return '﻿' + [head, ...rows].map((r) => r.map(cell).join(',')).join('\r\n');
 }
 
-function buildHtmlReport(s: AdaSummary, partial: boolean, findings: AdaFinding[]): string {
+/** Crawl coverage section of the downloadable report: what was visited, by source, depth and section. */
+function coverageHtml(s: AdaSummary): string {
+  const c = s.coverage;
+  if (!c) return '';
+  const pct = (aud: number, found: number) => found ? `${Math.round((aud / found) * 100)}%` : '—';
+  const row = (label: string, found: number, audited: number, extra = '') => `<tr><td>${label}${extra}</td><td>${found.toLocaleString()}</td><td>${audited.toLocaleString()}</td><td>${pct(audited, found)}</td></tr>`;
+  const depthLabel = (d: number) => d === 0 ? 'Start page' : d === 1 ? 'Menu, sitemap &amp; home-page links' : `${d} clicks from home`;
+  return `<h2>Crawl coverage — ${c.audited.toLocaleString()} of ${c.found.toLocaleString()} pages audited (${pct(c.audited, c.found)})</h2>
+<p class="muted">Every number is a count of real browser visits and real links collected from those pages; nothing is sampled or estimated. ${esc(stoppedReason(c))}${c.unreachable ? ` ${c.unreachable} page${c.unreachable === 1 ? '' : 's'} could not be loaded (counted as audited, scored 0).` : ''}${c.redirectedOffSite ? ` ${c.redirectedOffSite} redirected off-site.` : ''}${c.skippedNonHtml ? ` ${c.skippedNonHtml} non-HTML URL${c.skippedNonHtml === 1 ? '' : 's'} skipped and checked as links.` : ''}</p>
+<p class="muted">Links: ${c.links.unique.toLocaleString()} unique (${c.links.internal.toLocaleString()} internal · ${c.links.external.toLocaleString()} external) · ${c.links.checked.toLocaleString()} fetched and checked${c.links.skipped ? ` · ${c.links.skipped.toLocaleString()} external skipped` : ''}.</p>
+<div class="ex">
+<div><table><tr><th>Where the pages came from</th><th>Found</th><th>Audited</th><th>Coverage</th></tr>${row(esc(SOURCE_LABEL.start), c.bySource.start.found, c.bySource.start.audited)}${row(esc(SOURCE_LABEL.sitemap), c.bySource.sitemap.found, c.bySource.sitemap.audited)}${row(esc(SOURCE_LABEL.link), c.bySource.link.found, c.bySource.link.audited)}</table></div>
+<div><table><tr><th>Depth</th><th>Found</th><th>Audited</th><th>Coverage</th></tr>${c.byDepth.map((d) => row(depthLabel(d.depth), d.found, d.audited)).join('')}</table></div>
+</div>
+<table><tr><th>Site section</th><th>Found</th><th>Audited</th><th>Coverage</th></tr>${c.bySection.map((x) => row(`<code>${esc(x.path)}</code>`, x.found, x.audited, x.templated ? ' <span class="muted">templated · sampled first</span>' : '')).join('')}</table>`;
+}
+
+function buildHtmlReport(s: AdaSummary, partial: boolean, findings: AdaFinding[], pages: AdaPage[]): string {
   const a = s.categories.accessibility, l = s.categories.links, b = s.categories.bestPractice;
   const broken = l.broken + l.serverErrors + l.timeouts;
   const gradeColor: Record<string, string> = { A: '#059669', B: '#16a34a', C: '#d97706', D: '#ea580c', F: '#dc2626' };
@@ -1047,10 +1223,19 @@ ${section('accessibility', `Accessibility violations (WCAG) — ${a.violations}`
 ${section('links', `Broken links — ${broken} of ${l.checked} checked${l.blocked ? ` (${l.blocked} could not be verified)` : ''}`)}
 ${section('best-practice', `Best-practice issues — ${b.failingRules.length} checks failing`)}
 ${section('review', `Needs manual review — ${a.needsReview}`)}
-<h2>Pages audited</h2>
-<table><tr><th>Page</th><th>Accessibility</th><th>Best practices</th><th>Issues</th></tr>
+${coverageHtml(s)}
+<h2>Pages audited — ${(pages.length || s.pagesCrawled).toLocaleString()}</h2>
+<p class="muted">Every page below was opened in a real browser and had every check run. Depth 0 is the start page.</p>
+${pages.length ? `<table><tr><th>Page</th><th>Found via</th><th>Depth</th><th>HTTP</th><th>Load</th><th>Links</th><th>Accessibility</th><th>Best practices</th><th>Issues</th></tr>
+${pages.map((p) => `<tr><td>${esc(p.title || shortUrl(p.url))}<br><a class="muted" href="${esc(p.url)}">${esc(p.url)}</a></td><td>${esc(SOURCE_LABEL[p.source || 'link'])}${p.parent_url ? `<br><span class="muted">from ${esc(shortUrl(p.parent_url))}</span>` : ''}</td><td>${p.depth}</td><td>${p.status_code ?? 'ERR'}</td><td>${(p.load_ms / 1000).toFixed(1)}s</td><td>${p.links_found}</td><td>${p.a11y_score}</td><td>${p.bp_score}</td><td>${p.findings_count}</td></tr>`).join('')}
+</table>` : `<table><tr><th>Page</th><th>Accessibility</th><th>Best practices</th><th>Issues</th></tr>
 ${s.worstPages.map((p) => `<tr><td>${esc(p.title || p.url)}<br><span class="muted">${esc(p.url)}</span></td><td>${p.a11yScore}</td><td>${p.bpScore}</td><td>${p.findings}</td></tr>`).join('')}
-</table>
+</table><p class="muted">The full page list could not be loaded; the ${s.worstPages.length} lowest-scoring pages are shown.</p>`}
+${s.coverage && s.coverage.notAuditedTotal > 0 ? `<h2>Pages found but not audited — ${s.coverage.notAuditedTotal.toLocaleString()}</h2>
+<p class="muted">${esc(stoppedReason(s.coverage))}${s.coverage.notAudited.length < s.coverage.notAuditedTotal ? ` The first ${s.coverage.notAudited.length.toLocaleString()} are listed.` : ''}</p>
+<details><summary>Show the list</summary><table><tr><th>Page</th><th>Found via</th><th>Depth</th></tr>
+${s.coverage.notAudited.map((p) => `<tr><td><a href="${esc(p.url)}">${esc(p.url)}</a></td><td>${esc(SOURCE_LABEL[p.source])}${p.parentUrl ? `<br><span class="muted">from ${esc(shortUrl(p.parentUrl))}</span>` : ''}</td><td>${p.depth}</td></tr>`).join('')}
+</table></details>` : ''}
 ${s.notes.length ? `<h2>Notes</h2><ul class="muted">${s.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
 <div class="foot">Generated by IntelliQE. Accessibility rules by axe-core (Deque). Health score = accessibility 45% · links 30% · best practices 25%.</div>
 </body></html>`;

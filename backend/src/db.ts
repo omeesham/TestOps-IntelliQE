@@ -834,6 +834,8 @@ export async function initDb(): Promise<void> {
     await createIndex('idx_ada_findings_scan', 'ada_findings', '(scan_id, category, severity)');
     // Workflow log (crawl events) kept with the scan so the report can replay it later.
     await addColumn('ada_scans', 'progress_log', 'NVARCHAR(MAX)');
+    // How the crawler found each page: start | sitemap | link.
+    await addColumn('ada_pages', 'source', 'NVARCHAR(10)');
 
     // ─── 12. Seed: JBS platform tenant + default users ───
     await exec(`

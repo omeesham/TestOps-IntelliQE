@@ -17,7 +17,8 @@ interface LiveScan {
   tenantId: string;
   status: 'running' | 'completed' | 'failed' | 'cancelled';
   events: ProgressEvent[];
-  counters: { pages: number; discovered: number; linksFound: number; linksChecked: number; issues: number; maxPages: number; currentUrl?: string };
+  /** `pages` = pages whose checks have finished; a page in progress is not counted until its audit is done. */
+  counters: { pages: number; discovered: number; linksFound: number; linksInternal: number; linksExternal: number; linksChecked: number; issues: number; maxPages: number; currentUrl?: string };
   control: EngineControl;
   startedAt: number;
   finishedAt?: number;
@@ -70,7 +71,7 @@ export async function startScan(tenantId: string, createdBy: string, options: Sc
 
   const state: LiveScan = {
     tenantId, status: 'running', events: [], control: { cancelled: false },
-    counters: { pages: 0, discovered: 0, linksFound: 0, linksChecked: 0, issues: 0, maxPages: options.maxPages },
+    counters: { pages: 0, discovered: 0, linksFound: 0, linksInternal: 0, linksExternal: 0, linksChecked: 0, issues: 0, maxPages: options.maxPages },
     startedAt: Date.now(),
   };
   live.set(scanId, state);
@@ -80,14 +81,19 @@ export async function startScan(tenantId: string, createdBy: string, options: Sc
     state.events.push(ev);
     if (state.events.length > MAX_EVENTS_KEPT) state.events.splice(0, state.events.length - MAX_EVENTS_KEPT);
     const d = (e.data || {}) as Record<string, any>;
-    if (e.type === 'navigate') { state.counters.currentUrl = d.url; state.counters.pages = d.crawled ?? state.counters.pages; }
+    if (e.type === 'navigate') state.counters.currentUrl = d.url;
+    // The engine reports `audited` only for pages whose checks are complete — never for the page it is on.
+    if (d.audited !== undefined) state.counters.pages = Number(d.audited);
     if (d.discovered !== undefined) state.counters.discovered = Math.max(state.counters.discovered, Number(d.discovered));
     if (e.type === 'sitemap' && d.count !== undefined) state.counters.discovered = Math.max(state.counters.discovered, Number(d.count));
     if (e.type === 'sitemap' && d.inventory) state.inventory = d.inventory as SiteInventory;
-    if (e.type === 'page' && d.links !== undefined) state.counters.pages += 1;
+    if (d.linksFound !== undefined) {
+      state.counters.linksFound = Number(d.linksFound);
+      state.counters.linksInternal = Number(d.linksInternal || 0);
+      state.counters.linksExternal = Number(d.linksExternal || 0);
+    }
     if (e.type === 'accessibility') state.counters.issues += Number(d.violations || 0);
     if (e.type === 'best-practice') state.counters.issues += Number(d.failed || 0);
-    if (e.type === 'links' && d.total !== undefined) state.counters.linksFound = Number(d.total);
     if (e.type === 'links' && d.done !== undefined) state.counters.linksChecked = Number(d.done);
     if (e.type === 'link-check') state.counters.issues += 1;
   };
@@ -169,8 +175,8 @@ async function persist(scanId: string, tenantId: string, pages: PageResult[], li
 
   await batchInsert(
     'ada_pages',
-    ['scan_id', 'tenant_id', 'url', 'title', 'status_code', 'depth', 'parent_url', 'load_ms', 'links_found', 'a11y_score', 'bp_score', 'findings_count'],
-    pages.map((p) => [scanId, tenantId, p.url.slice(0, 2000), (p.title || '').slice(0, 500), p.statusCode, p.depth, (p.parentUrl || '').slice(0, 2000) || null, p.loadMs, p.linksFound, p.a11yScore, p.bpScore, p.findings.reduce((a, f) => a + f.occurrences, 0)]),
+    ['scan_id', 'tenant_id', 'url', 'title', 'status_code', 'depth', 'parent_url', 'source', 'load_ms', 'links_found', 'a11y_score', 'bp_score', 'findings_count'],
+    pages.map((p) => [scanId, tenantId, p.url.slice(0, 2000), (p.title || '').slice(0, 500), p.statusCode, p.depth, (p.parentUrl || '').slice(0, 2000) || null, p.source, p.loadMs, p.linksFound, p.a11yScore, p.bpScore, p.findings.reduce((a, f) => a + f.occurrences, 0)]),
   );
   // Every finding carries its own problem / fix / example so the report is self-contained.
   const enriched = findings.map(withRemediation);

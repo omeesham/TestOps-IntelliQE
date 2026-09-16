@@ -14,13 +14,13 @@
  *
  * Progress is reported through `emit` so the UI can show the navigation live.
  */
-import { buildInventory, describeInventory, inAuditedLocale, orderForCrawl, type SiteInventory } from './ada-inventory.js';
+import { buildInventory, describeInventory, inAuditedLocale, orderForCrawl, sectionOf, type SiteInventory } from './ada-inventory.js';
 import type { Browser, BrowserContext, Page } from '@playwright/test';
 import { tryLogin } from '../../agents/exploreAgent.js';
 import { runAccessibilityCheck, runBestPracticeCheck } from './ada-checks.js';
 import { checkLinks, shouldCheckLink, BROWSER_UA, type CollectedLink } from './ada-links.js';
 import { buildSummary } from './ada-score.js';
-import type { Finding, LinkResult, PageResult, ProgressEvent, ScanOptions, ScanSummary } from './ada-types.js';
+import type { CrawlCoverage, Finding, LinkResult, PageResult, PageSource, ProgressEvent, ScanOptions, ScanSummary } from './ada-types.js';
 
 type Emit = (e: Omit<ProgressEvent, 'seq' | 'at'>) => void;
 
@@ -183,6 +183,9 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
   let sitemapUrls: string[] = [];
   let inventory: SiteInventory = buildInventory([], startUrl);
   const TEMPLATED_SAMPLE_NOTE = 8;
+  // Coverage bookkeeping — counted, never estimated.
+  let skippedNonHtml = 0;
+  let redirectedOffSite = 0;
 
   try {
     browser = await chromium.launch({ headless: true });
@@ -226,8 +229,13 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
     page.on('pageerror', (e) => pageErrors.push(e.message));
 
     const visited = new Set<string>([normaliseUrl(startUrl)]);
-    const queue: { url: string; depth: number; parent?: string }[] = [{ url: startUrl, depth: 0 }];
+    const queue: { url: string; depth: number; parent?: string; source: PageSource }[] = [{ url: startUrl, depth: 0, source: 'start' }];
     let sitemapSeeded = false;
+    const linkCounts = () => {
+      let internal = 0;
+      for (const l of linkMap.values()) if (!l.external) internal++;
+      return { linksFound: linkMap.size, linksInternal: internal, linksExternal: linkMap.size - internal };
+    };
 
     const rememberLink = (href: string, referrer: string, text?: string) => {
       if (!shouldCheckLink(href)) return;
@@ -239,7 +247,7 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
 
     // Discovery keeps going past the audit cap so the user sees how big the site really is.
     const DISCOVERY_CEILING = 5000;
-    const enqueue = (href: string, depth: number, parent: string) => {
+    const enqueue = (href: string, depth: number, parent: string, source: PageSource = 'link') => {
       if (pages.length + queue.length >= DISCOVERY_CEILING) return;
       if (depth > options.maxDepth) return;
       if (!sameSite(href) || BINARY_EXT.test(href) || isDisallowed(href, robots)) return;
@@ -247,14 +255,14 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
       const key = normaliseUrl(href);
       if (visited.has(key)) return;
       visited.add(key);
-      queue.push({ url: key, depth, parent });
+      queue.push({ url: key, depth, parent, source });
     };
 
     while (queue.length && pages.length < options.maxPages) {
       if (control.cancelled) { notes.push('Scan cancelled by user.'); break; }
       const item = queue.shift()!;
       consoleErrors = []; pageErrors = [];
-      emit({ type: 'navigate', message: `Navigating to ${item.url}`, data: { url: item.url, depth: item.depth, crawled: pages.length, queued: queue.length, discovered: pages.length + queue.length + 1, max: options.maxPages } });
+      emit({ type: 'navigate', message: `Navigating to ${item.url}`, data: { url: item.url, depth: item.depth, source: item.source, audited: pages.length, queued: queue.length, discovered: pages.length + queue.length + 1, max: options.maxPages } });
 
       const t0 = Date.now();
       let loadMsMeasured = 0;
@@ -268,6 +276,7 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
         if (ct && !/html|xhtml/i.test(ct)) {
           emit({ type: 'warning', message: `Skipped ${item.url} — not an HTML page (${ct.split(';')[0]}).` });
           rememberLink(item.url, item.parent || startUrl);
+          skippedNonHtml++;
           continue;
         }
         await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => { /* SPAs may never idle */ });
@@ -276,7 +285,7 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
         const msg = (err as Error).message.split('\n')[0];
         emit({ type: 'warning', message: `Could not load ${item.url}: ${msg}` });
         pages.push({
-          url: item.url, title: '', statusCode: null, depth: item.depth, parentUrl: item.parent,
+          url: item.url, title: '', statusCode: null, depth: item.depth, parentUrl: item.parent, source: item.source,
           loadMs: Date.now() - t0, linksFound: 0, a11yScore: 0, bpScore: 0,
           findings: [{ pageUrl: item.url, category: 'best-practice', ruleId: 'page-unreachable', severity: 'critical', title: 'Page could not be loaded', description: msg, occurrences: 1 }],
         });
@@ -287,7 +296,8 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
       // Redirected off-site (e.g. to an IdP or a different brand domain) — record and move on.
       if (!sameSite(finalUrl)) {
         emit({ type: 'warning', message: `${item.url} redirected off-site to ${finalUrl} — not crawled further.` });
-        pages.push({ url: item.url, title: await page.title().catch(() => ''), statusCode, depth: item.depth, parentUrl: item.parent, loadMs, linksFound: 0, a11yScore: 100, bpScore: 100, findings: [] });
+        pages.push({ url: item.url, title: await page.title().catch(() => ''), statusCode, depth: item.depth, parentUrl: item.parent, source: item.source, loadMs, linksFound: 0, a11yScore: 100, bpScore: 100, findings: [] });
+        redirectedOffSite++;
         continue;
       }
 
@@ -336,10 +346,10 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
       for (const l of found.filter((x) => !x.nav)) enqueue(l.href, item.depth + 1, finalUrl);
       if (!sitemapSeeded) {
         sitemapSeeded = true;
-        for (const u of sitemapUrls) enqueue(u, 1, 'sitemap');
+        for (const u of sitemapUrls) enqueue(u, 1, 'sitemap', 'sitemap');
       }
       const internal = found.filter((l) => sameSite(l.href)).length;
-      emit({ type: 'page', message: `${title || finalUrl} — ${found.length} links (${internal} internal, ${found.length - internal} external) · ${pages.length + 1 + queue.length} pages found so far`, data: { url: finalUrl, title, links: found.length, internal, status: statusCode, discovered: pages.length + 1 + queue.length } });
+      emit({ type: 'page', message: `${title || finalUrl} — ${found.length} links (${internal} internal, ${found.length - internal} external) · ${pages.length + 1 + queue.length} pages found so far`, data: { url: finalUrl, title, links: found.length, internal, status: statusCode, discovered: pages.length + 1 + queue.length, ...linkCounts() } });
 
       // ── Checks ──
       const findings: Finding[] = [];
@@ -367,7 +377,7 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
         emit({ type: 'warning', message: `Best-practice check failed on ${shortUrl(finalUrl)}: ${(err as Error).message.split('\n')[0]}` });
       }
 
-      pages.push({ url: finalUrl, title, statusCode, depth: item.depth, parentUrl: item.parent, loadMs, linksFound: found.length, a11yScore, bpScore, findings });
+      pages.push({ url: finalUrl, title, statusCode, depth: item.depth, parentUrl: item.parent, source: item.source, loadMs, linksFound: found.length, a11yScore, bpScore, findings });
 
       if (queue.length && pages.length < options.maxPages && delayMs > 0) await page.waitForTimeout(delayMs);
     }
@@ -375,12 +385,18 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
     if (queue.length && pages.length >= options.maxPages) {
       notes.push(`Audited ${pages.length} of ${pages.length + queue.length} pages found. ${queue.length} page${queue.length === 1 ? '' : 's'} discovered but not audited (safety limit of ${options.maxPages} pages per audit).`);
     }
+    emit({ type: 'page', message: `Crawl finished — ${pages.length} page${pages.length === 1 ? '' : 's'} audited, ${queue.length} found but not audited, ${linkMap.size} unique links collected.`, data: { audited: pages.length, discovered: pages.length + queue.length, ...linkCounts() } });
 
     // ── Link check ──
     let links: LinkResult[] = [];
     if (!control.cancelled) {
       links = await checkLinks(ctx.request, [...linkMap.values()], { checkExternal: options.checkExternalLinks }, emit);
     }
+
+    const coverage = buildCoverage({
+      pages, queue, links, linkMap: [...linkMap.values()], inventory, skippedNonHtml, redirectedOffSite,
+      stoppedBecause: control.cancelled ? 'cancelled' : queue.length ? 'page-limit' : 'every-page-audited',
+    });
 
     const finishedAt = new Date();
     const summary = buildSummary({
@@ -392,11 +408,12 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
       robots: { crawlDelay: robots.crawlDelay, disallowCount: robots.disallow.length, sitemaps: robots.sitemaps },
       sitemapUrlsFound: inventory.sitemapUrls,
       inventory,
+      coverage,
       pagesDiscovered: pages.length + queue.length,
       linksFound: linkMap.size,
       notes,
     });
-    emit({ type: 'summary', message: `Health score ${summary.overall.score}/100 (${summary.overall.grade}) — ${summary.categories.accessibility.violations} accessibility violations, ${summary.categories.links.broken + summary.categories.links.serverErrors + summary.categories.links.timeouts} broken links, ${summary.categories.bestPractice.failingRules.length} best-practice rules failing.`, data: { overall: summary.overall } });
+    emit({ type: 'summary', message: `Health score ${summary.overall.score}/100 (${summary.overall.grade}) — ${summary.categories.accessibility.violations} accessibility violations, ${summary.categories.links.broken + summary.categories.links.serverErrors + summary.categories.links.timeouts} broken links, ${summary.categories.bestPractice.failingRules.length} best-practice rules failing.`, data: { overall: summary.overall, audited: pages.length, discovered: pages.length + queue.length } });
     return { pages, links, summary };
   } finally {
     if (browser) await browser.close().catch(() => { /* ignore */ });
@@ -405,4 +422,64 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
 
 function shortUrl(u: string): string {
   try { const x = new URL(u); return (x.pathname === '/' ? x.host : x.pathname) + (x.search || ''); } catch { return u; }
+}
+
+/* ───────────────────────────── coverage ───────────────────────────── */
+
+const MAX_NOT_AUDITED_KEPT = 3000;
+
+/** Tally what the crawl actually touched. Every number is a count of real pages / links; nothing is projected. */
+function buildCoverage(input: {
+  pages: PageResult[];
+  queue: { url: string; depth: number; parent?: string; source: PageSource }[];
+  links: LinkResult[];
+  linkMap: CollectedLink[];
+  inventory: SiteInventory;
+  skippedNonHtml: number;
+  redirectedOffSite: number;
+  stoppedBecause: CrawlCoverage['stoppedBecause'];
+}): CrawlCoverage {
+  const { pages, queue, links, linkMap, inventory } = input;
+  const bySource: CrawlCoverage['bySource'] = { start: { found: 0, audited: 0 }, sitemap: { found: 0, audited: 0 }, link: { found: 0, audited: 0 } };
+  const depthMap = new Map<number, { found: number; audited: number }>();
+  const sectionMap = new Map<string, { found: number; audited: number }>();
+  const bump = <K,>(m: Map<K, { found: number; audited: number }>, k: K, audited: boolean) => {
+    const e = m.get(k) || { found: 0, audited: 0 };
+    e.found++;
+    if (audited) e.audited++;
+    m.set(k, e);
+  };
+  for (const p of pages) {
+    bySource[p.source].found++; bySource[p.source].audited++;
+    bump(depthMap, p.depth, true);
+    bump(sectionMap, sectionOf(p.url), true);
+  }
+  for (const q of queue) {
+    bySource[q.source].found++;
+    bump(depthMap, q.depth, false);
+    bump(sectionMap, sectionOf(q.url), false);
+  }
+  const templated = new Set(inventory.sections.filter((s) => s.templated).map((s) => s.path));
+  let internal = 0;
+  for (const l of linkMap) if (!l.external) internal++;
+  return {
+    audited: pages.length,
+    found: pages.length + queue.length,
+    unreachable: pages.filter((p) => p.statusCode === null).length,
+    redirectedOffSite: input.redirectedOffSite,
+    skippedNonHtml: input.skippedNonHtml,
+    bySource,
+    byDepth: [...depthMap.entries()].sort((a, b) => a[0] - b[0]).map(([depth, e]) => ({ depth, ...e })),
+    bySection: [...sectionMap.entries()].sort((a, b) => b[1].found - a[1].found).map(([path, e]) => ({ path, ...e, templated: templated.has(path) })),
+    links: {
+      unique: linkMap.length,
+      internal,
+      external: linkMap.length - internal,
+      checked: links.filter((l) => l.kind !== 'skipped').length,
+      skipped: links.filter((l) => l.kind === 'skipped').length,
+    },
+    notAudited: queue.slice(0, MAX_NOT_AUDITED_KEPT).map((q) => ({ url: q.url, depth: q.depth, source: q.source, parentUrl: q.parent && q.parent !== 'sitemap' ? q.parent : undefined })),
+    notAuditedTotal: queue.length,
+    stoppedBecause: input.stoppedBecause,
+  };
 }

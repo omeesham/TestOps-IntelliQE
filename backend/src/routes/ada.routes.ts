@@ -169,7 +169,7 @@ router.get('/scans/:id/pages', async (req: Request, res: Response) => {
     const id = String(req.params.id);
     if (!UUID_RE.test(id)) { res.status(400).json({ error: 'Invalid scan id' }); return; }
     const { rows } = await pool.query(
-      `SELECT url, title, status_code, depth, parent_url, load_ms, links_found, a11y_score, bp_score, findings_count
+      `SELECT url, title, status_code, depth, parent_url, source, load_ms, links_found, a11y_score, bp_score, findings_count
          FROM ada_pages WHERE scan_id = $1 AND tenant_id = $2 ORDER BY depth, url`,
       [id, req.user!.tenantId],
     );

@@ -1518,6 +1518,22 @@ export interface AdaSiteInventory {
   sections: { path: string; pages: number; templated: boolean }[];
   templatedPages: number;
 }
+export type AdaPageSource = 'start' | 'sitemap' | 'link';
+/** Proof of what the crawl touched — counts of real visits, never estimates. */
+export interface AdaCoverage {
+  audited: number;
+  found: number;
+  unreachable: number;
+  redirectedOffSite: number;
+  skippedNonHtml: number;
+  bySource: Record<AdaPageSource, { found: number; audited: number }>;
+  byDepth: { depth: number; found: number; audited: number }[];
+  bySection: { path: string; found: number; audited: number; templated: boolean }[];
+  links: { unique: number; internal: number; external: number; checked: number; skipped: number };
+  notAudited: { url: string; depth: number; source: AdaPageSource; parentUrl?: string }[];
+  notAuditedTotal: number;
+  stoppedBecause: 'every-page-audited' | 'page-limit' | 'cancelled';
+}
 export interface AdaCategoryScore { score: number; grade: 'A' | 'B' | 'C' | 'D' | 'F'; label: string }
 export interface AdaLinkResult { url: string; status: number | null; kind: string; external: boolean; referrers: string[]; linkText?: string; error?: string; finalUrl?: string }
 
@@ -1536,6 +1552,7 @@ export interface AdaSummary {
   robots: { crawlDelay: number | null; disallowCount: number; sitemaps: string[] };
   sitemapUrlsFound: number;
   inventory?: AdaSiteInventory;
+  coverage?: AdaCoverage;
   overall: AdaCategoryScore;
   categories: {
     accessibility: AdaCategoryScore & { violations: number; needsReview: number; bySeverity: Record<AdaSeverity, number>; topRules: { ruleId: string; title: string; severity: AdaSeverity; pages: number; occurrences: number; helpUrl?: string; wcag?: string }[] };
@@ -1568,7 +1585,8 @@ export interface AdaScanRecord {
 
 export interface AdaProgress {
   status: 'running' | 'completed' | 'failed' | 'cancelled';
-  counters: { pages: number; discovered?: number; linksFound: number; linksChecked: number; issues: number; maxPages: number; currentUrl?: string };
+  /** `pages` counts only pages whose checks have finished. */
+  counters: { pages: number; discovered?: number; linksFound: number; linksInternal?: number; linksExternal?: number; linksChecked: number; issues: number; maxPages: number; currentUrl?: string };
   events: AdaProgressEvent[];
   lastSeq: number;
   elapsedMs: number;
@@ -1607,6 +1625,7 @@ export interface AdaPage {
   status_code: number | null;
   depth: number;
   parent_url?: string | null;
+  source?: AdaPageSource | null;
   load_ms: number;
   links_found: number;
   a11y_score: number;

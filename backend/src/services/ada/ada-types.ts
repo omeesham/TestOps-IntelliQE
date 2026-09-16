@@ -60,12 +60,16 @@ export interface Finding {
   details?: Record<string, unknown>;
 }
 
+/** How the crawler learned about a page: the start URL, the sitemap, or a link on an audited page. */
+export type PageSource = 'start' | 'sitemap' | 'link';
+
 export interface PageResult {
   url: string;
   title: string;
   statusCode: number | null;
   depth: number;
   parentUrl?: string;
+  source: PageSource;
   loadMs: number;
   linksFound: number;
   a11yScore: number;
@@ -91,6 +95,37 @@ export interface CategoryScore {
   label: string;
 }
 
+/**
+ * Exactly what the crawl touched, so the report can prove its own coverage:
+ * every page opened, every page found but left unaudited, and where each came
+ * from. Nothing here is estimated — the numbers are counts of real visits.
+ */
+export interface CrawlCoverage {
+  /** Pages opened in the browser with every check run (unreachable pages are recorded, not estimated). */
+  audited: number;
+  /** In-scope pages found: audited + still queued when the audit ended. */
+  found: number;
+  /** Audited pages that never loaded (timeout, DNS, connection refused). */
+  unreachable: number;
+  /** Pages that redirected off-site; recorded, not crawled further. */
+  redirectedOffSite: number;
+  /** URLs that answered with a non-HTML type (PDF, image…) and were skipped. */
+  skippedNonHtml: number;
+  /** Where the pages came from. */
+  bySource: Record<PageSource, { found: number; audited: number }>;
+  /** Pages by distance from the start page (depth 0 = the start URL, 1 = its menu/links and sitemap pages…). */
+  byDepth: { depth: number; found: number; audited: number }[];
+  /** Site sections (first two path segments), biggest first. */
+  bySection: { path: string; found: number; audited: number; templated: boolean }[];
+  /** Unique links seen on audited pages. */
+  links: { unique: number; internal: number; external: number; checked: number; skipped: number };
+  /** Pages found but not audited when the audit ended (capped — see notAuditedTotal). */
+  notAudited: { url: string; depth: number; source: PageSource; parentUrl?: string }[];
+  notAuditedTotal: number;
+  /** Why the audit ended before every found page was audited. */
+  stoppedBecause: 'every-page-audited' | 'page-limit' | 'cancelled';
+}
+
 export interface ScanSummary {
   targetUrl: string;
   siteName: string;
@@ -108,6 +143,8 @@ export interface ScanSummary {
   sitemapUrlsFound: number;
   /** What the site consists of: sitemap URLs, language versions, pages in scope, templated sections. */
   inventory?: SiteInventory;
+  /** Proof of what was visited: pages by section / depth / source, links, and the pages left unaudited. */
+  coverage?: CrawlCoverage;
   overall: CategoryScore;
   categories: {
     accessibility: CategoryScore & { violations: number; needsReview: number; bySeverity: Record<Severity, number>; topRules: { ruleId: string; title: string; severity: Severity; pages: number; occurrences: number; helpUrl?: string; wcag?: string }[] };
