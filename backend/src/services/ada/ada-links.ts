@@ -32,9 +32,10 @@ export function shouldCheckLink(href: string): boolean {
 export async function checkLinks(
   request: APIRequestContext,
   links: CollectedLink[],
-  opts: { checkExternal: boolean },
+  opts: { checkExternal: boolean; /** Stop taking new links after this many ms; the rest are reported as not checked. */ deadlineMs?: number },
   emit: (e: Omit<ProgressEvent, 'seq' | 'at'>) => void,
 ): Promise<LinkResult[]> {
+  const deadline = opts.deadlineMs ? Date.now() + opts.deadlineMs : null;
   const results: LinkResult[] = [];
   const queue = links.filter((l) => opts.checkExternal || !l.external);
   const skipped = links.filter((l) => !opts.checkExternal && l.external);
@@ -53,6 +54,7 @@ export async function checkLinks(
 
   const worker = async () => {
     while (queue.length) {
+      if (deadline && Date.now() > deadline) break;
       // Pick the first link whose host is not saturated.
       let idx = queue.findIndex((l) => (inFlightByHost.get(hostOf(l.url)) || 0) < 2);
       if (idx === -1) { await new Promise((r) => setTimeout(r, 150)); continue; }
@@ -76,6 +78,13 @@ export async function checkLinks(
     }
   };
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, Math.max(1, total)) }, worker));
+  if (queue.length) {
+    // Out of time: say so, and record the rest as not checked rather than dropping them.
+    emit({ type: 'links', message: `Link check stopped after ${Math.round((opts.deadlineMs || 0) / 1000)}s — ${done} of ${total} links checked, ${queue.length} not checked.`, data: { done, total, broken, notChecked: queue.length } });
+    for (const l of queue.splice(0)) {
+      results.push({ url: l.url, status: null, ok: true, kind: 'skipped', external: l.external, referrers: [...l.referrers], linkText: l.text, error: 'Not checked — time budget after the audit was stopped' });
+    }
+  }
   return results;
 }
 

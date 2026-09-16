@@ -90,9 +90,12 @@ export interface LinkResult {
 }
 
 export interface CategoryScore {
-  score: number;      // 0-100
-  grade: 'A' | 'B' | 'C' | 'D' | 'F';
+  /** 0-100, or null when the category was not measured (e.g. links were never checked). */
+  score: number | null;
+  grade: 'A' | 'B' | 'C' | 'D' | 'F' | null;
   label: string;
+  /** False when nothing in this category was checked — never shown as a score, never counted in the overall. */
+  measured: boolean;
 }
 
 /**
@@ -155,7 +158,7 @@ export interface ScanSummary {
   notes: string[];
 }
 
-export function gradeFor(score: number): CategoryScore['grade'] {
+export function gradeFor(score: number): NonNullable<CategoryScore['grade']> {
   if (score >= 90) return 'A';
   if (score >= 80) return 'B';
   if (score >= 70) return 'C';
@@ -163,12 +166,17 @@ export function gradeFor(score: number): CategoryScore['grade'] {
   return 'F';
 }
 
-export function gradeLabel(grade: CategoryScore['grade']): string {
+export function gradeLabel(grade: NonNullable<CategoryScore['grade']>): string {
   return { A: 'Excellent', B: 'Good', C: 'Needs attention', D: 'Poor', F: 'Critical' }[grade];
 }
 
 export function makeScore(score: number): CategoryScore {
   const s = Math.max(0, Math.min(100, Math.round(score)));
   const grade = gradeFor(s);
-  return { score: s, grade, label: gradeLabel(grade) };
+  return { score: s, grade, label: gradeLabel(grade), measured: true };
+}
+
+/** A category nothing was checked in. It is reported as such, not as a perfect score. */
+export function unmeasuredScore(label = 'Not checked'): CategoryScore {
+  return { score: null, grade: null, label, measured: false };
 }

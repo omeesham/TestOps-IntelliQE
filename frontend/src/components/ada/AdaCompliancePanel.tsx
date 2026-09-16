@@ -90,6 +90,27 @@ const EVENT_COLOR: Record<AdaProgressEvent['type'], string> = {
 
 const inputCls = 'w-full px-3.5 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-800 placeholder:text-gray-400 outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400 transition-all';
 
+/** "397 of 2,017 pages audited (1,988 listed in the sitemap, 29 more found by following links)" — every number accounted for. */
+function describePages(s: AdaSummary): string {
+  const n = (x: number) => x.toLocaleString();
+  const found = Math.max(s.pagesDiscovered || 0, s.pagesCrawled);
+  if (found <= s.pagesCrawled) return `${n(s.pagesCrawled)} page${s.pagesCrawled === 1 ? '' : 's'} audited — every page found`;
+  const fromSitemap = s.coverage?.bySource.sitemap.found ?? 0;
+  const extra = found - fromSitemap;
+  const how = fromSitemap > 0
+    ? ` (${n(fromSitemap)} listed in the sitemap, ${n(extra)} more found by following links)`
+    : ' (found by following links from the start page)';
+  return `${n(s.pagesCrawled)} of ${n(found)} pages audited${how}`;
+}
+
+/** "1,234 of 2,300 links checked" or "links not checked" — never a count that implies a check that did not happen. */
+function describeLinks(s: AdaSummary): string {
+  const l = s.categories.links;
+  if (l.measured === false || l.checked === 0) return 'links not checked';
+  const n = (x: number) => x.toLocaleString();
+  return s.linksFound > l.checked ? `${n(l.checked)} of ${n(s.linksFound)} links checked` : `${n(l.checked)} links checked`;
+}
+
 function shortUrl(u: string): string {
   try { const x = new URL(u); return (x.pathname === '/' ? x.host : x.pathname) + (x.search || ''); } catch { return u; }
 }
@@ -574,7 +595,7 @@ function ReportHeader({ scanId, summary, partial, findings, onReset, onBrownfiel
   return (
     <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-4">
       <div className="flex flex-wrap items-center gap-4">
-        <ScoreRing score={summary.overall.score} grade={summary.overall.grade} />
+        <ScoreRing score={summary.overall.score ?? 0} grade={summary.overall.grade ?? 'F'} />
         <div className="flex-1 min-w-[220px]">
           <div className="flex items-center gap-2 flex-wrap">
             <p className="text-[11px] uppercase tracking-wide text-gray-400">Website audit report</p>
@@ -587,7 +608,7 @@ function ReportHeader({ scanId, summary, partial, findings, onReset, onBrownfiel
           <a href={summary.targetUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-violet-600 hover:underline inline-flex items-center gap-1 break-all">{summary.targetUrl} <ExternalLink className="w-3 h-3" /></a>
           {summary.inventory && summary.inventory.sitemapUrls > 0 && <InventoryLine inv={summary.inventory} className="mt-2" />}
           <p className="text-xs text-gray-500 mt-1">
-            {summary.pagesCrawled} page{summary.pagesCrawled === 1 ? '' : 's'} audited{(summary.pagesDiscovered || 0) > summary.pagesCrawled ? ` of ${summary.pagesDiscovered} found` : ''} · {summary.linksChecked} links checked · {a.violations} accessibility violation{a.violations === 1 ? '' : 's'} · {brokenTotal} broken link{brokenTotal === 1 ? '' : 's'} · {summary.categories.bestPractice.failingRules.length} best-practice checks failing · {fmtDuration(summary.durationMs)}
+            {describePages(summary)} · {describeLinks(summary)} · {a.violations} accessibility violation{a.violations === 1 ? '' : 's'} · {l.measured === false ? 'broken links not assessed' : `${brokenTotal} broken link${brokenTotal === 1 ? '' : 's'}`} · {summary.categories.bestPractice.failingRules.length} best-practice checks failing · {fmtDuration(summary.durationMs)}
           </p>
           <TrendStrip scanId={scanId} summary={summary} />
           {summary.loginAttempted && (
@@ -599,7 +620,7 @@ function ReportHeader({ scanId, summary, partial, findings, onReset, onBrownfiel
         </div>
         <div className="grid grid-cols-3 gap-2">
           <MiniScore label="Accessibility" cat={summary.categories.accessibility} Icon={UniversalAccess} />
-          <MiniScore label="Links" cat={summary.categories.links} Icon={Link2Off} />
+          <MiniScore label="Links" cat={summary.categories.links} Icon={Link2Off} basis={l.measured === false ? undefined : `${l.checked.toLocaleString()} checked · ${brokenTotal} broken`} />
           <MiniScore label="Practices" cat={summary.categories.bestPractice} Icon={ShieldCheck} />
         </div>
       </div>
@@ -627,11 +648,22 @@ function ReportHeader({ scanId, summary, partial, findings, onReset, onBrownfiel
   );
 }
 
-function MiniScore({ label, cat, Icon }: { label: string; cat: { score: number; grade: string }; Icon: React.ElementType }) {
+function MiniScore({ label, cat, Icon, basis }: { label: string; cat: { score: number | null; grade: string | null; label?: string }; Icon: React.ElementType; basis?: string }) {
+  if (cat.score === null || cat.grade === null) {
+    return (
+      <div className="bg-gray-50 border border-dashed border-gray-200 rounded-lg px-3 py-2 text-center min-w-[84px]" title="Nothing in this category was checked, so it is not scored and not counted in the overall health score.">
+        <Icon className="w-4 h-4 mx-auto text-gray-300" />
+        <p className="text-lg font-bold leading-tight text-gray-300">—</p>
+        <p className="text-[10px] text-gray-400">{label}</p>
+        <p className="text-[10px] text-gray-400">{cat.label || 'Not checked'}</p>
+      </div>
+    );
+  }
   return (
     <div className="text-center bg-gray-50/70 border border-gray-100 rounded-lg px-3 py-2 min-w-[84px]">
       <Icon className="w-4 h-4 text-gray-400 mx-auto" />
       <p className={`text-lg font-bold leading-tight ${GRADE_COLOR[cat.grade]}`}>{cat.score}</p>
+      {basis && <p className="text-[10px] text-gray-400 leading-tight">{basis}</p>}
       <p className="text-[10px] text-gray-500">{label}</p>
     </div>
   );
@@ -707,7 +739,7 @@ function IssueExplorer({ findings, summary, embedded }: { findings: AdaFinding[]
         <p className="text-xs text-gray-600 mt-1">Issues in {totals.pages} page{totals.pages === 1 ? '' : 's'} and {totals.components} component{totals.components === 1 ? '' : 's'}</p>
         <div className="flex flex-wrap gap-1.5 mt-2">
           <span className="px-2 py-0.5 rounded border border-gray-200 text-[10px] text-gray-600 font-medium">WCAG 2.2 AA</span>
-          <span className={`px-2 py-0.5 rounded border border-gray-200 text-[10px] font-medium ${GRADE_COLOR[summary.overall.grade]}`}>Health {summary.overall.score}/100</span>
+          <span className={`px-2 py-0.5 rounded border border-gray-200 text-[10px] font-medium ${GRADE_COLOR[summary.overall.grade ?? 'F']}`}>Health {summary.overall.score ?? 0}/100</span>
         </div>
       </div>
       <div>
@@ -919,8 +951,8 @@ function WorkflowLog({ events, summary, partial }: { events: AdaProgressEvent[];
   return (
     <div>
       <div className="px-4 py-2.5 border-b border-gray-100 text-xs text-gray-600 flex flex-wrap gap-x-4 gap-y-1">
-        <span><span className="font-semibold text-gray-800">{summary.pagesCrawled}</span> pages audited{(summary.pagesDiscovered || 0) > summary.pagesCrawled ? <span className="text-gray-400"> of {summary.pagesDiscovered} found</span> : null}</span>
-        <span><span className="font-semibold text-gray-800">{summary.linksChecked}</span> links checked</span>
+        <span>{describePages(summary)}</span>
+        <span>{describeLinks(summary)}</span>
         <span><span className="font-semibold text-gray-800">{counts['link-check']}</span> link problems logged</span>
         <span><span className="font-semibold text-gray-800">{counts.warning}</span> warnings</span>
         <span>{fmtDuration(summary.durationMs)}</span>
@@ -1252,8 +1284,10 @@ function buildHtmlReport(s: AdaSummary, partial: boolean, findings: AdaFinding[]
   const a = s.categories.accessibility, l = s.categories.links, b = s.categories.bestPractice;
   const broken = l.broken + l.serverErrors + l.timeouts;
   const gradeColor: Record<string, string> = { A: '#059669', B: '#16a34a', C: '#d97706', D: '#ea580c', F: '#dc2626' };
-  const score = (c: { score: number; grade: string }, label: string, anchor?: string) =>
-    `<${anchor ? `a href="#${anchor}"` : 'div'} class="score"><div class="big" style="color:${gradeColor[c.grade]}">${c.score}</div><div class="lbl">${esc(label)}</div><div class="grade">Grade ${c.grade}${anchor ? ' · view' : ''}</div></${anchor ? 'a' : 'div'}>`;
+  const score = (c: { score: number | null; grade: string | null; label?: string }, label: string, anchor?: string, basis?: string) =>
+    c.score === null || c.grade === null
+      ? `<div class="score" style="border-style:dashed;background:#f9fafb"><div class="big" style="color:#9ca3af">—</div><div class="lbl">${esc(label)}</div><div class="grade">${esc(c.label || 'Not checked')} · not counted in overall</div></div>`
+      : `<${anchor ? `a href="#${anchor}"` : 'div'} class="score"><div class="big" style="color:${gradeColor[c.grade]}">${c.score}</div><div class="lbl">${esc(label)}</div><div class="grade">Grade ${c.grade}${basis ? ` · ${esc(basis)}` : ''}${anchor ? ' · view' : ''}</div></${anchor ? 'a' : 'div'}>`;
   const issues = findings.filter((f) => f.category !== 'review');
   const totalIssues = issues.reduce((x, f) => x + f.occurrences, 0);
   const bySev: Record<AdaSeverity, number> = { critical: 0, serious: 0, moderate: 0, minor: 0 };
@@ -1294,10 +1328,10 @@ details{border:1px solid #e5e7eb;border-radius:8px;padding:8px 12px;margin:6px 0
 .foot{margin-top:32px;font-size:11px;color:#9ca3af}</style></head><body>
 <h1 id="top">Website audit report — ${esc(s.siteName)}</h1>
 ${s.inventory && s.inventory.sitemapUrls > 0 ? `<p class="muted" style="margin:4px 0">Site inventory: ${s.inventory.sitemapUrls.toLocaleString()} URLs in sitemap${s.inventory.auditedLocale ? ` · ${s.inventory.locales.length} language version${s.inventory.locales.length === 1 ? '' : 's'} (${esc(s.inventory.locales.map((l) => l.code).join(', '))})` : ''} · ${s.inventory.pagesInScope.toLocaleString()} unique pages${s.inventory.auditedLocale ? ` in ${esc(s.inventory.auditedLocale)}` : ''}${s.inventory.templatedPages ? ` · ${s.inventory.templatedPages.toLocaleString()} templated articles (${esc(s.inventory.sections.filter((x) => x.templated).map((x) => x.path).join(', '))})` : ''}</p>` : ''}
-<div class="muted" style="margin:6px 0 10px"><span class="tag ${partial ? 'part' : 'ok'}">${partial ? 'STOPPED EARLY — PARTIAL RESULTS' : 'COMPLETE'}</span><span class="tag wcag">WCAG 2.2 AA</span> ${esc(s.targetUrl)} · audited ${esc(new Date(s.finishedAt).toLocaleString())} · ${s.pagesCrawled} pages audited${(s.pagesDiscovered || 0) > s.pagesCrawled ? ` of ${s.pagesDiscovered} found` : ''} · ${s.linksChecked} links checked · ${Math.round(s.durationMs / 1000)}s</div>
+<div class="muted" style="margin:6px 0 10px"><span class="tag ${partial ? 'part' : 'ok'}">${partial ? 'STOPPED EARLY — PARTIAL RESULTS' : 'COMPLETE'}</span><span class="tag wcag">WCAG 2.2 AA</span> ${esc(s.targetUrl)} · audited ${esc(new Date(s.finishedAt).toLocaleString())} · ${esc(describePages(s))} · ${esc(describeLinks(s))} · ${esc(fmtDuration(s.durationMs))}</div>
 <nav class="toc">
 <a href="#accessibility">Accessibility violations <b>${a.violations}</b></a>
-<a href="#links">Broken links <b>${broken}</b></a>
+<a href="#links">Broken links <b>${l.measured === false ? 'not checked' : broken}</b></a>
 <a href="#best-practice">Best practices failing <b>${b.failingRules.length}</b></a>
 <a href="#review">Needs manual review <b>${a.needsReview}</b></a>
 ${trend.length > 1 ? '<a href="#trend">Trend</a>' : ''}
@@ -1306,11 +1340,13 @@ ${s.coverage ? '<a href="#coverage">Coverage</a>' : ''}
 ${s.coverage && s.coverage.notAuditedTotal > 0 ? `<a href="#not-audited">Not audited <b>${s.coverage.notAuditedTotal.toLocaleString()}</b></a>` : ''}
 ${s.notes.length ? '<a href="#notes">Notes</a>' : ''}
 </nav>
-<div class="scores">${score(s.overall, 'Overall health')}${score(a, 'Accessibility (WCAG 2.2 AA)', 'accessibility')}${score(l, 'Links', 'links')}${score(b, 'Best practices', 'best-practice')}</div>
+<div class="scores">${score(s.overall, 'Overall health')}${score(a, 'Accessibility (WCAG 2.2 AA)', 'accessibility')}${score(l, 'Links', 'links', `${l.checked.toLocaleString()} checked · ${broken} broken`)}${score(b, 'Best practices', 'best-practice', `${b.rulesPassed}/${b.rulesEvaluated} checks passing`)}</div>
 <div class="summary"><div><div class="n">${totalIssues}</div><div class="muted">Issues in ${new Set(issues.map((f) => f.page_url)).size} pages and ${new Set(findings.filter((f) => f.element).map((f) => f.element)).size} components</div></div>
-<div><div class="muted" style="font-weight:600;margin-bottom:4px">Severity breakdown</div><span class="sev critical">${bySev.critical} critical</span> <span class="sev serious">${bySev.serious} serious</span> <span class="sev moderate">${bySev.moderate} moderate</span> <span class="sev minor">${bySev.minor} minor</span><div class="muted" style="margin-top:8px"><a href="#review">${a.needsReview} issue${a.needsReview === 1 ? '' : 's'} need manual review</a> · <a href="#accessibility">${a.violations} accessibility violation${a.violations === 1 ? '' : 's'}</a> · <a href="#links">${broken} broken link${broken === 1 ? '' : 's'}</a> · <a href="#best-practice">${b.failingRules.length} best-practice check${b.failingRules.length === 1 ? '' : 's'} failing</a></div></div></div>
+<div><div class="muted" style="font-weight:600;margin-bottom:4px">Severity breakdown</div><span class="sev critical">${bySev.critical} critical</span> <span class="sev serious">${bySev.serious} serious</span> <span class="sev moderate">${bySev.moderate} moderate</span> <span class="sev minor">${bySev.minor} minor</span><div class="muted" style="margin-top:8px"><a href="#review">${a.needsReview.toLocaleString()} item${a.needsReview === 1 ? '' : 's'} the scanner could not decide — manual review</a> · <a href="#accessibility">${a.violations} accessibility violation${a.violations === 1 ? '' : 's'}</a> · <a href="#links">${l.measured === false ? 'links not checked' : `${broken} broken link${broken === 1 ? '' : 's'}`}</a> · <a href="#best-practice">${b.failingRules.length} best-practice check${b.failingRules.length === 1 ? '' : 's'} failing</a></div></div></div>
 ${section('accessibility', `Accessibility violations (WCAG) — ${a.violations}`)}
-${section('links', `Broken links — ${broken} of ${l.checked} checked${l.blocked ? ` (${l.blocked} could not be verified)` : ''}`)}
+${l.measured === false
+    ? `<h2 id="links">Broken links — not checked <a class="top" href="#top">↑ top</a></h2><p class="muted">No links were checked in this audit${s.linksFound ? ` (${s.linksFound.toLocaleString()} were collected)` : ''}. The Links category is not scored and is not part of the overall health score. Run the audit to completion to check them.</p>`
+    : section('links', `Broken links — ${broken} of ${l.checked} checked${l.blocked ? ` (${l.blocked} could not be verified)` : ''}`)}
 ${section('best-practice', `Best-practice issues — ${b.failingRules.length} checks failing`)}
 ${section('review', `Needs manual review — ${a.needsReview}`)}
 ${trendHtml(trend, scanId)}

@@ -9,7 +9,7 @@
  */
 import type { SiteInventory } from './ada-inventory.js';
 import type { CrawlCoverage, LinkResult, PageResult, ScanSummary, Severity } from './ada-types.js';
-import { makeScore } from './ada-types.js';
+import { makeScore, unmeasuredScore } from './ada-types.js';
 
 const SEVERITY_ORDER: Severity[] = ['critical', 'serious', 'moderate', 'minor'];
 
@@ -62,8 +62,11 @@ export function buildSummary(input: {
   const blockedList = checked.filter((l) => l.kind === 'blocked');
   const blocked = blockedList.length;
   // Redirects are healthy and blocked links are unknowable; only hard failures cost points.
+  // No links checked at all (audit stopped before the link phase, or a site
+  // with no links) means NO score — never a default 100.
   const scoreable = checked.length - blocked;
-  const linkScore = scoreable > 0 ? ((ok + redirects) / scoreable) * 100 : 100;
+  const linksMeasured = checked.length > 0;
+  const linkScore: number | null = !linksMeasured ? null : scoreable > 0 ? ((ok + redirects) / scoreable) * 100 : 100;
   const brokenLinks = checked
     .filter((l) => !l.ok)
     .sort((a, b) => (a.external === b.external ? 0 : a.external ? 1 : -1) || (a.status ?? 999) - (b.status ?? 999))
@@ -85,7 +88,17 @@ export function buildSummary(input: {
     .sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity) || b.pages.size - a.pages.size)
     .map((r) => ({ ruleId: r.ruleId, title: r.title, severity: r.severity, pages: r.pages.size }));
 
-  const overall = a11yScore * 0.45 + linkScore * 0.30 + bpScore * 0.25;
+  // Overall = weighted blend of the categories that were actually measured,
+  // with the weights re-normalised so an unmeasured category neither helps
+  // nor hurts.
+  const weighted: [number | null, number][] = [[a11yScore, 0.45], [linkScore, 0.30], [bpScore, 0.25]];
+  const measured = weighted.filter((w): w is [number, number] => w[0] !== null);
+  const weightSum = measured.reduce((a, [, w]) => a + w, 0);
+  const overall = measured.reduce((a, [v, w]) => a + v * w, 0) / (weightSum || 1);
+  const notes = [...input.notes];
+  if (!linksMeasured) {
+    notes.push(`No links were checked${input.linksFound ? ` (${input.linksFound.toLocaleString()} were collected)` : ''}, so the Links category is not scored and the overall health score is based on accessibility and best practices only.`);
+  }
 
   const worstPages = [...pages]
     .map((p) => ({ url: p.url, title: p.title, a11yScore: p.a11yScore, bpScore: p.bpScore, findings: p.findings.reduce((a, f) => a + f.occurrences, 0) }))
@@ -111,10 +124,10 @@ export function buildSummary(input: {
     overall: makeScore(overall),
     categories: {
       accessibility: { ...makeScore(a11yScore), violations, needsReview, bySeverity, topRules },
-      links: { ...makeScore(linkScore), checked: checked.length, ok, redirects, broken, serverErrors, timeouts, blocked, brokenLinks, blockedLinks: blockedList.slice(0, 100) },
+      links: { ...(linkScore === null ? unmeasuredScore('Not checked') : makeScore(linkScore)), checked: checked.length, ok, redirects, broken, serverErrors, timeouts, blocked, brokenLinks, blockedLinks: blockedList.slice(0, 100) },
       bestPractice: { ...makeScore(bpScore), rulesEvaluated: RULES_TOTAL, rulesPassed: RULES_TOTAL - failingRules.length, failingRules },
     },
     worstPages,
-    notes: input.notes,
+    notes,
   };
 }

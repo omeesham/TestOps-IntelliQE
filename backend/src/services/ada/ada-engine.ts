@@ -39,6 +39,8 @@ const PAGE_TIMEOUT_MS = 30_000;
 const MAX_SITEMAP_CHILDREN = 50;
 const MAX_SITEMAP_URLS = 50_000;
 const MAX_ROBOTS_DELAY_MS = 3000;
+/** After "Stop & report", links collected so far are still checked — but only for this long. */
+const LINK_BUDGET_AFTER_STOP_MS = 120_000;
 const BINARY_EXT = /\.(pdf|zip|rar|7z|gz|tar|jpe?g|png|gif|webp|svg|ico|bmp|tiff?|mp3|mp4|m4a|wav|avi|mov|wmv|webm|docx?|xlsx?|pptx?|csv|json|xml|rss|atom|css|js|woff2?|ttf|eot|exe|dmg|apk|ics)(\?.*)?$/i;
 
 let _chromium: typeof import('@playwright/test').chromium | null = null;
@@ -388,9 +390,15 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
     emit({ type: 'page', message: `Crawl finished — ${pages.length} page${pages.length === 1 ? '' : 's'} audited, ${queue.length} found but not audited, ${linkMap.size} unique links collected.`, data: { audited: pages.length, discovered: pages.length + queue.length, ...linkCounts() } });
 
     // ── Link check ──
+    // A stopped audit still checks the links it collected, under a time budget,
+    // so the Links category is measured rather than silently skipped.
     let links: LinkResult[] = [];
-    if (!control.cancelled) {
-      links = await checkLinks(ctx.request, [...linkMap.values()], { checkExternal: options.checkExternalLinks }, emit);
+    const collected = [...linkMap.values()];
+    if (collected.length && control.cancelled) {
+      emit({ type: 'links', message: `Audit stopped — checking the ${collected.length.toLocaleString()} links collected so far (up to ${LINK_BUDGET_AFTER_STOP_MS / 1000}s)…`, data: { total: collected.length } });
+      links = await checkLinks(ctx.request, collected, { checkExternal: options.checkExternalLinks, deadlineMs: LINK_BUDGET_AFTER_STOP_MS }, emit);
+    } else if (collected.length) {
+      links = await checkLinks(ctx.request, collected, { checkExternal: options.checkExternalLinks }, emit);
     }
 
     const coverage = buildCoverage({
@@ -413,7 +421,7 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
       linksFound: linkMap.size,
       notes,
     });
-    emit({ type: 'summary', message: `Health score ${summary.overall.score}/100 (${summary.overall.grade}) — ${summary.categories.accessibility.violations} accessibility violations, ${summary.categories.links.broken + summary.categories.links.serverErrors + summary.categories.links.timeouts} broken links, ${summary.categories.bestPractice.failingRules.length} best-practice rules failing.`, data: { overall: summary.overall, audited: pages.length, discovered: pages.length + queue.length } });
+    emit({ type: 'summary', message: `Health score ${summary.overall.score}/100 (${summary.overall.grade}) — ${summary.categories.accessibility.violations} accessibility violations, ${summary.categories.links.measured ? `${summary.categories.links.broken + summary.categories.links.serverErrors + summary.categories.links.timeouts} broken links` : 'links not checked'}, ${summary.categories.bestPractice.failingRules.length} best-practice rules failing.`, data: { overall: summary.overall, audited: pages.length, discovered: pages.length + queue.length } });
     return { pages, links, summary };
   } finally {
     if (browser) await browser.close().catch(() => { /* ignore */ });

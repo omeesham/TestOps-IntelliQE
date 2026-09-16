@@ -1545,7 +1545,8 @@ export interface AdaCoverage {
   notAuditedTotal: number;
   stoppedBecause: 'every-page-audited' | 'page-limit' | 'cancelled';
 }
-export interface AdaCategoryScore { score: number; grade: 'A' | 'B' | 'C' | 'D' | 'F'; label: string }
+/** `score`/`grade` are null and `measured` false when nothing in the category was checked (e.g. links on a stopped audit). */
+export interface AdaCategoryScore { score: number | null; grade: 'A' | 'B' | 'C' | 'D' | 'F' | null; label: string; measured?: boolean }
 export interface AdaLinkResult { url: string; status: number | null; kind: string; external: boolean; referrers: string[]; linkText?: string; error?: string; finalUrl?: string }
 
 export interface AdaSummary {
