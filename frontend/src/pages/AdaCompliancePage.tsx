@@ -12,7 +12,8 @@ import {
   listAdaSchedules, createAdaSchedule, updateAdaSchedule, deleteAdaSchedule, runAdaScheduleNow, type AdaSchedule,
 } from '@/services/api';
 import AdaCompliancePanel, { type BrownfieldHandoff } from '@/components/ada/AdaCompliancePanel';
-import { Accessibility, Plus, Trash2, Loader2, Clock, CheckCircle2, XCircle, Square, ChevronLeft, CalendarClock, Play, Lock } from 'lucide-react';
+import { Plus, Trash2, Loader2, Clock, CheckCircle2, XCircle, Square, ChevronLeft, CalendarClock, Play, Lock } from 'lucide-react';
+import UniversalAccess from '@/components/icons/UniversalAccess';
 
 function errorMessage(err: unknown, fallback: string): string {
   const e = err as { response?: { data?: { error?: string } }; message?: string } | undefined;
@@ -256,7 +257,7 @@ export default function AdaCompliancePage() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
-            <Accessibility className="w-5 h-5 text-violet-500" /> ADA Compliance
+            <UniversalAccess className="w-5 h-5 text-violet-500" /> ADA Compliance
           </h1>
           <p className="text-xs text-gray-500 mt-1">
             Give IntelliQE a website address. It crawls every page it can reach and reports accessibility (WCAG 2.2 AA) violations, broken links and best-practice issues as one scored health report.
@@ -276,7 +277,7 @@ export default function AdaCompliancePage() {
           <p className="p-6 text-sm text-gray-400 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</p>
         ) : scans.length === 0 ? (
           <div className="p-10 text-center">
-            <Accessibility className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+            <UniversalAccess className="w-8 h-8 text-gray-300 mx-auto mb-2" />
             <p className="text-sm text-gray-600">No audits yet.</p>
             <p className="text-xs text-gray-400 mt-1">Start one with a single URL — no requirements or setup needed.</p>
           </div>

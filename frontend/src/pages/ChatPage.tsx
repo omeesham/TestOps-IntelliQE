@@ -31,7 +31,8 @@ import {
   BarChart3, Activity, Workflow, Box, Pencil, Save, ChevronLeft, ChevronRight,
   Play, Heart, GitBranch, Terminal, AlertTriangle, Wrench, ExternalLink, Copy, Package,
   SkipForward, XCircle, Volume2, VolumeX, Settings, Github, LifeBuoy,
-  Accessibility, } from 'lucide-react';
+} from 'lucide-react';
+import UniversalAccess from '@/components/icons/UniversalAccess';
 import { initTTS, speak, speakAsync, waitForSpeech, waitForVoices, stopSpeaking, isTTSEnabled, toggleTTS } from '@/utils/tts';
 import { useToast } from '@/components/feedback/ToastProvider';
 import AdaCompliancePanel, { type BrownfieldHandoff } from '@/components/ada/AdaCompliancePanel';
@@ -95,7 +96,7 @@ interface AgentStep {
 const CATEGORIES: { id: Category; title: string; icon: React.ElementType; desc: string; comingSoon?: boolean }[] = [
   { id: 'application', title: 'Web Application Automation', icon: Monitor, desc: 'Validate functional workflows, E2E testing and cross-browser behavior.' },
   { id: 'api',         title: 'API Automation',     icon: Plug,        desc: 'Test REST services, endpoints, and system integrations.', comingSoon: true },
-  { id: 'ada',         title: 'ADA Compliance',     icon: Accessibility, desc: 'Enter a URL. Audit accessibility (WCAG), broken links, best practices and site health.' },
+  { id: 'ada',         title: 'ADA Compliance',     icon: UniversalAccess, desc: 'Enter a URL. Audit accessibility (WCAG), broken links, best practices and site health.' },
 ];
 
 

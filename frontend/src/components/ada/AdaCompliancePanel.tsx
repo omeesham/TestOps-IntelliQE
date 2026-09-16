@@ -22,11 +22,12 @@ import {
   type AdaScanRecord, type AdaSeverity, type AdaSummary, type AdaRemediation, type AdaSiteInventory, type AdaCoverage,
 } from '@/services/api';
 import {
-  Accessibility, Globe, Lock, Unlock, Loader2, CheckCircle2, AlertTriangle, XCircle, Link2Off,
+  Globe, Lock, Unlock, Loader2, CheckCircle2, AlertTriangle, XCircle, Link2Off,
   ShieldCheck, FileSearch, Compass, ChevronDown, ChevronRight, Download, ExternalLink, Search,
   Square, RotateCcw, Sparkles, ListChecks, Map as MapIcon, Bot, Info, Eye, Copy, FileText, Table2,
   MousePointerClick, Wrench, Timer,
 } from 'lucide-react';
+import UniversalAccess from '@/components/icons/UniversalAccess';
 
 const EFFORT_STYLE: Record<AdaRemediation['effort'], string> = {
   quick: 'bg-emerald-50 text-emerald-700 border-emerald-200',
@@ -77,7 +78,7 @@ const GRADE_RING: Record<string, string> = {
 
 const EVENT_ICON: Record<AdaProgressEvent['type'], React.ElementType> = {
   start: Globe, robots: FileSearch, sitemap: MapIcon, navigate: Compass, page: CheckCircle2, login: Lock,
-  accessibility: Accessibility, 'best-practice': ListChecks, links: Link2Off, 'link-check': XCircle,
+  accessibility: UniversalAccess, 'best-practice': ListChecks, links: Link2Off, 'link-check': XCircle,
   summary: Sparkles, warning: AlertTriangle, error: XCircle, done: CheckCircle2,
 };
 const EVENT_COLOR: Record<AdaProgressEvent['type'], string> = {
@@ -274,7 +275,7 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
       <div className={`${embedded ? 'max-w-lg ml-11' : 'max-w-2xl'} bg-white border border-gray-100 rounded-xl p-5 shadow-sm space-y-4`}>
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center">
-            <Accessibility className="w-4 h-4 text-white" />
+            <UniversalAccess className="w-4 h-4 text-white" />
           </div>
           <div>
             <p className="text-sm font-semibold text-gray-800">Website audit</p>
@@ -440,7 +441,7 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
       <div className="bg-white border border-gray-100 rounded-xl shadow-sm">
         <div className="flex gap-1 px-2 pt-2 border-b border-gray-100 overflow-x-auto">
           {([
-            ['issues', 'Issue summary', Accessibility],
+            ['issues', 'Issue summary', UniversalAccess],
             ['log', 'Workflow log', ListChecks],
             ['coverage', 'Coverage', MapIcon],
             ['pages', 'Pages', Compass],
@@ -597,7 +598,7 @@ function ReportHeader({ scanId, summary, partial, findings, onReset, onBrownfiel
           )}
         </div>
         <div className="grid grid-cols-3 gap-2">
-          <MiniScore label="Accessibility" cat={summary.categories.accessibility} Icon={Accessibility} />
+          <MiniScore label="Accessibility" cat={summary.categories.accessibility} Icon={UniversalAccess} />
           <MiniScore label="Links" cat={summary.categories.links} Icon={Link2Off} />
           <MiniScore label="Practices" cat={summary.categories.bestPractice} Icon={ShieldCheck} />
         </div>
