@@ -32,17 +32,34 @@ import ReportTab from './ReportTab';
 import StageRail from './StageRail';
 import EndpointPicker from './EndpointPicker';
 import { EmptyState, RequiredMark } from './primitives';
-import { clock, formatDuration } from './format';
+import { clock, formatDuration, parseQueryParams, buildUrlWithParams } from './format';
 import type {
   Phase, Stage, StageKey, StageStatus, Scenario, Spec, RunRow, LogLine, LogLevel,
-  HeaderPair, AuthType, RunReport, PushState, ServiceObject,
+  HeaderPair, AuthType, RunReport, PushState, ServiceObject, QueryParamRow,
 } from './types';
 
 /* ── The standard palette ──
    The studio shares the app's violet-indigo scheme rather than carrying one of
    its own; these are the same values Chat, Reports and Bug Tracker use. */
 const BRAND_BUTTON =
-  'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:from-[#6D28D9] hover:to-[#4F46E5]';
+  'bg-gradient-to-b from-[#8B5CF6] to-[#6366F1] hover:from-[#7C3AED] hover:to-[#4F46E5]';
+
+/* ── Depth tokens ──
+   The studio borrows the raised, tactile surfaces of Postman and Bruno while
+   staying in the app's violet-indigo palette. Depth is drawn with layered,
+   violet-tinted shadows so the request bar and panels read as floating above the
+   workspace, and the primary action presses like a physical key. Purely
+   presentational — no run logic depends on any of these classes. */
+const BAR_3D =
+  'shadow-[0_1px_2px_rgba(15,23,42,0.05),0_6px_16px_-8px_rgba(76,29,149,0.28)]';
+/** The Send / Run key: a hard bottom edge for the raised face, a soft violet
+    ambient glow, a lift on hover and a real press-down on click. */
+const BUTTON_3D =
+  'shadow-[0_3px_0_0_#4338CA,0_8px_18px_-6px_rgba(99,102,241,0.55)] ' +
+  'hover:-translate-y-px hover:shadow-[0_4px_0_0_#4338CA,0_12px_24px_-6px_rgba(99,102,241,0.6)] ' +
+  'active:translate-y-[3px] active:shadow-[0_0_0_0_#4338CA,0_4px_10px_-6px_rgba(99,102,241,0.5)] ' +
+  'disabled:translate-y-0 disabled:shadow-[0_2px_0_0_#c7d2fe] ' +
+  'ring-1 ring-inset ring-white/25';
 
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
@@ -105,6 +122,8 @@ export default function ApiStudio({ onExit }: ApiStudioProps) {
   /* ── Request state — the ground truth for every stage ── */
   const [method, setMethod] = useState('GET');
   const [url, setUrl] = useState('');
+  /** Structured view over the URL's query string — see QueryParamRow. */
+  const [queryParams, setQueryParams] = useState<QueryParamRow[]>([]);
   const [headers, setHeaders] = useState<HeaderPair[]>([{ key: '', value: '' }]);
   const [authType, setAuthType] = useState<AuthType>('none');
   const [authValue, setAuthValue] = useState('');
@@ -216,12 +235,27 @@ export default function ApiStudio({ onExit }: ApiStudioProps) {
     coverage: COVERAGE,
   }), [method, url, headers, authType, authValue, body, expectedStatus, expectedBody]);
 
+  /* ── Query params ⇄ URL ──
+     The URL bar is canonical; these keep the Params table and the URL in lockstep
+     so an edit in either place shows up in the other. Typing in the URL reparses
+     the table; editing the table rewrites the URL's query string in place. */
+  const handleUrlChange = useCallback((raw: string) => {
+    setUrl(raw);
+    setQueryParams(parseQueryParams(raw));
+  }, []);
+
+  const applyQueryParams = useCallback((next: QueryParamRow[]) => {
+    setQueryParams(next);
+    setUrl((prev) => buildUrlWithParams(prev, next));
+  }, []);
+
   /* ═══════════════════════════════════════════════════════════════
      Spec import
      ═══════════════════════════════════════════════════════════════ */
   const fillFromEndpoint = (ep: ParsedApiEndpoint) => {
     setMethod((ep.method || 'GET').toUpperCase());
     setUrl(ep.url || '');
+    setQueryParams(parseQueryParams(ep.url || ''));
     setHeaders(ep.headers?.length ? ep.headers : [{ key: '', value: '' }]);
     setAuthType((ep.auth?.type || 'none') as AuthType);
     setAuthValue(ep.auth?.value || '');
@@ -262,6 +296,7 @@ export default function ApiStudio({ onExit }: ApiStudioProps) {
     setSpecError(''); setSpecWarning(''); setSpecNotice('');
     setMethod('GET');
     setUrl('');
+    setQueryParams([]);
     setHeaders([{ key: '', value: '' }]);
     setAuthType('none');
     setAuthValue('');
@@ -695,7 +730,7 @@ export default function ApiStudio({ onExit }: ApiStudioProps) {
      Render
      ═══════════════════════════════════════════════════════════════ */
   return (
-    <div className="h-full flex flex-col bg-[#FAFAFE] min-h-0">
+    <div className="h-full flex flex-col bg-gradient-to-b from-[#FAFAFE] to-[#F1EEFB] min-h-0">
       {/* ── Top bar ── */}
       <header className="flex items-center gap-2 px-3 h-12 bg-white border-b border-gray-200 flex-shrink-0">
         {onExit && (
@@ -708,7 +743,7 @@ export default function ApiStudio({ onExit }: ApiStudioProps) {
             <ChevronLeft className="w-4 h-4" />
           </button>
         )}
-        <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#7C3AED] to-[#6366F1] flex items-center justify-center flex-shrink-0">
+        <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#8B5CF6] to-[#6366F1] flex items-center justify-center flex-shrink-0 shadow-[0_2px_6px_-1px_rgba(124,58,237,0.55)] ring-1 ring-white/40">
           <Plug className="w-3.5 h-3.5 text-white" />
         </div>
         <div className="min-w-0">
@@ -731,23 +766,23 @@ export default function ApiStudio({ onExit }: ApiStudioProps) {
 
       {/* ── URL bar ── */}
       <div className="flex items-center gap-2 px-3 py-2 bg-white border-b border-gray-200 flex-shrink-0">
-        <div className={`flex flex-1 min-w-0 rounded-md border transition-all overflow-hidden ${
+        <div className={`flex flex-1 min-w-0 rounded-lg border bg-white transition-all overflow-hidden ${BAR_3D} ${
           showRequired && !url.trim()
             ? 'border-red-300 ring-2 ring-red-100'
-            : 'border-gray-200 focus-within:border-[#A5B4FC] focus-within:ring-2 focus-within:ring-[#EDE9FE]'
+            : 'border-gray-200/80 focus-within:border-[#A5B4FC] focus-within:ring-2 focus-within:ring-[#EDE9FE]'
         }`}>
           <select
             value={method}
             disabled={started}
             onChange={(e) => setMethod(e.target.value)}
-            className="px-2.5 py-2 border-r border-gray-200 text-[12px] font-mono font-bold outline-none disabled:opacity-60 text-[#6D28D9] bg-[#F5F3FF]"
+            className="px-2.5 py-2 border-r border-gray-200 text-[12px] font-mono font-bold outline-none disabled:opacity-60 text-[#6D28D9] bg-gradient-to-b from-[#F5F3FF] to-[#EDE9FE] shadow-[inset_-1px_0_2px_rgba(76,29,149,0.06)]"
           >
             {HTTP_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
           <input
             value={url}
             disabled={started}
-            onChange={(e) => setUrl(e.target.value)}
+            onChange={(e) => handleUrlChange(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !running) runScenarios(); }}
             placeholder="https://api.mycompany.com/v1/users"
             spellCheck={false}
@@ -765,7 +800,7 @@ export default function ApiStudio({ onExit }: ApiStudioProps) {
             type="button"
             onClick={runSuite}
             disabled={selected.size === 0}
-            className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-[12px] font-semibold text-white ${BRAND_BUTTON} rounded-md disabled:opacity-40 transition-all flex-shrink-0`}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-[12px] font-semibold text-white ${BRAND_BUTTON} ${BUTTON_3D} rounded-lg disabled:opacity-40 transition-all flex-shrink-0`}
           >
             Run {selected.size} scenario{selected.size === 1 ? '' : 's'}
             <ArrowRight className="w-3.5 h-3.5" />
@@ -776,7 +811,7 @@ export default function ApiStudio({ onExit }: ApiStudioProps) {
             onClick={runSuite}
             disabled={selected.size === 0}
             title="Run the same scenarios again — use New run to design a fresh suite"
-            className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-[12px] font-semibold text-white ${BRAND_BUTTON} rounded-md disabled:opacity-40 transition-all flex-shrink-0`}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-[12px] font-semibold text-white ${BRAND_BUTTON} ${BUTTON_3D} rounded-lg disabled:opacity-40 transition-all flex-shrink-0`}
           >
             <Play className="w-3.5 h-3.5" />
             Re-run {selected.size} scenario{selected.size === 1 ? '' : 's'}
@@ -787,10 +822,10 @@ export default function ApiStudio({ onExit }: ApiStudioProps) {
             onClick={runScenarios}
             disabled={running}
             title={missingRequired.length > 0 ? `Required: ${missingRequired.join(', ')}` : ''}
-            className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-[12px] font-semibold text-white ${BRAND_BUTTON} rounded-md disabled:opacity-40 transition-all flex-shrink-0`}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-[12px] font-semibold text-white ${BRAND_BUTTON} ${BUTTON_3D} rounded-lg disabled:opacity-40 transition-all flex-shrink-0`}
           >
             {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-            {running ? 'Running…' : started ? 'Regenerate' : 'Generate suite'}
+            {running ? 'Running…' : started ? 'Regenerate' : 'Send'}
           </button>
         )}
       </div>
@@ -824,6 +859,7 @@ export default function ApiStudio({ onExit }: ApiStudioProps) {
         {/* Left: request */}
         <div className="w-[300px] flex-shrink-0 min-h-0">
           <RequestPanel
+            queryParams={queryParams} onQueryParamsChange={applyQueryParams}
             headers={headers} onHeadersChange={setHeaders}
             authType={authType} onAuthTypeChange={setAuthType}
             authValue={authValue} onAuthValueChange={setAuthValue}
@@ -856,8 +892,10 @@ export default function ApiStudio({ onExit }: ApiStudioProps) {
                   key={t.id}
                   type="button"
                   onClick={() => setTab(t.id)}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11.5px] font-medium transition-colors ${
-                    tab === t.id ? 'bg-white text-[#6D28D9] border border-gray-200 shadow-sm' : 'text-[#6B7280] hover:text-gray-700 border border-transparent'
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11.5px] font-medium transition-all ${
+                    tab === t.id
+                      ? 'bg-white text-[#6D28D9] border border-[#E9E5FB] shadow-[0_1px_2px_rgba(15,23,42,0.05),0_4px_10px_-4px_rgba(76,29,149,0.22)] -translate-y-px'
+                      : 'text-[#6B7280] hover:text-gray-700 hover:bg-white/60 border border-transparent'
                   }`}
                 >
                   <Icon className="w-3.5 h-3.5" />

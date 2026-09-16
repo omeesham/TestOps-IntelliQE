@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { Section, RequiredMark } from './primitives';
 import { prettyJson } from './format';
-import type { HeaderPair, AuthType } from './types';
+import type { HeaderPair, AuthType, QueryParamRow } from './types';
 
 /** HTTP status codes offered for the expected-response contract. */
 const HTTP_STATUS_CODES: { code: string; label: string }[] = [
@@ -54,6 +54,13 @@ const inputCls =
 const invalidCls = '!border-red-300 focus:!border-red-400 focus:!ring-red-100';
 
 export interface RequestPanelProps {
+  /**
+   * The URL's query string as editable rows. Editing them rewrites the URL bar,
+   * and typing `?key=value` into the URL bar refills them — the URL stays the
+   * source of truth, so these never diverge from what the run actually sends.
+   */
+  queryParams: QueryParamRow[];
+  onQueryParamsChange: (p: QueryParamRow[]) => void;
   headers: HeaderPair[];
   onHeadersChange: (h: HeaderPair[]) => void;
   authType: AuthType;
@@ -97,6 +104,7 @@ export default function RequestPanel(props: RequestPanelProps) {
   const [showSecret, setShowSecret] = useState(false);
 
   const {
+    queryParams, onQueryParamsChange,
     headers, onHeadersChange, authType, onAuthTypeChange, authValue, onAuthValueChange,
     method, body, onBodyChange, expectedStatus, onExpectedStatusChange,
     expectedBody, onExpectedBodyChange, showRequired,
@@ -109,6 +117,7 @@ export default function RequestPanel(props: RequestPanelProps) {
   const missingStatus = showRequired && !expectedStatus.trim();
   const missingBody = showRequired && !expectedBody.trim();
 
+  const filledParams = queryParams.filter((p) => p.enabled && p.key.trim()).length;
   const filledHeaders = headers.filter((h) => h.key.trim()).length;
   const hasBody = ['POST', 'PUT', 'PATCH', 'DELETE'].includes((method || '').toUpperCase());
   const authLabel = AUTH_OPTIONS.find((a) => a.id === authType)?.label || 'No auth';
@@ -201,6 +210,74 @@ export default function RequestPanel(props: RequestPanelProps) {
             </button>
           </div>
         )}
+
+        {/* ── Query params ──
+            A structured editor over the URL's query string. Rows here append to
+            the endpoint above; a `?key=value` typed into the URL shows up here.
+            The checkbox keeps a param in the table but out of the URL. */}
+        <Section
+          title="Query params"
+          badge={filledParams ? String(filledParams) : ''}
+          action={
+            <button
+              type="button"
+              onClick={() => onQueryParamsChange([...queryParams, { key: '', value: '', enabled: true }])}
+              disabled={locked}
+              className="inline-flex items-center gap-0.5 text-[11px] text-[#7C3AED] hover:text-[#5B21B6] disabled:opacity-40"
+            >
+              <Plus className="w-3 h-3" />Add
+            </button>
+          }
+        >
+          {queryParams.length === 0 ? (
+            <p className="text-[10px] text-gray-400 leading-relaxed">
+              None yet. Add a row — or type <span className="font-mono text-gray-500">?key=value</span> into the URL above and it appears here.
+            </p>
+          ) : (
+            queryParams.map((p, i) => (
+              <div key={i} className={`flex items-center gap-1.5 ${p.enabled ? '' : 'opacity-45'}`}>
+                <input
+                  type="checkbox"
+                  checked={p.enabled}
+                  disabled={locked}
+                  onChange={(e) => onQueryParamsChange(
+                    queryParams.map((x, idx) => (idx === i ? { ...x, enabled: e.target.checked } : x)),
+                  )}
+                  title={p.enabled ? 'Enabled — included in the URL' : 'Disabled — kept here but left out of the URL'}
+                  aria-label="Include this parameter"
+                  className="w-3.5 h-3.5 flex-shrink-0 rounded accent-[#7C3AED] disabled:opacity-50 cursor-pointer"
+                />
+                <input
+                  value={p.key}
+                  disabled={locked}
+                  onChange={(e) => onQueryParamsChange(
+                    queryParams.map((x, idx) => (idx === i ? { ...x, key: e.target.value } : x)),
+                  )}
+                  placeholder="Key"
+                  className={inputCls + ' flex-1 font-mono !text-[11px]'}
+                />
+                <input
+                  value={p.value}
+                  disabled={locked}
+                  onChange={(e) => onQueryParamsChange(
+                    queryParams.map((x, idx) => (idx === i ? { ...x, value: e.target.value } : x)),
+                  )}
+                  placeholder="Value"
+                  className={inputCls + ' flex-1 font-mono !text-[11px]'}
+                />
+                <button
+                  type="button"
+                  onClick={() => onQueryParamsChange(queryParams.filter((_, idx) => idx !== i))}
+                  disabled={locked}
+                  className="text-gray-300 hover:text-red-500 disabled:opacity-40 flex-shrink-0"
+                  aria-label="Remove parameter"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))
+          )}
+        </Section>
 
         {/* ── Headers ── */}
         <Section

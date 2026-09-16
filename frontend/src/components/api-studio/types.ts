@@ -34,6 +34,14 @@ export interface Stage {
 
 export interface HeaderPair { key: string; value: string }
 
+/**
+ * One row of the query-param editor. `enabled` is the Bruno/Postman checkbox: a
+ * disabled row stays in the table for easy re-use but is left out of the URL.
+ * The URL string itself is always the source of truth — these rows are a
+ * structured view over its query string that writes back to it.
+ */
+export interface QueryParamRow { key: string; value: string; enabled: boolean }
+
 export type AuthType = 'none' | 'bearer' | 'basic' | 'apikey';
 
 /** The HTTP-level detail the generator attaches to each designed scenario. */

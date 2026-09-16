@@ -52,6 +52,50 @@ export function categoryMeta(type: string) {
   return { label: CATEGORY_LABELS[key] || type || 'Other', cls: CATEGORY_LABELS[key] ? BRAND_CHIP : MUTED_CHIP };
 }
 
+/* ── Query parameters ──
+ *
+ * The URL bar stays the single source of truth for the run — every stage reads
+ * `url`. The Params editor is a structured view over that URL's query string:
+ * `parseQueryParams` reads rows out of it, `buildUrlWithParams` writes them back.
+ * Both are total (never throw) so a half-typed URL still round-trips cleanly.
+ */
+import type { QueryParamRow } from './types';
+
+function safeDecode(s: string): string {
+  try { return decodeURIComponent(s.replace(/\+/g, ' ')); } catch { return s; }
+}
+
+/** Read the `?key=value&…` of a URL into editor rows. Missing query → no rows. */
+export function parseQueryParams(url: string): QueryParamRow[] {
+  const q = url.indexOf('?');
+  if (q === -1) return [];
+  let search = url.slice(q + 1);
+  const hash = search.indexOf('#');
+  if (hash !== -1) search = search.slice(0, hash);
+  if (!search) return [];
+  return search.split('&').filter(Boolean).map((pair) => {
+    const eq = pair.indexOf('=');
+    const rawKey = eq === -1 ? pair : pair.slice(0, eq);
+    const rawVal = eq === -1 ? '' : pair.slice(eq + 1);
+    return { key: safeDecode(rawKey), value: safeDecode(rawVal), enabled: true };
+  });
+}
+
+/**
+ * Replace a URL's query string with the enabled, named rows — preserving the
+ * part before the `?`. A disabled or blank-key row contributes nothing, so
+ * unchecking a param drops it from the URL without losing it from the table.
+ */
+export function buildUrlWithParams(url: string, params: QueryParamRow[]): string {
+  const q = url.indexOf('?');
+  const base = q === -1 ? url : url.slice(0, q);
+  const qs = params
+    .filter((p) => p.enabled && p.key.trim())
+    .map((p) => `${encodeURIComponent(p.key.trim())}=${encodeURIComponent(p.value)}`)
+    .join('&');
+  return qs ? `${base}?${qs}` : base;
+}
+
 /** Pretty-print JSON when it parses; otherwise show the text as given. */
 export function prettyJson(text: string | undefined): string {
   if (!text) return '';
