@@ -3330,8 +3330,11 @@ export default function ChatPage() {
           )}
         </div>
 
-        {/* Right: Pipeline Progress Sidebar */}
-        {renderPipelineSidebar()}
+        {/* Right: Pipeline Progress Sidebar. The website audit (ADA) runs its
+            own crawl with its own live log — the six AI pipeline stages do
+            not apply there, so the sidebar is hidden until the user hands the
+            site over to requirements / test generation. */}
+        {step !== 'ada' && renderPipelineSidebar()}
       </div>
     </div>
   );
