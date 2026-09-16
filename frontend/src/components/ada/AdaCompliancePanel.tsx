@@ -1225,7 +1225,7 @@ function coverageHtml(s: AdaSummary): string {
   const pct = (aud: number, found: number) => found ? `${Math.round((aud / found) * 100)}%` : '—';
   const row = (label: string, found: number, audited: number, extra = '') => `<tr><td>${label}${extra}</td><td>${found.toLocaleString()}</td><td>${audited.toLocaleString()}</td><td>${pct(audited, found)}</td></tr>`;
   const depthLabel = (d: number) => d === 0 ? 'Start page' : d === 1 ? 'Menu, sitemap &amp; home-page links' : `${d} clicks from home`;
-  return `<h2>Crawl coverage — ${c.audited.toLocaleString()} of ${c.found.toLocaleString()} pages audited (${pct(c.audited, c.found)})</h2>
+  return `<h2 id="coverage">Crawl coverage — ${c.audited.toLocaleString()} of ${c.found.toLocaleString()} pages audited (${pct(c.audited, c.found)}) <a class="top" href="#top">↑ top</a></h2>
 <p class="muted">Every number is a count of real browser visits and real links collected from those pages; nothing is sampled or estimated. ${esc(stoppedReason(c))}${c.unreachable ? ` ${c.unreachable} page${c.unreachable === 1 ? '' : 's'} could not be loaded (counted as audited, scored 0).` : ''}${c.redirectedOffSite ? ` ${c.redirectedOffSite} redirected off-site.` : ''}${c.skippedNonHtml ? ` ${c.skippedNonHtml} non-HTML URL${c.skippedNonHtml === 1 ? '' : 's'} skipped and checked as links.` : ''}</p>
 <p class="muted">Links: ${c.links.unique.toLocaleString()} unique (${c.links.internal.toLocaleString()} internal · ${c.links.external.toLocaleString()} external) · ${c.links.checked.toLocaleString()} fetched and checked${c.links.skipped ? ` · ${c.links.skipped.toLocaleString()} external skipped` : ''}.</p>
 <div class="ex">
@@ -1242,7 +1242,7 @@ function trendHtml(points: AdaTrendPoint[], scanId: string | null): string {
   const { cur, prev } = pos;
   const d = (a: number | null, b: number | null) => (a === null || b === null) ? 'n/a' : `${a - b > 0 ? '+' : ''}${a - b}`;
   const rows = points.slice(-12).map((p) => `<tr${sameId(p.id, cur.id) ? ' style="font-weight:600"' : ''}><td>${esc(new Date(p.finishedAt).toLocaleString())}${p.status === 'cancelled' ? ' <span class="muted">stopped early</span>' : ''}</td><td>${esc(p.createdBy || '')}</td><td>${p.score ?? '—'}</td><td>${p.pagesAudited}</td><td>${p.issues}</td><td>${p.violations ?? '—'}</td><td>${p.brokenLinks ?? '—'}</td><td>${p.bestPracticeFailing ?? '—'}</td></tr>`).join('');
-  return `<h2>Trend — ${points.length} audit${points.length === 1 ? '' : 's'} of this site</h2>
+  return `<h2 id="trend">Trend — ${points.length} audit${points.length === 1 ? '' : 's'} of this site <a class="top" href="#top">↑ top</a></h2>
 ${prev ? `<p class="muted">Compared with the previous audit (${esc(new Date(prev.finishedAt).toLocaleString())}): score ${d(cur.score, prev.score)} · issues ${d(cur.issues, prev.issues)} · accessibility violations ${d(cur.violations, prev.violations)} · broken links ${d(cur.brokenLinks, prev.brokenLinks)} · pages audited ${cur.pagesAudited} vs ${prev.pagesAudited}${cur.pagesAudited !== prev.pagesAudited ? ' (page counts differ — issue counts are not like-for-like)' : ''}.</p>` : ''}
 <table><tr><th>Audit</th><th>Run by</th><th>Score</th><th>Pages</th><th>Issues</th><th>Violations</th><th>Broken links</th><th>Practices failing</th></tr>${rows}</table>`;
 }
@@ -1251,8 +1251,8 @@ function buildHtmlReport(s: AdaSummary, partial: boolean, findings: AdaFinding[]
   const a = s.categories.accessibility, l = s.categories.links, b = s.categories.bestPractice;
   const broken = l.broken + l.serverErrors + l.timeouts;
   const gradeColor: Record<string, string> = { A: '#059669', B: '#16a34a', C: '#d97706', D: '#ea580c', F: '#dc2626' };
-  const score = (c: { score: number; grade: string }, label: string) =>
-    `<div class="score"><div class="big" style="color:${gradeColor[c.grade]}">${c.score}</div><div class="lbl">${esc(label)}</div><div class="grade">Grade ${c.grade}</div></div>`;
+  const score = (c: { score: number; grade: string }, label: string, anchor?: string) =>
+    `<${anchor ? `a href="#${anchor}"` : 'div'} class="score"><div class="big" style="color:${gradeColor[c.grade]}">${c.score}</div><div class="lbl">${esc(label)}</div><div class="grade">Grade ${c.grade}${anchor ? ' · view' : ''}</div></${anchor ? 'a' : 'div'}>`;
   const issues = findings.filter((f) => f.category !== 'review');
   const totalIssues = issues.reduce((x, f) => x + f.occurrences, 0);
   const bySev: Record<AdaSeverity, number> = { critical: 0, serious: 0, moderate: 0, minor: 0 };
@@ -1266,8 +1266,9 @@ function buildHtmlReport(s: AdaSummary, partial: boolean, findings: AdaFinding[]
   const sorted = [...groups.values()].sort((x, y) => SEV_ORDER[x.severity] - SEV_ORDER[y.severity] || y.occ - x.occ);
   const section = (cat: AdaCategory, heading: string) => {
     const gs = sorted.filter((g) => g.category === cat);
-    if (!gs.length) return `<h2>${esc(heading)}</h2><p class="muted">None found.</p>`;
-    return `<h2>${esc(heading)}</h2>` + gs.map((g) => {
+    const h2 = `<h2 id="${cat}">${esc(heading)} <a class="top" href="#top">↑ top</a></h2>`;
+    if (!gs.length) return `${h2}<p class="muted">None found.</p>`;
+    return h2 + gs.map((g) => {
       const r = remediationOf(g.rows[0]);
       const fix = r ? `<div class="fix"><div class="fixh"><span class="eff ${r.effort}">${esc(EFFORT_LABEL[r.effort])}</span> How to fix</div><p class="prob"><b>Problem:</b> ${esc(r.problem)}${r.impact ? ` <span class="muted">${esc(r.impact)}</span>` : ''}</p><ol>${r.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>${r.example ? `<div class="ex"><div><span class="muted">Before</span><pre class="bad">${esc(r.example.before)}</pre></div><div><span class="muted">After</span><pre class="good">${esc(r.example.after)}</pre></div></div>${r.example.note ? `<p class="muted">${esc(r.example.note)}</p>` : ''}` : ''}${g.helpUrl ? `<p class="muted">Reference: <a href="${esc(g.helpUrl)}">${esc(g.helpUrl)}</a></p>` : ''}</div>` : (g.helpUrl ? `<p class="muted">Reference: <a href="${esc(g.helpUrl)}">${esc(g.helpUrl)}</a></p>` : '');
       return `
@@ -1278,7 +1279,8 @@ ${g.rows.slice(0, 200).map((f) => { const fr = remediationOf(f); return `<tr><td
 </table></details>`; }).join('');
   };
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Website audit — ${esc(s.siteName)}</title>
-<style>body{font-family:Segoe UI,Arial,sans-serif;color:#1f2937;margin:0;padding:32px;max-width:1100px}h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;margin:28px 0 8px;border-bottom:1px solid #e5e7eb;padding-bottom:4px}
+<style>html{scroll-behavior:smooth}body{font-family:Segoe UI,Arial,sans-serif;color:#1f2937;margin:0;padding:32px;max-width:1100px}h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;margin:28px 0 8px;border-bottom:1px solid #e5e7eb;padding-bottom:4px;scroll-margin-top:64px;display:flex;justify-content:space-between;align-items:baseline}h2 a.top{font-size:11px;font-weight:400;color:#9ca3af;text-decoration:none}h2 a.top:hover{color:#5b21b6}
+.toc{position:sticky;top:0;z-index:2;background:#fff;border-bottom:1px solid #e5e7eb;padding:8px 0;margin:14px 0 6px;display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px}.toc a{color:#5b21b6;text-decoration:none;white-space:nowrap}.toc a:hover{text-decoration:underline}.toc b{color:#1f2937;font-weight:600}a.score{text-decoration:none;color:inherit}a.score:hover{border-color:#a78bfa;background:#f5f3ff}.muted a{color:#5b21b6}
 .muted{color:#6b7280;font-size:12px}.tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;margin-right:6px}.ok{background:#d1fae5;color:#065f46}.part{background:#fef3c7;color:#92400e}.wcag{background:#ede9fe;color:#5b21b6}
 .scores{display:flex;gap:16px;margin:20px 0}.score{flex:1;border:1px solid #e5e7eb;border-radius:10px;padding:14px;text-align:center}.big{font-size:34px;font-weight:700}.lbl{font-size:12px;color:#6b7280}.grade{font-size:11px;color:#9ca3af}
 .summary{display:flex;gap:24px;align-items:flex-start;border:1px solid #e5e7eb;border-radius:10px;padding:16px;margin:16px 0}.summary .n{font-size:40px;font-weight:700;line-height:1}
@@ -1289,31 +1291,42 @@ details{border:1px solid #e5e7eb;border-radius:8px;padding:8px 12px;margin:6px 0
 .eff{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;margin-right:6px;border:1px solid}.quick{background:#ecfdf5;color:#047857;border-color:#a7f3d0}.moderate.eff{background:#fffbeb;color:#b45309;border-color:#fde68a}.involved{background:#fef2f2;color:#b91c1c;border-color:#fecaca}
 .ex{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ex pre,code.good{font-family:Consolas,monospace;font-size:11px;white-space:pre-wrap;word-break:break-all;border-radius:6px;padding:6px 8px;margin:2px 0 0}pre.bad{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}pre.good,code.good{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}code.good{display:inline-block;margin-top:4px;color:#065f46}
 .foot{margin-top:32px;font-size:11px;color:#9ca3af}</style></head><body>
-<h1>Website audit report — ${esc(s.siteName)}</h1>
+<h1 id="top">Website audit report — ${esc(s.siteName)}</h1>
 ${s.inventory && s.inventory.sitemapUrls > 0 ? `<p class="muted" style="margin:4px 0">Site inventory: ${s.inventory.sitemapUrls.toLocaleString()} URLs in sitemap${s.inventory.auditedLocale ? ` · ${s.inventory.locales.length} language version${s.inventory.locales.length === 1 ? '' : 's'} (${esc(s.inventory.locales.map((l) => l.code).join(', '))})` : ''} · ${s.inventory.pagesInScope.toLocaleString()} unique pages${s.inventory.auditedLocale ? ` in ${esc(s.inventory.auditedLocale)}` : ''}${s.inventory.templatedPages ? ` · ${s.inventory.templatedPages.toLocaleString()} templated articles (${esc(s.inventory.sections.filter((x) => x.templated).map((x) => x.path).join(', '))})` : ''}</p>` : ''}
 <div class="muted" style="margin:6px 0 10px"><span class="tag ${partial ? 'part' : 'ok'}">${partial ? 'STOPPED EARLY — PARTIAL RESULTS' : 'COMPLETE'}</span><span class="tag wcag">WCAG 2.2 AA</span> ${esc(s.targetUrl)} · audited ${esc(new Date(s.finishedAt).toLocaleString())} · ${s.pagesCrawled} pages audited${(s.pagesDiscovered || 0) > s.pagesCrawled ? ` of ${s.pagesDiscovered} found` : ''} · ${s.linksChecked} links checked · ${Math.round(s.durationMs / 1000)}s</div>
-<div class="scores">${score(s.overall, 'Overall health')}${score(a, 'Accessibility (WCAG 2.2 AA)')}${score(l, 'Links')}${score(b, 'Best practices')}</div>
+<nav class="toc">
+<a href="#accessibility">Accessibility violations <b>${a.violations}</b></a>
+<a href="#links">Broken links <b>${broken}</b></a>
+<a href="#best-practice">Best practices failing <b>${b.failingRules.length}</b></a>
+<a href="#review">Needs manual review <b>${a.needsReview}</b></a>
+${trend.length > 1 ? '<a href="#trend">Trend</a>' : ''}
+${s.coverage ? '<a href="#coverage">Coverage</a>' : ''}
+<a href="#pages">Pages audited <b>${(pages.length || s.pagesCrawled).toLocaleString()}</b></a>
+${s.coverage && s.coverage.notAuditedTotal > 0 ? `<a href="#not-audited">Not audited <b>${s.coverage.notAuditedTotal.toLocaleString()}</b></a>` : ''}
+${s.notes.length ? '<a href="#notes">Notes</a>' : ''}
+</nav>
+<div class="scores">${score(s.overall, 'Overall health')}${score(a, 'Accessibility (WCAG 2.2 AA)', 'accessibility')}${score(l, 'Links', 'links')}${score(b, 'Best practices', 'best-practice')}</div>
 <div class="summary"><div><div class="n">${totalIssues}</div><div class="muted">Issues in ${new Set(issues.map((f) => f.page_url)).size} pages and ${new Set(findings.filter((f) => f.element).map((f) => f.element)).size} components</div></div>
-<div><div class="muted" style="font-weight:600;margin-bottom:4px">Severity breakdown</div><span class="sev critical">${bySev.critical} critical</span> <span class="sev serious">${bySev.serious} serious</span> <span class="sev moderate">${bySev.moderate} moderate</span> <span class="sev minor">${bySev.minor} minor</span><div class="muted" style="margin-top:8px">${a.needsReview} issue${a.needsReview === 1 ? '' : 's'} need manual review · ${a.violations} accessibility violation${a.violations === 1 ? '' : 's'} · ${broken} broken link${broken === 1 ? '' : 's'} · ${b.failingRules.length} best-practice check${b.failingRules.length === 1 ? '' : 's'} failing</div></div></div>
+<div><div class="muted" style="font-weight:600;margin-bottom:4px">Severity breakdown</div><span class="sev critical">${bySev.critical} critical</span> <span class="sev serious">${bySev.serious} serious</span> <span class="sev moderate">${bySev.moderate} moderate</span> <span class="sev minor">${bySev.minor} minor</span><div class="muted" style="margin-top:8px"><a href="#review">${a.needsReview} issue${a.needsReview === 1 ? '' : 's'} need manual review</a> · <a href="#accessibility">${a.violations} accessibility violation${a.violations === 1 ? '' : 's'}</a> · <a href="#links">${broken} broken link${broken === 1 ? '' : 's'}</a> · <a href="#best-practice">${b.failingRules.length} best-practice check${b.failingRules.length === 1 ? '' : 's'} failing</a></div></div></div>
 ${section('accessibility', `Accessibility violations (WCAG) — ${a.violations}`)}
 ${section('links', `Broken links — ${broken} of ${l.checked} checked${l.blocked ? ` (${l.blocked} could not be verified)` : ''}`)}
 ${section('best-practice', `Best-practice issues — ${b.failingRules.length} checks failing`)}
 ${section('review', `Needs manual review — ${a.needsReview}`)}
 ${trendHtml(trend, scanId)}
 ${coverageHtml(s)}
-<h2>Pages audited — ${(pages.length || s.pagesCrawled).toLocaleString()}</h2>
+<h2 id="pages">Pages audited — ${(pages.length || s.pagesCrawled).toLocaleString()} <a class="top" href="#top">↑ top</a></h2>
 <p class="muted">Every page below was opened in a real browser and had every check run. Depth 0 is the start page.</p>
 ${pages.length ? `<table><tr><th>Page</th><th>Found via</th><th>Depth</th><th>HTTP</th><th>Load</th><th>Links</th><th>Accessibility</th><th>Best practices</th><th>Issues</th></tr>
 ${pages.map((p) => `<tr><td>${esc(p.title || shortUrl(p.url))}<br><a class="muted" href="${esc(p.url)}">${esc(p.url)}</a></td><td>${esc(SOURCE_LABEL[p.source || 'link'])}${p.parent_url ? `<br><span class="muted">from ${esc(shortUrl(p.parent_url))}</span>` : ''}</td><td>${p.depth}</td><td>${p.status_code ?? 'ERR'}</td><td>${(p.load_ms / 1000).toFixed(1)}s</td><td>${p.links_found}</td><td>${p.a11y_score}</td><td>${p.bp_score}</td><td>${p.findings_count}</td></tr>`).join('')}
 </table>` : `<table><tr><th>Page</th><th>Accessibility</th><th>Best practices</th><th>Issues</th></tr>
 ${s.worstPages.map((p) => `<tr><td>${esc(p.title || p.url)}<br><span class="muted">${esc(p.url)}</span></td><td>${p.a11yScore}</td><td>${p.bpScore}</td><td>${p.findings}</td></tr>`).join('')}
 </table><p class="muted">The full page list could not be loaded; the ${s.worstPages.length} lowest-scoring pages are shown.</p>`}
-${s.coverage && s.coverage.notAuditedTotal > 0 ? `<h2>Pages found but not audited — ${s.coverage.notAuditedTotal.toLocaleString()}</h2>
+${s.coverage && s.coverage.notAuditedTotal > 0 ? `<h2 id="not-audited">Pages found but not audited — ${s.coverage.notAuditedTotal.toLocaleString()} <a class="top" href="#top">↑ top</a></h2>
 <p class="muted">${esc(stoppedReason(s.coverage))}${s.coverage.notAudited.length < s.coverage.notAuditedTotal ? ` The first ${s.coverage.notAudited.length.toLocaleString()} are listed.` : ''}</p>
 <details><summary>Show the list</summary><table><tr><th>Page</th><th>Found via</th><th>Depth</th></tr>
 ${s.coverage.notAudited.map((p) => `<tr><td><a href="${esc(p.url)}">${esc(p.url)}</a></td><td>${esc(SOURCE_LABEL[p.source])}${p.parentUrl ? `<br><span class="muted">from ${esc(shortUrl(p.parentUrl))}</span>` : ''}</td><td>${p.depth}</td></tr>`).join('')}
 </table></details>` : ''}
-${s.notes.length ? `<h2>Notes</h2><ul class="muted">${s.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+${s.notes.length ? `<h2 id="notes">Notes <a class="top" href="#top">↑ top</a></h2><ul class="muted">${s.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
 <div class="foot">Generated by IntelliQE. Accessibility rules by axe-core (Deque). Health score = accessibility 45% · links 30% · best practices 25%.</div>
 </body></html>`;
 }
