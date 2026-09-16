@@ -453,6 +453,8 @@ async function executeStage(tenantId: string, body: any): Promise<any> {
     executionDetails: details,
     failureReason: next.failureReason,
     reportUrl,
+    // WCAG scan of every state the tests reached — null when nothing was scanned.
+    accessibility: next.executionResults?.accessibility || null,
     app: appName ? { name: appName, targetUrl: ctx?.targetUrl } : null,
     summary: {
       total,

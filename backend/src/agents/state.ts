@@ -36,6 +36,16 @@ export interface DataValidationExpectation {
   reason: string;
 }
 
+/** axe-core results collected while the generated tests ran (see services/a11y-fixture.service.ts). */
+export interface ExecutionAccessibility {
+  checkpoints: number;
+  pagesScanned: number;
+  testsScanned: number;
+  violations: number;
+  byImpact: Record<'critical' | 'serious' | 'moderate' | 'minor', number>;
+  rules: { id: string; help: string; helpUrl: string; impact: 'critical' | 'serious' | 'moderate' | 'minor' | null; wcag: string[]; nodes: number; checkpoints: number; pages: string[] }[];
+}
+
 export interface AccessibilityTestData {
   element: string;
   label: string;
@@ -300,6 +310,11 @@ export interface TestOpsState {
       durationMs?: number;
       error?: string;
     }[];
+    /**
+     * WCAG scan of every state the tests reached (after each navigation and
+     * step). Absent when no test ran far enough to scan anything.
+     */
+    accessibility?: ExecutionAccessibility;
   } | null;
   testData: TestDataPayload | null;
   failureReason: string | null;

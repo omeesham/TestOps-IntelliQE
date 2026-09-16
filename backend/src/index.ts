@@ -50,6 +50,7 @@ import publicApiRoutes from './routes/public/public-api.routes.js';
 import clientLogsRoutes from './routes/client-logs.routes.js';
 import bugsRoutes from './routes/bugs.routes.js';
 import adaRoutes from './routes/ada.routes.js';
+import { startAdaScheduler } from './services/ada/ada-schedule.service.js';
 import featureTogglesRoutes from './routes/feature-toggles.routes.js';
 import agentPerformanceRoutes from './routes/agent-performance.routes.js';
 import { initDb } from './db.js';
@@ -322,6 +323,7 @@ setEventCallback((runId, event) => broadcastSSE(runId, event));
 
 initDb()
   .then(() => {
+    startAdaScheduler();
     app.listen(PORT, () => {
       logger.info(`JBS IntelliQE API listening`, { port: PORT, env: NODE_ENV });
     });

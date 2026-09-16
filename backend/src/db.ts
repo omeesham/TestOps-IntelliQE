@@ -836,6 +836,27 @@ export async function initDb(): Promise<void> {
     await addColumn('ada_scans', 'progress_log', 'NVARCHAR(MAX)');
     // How the crawler found each page: start | sitemap | link.
     await addColumn('ada_pages', 'source', 'NVARCHAR(10)');
+    // Recurring audits: one row per site + cadence. The ticker in
+    // services/ada/ada-schedule.service.ts claims rows whose next_run_at has passed.
+    await createTable('ada_schedules', `
+      CREATE TABLE ${SCHEMA}.ada_schedules (
+        id            UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id     UNIQUEIDENTIFIER NOT NULL,
+        target_url    NVARCHAR(1000) NOT NULL,
+        frequency     NVARCHAR(10) NOT NULL CHECK (frequency IN ('daily', 'weekly')),
+        run_hour_utc  INT NOT NULL DEFAULT 3,
+        run_weekday   INT,
+        options       NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        enabled       BIT NOT NULL DEFAULT 1,
+        next_run_at   DATETIMEOFFSET,
+        last_run_at   DATETIMEOFFSET,
+        last_scan_id  UNIQUEIDENTIFIER,
+        last_error    NVARCHAR(500),
+        created_by    NVARCHAR(100),
+        created_at    DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at    DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createIndex('idx_ada_schedules_due', 'ada_schedules', '(enabled, next_run_at)');
 
     // ─── 12. Seed: JBS platform tenant + default users ───
     await exec(`

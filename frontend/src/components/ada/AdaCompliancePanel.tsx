@@ -17,7 +17,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  startAdaScan, getAdaScan, getAdaFindings, getAdaPages, cancelAdaScan,
+  startAdaScan, getAdaScan, getAdaFindings, getAdaPages, cancelAdaScan, getAdaTrend, type AdaTrendPoint,
   type AdaCategory, type AdaFinding, type AdaPage, type AdaProgress, type AdaProgressEvent,
   type AdaScanRecord, type AdaSeverity, type AdaSummary, type AdaRemediation, type AdaSiteInventory, type AdaCoverage,
 } from '@/services/api';
@@ -566,7 +566,8 @@ function ReportHeader({ scanId, summary, partial, findings, onReset, onBrownfiel
     if (kind === 'csv') { downloadBlob(buildCsv(findings), `${base}-issues.csv`, 'text/csv'); return; }
     // The page list is stored per page in the database; fetch it so the download names every page visited.
     const pages = scanId ? await getAdaPages(scanId).catch(() => [] as AdaPage[]) : [];
-    if (kind === 'html') downloadBlob(buildHtmlReport(summary, partial, findings, pages), `${base}.html`, 'text/html');
+    const trend = kind === 'html' ? await getAdaTrend(summary.targetUrl).then((r) => r.points).catch(() => [] as AdaTrendPoint[]) : [];
+    if (kind === 'html') downloadBlob(buildHtmlReport(summary, partial, findings, pages, trend, scanId), `${base}.html`, 'text/html');
     else downloadBlob(buildPagesCsv(pages, summary.coverage), `${base}-pages.csv`, 'text/csv');
   };
   return (
@@ -587,6 +588,7 @@ function ReportHeader({ scanId, summary, partial, findings, onReset, onBrownfiel
           <p className="text-xs text-gray-500 mt-1">
             {summary.pagesCrawled} page{summary.pagesCrawled === 1 ? '' : 's'} audited{(summary.pagesDiscovered || 0) > summary.pagesCrawled ? ` of ${summary.pagesDiscovered} found` : ''} · {summary.linksChecked} links checked · {a.violations} accessibility violation{a.violations === 1 ? '' : 's'} · {brokenTotal} broken link{brokenTotal === 1 ? '' : 's'} · {summary.categories.bestPractice.failingRules.length} best-practice checks failing · {fmtDuration(summary.durationMs)}
           </p>
+          <TrendStrip scanId={scanId} summary={summary} />
           {summary.loginAttempted && (
             <p className="text-[11px] text-gray-500 mt-1 flex items-center gap-1">
               {summary.loginSucceeded ? <Lock className="w-3 h-3 text-emerald-500" /> : <Unlock className="w-3 h-3 text-amber-500" />}
@@ -984,6 +986,68 @@ function PagesTable({ scanId }: { scanId: string }) {
   );
 }
 
+/* ───────────────────────────── trend ───────────────────────────── */
+
+const sameId = (a: string | null | undefined, b: string | null | undefined) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
+
+/** Locate this audit and the one before it in a site's trend. */
+function trendPosition(points: AdaTrendPoint[], scanId: string | null): { cur: AdaTrendPoint; prev: AdaTrendPoint | null; index: number } | null {
+  if (!points.length) return null;
+  let index = scanId ? points.findIndex((p) => sameId(p.id, scanId)) : -1;
+  if (index === -1) index = points.length - 1;
+  return { cur: points[index], prev: index > 0 ? points[index - 1] : null, index };
+}
+
+function Delta({ value, lowerIsBetter }: { value: number | null; lowerIsBetter?: boolean }) {
+  if (value === null) return <span className="text-gray-400">n/a</span>;
+  if (value === 0) return <span className="text-gray-500">±0</span>;
+  const good = lowerIsBetter ? value < 0 : value > 0;
+  return <span className={`font-semibold ${good ? 'text-emerald-600' : 'text-red-600'}`}>{value > 0 ? '+' : ''}{value}</span>;
+}
+
+/** Score of the last audits of this site plus the delta against the previous run. */
+function TrendStrip({ scanId, summary }: { scanId: string | null; summary: AdaSummary }) {
+  const [points, setPoints] = useState<AdaTrendPoint[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    getAdaTrend(summary.targetUrl).then((r) => { if (alive) setPoints(r.points); }).catch(() => { if (alive) setPoints([]); });
+    return () => { alive = false; };
+  }, [summary.targetUrl, scanId]);
+  const pos = points ? trendPosition(points, scanId) : null;
+  if (!points || !pos) return null;
+  const { cur, prev, index } = pos;
+  const shown = points.slice(Math.max(0, index - 11), index + 1);
+  const d = (a: number | null, b: number | null) => a === null || b === null ? null : a - b;
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
+      {shown.length > 1 && (
+        <div className="flex items-end gap-[3px] h-7" aria-label="Health score of the last audits of this site, oldest to newest">
+          {shown.map((p) => (
+            <div
+              key={p.id}
+              className={`w-2 rounded-t-[2px] ${sameId(p.id, cur.id) ? 'bg-violet-600' : 'bg-violet-300'}`}
+              style={{ height: `${Math.max(3, Math.round(((p.score ?? 0) / 100) * 28))}px` }}
+              title={`${new Date(p.finishedAt).toLocaleString()} · score ${p.score ?? '—'} · ${p.issues} issues · ${p.pagesAudited} pages${p.status === 'cancelled' ? ' · stopped early' : ''}${p.createdBy === 'schedule' ? ' · scheduled' : ''}`}
+            />
+          ))}
+        </div>
+      )}
+      {prev ? (
+        <span className="text-gray-600">
+          vs previous audit ({new Date(prev.finishedAt).toLocaleDateString()}{prev.createdBy === 'schedule' ? ', scheduled' : ''}):
+          {' '}score <Delta value={d(cur.score, prev.score)} />
+          {' · '}issues <Delta value={d(cur.issues, prev.issues)} lowerIsBetter />
+          {' · '}violations <Delta value={d(cur.violations, prev.violations)} lowerIsBetter />
+          {' · '}broken links <Delta value={d(cur.brokenLinks, prev.brokenLinks)} lowerIsBetter />
+          {cur.pagesAudited !== prev.pagesAudited && <span className="text-gray-400"> · {cur.pagesAudited} pages audited vs {prev.pagesAudited} — counts are not like-for-like</span>}
+        </span>
+      ) : (
+        <span className="text-gray-400">First audit of this site. Add a recurring audit on the ADA Compliance page to track the trend.</span>
+      )}
+    </div>
+  );
+}
+
 /* ───────────────────────────── coverage ───────────────────────────── */
 
 const SOURCE_LABEL: Record<string, string> = { start: 'Start page', sitemap: 'Sitemap', link: 'Link on an audited page' };
@@ -1171,7 +1235,19 @@ function coverageHtml(s: AdaSummary): string {
 <table><tr><th>Site section</th><th>Found</th><th>Audited</th><th>Coverage</th></tr>${c.bySection.map((x) => row(`<code>${esc(x.path)}</code>`, x.found, x.audited, x.templated ? ' <span class="muted">templated · sampled first</span>' : '')).join('')}</table>`;
 }
 
-function buildHtmlReport(s: AdaSummary, partial: boolean, findings: AdaFinding[], pages: AdaPage[]): string {
+/** Trend section of the downloadable report: this audit against the previous ones of the same site. */
+function trendHtml(points: AdaTrendPoint[], scanId: string | null): string {
+  const pos = trendPosition(points, scanId);
+  if (!pos || points.length < 2) return '';
+  const { cur, prev } = pos;
+  const d = (a: number | null, b: number | null) => (a === null || b === null) ? 'n/a' : `${a - b > 0 ? '+' : ''}${a - b}`;
+  const rows = points.slice(-12).map((p) => `<tr${sameId(p.id, cur.id) ? ' style="font-weight:600"' : ''}><td>${esc(new Date(p.finishedAt).toLocaleString())}${p.status === 'cancelled' ? ' <span class="muted">stopped early</span>' : ''}</td><td>${esc(p.createdBy || '')}</td><td>${p.score ?? '—'}</td><td>${p.pagesAudited}</td><td>${p.issues}</td><td>${p.violations ?? '—'}</td><td>${p.brokenLinks ?? '—'}</td><td>${p.bestPracticeFailing ?? '—'}</td></tr>`).join('');
+  return `<h2>Trend — ${points.length} audit${points.length === 1 ? '' : 's'} of this site</h2>
+${prev ? `<p class="muted">Compared with the previous audit (${esc(new Date(prev.finishedAt).toLocaleString())}): score ${d(cur.score, prev.score)} · issues ${d(cur.issues, prev.issues)} · accessibility violations ${d(cur.violations, prev.violations)} · broken links ${d(cur.brokenLinks, prev.brokenLinks)} · pages audited ${cur.pagesAudited} vs ${prev.pagesAudited}${cur.pagesAudited !== prev.pagesAudited ? ' (page counts differ — issue counts are not like-for-like)' : ''}.</p>` : ''}
+<table><tr><th>Audit</th><th>Run by</th><th>Score</th><th>Pages</th><th>Issues</th><th>Violations</th><th>Broken links</th><th>Practices failing</th></tr>${rows}</table>`;
+}
+
+function buildHtmlReport(s: AdaSummary, partial: boolean, findings: AdaFinding[], pages: AdaPage[], trend: AdaTrendPoint[] = [], scanId: string | null = null): string {
   const a = s.categories.accessibility, l = s.categories.links, b = s.categories.bestPractice;
   const broken = l.broken + l.serverErrors + l.timeouts;
   const gradeColor: Record<string, string> = { A: '#059669', B: '#16a34a', C: '#d97706', D: '#ea580c', F: '#dc2626' };
@@ -1223,6 +1299,7 @@ ${section('accessibility', `Accessibility violations (WCAG) — ${a.violations}`
 ${section('links', `Broken links — ${broken} of ${l.checked} checked${l.blocked ? ` (${l.blocked} could not be verified)` : ''}`)}
 ${section('best-practice', `Best-practice issues — ${b.failingRules.length} checks failing`)}
 ${section('review', `Needs manual review — ${a.needsReview}`)}
+${trendHtml(trend, scanId)}
 ${coverageHtml(s)}
 <h2>Pages audited — ${(pages.length || s.pagesCrawled).toLocaleString()}</h2>
 <p class="muted">Every page below was opened in a real browser and had every check run. Depth 0 is the start page.</p>

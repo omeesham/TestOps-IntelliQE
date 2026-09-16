@@ -22,8 +22,7 @@ import {
   getSharePointDocuments,
   getSharePointDocument,
   registerBugsFromRun,
-  reportToSupport,
-} from '@/services/api';
+  reportToSupport, type ExecutionAccessibility } from '@/services/api';
 import {
   Send, Bot, Loader2, CheckCircle, Monitor, Plug,
   Globe, Layers, Shield, FileText, Upload, Type, Link2,
@@ -384,7 +383,7 @@ export default function ChatPage() {
   // wasn't executed (e.g., Playwright failed to start, or no spec was
   // produced). Surfacing it honestly beats faking a pass or a fail.
   const [executionResults, setExecutionResults] = useState<{ testCaseId: string; testName: string; status: 'pending' | 'running' | 'passed' | 'failed' | 'not_run'; duration: string; error?: string }[]>([]);
-  const [executionSummary, setExecutionSummary] = useState<{ total: number; passed: number; failed: number; duration: string; durationMs: number } | null>(null);
+  const [executionSummary, setExecutionSummary] = useState<{ total: number; passed: number; failed: number; duration: string; durationMs: number; accessibility?: ExecutionAccessibility | null } | null>(null);
   // Which in-place subset re-run is running ('failure' | 'flaky' | ''), so only
   // that button spins and re-runs are not fired concurrently.
   // One-click "Push to GitHub" state (report + results screens).
@@ -1406,7 +1405,7 @@ export default function ChatPage() {
     // Report the REAL wall-clock time of the execution stage. Summing per-test
     // durations is wrong twice over: parallel workers overlap (sum ≠ elapsed),
     // and tests without a result sum to 0s even after a minutes-long run.
-    setExecutionSummary({ total: finalResults.length, passed, failed, duration: formatHMS(execWallMs), durationMs: execWallMs });
+    setExecutionSummary({ total: finalResults.length, passed, failed, duration: formatHMS(execWallMs), durationMs: execWallMs, accessibility: execRes?.accessibility || null });
 
     // Pipeline: Stage 4 → completed
     updatePipeline('execution', 'completed', `${passed}/${finalResults.length} passed`);
@@ -2817,6 +2816,32 @@ export default function ChatPage() {
               <p className="text-[10px] text-gray-400 uppercase">Duration</p>
             </div>
           </div>
+
+          {/* WCAG scan taken after every navigation and step of the run — real
+              axe-core results from the states the tests actually reached. */}
+          {executionSummary.accessibility && (() => {
+            const a = executionSummary.accessibility;
+            const imp = a.byImpact;
+            return (
+              <div className="bg-white border border-gray-100 rounded-xl p-3 shadow-sm text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-medium text-gray-700">Accessibility during the run (WCAG 2.2 AA)</p>
+                  <p className={`font-semibold ${a.violations > 0 ? 'text-red-600' : 'text-emerald-600'}`}>{a.violations} violation{a.violations === 1 ? '' : 's'}</p>
+                </div>
+                <p className="text-gray-500 mt-1">
+                  {a.checkpoints} state{a.checkpoints === 1 ? '' : 's'} scanned across {a.pagesScanned} page{a.pagesScanned === 1 ? '' : 's'} in {a.testsScanned} test{a.testsScanned === 1 ? '' : 's'}
+                  {a.violations > 0 && ` · ${imp.critical} critical · ${imp.serious} serious · ${imp.moderate} moderate · ${imp.minor} minor`}
+                </p>
+                {a.rules.slice(0, 3).map((r) => (
+                  <p key={r.id} className="text-gray-600 mt-1 truncate" title={r.help}>
+                    <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle ${r.impact === 'critical' ? 'bg-red-500' : r.impact === 'serious' ? 'bg-orange-500' : r.impact === 'moderate' ? 'bg-amber-400' : 'bg-gray-400'}`} />
+                    {r.help} <span className="text-gray-400">· {r.nodes} element{r.nodes === 1 ? '' : 's'} on {r.pages.length} page{r.pages.length === 1 ? '' : 's'}</span>
+                  </p>
+                ))}
+                {a.rules.length > 3 && <p className="text-gray-400 mt-1">+{a.rules.length - 3} more rule{a.rules.length - 3 === 1 ? '' : 's'} — full detail is attached to each test in the report.</p>}
+              </div>
+            );
+          })()}
 
           {/* No per-test result list — the customer view shows only the summary
               tiles; script files, errors, and fix hints stay internal (the Bug

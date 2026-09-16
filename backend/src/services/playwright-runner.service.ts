@@ -5,6 +5,10 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import pool from '../db.js';
+import {
+  A11Y_RESULTS_DIRNAME, writeA11yFixture, rewritePlaywrightImports, fixtureImportPathFor,
+  collectA11yResults, summariseA11y, type A11ySummary,
+} from './a11y-fixture.service.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -248,7 +252,7 @@ export async function runPlaywrightForRun(
   runId: string,
   /** Optional subset — run only these test cases (used by Bug Tracker re-runs). */
   testCaseIds?: string[],
-): Promise<{ resultsDir: string; workspace: string; summary: PwSummary | null; results: RunTestResult[] }> {
+): Promise<{ resultsDir: string; workspace: string; summary: PwSummary | null; results: RunTestResult[]; a11y: A11ySummary | null }> {
   if (!runId) throw new Error('runId is required to execute Playwright tests');
 
   const query = isPlatform
@@ -281,8 +285,12 @@ export async function runPlaywrightForRun(
   const workspace = path.join(os.tmpdir(), `jbs-pw-${runId}-${Date.now()}`);
   const testsDir = path.join(workspace, 'tests');
   const resultsDir = path.join(workspace, 'allure-results');
+  const a11yDir = path.join(workspace, A11Y_RESULTS_DIRNAME);
   await fs.mkdir(testsDir, { recursive: true });
   await fs.mkdir(resultsDir, { recursive: true });
+  await fs.mkdir(a11yDir, { recursive: true });
+  // axe checkpoints after every navigation / step — see a11y-fixture.service.ts.
+  await writeA11yFixture(workspace);
 
   // Write each stored spec to the tests dir. Track basename → test_case_id so
   // we can map Playwright's per-spec results back to the originating test case.
@@ -303,7 +311,7 @@ export async function runPlaywrightForRun(
     usedNames.add(name);
     if (row.test_case_id) fileToTcId.set(name, String(row.test_case_id));
     const specFile = path.join(testsDir, name);
-    await fs.writeFile(specFile, row.code, 'utf-8');
+    await fs.writeFile(specFile, rewritePlaywrightImports(row.code, fixtureImportPathFor(workspace, specFile)), 'utf-8');
     written.push({ scriptId: row.id, specFile });
   }
 
@@ -348,6 +356,7 @@ module.exports = defineConfig({
     // Let Node fall back to backend/node_modules when resolving reporters or
     // any other module the spec files import.
     NODE_PATH: path.join(BACKEND_ROOT, 'node_modules'),
+    JBS_A11Y_DIR: a11yDir,
   };
 
   let stdout = '';
@@ -402,5 +411,8 @@ module.exports = defineConfig({
     console.warn('[playwright-runner] failed to update automation_scripts last_run:', e.message);
   }
 
-  return { resultsDir, workspace, summary, results: resultsFromSummary(summary, fileToTcId) };
+  const checkpoints = await collectA11yResults(a11yDir);
+  const a11y: A11ySummary | null = checkpoints.length ? summariseA11y(checkpoints) : null;
+
+  return { resultsDir, workspace, summary, results: resultsFromSummary(summary, fileToTcId), a11y };
 }

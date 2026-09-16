@@ -7,6 +7,10 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import type { TestOpsState, TestCase, PageObjectFile } from './state.js';
 import { collectClientDeliverableBundle } from '../services/client-deliverable.service.js';
+import {
+  A11Y_RESULTS_DIRNAME, writeA11yFixture, rewritePlaywrightImports, fixtureImportPathFor,
+  collectA11yResults, summariseA11y, type A11ySummary,
+} from '../services/a11y-fixture.service.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -134,12 +138,17 @@ async function runPlaywrightInMemory(
   targetUrl: string | undefined,
   htmlReportDir?: string,
   allureResultsDir?: string,
-): Promise<{ specResults: SpecResult[]; summary: PwSummary | null }> {
+): Promise<{ specResults: SpecResult[]; summary: PwSummary | null; a11y: A11ySummary | null }> {
   const workspace = path.join(os.tmpdir(), `jbs-pw-sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const testsDir = path.join(workspace, 'tests');
   const resultsDir = path.join(workspace, 'allure-results');
+  const a11yDir = path.join(workspace, A11Y_RESULTS_DIRNAME);
   await fs.mkdir(testsDir, { recursive: true });
   await fs.mkdir(resultsDir, { recursive: true });
+  await fs.mkdir(a11yDir, { recursive: true });
+  // Every spec's `@playwright/test` import is pointed at this fixture, which
+  // runs axe after each navigation / step and attaches the results.
+  await writeA11yFixture(workspace);
 
   // Helper: write a file at a repo-relative path inside the workspace.
   const writeRel = async (rel: string, content: string) => {
@@ -204,7 +213,7 @@ async function runPlaywrightInMemory(
     const code = unresolved.length === 0
       ? s.code
       : missingPomStub(s.testCaseId, unresolved);
-    await writeRel(specRel, code);
+    await writeRel(specRel, rewritePlaywrightImports(code, fixtureImportPathFor(workspace, path.join(workspace, specRel))));
   }
 
   const configPath = path.join(workspace, 'playwright.config.cjs');
@@ -255,6 +264,7 @@ ${baseUrlLine}    actionTimeout: 20_000,
     CI: '1',
     PLAYWRIGHT_JSON_OUTPUT_NAME: path.join(workspace, 'pw-summary.json'),
     NODE_PATH: path.join(BACKEND_ROOT, 'node_modules'),
+    JBS_A11Y_DIR: a11yDir,
   };
 
   const isWindows = process.platform === 'win32';
@@ -344,7 +354,16 @@ ${baseUrlLine}    actionTimeout: 20_000,
     });
   }
 
-  return { specResults, summary };
+  // Accessibility checkpoints written by the fixture during the run.
+  const checkpoints = await collectA11yResults(a11yDir);
+  const a11y = checkpoints.length ? summariseA11y(checkpoints) : null;
+  if (a11y && htmlReportDir) {
+    // Keep the raw results next to the HTML report so they are served with it.
+    await fs.mkdir(htmlReportDir, { recursive: true }).catch(() => {});
+    await fs.writeFile(path.join(htmlReportDir, 'accessibility-results.json'), JSON.stringify(a11y, null, 2), 'utf-8').catch(() => {});
+  }
+
+  return { specResults, summary, a11y };
 }
 
 /** Strip ANSI color codes Playwright embeds in error messages. */
@@ -420,7 +439,7 @@ export async function executionAgent(
   }
 
   try {
-    const { specResults } = await runPlaywrightInMemory(scripts, state.pageObjects || [], targetUrl, opts?.htmlReportDir, opts?.allureResultsDir);
+    const { specResults, a11y } = await runPlaywrightInMemory(scripts, state.pageObjects || [], targetUrl, opts?.htmlReportDir, opts?.allureResultsDir);
 
     // Primary lookup is by test case id (from the spec file name); scenario
     // title is only a fallback for results we couldn't map by file.
@@ -478,6 +497,8 @@ export async function executionAgent(
         failed,
         failReason: specResults.find((r) => !r.passed)?.errorMessage,
         details,
+        // The per-checkpoint detail stays in the report dir; the state carries the roll-up.
+        accessibility: a11y ? { checkpoints: a11y.checkpoints, pagesScanned: a11y.pagesScanned, testsScanned: a11y.testsScanned, violations: a11y.violations, byImpact: a11y.byImpact, rules: a11y.rules } : undefined,
       },
       failureReason: failed > 0 ? (specResults.find((r) => !r.passed)?.errorMessage || 'Some tests failed') : null,
     };

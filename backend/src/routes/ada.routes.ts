@@ -8,6 +8,12 @@
  *   GET    /api/ada/scans/:id/pages    pages crawled with per-page scores
  *   POST   /api/ada/scans/:id/cancel   stop a running scan (partial results are kept)
  *   DELETE /api/ada/scans/:id          delete a scan and everything under it
+ *   GET    /api/ada/trend?url=         finished audits of one site, oldest first, for run-over-run comparison
+ *   GET    /api/ada/schedules          recurring audits for this tenant
+ *   POST   /api/ada/schedules          create one  { url, frequency, runHourUtc, runWeekday?, maxPages?, checkExternalLinks?, username?, password? }
+ *   PATCH  /api/ada/schedules/:id      change cadence / options / enabled
+ *   DELETE /api/ada/schedules/:id
+ *   POST   /api/ada/schedules/:id/run  start that schedule's audit now
  */
 import { Router } from 'express';
 import type { Request, Response } from 'express';
@@ -16,6 +22,7 @@ import {
   startScan, getProgress, cancelScan, tenantHasRunningScan, DEFAULT_OPTIONS,
 } from '../services/ada/ada-scan.service.js';
 import { normaliseStartUrl } from '../services/ada/ada-engine.js';
+import { listSchedules, createSchedule, updateSchedule, deleteSchedule, runScheduleNow } from '../services/ada/ada-schedule.service.js';
 import { remediate } from '../services/ada/ada-remediation.js';
 import type { ScanOptions } from '../services/ada/ada-types.js';
 
@@ -90,6 +97,136 @@ router.get('/scans', async (req: Request, res: Response) => {
     res.json({ scans: rows });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to list audits' });
+  }
+});
+
+/**
+ * Trend of one site: every finished audit of the same normalised URL, oldest
+ * first, reduced to the numbers a run-over-run comparison needs. The report
+ * uses it to show "vs previous audit" deltas.
+ */
+router.get('/trend', async (req: Request, res: Response) => {
+  try {
+    const raw = String(req.query.url || '').trim();
+    if (!raw) { res.status(400).json({ error: 'url is required' }); return; }
+    let url: string;
+    try { url = normaliseStartUrl(raw); } catch { res.status(400).json({ error: 'Invalid url' }); return; }
+    const limit = Math.min(50, Math.max(2, Number(req.query.limit) || 12));
+    const { rows } = await pool.query(
+      `SELECT id, status, overall_score, pages_crawled, links_checked, findings_count, result, finished_at, created_by
+         FROM ada_scans
+        WHERE tenant_id = $1 AND target_url = $2 AND status IN ('completed', 'cancelled') AND finished_at IS NOT NULL
+        ORDER BY finished_at DESC LIMIT ${limit}`,
+      [req.user!.tenantId, url],
+    );
+    const points = rows.reverse().map((r: any) => {
+      let result: any = r.result;
+      if (typeof result === 'string') { try { result = JSON.parse(result); } catch { result = null; } }
+      const cats = result?.categories || {};
+      return {
+        id: r.id,
+        status: r.status,
+        finishedAt: r.finished_at,
+        createdBy: r.created_by,
+        score: r.overall_score,
+        pagesAudited: r.pages_crawled,
+        pagesFound: result?.pagesDiscovered ?? r.pages_crawled,
+        linksChecked: r.links_checked,
+        issues: r.findings_count,
+        violations: cats.accessibility?.violations ?? null,
+        needsReview: cats.accessibility?.needsReview ?? null,
+        brokenLinks: cats.links ? (cats.links.broken + cats.links.serverErrors + cats.links.timeouts) : null,
+        bestPracticeFailing: cats.bestPractice?.failingRules?.length ?? null,
+        accessibilityScore: cats.accessibility?.score ?? null,
+        linksScore: cats.links?.score ?? null,
+        bestPracticeScore: cats.bestPractice?.score ?? null,
+      };
+    });
+    res.json({ url, points });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to load trend' });
+  }
+});
+
+/* ───────────────────────────── recurring audits ───────────────────────────── */
+
+router.get('/schedules', async (req: Request, res: Response) => {
+  try { res.json({ schedules: await listSchedules(req.user!.tenantId) }); }
+  catch (err: any) { res.status(500).json({ error: err.message || 'Failed to list schedules' }); }
+});
+
+router.post('/schedules', async (req: Request, res: Response) => {
+  try {
+    const body = req.body || {};
+    const rawUrl = typeof body.url === 'string' ? body.url.trim() : '';
+    if (!rawUrl) { res.status(400).json({ error: 'url is required' }); return; }
+    let url: URL;
+    try { url = new URL(normaliseStartUrl(rawUrl)); } catch { res.status(400).json({ error: 'That does not look like a valid website address' }); return; }
+    if (!['http:', 'https:'].includes(url.protocol) || !url.hostname.includes('.')) { res.status(400).json({ error: 'Enter a public website address' }); return; }
+    if (isPrivateTarget(url)) { res.status(400).json({ error: 'Internal or private network addresses cannot be audited' }); return; }
+    const schedule = await createSchedule(req.user!.tenantId, req.user!.username, {
+      url: url.toString(),
+      frequency: body.frequency === 'weekly' ? 'weekly' : 'daily',
+      runHourUtc: Number(body.runHourUtc ?? 3),
+      runWeekday: body.runWeekday === undefined || body.runWeekday === null ? null : Number(body.runWeekday),
+      maxPages: body.maxPages !== undefined ? Number(body.maxPages) : undefined,
+      checkExternalLinks: body.checkExternalLinks !== false,
+      username: typeof body.username === 'string' ? body.username : undefined,
+      password: typeof body.password === 'string' && body.password ? body.password : undefined,
+    });
+    res.status(201).json({ schedule });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to create schedule' });
+  }
+});
+
+router.patch('/schedules/:id', async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) { res.status(400).json({ error: 'Invalid schedule id' }); return; }
+    const b = req.body || {};
+    const schedule = await updateSchedule(req.user!.tenantId, id, {
+      url: typeof b.url === 'string' ? b.url : undefined,
+      frequency: b.frequency === 'daily' || b.frequency === 'weekly' ? b.frequency : undefined,
+      runHourUtc: b.runHourUtc !== undefined ? Number(b.runHourUtc) : undefined,
+      runWeekday: b.runWeekday !== undefined ? (b.runWeekday === null ? null : Number(b.runWeekday)) : undefined,
+      maxPages: b.maxPages !== undefined ? Number(b.maxPages) : undefined,
+      checkExternalLinks: typeof b.checkExternalLinks === 'boolean' ? b.checkExternalLinks : undefined,
+      username: typeof b.username === 'string' ? b.username : undefined,
+      password: typeof b.password === 'string' ? b.password : undefined,
+      enabled: typeof b.enabled === 'boolean' ? b.enabled : undefined,
+    });
+    if (!schedule) { res.status(404).json({ error: 'Schedule not found' }); return; }
+    res.json({ schedule });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to update schedule' });
+  }
+});
+
+router.delete('/schedules/:id', async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) { res.status(400).json({ error: 'Invalid schedule id' }); return; }
+    const ok = await deleteSchedule(req.user!.tenantId, id);
+    if (!ok) { res.status(404).json({ error: 'Schedule not found' }); return; }
+    res.json({ deleted: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to delete schedule' });
+  }
+});
+
+router.post('/schedules/:id/run', async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) { res.status(400).json({ error: 'Invalid schedule id' }); return; }
+    const tenantId = req.user!.tenantId;
+    const running = tenantHasRunningScan(tenantId);
+    if (running) { res.status(409).json({ error: 'An audit is already running for your account', scanId: running }); return; }
+    const scanId = await runScheduleNow(tenantId, id, req.user!.username);
+    res.status(202).json({ scanId });
+  } catch (err: any) {
+    const status = /not found/i.test(err.message) ? 404 : 500;
+    res.status(status).json({ error: err.message || 'Failed to start audit' });
   }
 });
 

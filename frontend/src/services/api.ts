@@ -455,9 +455,20 @@ export async function executePipeline(testCases: any[], scripts: any[], pageObje
     executionDetails: { testCaseId: string; scenario: string; status: string; durationMs?: number; error?: string }[];
     failureReason: string | null;
     reportUrl?: string;
+    /** WCAG scan of every state the tests reached (after each navigation and step). Null when nothing was scanned. */
+    accessibility: ExecutionAccessibility | null;
     app: { name: string; targetUrl?: string } | null;
     summary: { total: number; passed: number; failed: number; executed: boolean; reason?: string };
   }>(started.jobId);
+}
+
+export interface ExecutionAccessibility {
+  checkpoints: number;
+  pagesScanned: number;
+  testsScanned: number;
+  violations: number;
+  byImpact: Record<'critical' | 'serious' | 'moderate' | 'minor', number>;
+  rules: { id: string; help: string; helpUrl: string; impact: 'critical' | 'serious' | 'moderate' | 'minor' | null; wcag: string[]; nodes: number; checkpoints: number; pages: string[] }[];
 }
 
 /** Stage 5 — heal failing tests then re-execute the suite (detached job + polling). */
@@ -1661,6 +1672,82 @@ export async function getAdaFindings(
 export async function getAdaPages(scanId: string): Promise<AdaPage[]> {
   const { data } = await api.get(`/ada/scans/${encodeURIComponent(scanId)}/pages`);
   return data.pages;
+}
+
+/** One finished audit of a site, reduced to the numbers a run-over-run comparison needs. */
+export interface AdaTrendPoint {
+  id: string;
+  status: 'completed' | 'cancelled';
+  finishedAt: string;
+  createdBy?: string | null;
+  score: number | null;
+  pagesAudited: number;
+  pagesFound: number;
+  linksChecked: number;
+  issues: number;
+  violations: number | null;
+  needsReview: number | null;
+  brokenLinks: number | null;
+  bestPracticeFailing: number | null;
+  accessibilityScore: number | null;
+  linksScore: number | null;
+  bestPracticeScore: number | null;
+}
+
+export async function getAdaTrend(url: string, limit = 12): Promise<{ url: string; points: AdaTrendPoint[] }> {
+  const { data } = await api.get('/ada/trend', { params: { url, limit } });
+  return data;
+}
+
+export interface AdaSchedule {
+  id: string;
+  target_url: string;
+  frequency: 'daily' | 'weekly';
+  run_hour_utc: number;
+  run_weekday: number | null;
+  options: { maxPages?: number; checkExternalLinks?: boolean; username?: string; hasPassword?: boolean };
+  enabled: boolean;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_scan_id: string | null;
+  last_error: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface AdaScheduleInput {
+  url: string;
+  frequency: 'daily' | 'weekly';
+  runHourUtc: number;
+  runWeekday?: number | null;
+  maxPages?: number;
+  checkExternalLinks?: boolean;
+  username?: string;
+  password?: string;
+}
+
+export async function listAdaSchedules(): Promise<AdaSchedule[]> {
+  const { data } = await api.get('/ada/schedules');
+  return data.schedules;
+}
+
+export async function createAdaSchedule(input: AdaScheduleInput): Promise<AdaSchedule> {
+  const { data } = await api.post('/ada/schedules', input);
+  return data.schedule;
+}
+
+export async function updateAdaSchedule(id: string, patch: Partial<AdaScheduleInput> & { enabled?: boolean }): Promise<AdaSchedule> {
+  const { data } = await api.patch(`/ada/schedules/${id}`, patch);
+  return data.schedule;
+}
+
+export async function deleteAdaSchedule(id: string): Promise<void> {
+  await api.delete(`/ada/schedules/${id}`);
+}
+
+export async function runAdaScheduleNow(id: string): Promise<{ scanId: string }> {
+  const { data } = await api.post(`/ada/schedules/${id}/run`);
+  return data;
 }
 
 export async function cancelAdaScan(scanId: string): Promise<void> {
