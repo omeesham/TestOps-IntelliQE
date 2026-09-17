@@ -1499,7 +1499,7 @@ export function subscribeToAgentPerformance(
 // scored website health report. Progress is polled — see AdaCompliancePanel.
 
 export type AdaSeverity = 'critical' | 'serious' | 'moderate' | 'minor';
-export type AdaCategory = 'accessibility' | 'links' | 'best-practice' | 'review';
+export type AdaCategory = 'accessibility' | 'links' | 'best-practice' | 'review' | 'visual';
 
 export interface AdaScanOptions {
   url: string;
@@ -1509,13 +1509,18 @@ export interface AdaScanOptions {
   maxDepth?: number;
   useSitemap?: boolean;
   checkExternalLinks?: boolean;
+  /** UX testing: layout integrity on every device, plus adherence to the chosen design standard. */
+  ux?: boolean;
+  devices?: string[];
+  designStandardId?: string;
+  uxPagesPerDevice?: number;
 }
 
 export interface AdaProgressEvent {
   seq: number;
   at: string;
   type: 'start' | 'robots' | 'sitemap' | 'navigate' | 'page' | 'login' | 'accessibility' | 'best-practice'
-    | 'links' | 'link-check' | 'summary' | 'warning' | 'error' | 'done';
+    | 'ux' | 'links' | 'link-check' | 'summary' | 'warning' | 'error' | 'done';
   message: string;
   data?: Record<string, unknown>;
 }
@@ -1570,6 +1575,8 @@ export interface AdaSummary {
     accessibility: AdaCategoryScore & { violations: number; needsReview: number; bySeverity: Record<AdaSeverity, number>; topRules: { ruleId: string; title: string; severity: AdaSeverity; pages: number; occurrences: number; helpUrl?: string; wcag?: string }[] };
     links: AdaCategoryScore & { checked: number; ok: number; redirects: number; broken: number; serverErrors: number; timeouts: number; blocked: number; brokenLinks: AdaLinkResult[]; blockedLinks: AdaLinkResult[] };
     bestPractice: AdaCategoryScore & { rulesEvaluated: number; rulesPassed: number; failingRules: { ruleId: string; title: string; severity: AdaSeverity; pages: number }[] };
+    /** Present when UX testing ran. */
+    ux?: AdaUxSummary;
   };
   worstPages: { url: string; title: string; a11yScore: number; bpScore: number; findings: number }[];
   notes: string[];
@@ -1662,7 +1669,7 @@ export async function getAdaScan(scanId: string, after = 0): Promise<{ scan: Ada
 
 export async function getAdaFindings(
   scanId: string,
-  filters: { category?: AdaCategory | ''; severity?: AdaSeverity | ''; page?: string; q?: string; limit?: number; offset?: number } = {},
+  filters: { category?: AdaCategory | ''; notCategory?: AdaCategory | ''; severity?: AdaSeverity | ''; page?: string; q?: string; limit?: number; offset?: number } = {},
 ): Promise<{ findings: AdaFinding[]; total: number; occurrences: number }> {
   const params: Record<string, string | number> = {};
   for (const [k, v] of Object.entries(filters)) if (v !== undefined && v !== '' && v !== null) params[k] = v as string | number;
@@ -1675,6 +1682,77 @@ export async function getAdaPages(scanId: string): Promise<AdaPage[]> {
   return data.pages;
 }
 
+/* ── UX testing ── */
+
+export type AdaDeviceKind = 'desktop' | 'tablet' | 'mobile';
+export interface AdaDevice { id: string; label: string; kind: AdaDeviceKind; vendor?: string; viewport: { width: number; height: number }; recommended: boolean; primary: boolean }
+
+/** `layout` is always scored; `adherence` only against an uploaded design standard. */
+export interface AdaUxSummary extends AdaCategoryScore {
+  layout: AdaCategoryScore;
+  adherence: AdaCategoryScore;
+  standard: { id: string; name: string } | null;
+  issues: number;
+  needsReview: number;
+  devices: { id: string; label: string; kind: AdaDeviceKind; viewport: string; pagesChecked: number; issues: number; layoutScore: number | null; adherenceScore: number | null }[];
+  topRules: { ruleId: string; title: string; severity: AdaSeverity; family: string; confidence: string; pages: number; devices: string[]; occurrences: number }[];
+  typography: { role: string; family: string; size: number; weight: number; uses: number; pages: number }[];
+  colors: { hex: string; kind: 'text' | 'background' | 'border'; uses: number; pages: number; inStandard?: boolean; nearest?: { name: string; hex: string; deltaE: number } }[];
+  emulationNote: string;
+}
+
+export interface AdaDesignStandard {
+  id: string;
+  name: string;
+  source_format: string;
+  stats: { colors: number; fontFamilies: number; fontSizes: number; fontWeights: number; spacing: number; radii: number };
+  warnings: string[];
+  preview: { colors: { name: string; hex: string }[]; fontFamilies: string[]; fontSizes: number[] };
+  created_by: string | null;
+  created_at: string;
+}
+
+export async function listAdaDevices(): Promise<{ devices: AdaDevice[]; recommended: string[] }> {
+  const { data } = await api.get('/ada/devices');
+  return data;
+}
+
+export async function listAdaStandards(): Promise<AdaDesignStandard[]> {
+  const { data } = await api.get('/ada/standards');
+  return data.standards;
+}
+
+/** `content` is the file's text: design tokens JSON or CSS custom properties. */
+export async function uploadAdaStandard(name: string, content: string): Promise<AdaDesignStandard> {
+  const { data } = await api.post('/ada/standards', { name, content });
+  return data.standard;
+}
+
+export async function deleteAdaStandard(id: string): Promise<void> {
+  await api.delete(`/ada/standards/${id}`);
+}
+
+/** Evidence images need the auth header, so they are fetched as a blob and handed back as an object URL (caller revokes). */
+export async function getAdaEvidence(scanId: string, file: string): Promise<string> {
+  const { data } = await api.get(`/ada/scans/${encodeURIComponent(scanId)}/evidence/${encodeURIComponent(file)}`, { responseType: 'blob' });
+  return URL.createObjectURL(data as Blob);
+}
+
+export interface AdaHealth {
+  url: string; scanId: string; status: string; finishedAt: string; runBy?: string | null; ageHours: number;
+  score: number | null; grade: string | null;
+  categories: { accessibility: number | null; links: number | null; bestPractice: number | null; ux: number | null; uxLayout: number | null; uxAdherence: number | null };
+  pagesAudited: number; issues: number; uxIssues?: number | null;
+  change: { since: string; score: number; issues: number } | null;
+  gate: { passed: boolean; checks: { name: string; ok: boolean; actual: number | null; threshold: string }[] };
+}
+
+/** Latest finished audit of a site plus a pass/fail gate — reads stored results, so it is instant. */
+export async function getAdaHealth(url: string, thresholds: { minScore?: number; minUx?: number; maxCritical?: number } = {}): Promise<AdaHealth> {
+  const { data } = await api.get('/ada/health', { params: { url, ...thresholds } });
+  return data;
+}
+
 /** One finished audit of a site, reduced to the numbers a run-over-run comparison needs. */
 export interface AdaTrendPoint {
   id: string;
@@ -1685,7 +1763,10 @@ export interface AdaTrendPoint {
   pagesAudited: number;
   pagesFound: number;
   linksChecked: number;
+  /** Accessibility, link and best-practice issues. UX findings are counted separately in `uxIssues`. */
   issues: number;
+  uxScore?: number | null;
+  uxIssues?: number | null;
   violations: number | null;
   needsReview: number | null;
   brokenLinks: number | null;

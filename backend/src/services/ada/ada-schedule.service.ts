@@ -17,6 +17,7 @@ import pool from '../../db.js';
 import { encryptAtRest, decryptStored } from '../../utils/crypto.js';
 import { normaliseStartUrl } from './ada-engine.js';
 import { startScan, DEFAULT_OPTIONS } from './ada-scan.service.js';
+import { loadStandard } from './ada-standard.service.js';
 
 export type ScheduleFrequency = 'daily' | 'weekly';
 
@@ -28,7 +29,7 @@ export interface AdaSchedule {
   run_hour_utc: number;
   /** 0 = Sunday … 6 = Saturday. Only for weekly. */
   run_weekday: number | null;
-  options: { maxPages?: number; checkExternalLinks?: boolean; username?: string; hasPassword?: boolean };
+  options: { maxPages?: number; checkExternalLinks?: boolean; username?: string; hasPassword?: boolean; ux?: boolean; devices?: string[]; designStandardId?: string };
   enabled: boolean;
   next_run_at: string | null;
   last_run_at: string | null;
@@ -47,6 +48,10 @@ export interface ScheduleInput {
   checkExternalLinks?: boolean;
   username?: string;
   password?: string;
+  /** UX checks: on by default, with the recommended devices. */
+  ux?: boolean;
+  devices?: string[];
+  designStandardId?: string;
 }
 
 const TICK_MS = 60_000;
@@ -67,7 +72,7 @@ export function computeNextRun(frequency: ScheduleFrequency, hourUtc: number, we
 
 /* ───────────────────────────── storage ───────────────────────────── */
 
-interface StoredOptions { maxPages?: number; checkExternalLinks?: boolean; username?: string; password?: string }
+interface StoredOptions { maxPages?: number; checkExternalLinks?: boolean; username?: string; password?: string; ux?: boolean; devices?: string[]; designStandardId?: string }
 
 function parseOptions(raw: unknown): StoredOptions {
   if (raw && typeof raw === 'object') return raw as StoredOptions;
@@ -85,7 +90,7 @@ function toPublic(row: Record<string, unknown>): AdaSchedule {
     frequency: row.frequency as ScheduleFrequency,
     run_hour_utc: Number(row.run_hour_utc),
     run_weekday: row.run_weekday === null || row.run_weekday === undefined ? null : Number(row.run_weekday),
-    options: { maxPages: o.maxPages, checkExternalLinks: o.checkExternalLinks, username: o.username, hasPassword: !!o.password },
+    options: { maxPages: o.maxPages, checkExternalLinks: o.checkExternalLinks, username: o.username, hasPassword: !!o.password, ux: o.ux !== false, devices: o.devices, designStandardId: o.designStandardId },
     enabled: !!row.enabled,
     next_run_at: (row.next_run_at as string) || null,
     last_run_at: (row.last_run_at as string) || null,
@@ -116,6 +121,9 @@ export async function createSchedule(tenantId: string, createdBy: string, input:
     checkExternalLinks: input.checkExternalLinks !== false,
     username: input.username?.trim() || undefined,
     password: input.password ? encryptAtRest(input.password) : undefined,
+    ux: input.ux !== false,
+    devices: Array.isArray(input.devices) && input.devices.length ? input.devices.map(String).slice(0, 8) : undefined,
+    designStandardId: input.designStandardId || undefined,
   };
   const { rows } = await pool.query(
     `INSERT INTO ada_schedules (tenant_id, target_url, frequency, run_hour_utc, run_weekday, options, enabled, next_run_at, created_by)
@@ -141,6 +149,9 @@ export async function updateSchedule(tenantId: string, id: string, patch: Partia
     checkExternalLinks: patch.checkExternalLinks !== undefined ? patch.checkExternalLinks : stored.checkExternalLinks,
     username: patch.username !== undefined ? (patch.username.trim() || undefined) : stored.username,
     password: patch.password !== undefined ? (patch.password ? encryptAtRest(patch.password) : undefined) : stored.password,
+    ux: patch.ux !== undefined ? patch.ux : stored.ux,
+    devices: patch.devices !== undefined ? patch.devices.map(String).slice(0, 8) : stored.devices,
+    designStandardId: patch.designStandardId !== undefined ? (patch.designStandardId || undefined) : stored.designStandardId,
   };
   const enabled = patch.enabled !== undefined ? !!patch.enabled : !!cur.enabled;
   const timingChanged = merged.frequency !== cur.frequency || merged.hour !== Number(cur.run_hour_utc) || merged.weekday !== (cur.run_weekday ?? null);
@@ -174,6 +185,8 @@ export async function runScheduleNow(tenantId: string, id: string, actor: string
 
 async function launch(row: Record<string, unknown>, actor: string): Promise<string> {
   const o = parseOptions(row.options);
+  // A standard that was deleted since the schedule was made simply means "not scored" — the audit still runs.
+  const std = o.designStandardId ? await loadStandard(String(row.tenant_id), o.designStandardId).catch(() => null) : null;
   const scanId = await startScan(String(row.tenant_id), actor, {
     url: String(row.target_url),
     username: o.username,
@@ -183,6 +196,10 @@ async function launch(row: Record<string, unknown>, actor: string): Promise<stri
     useSitemap: true,
     checkExternalLinks: o.checkExternalLinks !== false,
     crawlDelayMs: DEFAULT_OPTIONS.crawlDelayMs,
+    uxEnabled: o.ux !== false,
+    devices: o.devices && o.devices.length ? o.devices : DEFAULT_OPTIONS.devices,
+    uxPagesPerDevice: DEFAULT_OPTIONS.uxPagesPerDevice,
+    designStandard: std ? { id: std.id, name: std.name, standard: std.standard } : null,
   });
   await pool.query(`UPDATE ada_schedules SET last_run_at = now(), last_scan_id = $2, last_error = NULL, updated_at = now() WHERE id = $1`, [row.id, scanId]);
   return scanId;

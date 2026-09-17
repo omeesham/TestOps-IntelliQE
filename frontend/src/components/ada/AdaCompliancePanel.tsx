@@ -28,6 +28,7 @@ import {
   MousePointerClick, Wrench, Timer,
 } from 'lucide-react';
 import UniversalAccess from '@/components/icons/UniversalAccess';
+import { UxSetup, UxReport } from '@/components/ada/UxTesting';
 
 const EFFORT_STYLE: Record<AdaRemediation['effort'], string> = {
   quick: 'bg-emerald-50 text-emerald-700 border-emerald-200',
@@ -41,7 +42,7 @@ function remediationOf(f: AdaFinding | null | undefined): AdaRemediation | undef
 }
 
 type Screen = 'form' | 'scanning' | 'results';
-type Tab = 'issues' | 'log' | 'coverage' | 'pages';
+type Tab = 'issues' | 'ux' | 'log' | 'coverage' | 'pages';
 
 export interface BrownfieldHandoff { url: string; siteName?: string; username?: string; password?: string }
 
@@ -67,7 +68,7 @@ const SEV_DOT: Record<AdaSeverity, string> = {
   critical: 'bg-red-500', serious: 'bg-orange-500', moderate: 'bg-amber-400', minor: 'bg-gray-400',
 };
 const CATEGORY_LABEL: Record<AdaCategory, string> = {
-  accessibility: 'Accessibility', links: 'Broken link', 'best-practice': 'Best practice', review: 'Needs review',
+  accessibility: 'Accessibility', links: 'Broken link', 'best-practice': 'Best practice', review: 'Needs review', visual: 'UX',
 };
 const GRADE_COLOR: Record<string, string> = {
   A: 'text-emerald-600', B: 'text-green-600', C: 'text-amber-600', D: 'text-orange-600', F: 'text-red-600',
@@ -78,12 +79,12 @@ const GRADE_RING: Record<string, string> = {
 
 const EVENT_ICON: Record<AdaProgressEvent['type'], React.ElementType> = {
   start: Globe, robots: FileSearch, sitemap: MapIcon, navigate: Compass, page: CheckCircle2, login: Lock,
-  accessibility: UniversalAccess, 'best-practice': ListChecks, links: Link2Off, 'link-check': XCircle,
+  accessibility: UniversalAccess, 'best-practice': ListChecks, ux: MousePointerClick, links: Link2Off, 'link-check': XCircle,
   summary: Sparkles, warning: AlertTriangle, error: XCircle, done: CheckCircle2,
 };
 const EVENT_COLOR: Record<AdaProgressEvent['type'], string> = {
   start: 'text-violet-500', robots: 'text-gray-400', sitemap: 'text-gray-400', navigate: 'text-indigo-500',
-  page: 'text-emerald-500', login: 'text-violet-500', accessibility: 'text-blue-500', 'best-practice': 'text-teal-500',
+  page: 'text-emerald-500', login: 'text-violet-500', accessibility: 'text-blue-500', 'best-practice': 'text-teal-500', ux: 'text-fuchsia-500',
   links: 'text-gray-500', 'link-check': 'text-red-500', summary: 'text-violet-600', warning: 'text-amber-500',
   error: 'text-red-600', done: 'text-emerald-600',
 };
@@ -149,6 +150,10 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
   const [quickSample, setQuickSample] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [checkExternal, setCheckExternal] = useState(true);
+  // UX testing: devices are seeded with the server's recommended set by UxSetup.
+  const [uxEnabled, setUxEnabled] = useState(true);
+  const [uxDevices, setUxDevices] = useState<string[]>([]);
+  const [standardId, setStandardId] = useState('');
   const [formError, setFormError] = useState('');
   /** Id of the audit that is already running for this account (from a 409), so the form can stop or open it. */
   const [blockingScanId, setBlockingScanId] = useState<string | null>(null);
@@ -206,7 +211,7 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
   useEffect(() => {
     if (screen !== 'results' || !scanId || !summary || findingsFor === scanId) return;
     let alive = true;
-    getAdaFindings(scanId, { limit: 2000 })
+    getAdaFindings(scanId, { notCategory: 'visual', limit: 2000 })
       .then((r) => { if (alive) setFindings(r.findings); })
       .catch(() => { if (alive) setFindings([]); })
       .finally(() => { if (alive) setFindingsFor(scanId); });
@@ -228,6 +233,9 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
         password: needsLogin && password ? password : undefined,
         maxPages: quickSample ? 15 : undefined,
         checkExternalLinks: checkExternal,
+        ux: uxEnabled,
+        devices: uxEnabled && uxDevices.length ? uxDevices : undefined,
+        designStandardId: uxEnabled && standardId ? standardId : undefined,
       });
       lastSeq.current = 0;
       setEvents([]); setProgress(null); setScan(null); setFindings([]); setFindingsFor('');
@@ -334,6 +342,8 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
             <p className="col-span-2 text-[11px] text-gray-400">Used once, for this audit only. If the first page is a sign-in form, IntelliQE signs in and audits the pages behind it; otherwise it audits the public pages.</p>
           </div>
         )}
+
+        <UxSetup enabled={uxEnabled} onEnabled={setUxEnabled} devices={uxDevices} onDevices={setUxDevices} standardId={standardId} onStandardId={setStandardId} />
 
         <button onClick={() => setShowAdvanced((v) => !v)} className="text-[11px] text-violet-500 hover:text-violet-700 flex items-center gap-1">
           {showAdvanced ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />} Scan options
@@ -463,6 +473,7 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
         <div className="flex gap-1 px-2 pt-2 border-b border-gray-100 overflow-x-auto">
           {([
             ['issues', 'Issue summary', UniversalAccess],
+            ...(summary.categories.ux ? [['ux', 'UX testing', MousePointerClick] as [Tab, string, React.ElementType]] : []),
             ['log', 'Workflow log', ListChecks],
             ['coverage', 'Coverage', MapIcon],
             ['pages', 'Pages', Compass],
@@ -474,6 +485,7 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
             >
               <Icon className="w-3.5 h-3.5" /> {label}
               {key === 'pages' && <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-gray-100 text-gray-500">{summary.pagesCrawled}</span>}
+              {key === 'ux' && summary.categories.ux && <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-gray-100 text-gray-500">{summary.categories.ux.issues.toLocaleString()}</span>}
             </button>
           ))}
         </div>
@@ -481,6 +493,7 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
           ? <p className="p-5 text-xs text-gray-400 flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading issues…</p>
           : <IssueExplorer findings={findings} summary={summary} embedded={!!embedded} />)}
         {tab === 'log' && <WorkflowLog events={logEvents} summary={summary} partial={partial} />}
+        {tab === 'ux' && scanId && <UxReport scanId={scanId} summary={summary} />}
         {tab === 'coverage' && <CoverageView summary={summary} />}
         {tab === 'pages' && scanId && <PagesTable scanId={scanId} />}
       </div>
@@ -618,10 +631,11 @@ function ReportHeader({ scanId, summary, partial, findings, onReset, onBrownfiel
             </p>
           )}
         </div>
-        <div className="grid grid-cols-3 gap-2">
+        <div className={`grid gap-2 ${summary.categories.ux ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'}`}>
           <MiniScore label="Accessibility" cat={summary.categories.accessibility} Icon={UniversalAccess} />
           <MiniScore label="Links" cat={summary.categories.links} Icon={Link2Off} basis={l.measured === false ? undefined : `${l.checked.toLocaleString()} checked · ${brokenTotal} broken`} />
           <MiniScore label="Practices" cat={summary.categories.bestPractice} Icon={ShieldCheck} />
+          {summary.categories.ux && <MiniScore label="UX" cat={summary.categories.ux} Icon={MousePointerClick} basis={`${summary.categories.ux.devices.length} device${summary.categories.ux.devices.length === 1 ? '' : 's'}${summary.categories.ux.standard ? '' : ' · layout only'}`} />}
         </div>
       </div>
       <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-gray-100 relative">
@@ -699,7 +713,7 @@ function IssueExplorer({ findings, summary, embedded }: { findings: AdaFinding[]
     const issues = findings.filter((f) => f.category !== 'review');
     const bySeverity: Record<AdaSeverity, number> = { critical: 0, serious: 0, moderate: 0, minor: 0 };
     for (const f of issues) bySeverity[f.severity] += f.occurrences;
-    const byCat: Record<AdaCategory, number> = { accessibility: 0, links: 0, 'best-practice': 0, review: 0 };
+    const byCat: Record<AdaCategory, number> = { accessibility: 0, links: 0, 'best-practice': 0, review: 0, visual: 0 };
     for (const f of findings) byCat[f.category] += f.occurrences;
     return {
       issues: issues.reduce((a, f) => a + f.occurrences, 0),
@@ -1072,6 +1086,8 @@ function TrendStrip({ scanId, summary }: { scanId: string | null; summary: AdaSu
           {' · '}issues <Delta value={d(cur.issues, prev.issues)} lowerIsBetter />
           {' · '}violations <Delta value={d(cur.violations, prev.violations)} lowerIsBetter />
           {' · '}broken links <Delta value={d(cur.brokenLinks, prev.brokenLinks)} lowerIsBetter />
+          {cur.uxScore != null && prev.uxScore != null && <>{' · '}UX <Delta value={d(cur.uxScore, prev.uxScore)} /></>}
+          {cur.uxScore != null && prev.uxScore == null && <span className="text-gray-400"> · UX testing is new in this run, so the overall score now includes it</span>}
           {cur.pagesAudited !== prev.pagesAudited && <span className="text-gray-400"> · {cur.pagesAudited} pages audited vs {prev.pagesAudited} — counts are not like-for-like</span>}
         </span>
       ) : (
@@ -1268,6 +1284,19 @@ function coverageHtml(s: AdaSummary): string {
 <table><tr><th>Site section</th><th>Found</th><th>Audited</th><th>Coverage</th></tr>${c.bySection.map((x) => row(`<code>${esc(x.path)}</code>`, x.found, x.audited, x.templated ? ' <span class="muted">templated · sampled first</span>' : '')).join('')}</table>`;
 }
 
+/** UX testing section of the downloadable report. */
+function uxHtml(s: AdaSummary): string {
+  const ux = s.categories.ux;
+  if (!ux) return '';
+  const v = (n: number | null) => n === null ? '—' : String(n);
+  return `<h2 id="ux">UX testing — score ${v(ux.score)} · ${ux.issues.toLocaleString()} issues · ${ux.needsReview.toLocaleString()} to review <a class="top" href="#top">↑ top</a></h2>
+<p class="muted"><b>Layout integrity ${v(ux.layout.score)}</b> (overlapping or covered controls, cut-off text, sideways scrolling, touch targets) · <b>Design adherence ${v(ux.adherence.score)}</b> ${ux.standard ? `against the design standard "${esc(ux.standard.name)}" (fonts, sizes, colours, radius, spacing)` : '— not scored: no design standard was uploaded, so the site was only checked against itself'}.</p>
+<table><tr><th>Device</th><th>Viewport</th><th>Pages</th><th>Issues</th><th>Layout</th><th>Adherence</th></tr>${ux.devices.map((d) => `<tr><td>${esc(d.label)}</td><td>${esc(d.viewport)}</td><td>${d.pagesChecked}</td><td>${d.issues}</td><td>${v(d.layoutScore)}</td><td>${v(d.adherenceScore)}</td></tr>`).join('')}</table>
+<p class="muted">${esc(ux.emulationNote)}</p>
+<table><tr><th>Finding</th><th>Type</th><th>Severity</th><th>Occurrences</th><th>Pages</th><th>Devices</th></tr>${ux.topRules.map((r) => `<tr><td>${esc(r.title)}</td><td>${r.confidence === 'high' ? esc(r.family) : 'to review'}</td><td><span class="sev ${r.severity}">${r.severity}</span></td><td>${r.occurrences.toLocaleString()}</td><td>${r.pages}</td><td>${esc(r.devices.join(', '))}</td></tr>`).join('')}</table>
+${ux.standard && ux.colors.some((c) => c.inStandard === false) ? `<p class="muted"><b>Most used colours not in the standard:</b> ${ux.colors.filter((c) => c.inStandard === false).slice(0, 10).map((c) => `<code>${esc(c.hex)}</code> (${c.uses.toLocaleString()} uses${c.nearest ? `, nearest ${esc(c.nearest.hex)}` : ''})`).join(' · ')}</p>` : ''}`;
+}
+
 /** Trend section of the downloadable report: this audit against the previous ones of the same site. */
 function trendHtml(points: AdaTrendPoint[], scanId: string | null): string {
   const pos = trendPosition(points, scanId);
@@ -1334,13 +1363,14 @@ ${s.inventory && s.inventory.sitemapUrls > 0 ? `<p class="muted" style="margin:4
 <a href="#links">Broken links <b>${l.measured === false ? 'not checked' : broken}</b></a>
 <a href="#best-practice">Best practices failing <b>${b.failingRules.length}</b></a>
 <a href="#review">Needs manual review <b>${a.needsReview}</b></a>
+${s.categories.ux ? `<a href="#ux">UX testing <b>${s.categories.ux.issues.toLocaleString()}</b></a>` : ''}
 ${trend.length > 1 ? '<a href="#trend">Trend</a>' : ''}
 ${s.coverage ? '<a href="#coverage">Coverage</a>' : ''}
 <a href="#pages">Pages audited <b>${(pages.length || s.pagesCrawled).toLocaleString()}</b></a>
 ${s.coverage && s.coverage.notAuditedTotal > 0 ? `<a href="#not-audited">Not audited <b>${s.coverage.notAuditedTotal.toLocaleString()}</b></a>` : ''}
 ${s.notes.length ? '<a href="#notes">Notes</a>' : ''}
 </nav>
-<div class="scores">${score(s.overall, 'Overall health')}${score(a, 'Accessibility (WCAG 2.2 AA)', 'accessibility')}${score(l, 'Links', 'links', `${l.checked.toLocaleString()} checked · ${broken} broken`)}${score(b, 'Best practices', 'best-practice', `${b.rulesPassed}/${b.rulesEvaluated} checks passing`)}</div>
+<div class="scores">${score(s.overall, 'Overall health')}${score(a, 'Accessibility (WCAG 2.2 AA)', 'accessibility')}${score(l, 'Links', 'links', `${l.checked.toLocaleString()} checked · ${broken} broken`)}${score(b, 'Best practices', 'best-practice', `${b.rulesPassed}/${b.rulesEvaluated} checks passing`)}${s.categories.ux ? score(s.categories.ux, 'UX (layout + design)', 'ux', `${s.categories.ux.devices.length} devices`) : ''}</div>
 <div class="summary"><div><div class="n">${totalIssues}</div><div class="muted">Issues in ${new Set(issues.map((f) => f.page_url)).size} pages and ${new Set(findings.filter((f) => f.element).map((f) => f.element)).size} components</div></div>
 <div><div class="muted" style="font-weight:600;margin-bottom:4px">Severity breakdown</div><span class="sev critical">${bySev.critical} critical</span> <span class="sev serious">${bySev.serious} serious</span> <span class="sev moderate">${bySev.moderate} moderate</span> <span class="sev minor">${bySev.minor} minor</span><div class="muted" style="margin-top:8px"><a href="#review">${a.needsReview.toLocaleString()} item${a.needsReview === 1 ? '' : 's'} the scanner could not decide — manual review</a> · <a href="#accessibility">${a.violations} accessibility violation${a.violations === 1 ? '' : 's'}</a> · <a href="#links">${l.measured === false ? 'links not checked' : `${broken} broken link${broken === 1 ? '' : 's'}`}</a> · <a href="#best-practice">${b.failingRules.length} best-practice check${b.failingRules.length === 1 ? '' : 's'} failing</a></div></div></div>
 ${section('accessibility', `Accessibility violations (WCAG) — ${a.violations}`)}
@@ -1349,6 +1379,7 @@ ${l.measured === false
     : section('links', `Broken links — ${broken} of ${l.checked} checked${l.blocked ? ` (${l.blocked} could not be verified)` : ''}`)}
 ${section('best-practice', `Best-practice issues — ${b.failingRules.length} checks failing`)}
 ${section('review', `Needs manual review — ${a.needsReview}`)}
+${uxHtml(s)}
 ${trendHtml(trend, scanId)}
 ${coverageHtml(s)}
 <h2 id="pages">Pages audited — ${(pages.length || s.pagesCrawled).toLocaleString()} <a class="top" href="#top">↑ top</a></h2>

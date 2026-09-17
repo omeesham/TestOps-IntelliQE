@@ -857,6 +857,21 @@ export async function initDb(): Promise<void> {
         updated_at    DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
       )`);
     await createIndex('idx_ada_schedules_due', 'ada_schedules', '(enabled, next_run_at)');
+    // Customer design standards (tokens upload) the UX checks are scored against.
+    // `tokens` is the raw upload, `standard` the normalised rules, `meta` parse stats + warnings.
+    await createTable('ada_design_standards', `
+      CREATE TABLE ${SCHEMA}.ada_design_standards (
+        id            UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id     UNIQUEIDENTIFIER NOT NULL,
+        name          NVARCHAR(200) NOT NULL,
+        source_format NVARCHAR(100),
+        tokens        NVARCHAR(MAX) NOT NULL,
+        standard      NVARCHAR(MAX) NOT NULL,
+        meta          NVARCHAR(MAX),
+        created_by    NVARCHAR(100),
+        created_at    DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createIndex('idx_ada_design_standards_tenant', 'ada_design_standards', '(tenant_id, created_at DESC)');
 
     // ─── 12. Seed: JBS platform tenant + default users ───
     await exec(`

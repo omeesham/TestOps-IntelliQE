@@ -7,8 +7,12 @@
  * `getProgress` with a cursor, which is the same short-request pattern the
  * pipeline stages use to survive the ~240s ingress limit on Azure.
  */
+import path from 'path';
+import fs from 'fs/promises';
+import { fileURLToPath } from 'url';
 import pool from '../../db.js';
 import { runScan, normaliseStartUrl, type EngineControl } from './ada-engine.js';
+import { RECOMMENDED_DEVICE_IDS } from './ada-devices.js';
 import { withRemediation } from './ada-remediation.js';
 import type { SiteInventory } from './ada-inventory.js';
 import type { Finding, LinkResult, PageResult, ProgressEvent, ScanOptions, ScanSummary } from './ada-types.js';
@@ -25,6 +29,17 @@ interface LiveScan {
   summary?: ScanSummary;
   inventory?: SiteInventory;
   error?: string;
+}
+
+const BACKEND_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const EVIDENCE_ROOT = path.join(process.env.REPORTS_DIR || path.join(BACKEND_ROOT, 'allure-reports'), 'ada-evidence');
+
+/** Folder holding a scan's cropped evidence screenshots. */
+export function evidenceDirFor(scanId: string): string {
+  return path.join(EVIDENCE_ROOT, scanId.toLowerCase().replace(/[^0-9a-f-]/g, ''));
+}
+export async function removeEvidence(scanId: string): Promise<void> {
+  await fs.rm(evidenceDirFor(scanId), { recursive: true, force: true }).catch(() => { /* nothing to remove */ });
 }
 
 const live = new Map<string, LiveScan>();
@@ -53,6 +68,10 @@ export const DEFAULT_OPTIONS: Omit<ScanOptions, 'url'> = {
   useSitemap: true,
   checkExternalLinks: true,
   crawlDelayMs: 400,
+  // UX checks on desktop plus one phone per distinct screen width.
+  uxEnabled: true,
+  devices: RECOMMENDED_DEVICE_IDS,
+  uxPagesPerDevice: 15,
 };
 
 export async function startScan(tenantId: string, createdBy: string, options: ScanOptions): Promise<string> {
@@ -65,7 +84,8 @@ export async function startScan(tenantId: string, createdBy: string, options: Sc
     `INSERT INTO ada_scans (tenant_id, target_url, status, config_data, created_by, started_at)
      VALUES ($1, $2, 'running', $3, $4, now())
      RETURNING id`,
-    [tenantId, startUrl, JSON.stringify({ ...options, url: startUrl, password: options.password ? '***' : undefined }), createdBy],
+    // The standard itself stays in its own table; the scan records which one it was judged against.
+    [tenantId, startUrl, JSON.stringify({ ...options, url: startUrl, password: options.password ? '***' : undefined, evidenceDir: undefined, designStandard: options.designStandard ? { id: options.designStandard.id, name: options.designStandard.name } : null }), createdBy],
   );
   const scanId: string = rows[0].id;
 
@@ -94,6 +114,7 @@ export async function startScan(tenantId: string, createdBy: string, options: Sc
     }
     if (e.type === 'accessibility') state.counters.issues += Number(d.violations || 0);
     if (e.type === 'best-practice') state.counters.issues += Number(d.failed || 0);
+    if (e.type === 'ux' && d.issues !== undefined) state.counters.issues += Number(d.issues || 0);
     if (e.type === 'links' && d.done !== undefined) state.counters.linksChecked = Number(d.done);
     if (e.type === 'link-check') state.counters.issues += 1;
   };
@@ -101,7 +122,7 @@ export async function startScan(tenantId: string, createdBy: string, options: Sc
   // Detached — the HTTP request that started the scan returns immediately.
   (async () => {
     try {
-      const result = await runScan({ ...options, url: startUrl }, emit, state.control);
+      const result = await runScan({ ...options, url: startUrl, evidenceDir: evidenceDirFor(scanId) }, emit, state.control);
       const finalStatus = state.control.cancelled ? 'cancelled' : 'completed';
       await persist(scanId, tenantId, result.pages, result.links, result.summary, finalStatus);
       state.summary = result.summary;

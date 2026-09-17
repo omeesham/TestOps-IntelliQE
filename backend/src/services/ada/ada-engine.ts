@@ -20,7 +20,9 @@ import { tryLogin } from '../../agents/exploreAgent.js';
 import { runAccessibilityCheck, runBestPracticeCheck } from './ada-checks.js';
 import { checkLinks, shouldCheckLink, BROWSER_UA, type CollectedLink } from './ada-links.js';
 import { buildSummary } from './ada-score.js';
-import type { CrawlCoverage, Finding, LinkResult, PageResult, PageSource, ProgressEvent, ScanOptions, ScanSummary } from './ada-types.js';
+import { resolveDevices, type DeviceProfile } from './ada-devices.js';
+import { runVisualCheck, type EvidenceBudget } from './ada-visual.js';
+import type { CrawlCoverage, Finding, LinkResult, PageResult, PageSource, ProgressEvent, ScanOptions, ScanSummary, UxRun } from './ada-types.js';
 
 type Emit = (e: Omit<ProgressEvent, 'seq' | 'at'>) => void;
 
@@ -40,7 +42,9 @@ const MAX_SITEMAP_CHILDREN = 50;
 const MAX_SITEMAP_URLS = 50_000;
 const MAX_ROBOTS_DELAY_MS = 3000;
 /** After "Stop & report", links collected so far are still checked — but only for this long. */
-const LINK_BUDGET_AFTER_STOP_MS = 120_000;
+/** After "Stop & report": how long the collected links may still be checked, and how long each request may take. Kept short so stopping feels like stopping. */
+const LINK_BUDGET_AFTER_STOP_MS = 30_000;
+const LINK_TIMEOUT_AFTER_STOP_MS = 5_000;
 const BINARY_EXT = /\.(pdf|zip|rar|7z|gz|tar|jpe?g|png|gif|webp|svg|ico|bmp|tiff?|mp3|mp4|m4a|wav|avi|mov|wmv|webm|docx?|xlsx?|pptx?|csv|json|xml|rss|atom|css|js|woff2?|ttf|eot|exe|dmg|apk|ics)(\?.*)?$/i;
 
 let _chromium: typeof import('@playwright/test').chromium | null = null;
@@ -188,6 +192,14 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
   // Coverage bookkeeping — counted, never estimated.
   let skippedNonHtml = 0;
   let redirectedOffSite = 0;
+  // UX checks: every device profile selected, against the customer's design standard when one was uploaded.
+  const uxDevices: DeviceProfile[] = options.uxEnabled ? resolveDevices(options.devices) : [];
+  const standard = options.designStandard?.standard ?? null;
+  const evidence: EvidenceBudget = { dir: options.evidenceDir || null, left: 300, seq: 0 };
+  const uxResults: UxRun['results'] = [];
+  const uxTypography = new Map<string, UxRun['typography'][number]>();
+  const uxColors = new Map<string, UxRun['colors'][number]>();
+  const devicePagesDone = new Map<string, number>();
 
   try {
     browser = await chromium.launch({ headless: true });
@@ -201,6 +213,29 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
     await ctx.addInitScript({ content: 'window.__name = window.__name || function (f) { return f; };' });
     // Don't spend time on video/audio — nothing we check needs them.
     await ctx.route('**/*', (route) => (['media'].includes(route.request().resourceType()) ? route.abort() : route.continue()));
+
+    // One extra browser context per non-primary device, created on first use so
+    // it inherits the session if the crawl signed in.
+    const deviceContexts = new Map<string, { ctx: BrowserContext; page: Page }>();
+    const devicePage = async (d: DeviceProfile): Promise<Page> => {
+      const existing = deviceContexts.get(d.id);
+      if (existing) return existing.page;
+      const dctx = await browser!.newContext({
+        ignoreHTTPSErrors: true, locale: 'en-US', viewport: d.viewport, deviceScaleFactor: d.deviceScaleFactor,
+        isMobile: d.isMobile, hasTouch: d.hasTouch, userAgent: d.userAgent || BROWSER_UA,
+        storageState: await ctx.storageState().catch(() => undefined),
+      });
+      await dctx.addInitScript({ content: 'window.__name = window.__name || function (f) { return f; };' });
+      await dctx.route('**/*', (route) => (['media'].includes(route.request().resourceType()) ? route.abort() : route.continue()));
+      const dpage = await dctx.newPage();
+      dpage.setDefaultTimeout(PAGE_TIMEOUT_MS);
+      dpage.on('dialog', (dl) => dl.dismiss().catch(() => { /* ignore */ }));
+      deviceContexts.set(d.id, { ctx: dctx, page: dpage });
+      return dpage;
+    };
+    if (uxDevices.length) {
+      emit({ type: 'ux', message: `UX checks on ${uxDevices.length} device profile${uxDevices.length === 1 ? '' : 's'}: ${uxDevices.map((d) => d.label).join(', ')}${options.designStandard ? ` · against design standard "${options.designStandard.name}"` : ' · no design standard uploaded, so design adherence will not be scored'}.`, data: { devices: uxDevices.map((d) => d.id), standard: options.designStandard?.name || null } });
+    }
 
     robots = await readRobots(ctx, origin, emit);
     if (options.useSitemap) sitemapUrls = await readSitemap(ctx, origin, robots, sameSite, emit);
@@ -379,6 +414,34 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
         emit({ type: 'warning', message: `Best-practice check failed on ${shortUrl(finalUrl)}: ${(err as Error).message.split('\n')[0]}` });
       }
 
+      // ── UX checks: this page on every selected device ──
+      for (const device of uxDevices) {
+        if (control.cancelled) break;
+        const primary = device === uxDevices[0];
+        if (!primary && (devicePagesDone.get(device.id) || 0) >= options.uxPagesPerDevice) continue;
+        try {
+          let target = page;
+          if (!primary) {
+            target = await devicePage(device);
+            await target.goto(finalUrl, { waitUntil: 'domcontentloaded', timeout: PAGE_TIMEOUT_MS });
+            await target.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => { /* SPAs may never idle */ });
+          }
+          const ux = await runVisualCheck(target, finalUrl, device, standard, evidence);
+          findings.push(...ux.findings);
+          uxResults.push({ deviceId: device.id, url: finalUrl, layoutScore: ux.layoutScore, adherenceScore: ux.adherenceScore });
+          devicePagesDone.set(device.id, (devicePagesDone.get(device.id) || 0) + 1);
+          if (primary) {
+            for (const t of ux.typography) { const k = `${t.role}|${t.family}|${t.size}|${t.weight}`; const e = uxTypography.get(k); if (e) { e.uses += t.uses; e.pages++; } else uxTypography.set(k, { ...t, pages: 1 }); }
+            for (const c of ux.colors) { const k = `${c.kind}|${c.hex}`; const e = uxColors.get(k); if (e) { e.uses += c.uses; e.pages++; } else uxColors.set(k, { ...c, pages: 1 }); }
+          }
+          const scored = ux.findings.filter((f) => f.details?.confidence === 'high').reduce((a, f) => a + f.occurrences, 0);
+          const review = ux.findings.length ? ux.findings.filter((f) => f.details?.confidence !== 'high').reduce((a, f) => a + f.occurrences, 0) : 0;
+          emit({ type: 'ux', message: `UX · ${device.label}: ${scored === 0 ? 'no issues' : `${scored} issue${scored === 1 ? '' : 's'}`}${review ? `, ${review} to review` : ''} on ${shortUrl(finalUrl)}`, data: { url: finalUrl, device: device.id, issues: scored, review, layoutScore: ux.layoutScore, adherenceScore: ux.adherenceScore } });
+        } catch (err) {
+          emit({ type: 'warning', message: `UX check failed on ${shortUrl(finalUrl)} (${device.label}): ${(err as Error).message.split('\n')[0]}` });
+        }
+      }
+
       pages.push({ url: finalUrl, title, statusCode, depth: item.depth, parentUrl: item.parent, source: item.source, loadMs, linksFound: found.length, a11yScore, bpScore, findings });
 
       if (queue.length && pages.length < options.maxPages && delayMs > 0) await page.waitForTimeout(delayMs);
@@ -396,9 +459,9 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
     const collected = [...linkMap.values()];
     if (collected.length && control.cancelled) {
       emit({ type: 'links', message: `Audit stopped — checking the ${collected.length.toLocaleString()} links collected so far (up to ${LINK_BUDGET_AFTER_STOP_MS / 1000}s)…`, data: { total: collected.length } });
-      links = await checkLinks(ctx.request, collected, { checkExternal: options.checkExternalLinks, deadlineMs: LINK_BUDGET_AFTER_STOP_MS }, emit);
+      links = await checkLinks(ctx.request, collected, { checkExternal: options.checkExternalLinks, deadlineMs: LINK_BUDGET_AFTER_STOP_MS, timeoutMs: LINK_TIMEOUT_AFTER_STOP_MS }, emit);
     } else if (collected.length) {
-      links = await checkLinks(ctx.request, collected, { checkExternal: options.checkExternalLinks }, emit);
+      links = await checkLinks(ctx.request, collected, { checkExternal: options.checkExternalLinks, control }, emit);
     }
 
     const coverage = buildCoverage({
@@ -417,6 +480,14 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
       sitemapUrlsFound: inventory.sitemapUrls,
       inventory,
       coverage,
+      ux: uxDevices.length ? {
+        devices: uxDevices.map((d) => ({ id: d.id, label: d.label, kind: d.kind, viewport: `${d.viewport.width} × ${d.viewport.height}` })),
+        results: uxResults,
+        standard: options.designStandard ? { id: options.designStandard.id, name: options.designStandard.name } : null,
+        typography: [...uxTypography.values()],
+        colors: [...uxColors.values()],
+      } : undefined,
+      designStandard: standard,
       pagesDiscovered: pages.length + queue.length,
       linksFound: linkMap.size,
       notes,

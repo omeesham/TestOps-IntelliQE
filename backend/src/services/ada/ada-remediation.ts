@@ -472,6 +472,58 @@ function linkFix(f: Finding): Remediation {
   return { problem: `${link} could not be reached${d.error ? ` (${String(d.error)})` : ''}.`, steps: ['Check the URL for typos (protocol, domain).', 'Open it manually and replace or remove it if it is genuinely dead.'], effort: 'quick' };
 }
 
+/* ───────────────────────────── UX / visual rules ───────────────────────────── */
+
+function visualFix(f: Finding): Remediation {
+  const d = (f.details || {}) as Record<string, unknown>;
+  const sel = f.element || 'the element';
+  const actual = d.actual ? String(d.actual) : '';
+  const expected = d.expected ? String(d.expected) : '';
+  const device = d.deviceLabel ? ` on ${String(d.deviceLabel)}` : '';
+  const css = (prop: string, from: string, to: string) => ({ before: `${sel} {\n  ${prop}: ${from};\n}`, after: `${sel} {\n  ${prop}: ${to};\n}` });
+  const review = d.confidence === 'review' ? ['Look at the evidence image first — this check is heuristic and may be intentional.'] : [];
+  switch (f.ruleId) {
+    case 'ux-overlap':
+      return { problem: `Two controls are drawn on top of each other${device}.`, impact: 'Users tap or click the wrong control, or cannot reach the one underneath.', steps: ['Open the page at this viewport width and find the two controls in the evidence image.', 'Give their container room to wrap (flex-wrap: wrap) or stack them below a breakpoint.', 'Remove negative margins or absolute positioning that pulls one over the other.'], example: { before: `.actions { display: flex; }`, after: `.actions { display: flex; flex-wrap: wrap; gap: 8px; }` }, effort: 'moderate' };
+    case 'ux-occluded':
+      return { problem: `This control is covered by another element${device}, so a click at its centre lands on something else.`, impact: 'The control looks available but does not respond.', steps: ['Identify the covering element named in the finding.', 'If it is a sticky header or banner, add scroll-margin/padding so content is not hidden beneath it.', 'Otherwise fix the stacking: lower its z-index, or remove the overlap.'], example: { before: `header { position: sticky; top: 0; }`, after: `header { position: sticky; top: 0; }\nhtml { scroll-padding-top: 80px; }` }, effort: 'moderate' };
+    case 'ux-overlay-blocks':
+      return { problem: `One overlay covers several controls${device}.`, steps: [...review, 'If this is a cookie or consent bar, confirm it can be dismissed and does not return on every page.', 'If it is not meant to be there, find why it stays open (failed script, missing close handler).'], effort: 'moderate' };
+    case 'ux-overflow-x':
+      return { problem: `The page is wider than the screen${device}, so it scrolls sideways.`, impact: 'Content is cut off and the layout feels broken, especially on phones.', steps: ['Inspect the elements named in the finding — they extend past the viewport.', 'Replace fixed widths with max-width: 100%, and let long words, tables and code blocks wrap or scroll inside their own container.', 'Check images and embeds have max-width: 100%.'], example: { before: `.hero img { width: 1200px; }`, after: `.hero img { width: 100%; max-width: 1200px; height: auto; }` }, effort: 'moderate' };
+    case 'ux-clipped-text':
+      return { problem: `Text is cut off${device}: ${actual}.`, impact: 'Users cannot read the full label or heading.', steps: ['Let the element grow (remove the fixed width/height) or allow wrapping (white-space: normal).', 'If truncation is intended, expose the full text in a title/tooltip and make sure the key words come first.'], example: css('white-space', 'nowrap', 'normal'), effort: 'quick' };
+    case 'ux-touch-target':
+      return { problem: `This control is ${actual}; a comfortable touch target is at least ${expected}.`, impact: 'Small targets cause mis-taps, especially for users with limited dexterity.', steps: ['Increase the clickable area with padding or min-width/min-height — the visible icon can stay the same size.', 'Keep at least 8px between neighbouring targets.'], example: { before: `${sel} { padding: 2px; }`, after: `${sel} { min-width: 44px; min-height: 44px; padding: 10px; }` }, effort: 'quick' };
+    case 'ux-misaligned':
+      return { problem: `This element is ${actual}.`, steps: [...review, 'Compare its margin, padding and border with its siblings — a 1-4px difference usually comes from one extra border or a different line-height.', 'Align the group with flex or grid rather than per-element offsets.'], effort: 'quick' };
+    case 'ux-uneven-gap':
+      return { problem: `Spacing in this group is uneven: ${actual}, expected ${expected}.`, steps: [...review, 'Use a single gap on the flex/grid container instead of per-item margins.', 'Remove one-off margins on individual items.'], example: { before: `.item { margin-bottom: 12px; }\n.item.special { margin-bottom: 20px; }`, after: `.list { display: grid; gap: 12px; }` }, effort: 'quick' };
+    case 'ux-font-family':
+      return { problem: `Text renders in "${actual}", which is not in the design standard (${expected}).`, impact: 'Off-brand typography; often a third-party widget or a forgotten override.', steps: ['Find the rule that sets this font-family (DevTools → Computed → font-family).', 'Replace it with the standard family, or remove the override so the element inherits it.'], example: css('font-family', `"${actual}"`, `"${expected.split(',')[0].trim()}", sans-serif`), effort: 'quick' };
+    case 'ux-font-not-loaded':
+      return { problem: `The web font ${expected} is declared but did not load, so a fallback font is showing.`, impact: 'Every visitor sees different typography from the design.', steps: ['Check the @font-face URL returns 200 and the correct CORS headers.', 'Preload the font and use font-display: swap.', 'Confirm the font-family name in CSS matches the @font-face name exactly.'], example: { before: `@font-face { font-family: "Brand"; src: url(/fonts/brand.woff2); }`, after: `<link rel="preload" href="/fonts/brand.woff2" as="font" type="font/woff2" crossorigin>\n@font-face { font-family: "Brand"; src: url(/fonts/brand.woff2) format("woff2"); font-display: swap; }` }, effort: 'moderate' };
+    case 'ux-font-size':
+      return { problem: `Font size is ${actual}; the nearest size on the type scale is ${expected}.`, steps: ['Replace the one-off size with the type-scale token.', 'If the size comes from a percentage or em on a nested element, set it explicitly from the scale.'], example: css('font-size', actual, expected), effort: 'quick' };
+    case 'ux-font-weight':
+      return { problem: `Font weight ${actual} is not in the design standard (${expected}).`, steps: ['Use one of the standard weights.', 'Make sure that weight of the font file is actually loaded — otherwise the browser synthesises it.'], example: css('font-weight', actual, expected.split(',')[0].trim()), effort: 'quick' };
+    case 'ux-color-drift':
+      return { problem: `${actual} is almost, but not exactly, the palette colour ${expected}.`, impact: 'Usually a hand-typed hex or a colour picked from a screenshot. It makes the brand colour look inconsistent.', steps: ['Replace the hard-coded value with the design token / CSS variable for this colour.'], example: css('color', actual, expected.split(' ')[0]), effort: 'quick' };
+    case 'ux-color-off-palette':
+      return { problem: `${actual} is not in the palette (${expected}).`, steps: ['Decide which palette colour this should be and use its token.', 'If the colour is legitimately needed, add it to the design standard so it stops being reported.'], example: css('color', actual, (expected.match(/#[0-9A-Fa-f]{6}/) || [expected])[0]), effort: 'quick' };
+    case 'ux-radius':
+      return { problem: `Corner radius ${actual} is not in the design standard; nearest is ${expected}.`, steps: ['Use the radius token for this component.'], example: css('border-radius', actual, expected), effort: 'quick' };
+    case 'ux-spacing':
+      return { problem: `Padding ${actual} is not on the spacing scale; nearest step is ${expected}.`, steps: [...review, 'Use the spacing token for this component.'], example: css('padding-inline', actual, expected), effort: 'quick' };
+    case 'ux-inconsistent-type':
+      return { problem: `${f.description || f.title}`, steps: [...review, 'Decide which style is correct for this kind of text and apply it everywhere.', 'Upload a design standard to have this scored against your own rules instead of the page majority.'], effort: 'quick' };
+    case 'ux-near-duplicate-color':
+      return { problem: `${actual} and ${expected} are nearly identical — one is probably a typo of the other.`, steps: [...review, 'Pick one and replace the other with a shared CSS variable.'], example: css('color', actual, expected), effort: 'quick' };
+    default:
+      return { problem: f.description || f.title, steps: [...review, 'Open the evidence image and compare the element with the design.'], effort: 'quick' };
+  }
+}
+
 /* ───────────────────────────── entry point ───────────────────────────── */
 
 export function remediate(f: Finding): Remediation {
@@ -484,6 +536,7 @@ export function remediate(f: Finding): Remediation {
     details,
   };
   if (f.category === 'links') return linkFix(f);
+  if (f.category === 'visual') return visualFix(f);
   const id = f.ruleId.replace(/^axe-/, '');
   const rule = R[id];
   if (rule) {

@@ -11,8 +11,10 @@
 
 /** 'review' = axe could not decide automatically; a person must check (e.g. contrast on a gradient). */
 import type { SiteInventory } from './ada-inventory.js';
+import type { DesignStandard } from './ada-design-standard.js';
 
-export type FindingCategory = 'accessibility' | 'links' | 'best-practice' | 'review';
+/** 'visual' = UX checks (layout integrity, design-standard adherence) — see ada-visual.ts. */
+export type FindingCategory = 'accessibility' | 'links' | 'best-practice' | 'review' | 'visual';
 export type Severity = 'critical' | 'serious' | 'moderate' | 'minor';
 
 export interface ScanOptions {
@@ -30,6 +32,16 @@ export interface ScanOptions {
   checkExternalLinks: boolean;
   /** Politeness delay between page visits (ms). robots.txt Crawl-delay overrides upward, capped. */
   crawlDelayMs: number;
+  /** Run the UX checks (layout integrity + design-standard adherence) on every device profile below. */
+  uxEnabled: boolean;
+  /** Device profile ids (see ada-devices.ts). The primary desktop profile is always included. */
+  devices: string[];
+  /** How many pages each non-primary device visits. The primary desktop checks every audited page. */
+  uxPagesPerDevice: number;
+  /** The customer's own design rules. Without one, adherence is reported as "not scored". */
+  designStandard?: { id: string; name: string; standard: DesignStandard } | null;
+  /** Where cropped evidence screenshots are written. Omit to skip evidence. */
+  evidenceDir?: string;
 }
 
 export interface ProgressEvent {
@@ -37,7 +49,7 @@ export interface ProgressEvent {
   at: string;
   type:
     | 'start' | 'robots' | 'sitemap' | 'navigate' | 'page' | 'login'
-    | 'accessibility' | 'best-practice' | 'links' | 'link-check'
+    | 'accessibility' | 'best-practice' | 'ux' | 'links' | 'link-check'
     | 'summary' | 'warning' | 'error' | 'done';
   message: string;
   data?: Record<string, unknown>;
@@ -153,9 +165,41 @@ export interface ScanSummary {
     accessibility: CategoryScore & { violations: number; needsReview: number; bySeverity: Record<Severity, number>; topRules: { ruleId: string; title: string; severity: Severity; pages: number; occurrences: number; helpUrl?: string; wcag?: string }[] };
     links: CategoryScore & { checked: number; ok: number; redirects: number; broken: number; serverErrors: number; timeouts: number; blocked: number; brokenLinks: LinkResult[]; blockedLinks: LinkResult[] };
     bestPractice: CategoryScore & { rulesEvaluated: number; rulesPassed: number; failingRules: { ruleId: string; title: string; severity: Severity; pages: number }[] };
+    /** Present when the UX checks ran. */
+    ux?: UxSummary;
   };
   worstPages: { url: string; title: string; a11yScore: number; bpScore: number; findings: number }[];
   notes: string[];
+}
+
+/** Raw per-device, per-page UX results the engine hands to the scorer. */
+export interface UxRun {
+  devices: { id: string; label: string; kind: 'desktop' | 'tablet' | 'mobile'; viewport: string }[];
+  results: { deviceId: string; url: string; layoutScore: number; adherenceScore: number | null }[];
+  standard: { id: string; name: string } | null;
+  typography: { role: string; family: string; size: number; weight: number; uses: number; pages: number }[];
+  colors: { hex: string; kind: 'text' | 'background' | 'border'; uses: number; pages: number }[];
+}
+
+/**
+ * UX category. `layout` is objective and always scored; `adherence` is scored
+ * only against an uploaded design standard — without one it is "not scored",
+ * and the category score is the layout score alone.
+ */
+export interface UxSummary extends CategoryScore {
+  layout: CategoryScore;
+  adherence: CategoryScore;
+  standard: { id: string; name: string } | null;
+  /** Scored issues (high confidence). */
+  issues: number;
+  /** Heuristic observations a person should look at — never scored. */
+  needsReview: number;
+  devices: { id: string; label: string; kind: 'desktop' | 'tablet' | 'mobile'; viewport: string; pagesChecked: number; issues: number; layoutScore: number | null; adherenceScore: number | null }[];
+  topRules: { ruleId: string; title: string; severity: Severity; family: string; confidence: string; pages: number; devices: string[]; occurrences: number }[];
+  typography: UxRun['typography'];
+  colors: (UxRun['colors'][number] & { inStandard?: boolean; nearest?: { name: string; hex: string; deltaE: number } })[];
+  /** Phones and tablets are emulated in Chromium — stated on the report. */
+  emulationNote: string;
 }
 
 export function gradeFor(score: number): NonNullable<CategoryScore['grade']> {

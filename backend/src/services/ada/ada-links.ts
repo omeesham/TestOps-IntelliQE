@@ -32,10 +32,20 @@ export function shouldCheckLink(href: string): boolean {
 export async function checkLinks(
   request: APIRequestContext,
   links: CollectedLink[],
-  opts: { checkExternal: boolean; /** Stop taking new links after this many ms; the rest are reported as not checked. */ deadlineMs?: number },
+  opts: {
+    checkExternal: boolean;
+    /** Stop taking new links after this many ms; the rest are reported as not checked. */
+    deadlineMs?: number;
+    /** Per-request timeout; the post-stop check uses a short one so a dead host cannot hold the report up. */
+    timeoutMs?: number;
+    /** Polled between links: once the user has stopped the audit, no new link is started. */
+    control?: { cancelled: boolean };
+  },
   emit: (e: Omit<ProgressEvent, 'seq' | 'at'>) => void,
 ): Promise<LinkResult[]> {
   const deadline = opts.deadlineMs ? Date.now() + opts.deadlineMs : null;
+  const timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
+  let stopRequested = false;
   const results: LinkResult[] = [];
   const queue = links.filter((l) => opts.checkExternal || !l.external);
   const skipped = links.filter((l) => !opts.checkExternal && l.external);
@@ -55,6 +65,15 @@ export async function checkLinks(
   const worker = async () => {
     while (queue.length) {
       if (deadline && Date.now() > deadline) break;
+      // Stop pressed while links were being checked: let the requests already
+      // in flight finish (a few seconds at most) and start no more.
+      if (opts.control?.cancelled) {
+        if (!stopRequested) {
+          stopRequested = true;
+          emit({ type: 'links', message: `Stop requested — finishing the links in flight, ${queue.length.toLocaleString()} not checked.`, data: { done, total, broken, notChecked: queue.length } });
+        }
+        break;
+      }
       // Pick the first link whose host is not saturated.
       let idx = queue.findIndex((l) => (inFlightByHost.get(hostOf(l.url)) || 0) < 2);
       if (idx === -1) { await new Promise((r) => setTimeout(r, 150)); continue; }
@@ -62,7 +81,7 @@ export async function checkLinks(
       const host = hostOf(link.url);
       inFlightByHost.set(host, (inFlightByHost.get(host) || 0) + 1);
       try {
-        const r = await checkOne(request, link);
+        const r = await checkOne(request, link, timeoutMs);
         results.push(r);
         if (r.kind === 'broken' || r.kind === 'server-error' || r.kind === 'timeout' || r.kind === 'error') {
           broken++;
@@ -79,22 +98,23 @@ export async function checkLinks(
   };
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, Math.max(1, total)) }, worker));
   if (queue.length) {
-    // Out of time: say so, and record the rest as not checked rather than dropping them.
-    emit({ type: 'links', message: `Link check stopped after ${Math.round((opts.deadlineMs || 0) / 1000)}s — ${done} of ${total} links checked, ${queue.length} not checked.`, data: { done, total, broken, notChecked: queue.length } });
+    // Out of time or stopped: say so, and record the rest as not checked rather than dropping them.
+    const why = stopRequested ? 'Not checked — the audit was stopped' : 'Not checked — time budget after the audit was stopped';
+    emit({ type: 'links', message: `Link check ${stopRequested ? 'stopped' : `stopped after ${Math.round((opts.deadlineMs || 0) / 1000)}s`} — ${done} of ${total} links checked, ${queue.length} not checked.`, data: { done, total, broken, notChecked: queue.length } });
     for (const l of queue.splice(0)) {
-      results.push({ url: l.url, status: null, ok: true, kind: 'skipped', external: l.external, referrers: [...l.referrers], linkText: l.text, error: 'Not checked — time budget after the audit was stopped' });
+      results.push({ url: l.url, status: null, ok: true, kind: 'skipped', external: l.external, referrers: [...l.referrers], linkText: l.text, error: why });
     }
   }
   return results;
 }
 
-async function checkOne(request: APIRequestContext, link: CollectedLink): Promise<LinkResult> {
+async function checkOne(request: APIRequestContext, link: CollectedLink, timeoutMs: number): Promise<LinkResult> {
   const base: Omit<LinkResult, 'status' | 'ok' | 'kind'> = {
     url: link.url, external: link.external, referrers: [...link.referrers].slice(0, 10), linkText: link.text,
   };
   const attempt = async (method: 'HEAD' | 'GET') => request.fetch(link.url, {
     method,
-    timeout: TIMEOUT_MS,
+    timeout: timeoutMs,
     maxRedirects: 10,
     ignoreHTTPSErrors: true,
     // A plain browser UA for verification - CDNs that reject anything

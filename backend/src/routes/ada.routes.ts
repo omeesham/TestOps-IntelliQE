@@ -14,21 +14,32 @@
  *   PATCH  /api/ada/schedules/:id      change cadence / options / enabled
  *   DELETE /api/ada/schedules/:id
  *   POST   /api/ada/schedules/:id/run  start that schedule's audit now
+ *   GET    /api/ada/devices            device profiles available for UX checks
+ *   GET    /api/ada/standards          uploaded design standards
+ *   POST   /api/ada/standards          upload one  { name, content }  (tokens JSON or CSS variables, as text)
+ *   DELETE /api/ada/standards/:id
+ *   GET    /api/ada/scans/:id/evidence/:file   cropped screenshot for a UX finding
+ *   GET    /api/ada/health?url=        latest finished audit of a site + pass/fail gate — answers instantly
  */
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import pool from '../db.js';
+import path from 'path';
+import { existsSync } from 'fs';
 import {
-  startScan, getProgress, cancelScan, tenantHasRunningScan, DEFAULT_OPTIONS,
+  startScan, getProgress, cancelScan, tenantHasRunningScan, DEFAULT_OPTIONS, evidenceDirFor, removeEvidence,
 } from '../services/ada/ada-scan.service.js';
+import { DEVICE_PROFILES, RECOMMENDED_DEVICE_IDS, PRIMARY_DEVICE_ID } from '../services/ada/ada-devices.js';
+import { listStandards, loadStandard, createStandard, deleteStandard } from '../services/ada/ada-standard.service.js';
 import { normaliseStartUrl } from '../services/ada/ada-engine.js';
+import { normaliseLegacySummary } from '../services/ada/ada-score.js';
 import { listSchedules, createSchedule, updateSchedule, deleteSchedule, runScheduleNow } from '../services/ada/ada-schedule.service.js';
 import { remediate } from '../services/ada/ada-remediation.js';
 import type { ScanOptions } from '../services/ada/ada-types.js';
 
 const router = Router();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const CATEGORIES = ['accessibility', 'links', 'best-practice', 'review'];
+const CATEGORIES = ['accessibility', 'links', 'best-practice', 'review', 'visual'];
 const SEVERITIES = ['critical', 'serious', 'moderate', 'minor'];
 const escapeLike = (s: string) => s.replace(/[[%_]/g, (c) => `[${c}]`);
 
@@ -76,7 +87,16 @@ router.post('/scans', async (req: Request, res: Response) => {
       useSitemap: body.useSitemap !== false,
       checkExternalLinks: body.checkExternalLinks !== false,
       crawlDelayMs: clamp(body.crawlDelayMs, 0, 5000, DEFAULT_OPTIONS.crawlDelayMs),
+      uxEnabled: body.ux !== false,
+      devices: Array.isArray(body.devices) && body.devices.length ? body.devices.map(String).slice(0, 8) : DEFAULT_OPTIONS.devices,
+      uxPagesPerDevice: clamp(body.uxPagesPerDevice, 1, 100, DEFAULT_OPTIONS.uxPagesPerDevice),
+      designStandard: null,
     };
+    if (options.uxEnabled && typeof body.designStandardId === 'string' && UUID_RE.test(body.designStandardId)) {
+      const std = await loadStandard(tenantId, body.designStandardId);
+      if (!std) { res.status(400).json({ error: 'That design standard no longer exists' }); return; }
+      options.designStandard = { id: std.id, name: std.name, standard: std.standard };
+    }
     const scanId = await startScan(tenantId, req.user!.username, options);
     res.status(202).json({ scanId, url: options.url });
   } catch (err: any) {
@@ -122,7 +142,11 @@ router.get('/trend', async (req: Request, res: Response) => {
     const points = rows.reverse().map((r: any) => {
       let result: any = r.result;
       if (typeof result === 'string') { try { result = JSON.parse(result); } catch { result = null; } }
+      result = normaliseLegacySummary(result);
       const cats = result?.categories || {};
+      // UX findings are tracked on their own so that turning UX testing on does
+      // not look like a thousand new accessibility issues in the trend.
+      const uxCount = cats.ux ? (cats.ux.issues || 0) + (cats.ux.needsReview || 0) : 0;
       return {
         id: r.id,
         status: r.status,
@@ -132,7 +156,9 @@ router.get('/trend', async (req: Request, res: Response) => {
         pagesAudited: r.pages_crawled,
         pagesFound: result?.pagesDiscovered ?? r.pages_crawled,
         linksChecked: r.links_checked,
-        issues: r.findings_count,
+        issues: Math.max(0, r.findings_count - uxCount),
+        uxScore: cats.ux?.score ?? null,
+        uxIssues: cats.ux ? cats.ux.issues : null,
         violations: cats.accessibility?.violations ?? null,
         needsReview: cats.accessibility?.needsReview ?? null,
         brokenLinks: cats.links ? (cats.links.broken + cats.links.serverErrors + cats.links.timeouts) : null,
@@ -146,6 +172,105 @@ router.get('/trend', async (req: Request, res: Response) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to load trend' });
   }
+});
+
+/* ───────────────────────────── UX: devices, design standards, evidence ───────────────────────────── */
+
+router.get('/devices', (_req: Request, res: Response) => {
+  res.json({ devices: DEVICE_PROFILES.map((d) => ({ id: d.id, label: d.label, kind: d.kind, vendor: d.vendor, viewport: d.viewport, recommended: !!d.recommended, primary: d.id === PRIMARY_DEVICE_ID })), recommended: RECOMMENDED_DEVICE_IDS });
+});
+
+router.get('/standards', async (req: Request, res: Response) => {
+  try {
+    const rows = await listStandards(req.user!.tenantId);
+    res.json({ standards: rows.map(({ standard, ...s }) => ({ ...s, preview: { colors: standard.colors?.slice(0, 12) || [], fontFamilies: standard.fontFamilies || [], fontSizes: standard.fontSizes || [] } })) });
+  } catch (err: any) { res.status(500).json({ error: err.message || 'Failed to list design standards' }); }
+});
+
+router.post('/standards', async (req: Request, res: Response) => {
+  try {
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const content = typeof req.body?.content === 'string' ? req.body.content : '';
+    if (!name) { res.status(400).json({ error: 'Give the design standard a name' }); return; }
+    if (!content.trim()) { res.status(400).json({ error: 'The file is empty' }); return; }
+    const { standard, ...s } = await createStandard(req.user!.tenantId, req.user!.username, name, content);
+    res.status(201).json({ standard: { ...s, preview: { colors: standard.colors.slice(0, 12), fontFamilies: standard.fontFamilies, fontSizes: standard.fontSizes } } });
+  } catch (err: any) {
+    // Parse failures are the user's to fix, so they come back as 400 with the reason.
+    res.status(400).json({ error: err.message || 'Could not read that file' });
+  }
+});
+
+router.delete('/standards/:id', async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) { res.status(400).json({ error: 'Invalid id' }); return; }
+    if (!(await deleteStandard(req.user!.tenantId, id))) { res.status(404).json({ error: 'Design standard not found' }); return; }
+    res.json({ deleted: true });
+  } catch (err: any) { res.status(500).json({ error: err.message || 'Failed to delete' }); }
+});
+
+router.get('/scans/:id/evidence/:file', async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id), file = String(req.params.file);
+    if (!UUID_RE.test(id) || !/^e\d{4}\.jpg$/.test(file)) { res.status(400).json({ error: 'Invalid evidence reference' }); return; }
+    const own = await pool.query(`SELECT id FROM ada_scans WHERE id = $1 AND tenant_id = $2`, [id, req.user!.tenantId]);
+    if (own.rows.length === 0) { res.status(404).json({ error: 'Audit not found' }); return; }
+    const abs = path.join(evidenceDirFor(id), file);
+    if (!existsSync(abs)) { res.status(404).json({ error: 'Evidence image is no longer available' }); return; }
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    // Serve relative to the evidence folder: Express rejects absolute paths that pass
+    // through a dot-directory (a checkout under ".claude/…", a "~/.cache" reports dir).
+    res.sendFile(file, { root: evidenceDirFor(id) });
+  } catch (err: any) { res.status(500).json({ error: err.message || 'Failed to load evidence' }); }
+});
+
+/**
+ * Instant health: the latest finished audit of a site, its change against the
+ * previous one, and a pass/fail gate. It reads stored results only, so it
+ * answers in milliseconds — the "is this site OK right now?" call for a
+ * dashboard, a release checklist or a CI step. Thresholds are query params:
+ *   minScore (default 80) · minUx (optional) · maxCritical (default 0)
+ */
+router.get('/health', async (req: Request, res: Response) => {
+  try {
+    const raw = String(req.query.url || '').trim();
+    if (!raw) { res.status(400).json({ error: 'url is required' }); return; }
+    let url: string;
+    try { url = normaliseStartUrl(raw); } catch { res.status(400).json({ error: 'Invalid url' }); return; }
+    const { rows } = await pool.query(
+      `SELECT id, status, overall_score, pages_crawled, findings_count, result, finished_at, created_by
+         FROM ada_scans WHERE tenant_id = $1 AND target_url = $2 AND status IN ('completed', 'cancelled') AND finished_at IS NOT NULL
+        ORDER BY finished_at DESC LIMIT 2`,
+      [req.user!.tenantId, url],
+    );
+    if (rows.length === 0) { res.status(404).json({ error: 'No finished audit for this site yet', url }); return; }
+    const parse = (r: any) => { let x = r.result; if (typeof x === 'string') { try { x = JSON.parse(x); } catch { x = null; } } return x || {}; };
+    const cur = parse(rows[0]), prev = rows[1] ? parse(rows[1]) : null;
+    const cats = cur.categories || {};
+    const uxCountOf = (x: any) => x?.categories?.ux ? (x.categories.ux.issues || 0) + (x.categories.ux.needsReview || 0) : 0;
+    const issuesNow = Math.max(0, rows[0].findings_count - uxCountOf(cur));
+    const sev = cats.accessibility?.bySeverity || {};
+    const minScore = Number(req.query.minScore ?? 80), maxCritical = Number(req.query.maxCritical ?? 0);
+    const minUx = req.query.minUx !== undefined ? Number(req.query.minUx) : null;
+    const checks = [
+      { name: 'overall-score', ok: (rows[0].overall_score ?? 0) >= minScore, actual: rows[0].overall_score, threshold: `>= ${minScore}` },
+      { name: 'critical-accessibility', ok: (sev.critical || 0) <= maxCritical, actual: sev.critical || 0, threshold: `<= ${maxCritical}` },
+      ...(minUx !== null ? [{ name: 'ux-score', ok: cats.ux?.score != null && cats.ux.score >= minUx, actual: cats.ux?.score ?? null, threshold: `>= ${minUx}` }] : []),
+    ];
+    res.json({
+      url, scanId: rows[0].id, status: rows[0].status, finishedAt: rows[0].finished_at, runBy: rows[0].created_by,
+      ageHours: Math.round(((Date.now() - new Date(rows[0].finished_at).getTime()) / 36e5) * 10) / 10,
+      score: rows[0].overall_score, grade: cur.overall?.grade ?? null,
+      categories: {
+        accessibility: cats.accessibility?.score ?? null, links: cats.links?.score ?? null, bestPractice: cats.bestPractice?.score ?? null,
+        ux: cats.ux?.score ?? null, uxLayout: cats.ux?.layout?.score ?? null, uxAdherence: cats.ux?.adherence?.score ?? null,
+      },
+      pagesAudited: rows[0].pages_crawled, issues: issuesNow, uxIssues: cats.ux ? cats.ux.issues : null,
+      change: prev ? { since: rows[1].finished_at, score: (rows[0].overall_score ?? 0) - (rows[1].overall_score ?? 0), issues: issuesNow - Math.max(0, rows[1].findings_count - uxCountOf(prev)) } : null,
+      gate: { passed: checks.every((c) => c.ok), checks },
+    });
+  } catch (err: any) { res.status(500).json({ error: err.message || 'Failed to load health' }); }
 });
 
 /* ───────────────────────────── recurring audits ───────────────────────────── */
@@ -173,6 +298,9 @@ router.post('/schedules', async (req: Request, res: Response) => {
       checkExternalLinks: body.checkExternalLinks !== false,
       username: typeof body.username === 'string' ? body.username : undefined,
       password: typeof body.password === 'string' && body.password ? body.password : undefined,
+      ux: body.ux !== false,
+      devices: Array.isArray(body.devices) ? body.devices.map(String) : undefined,
+      designStandardId: typeof body.designStandardId === 'string' && UUID_RE.test(body.designStandardId) ? body.designStandardId : undefined,
     });
     res.status(201).json({ schedule });
   } catch (err: any) {
@@ -194,6 +322,9 @@ router.patch('/schedules/:id', async (req: Request, res: Response) => {
       checkExternalLinks: typeof b.checkExternalLinks === 'boolean' ? b.checkExternalLinks : undefined,
       username: typeof b.username === 'string' ? b.username : undefined,
       password: typeof b.password === 'string' ? b.password : undefined,
+      ux: typeof b.ux === 'boolean' ? b.ux : undefined,
+      devices: Array.isArray(b.devices) ? b.devices.map(String) : undefined,
+      designStandardId: typeof b.designStandardId === 'string' ? b.designStandardId : undefined,
       enabled: typeof b.enabled === 'boolean' ? b.enabled : undefined,
     });
     if (!schedule) { res.status(404).json({ error: 'Schedule not found' }); return; }
@@ -238,6 +369,8 @@ router.get('/scans/:id', async (req: Request, res: Response) => {
     const { rows } = await pool.query(`SELECT * FROM ada_scans WHERE id = $1 AND tenant_id = $2`, [id, tenantId]);
     if (rows.length === 0) { res.status(404).json({ error: 'Audit not found' }); return; }
     const scan = rows[0];
+    if (typeof scan.result === 'string') { try { scan.result = JSON.parse(scan.result); } catch { scan.result = null; } }
+    scan.result = normaliseLegacySummary(scan.result);
     // progress_log is stored as text (not in the shim's JSON column list) - parse it here.
     if (typeof scan.progress_log === 'string') { try { scan.log = JSON.parse(scan.progress_log); } catch { scan.log = []; } }
     else scan.log = Array.isArray(scan.progress_log) ? scan.progress_log : [];
@@ -269,6 +402,9 @@ router.get('/scans/:id/findings', async (req: Request, res: Response) => {
     const pageUrl = String(req.query.page || '');
     const q = String(req.query.q || '').trim();
     if (CATEGORIES.includes(category)) { params.push(category); where.push(`category = $${params.length}`); }
+    // UX findings have their own tab; the issue explorer asks for everything except them.
+    const notCategory = String(req.query.notCategory || '');
+    if (CATEGORIES.includes(notCategory)) { params.push(notCategory); where.push(`category <> $${params.length}`); }
     if (SEVERITIES.includes(severity)) { params.push(severity); where.push(`severity = $${params.length}`); }
     if (pageUrl) { params.push(pageUrl); where.push(`page_url = $${params.length}`); }
     if (q) { params.push(`%${escapeLike(q)}%`); where.push(`(title LIKE $${params.length} OR rule_id LIKE $${params.length} OR page_url LIKE $${params.length} OR element LIKE $${params.length})`); }
@@ -330,6 +466,7 @@ router.delete('/scans/:id', async (req: Request, res: Response) => {
     if (!UUID_RE.test(id)) { res.status(400).json({ error: 'Invalid scan id' }); return; }
     const result = await pool.query(`DELETE FROM ada_scans WHERE id = $1 AND tenant_id = $2`, [id, req.user!.tenantId]);
     if (!result.rowCount) { res.status(404).json({ error: 'Audit not found' }); return; }
+    await removeEvidence(id);
     res.json({ deleted: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to delete audit' });
