@@ -5,6 +5,8 @@
  *
  *   LAYOUT INTEGRITY   objective, always scored
  *     ux-overlap            two controls drawn on top of each other
+ *     ux-text-overlap       text drawn over other text (heading over paragraph, label over label)
+ *     ux-text-over-control  (review) text colliding with a button / link / input it does not belong to
  *     ux-occluded           a control covered by another element (cannot be clicked)
  *     ux-overlay-blocks     one overlay (cookie bar, modal) covering many controls
  *     ux-overflow-x         the page scrolls sideways
@@ -43,7 +45,7 @@ interface RawEl {
   radius: number; padX: number; padY: number; interactive: boolean;
 }
 interface RawIssue {
-  kind: 'overlap' | 'occluded' | 'overlay' | 'overflow-x' | 'clipped' | 'touch-target' | 'misaligned' | 'uneven-gap';
+  kind: 'overlap' | 'text-overlap' | 'text-over-control' | 'occluded' | 'overlay' | 'overflow-x' | 'clipped' | 'touch-target' | 'misaligned' | 'uneven-gap';
   sel: string; text: string; x: number; y: number; w: number; h: number;
   other?: string; actual?: string; expected?: string; count?: number;
 }
@@ -70,6 +72,8 @@ const MAX_EVIDENCE_PER_RULE = 2;
 
 const RULES: Record<string, { family: UxFamily; title: string; severity: Severity; confidence: UxConfidence }> = {
   'ux-overlap': { family: 'layout', title: 'Controls overlap each other', severity: 'serious', confidence: 'high' },
+  'ux-text-overlap': { family: 'layout', title: 'Text overlaps other text', severity: 'serious', confidence: 'high' },
+  'ux-text-over-control': { family: 'layout', title: 'Text collides with a control', severity: 'moderate', confidence: 'review' },
   'ux-occluded': { family: 'layout', title: 'Control is covered by another element', severity: 'serious', confidence: 'high' },
   'ux-overlay-blocks': { family: 'layout', title: 'An overlay covers several controls', severity: 'moderate', confidence: 'review' },
   'ux-overflow-x': { family: 'layout', title: 'Page scrolls sideways', severity: 'serious', confidence: 'high' },
@@ -159,6 +163,18 @@ async function collect(page: Page, touch: boolean, minTarget: number): Promise<C
       return 'body';
     };
 
+    // The box of the text itself (not the block it sits in): a full-width <p>
+    // next to a floated heading only collides if the glyphs do.
+    const textBox = (el: Element): DOMRect | null => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const rects = Array.from(range.getClientRects()).filter((r) => r.width > 1 && r.height > 1);
+      if (!rects.length) return null;
+      const l = Math.min(...rects.map((r) => r.left)), t = Math.min(...rects.map((r) => r.top));
+      return new DOMRect(l, t, Math.max(...rects.map((r) => r.right)) - l, Math.max(...rects.map((r) => r.bottom)) - t);
+    };
+    const texts: { el: Element; r: DOMRect; fixed: boolean }[] = [];
+
     /* ── text / style sample ── */
     const elements: any[] = [];
     const textSel = 'h1,h2,h3,h4,h5,h6,p,li,a,button,[role="button"],input:not([type="hidden"]),select,textarea,label,th,td,blockquote,figcaption,summary';
@@ -184,6 +200,22 @@ async function collect(page: Page, touch: boolean, minTarget: number): Promise<C
         padX: Math.round(parseFloat(cs.paddingLeft) * 100) / 100, padY: Math.round(parseFloat(cs.paddingTop) * 100) / 100,
         interactive: isControl || tag === 'a',
       });
+      // Non-interactive text only — control-vs-control overlap is handled separately below.
+      if (!isControl && tag !== 'a' && tag !== 'summary' && !el.closest('a,button,[role="button"]') && texts.length < 400) {
+        const tr = textBox(el);
+        if (tr) texts.push({ el, r: tr, fixed: isFixed(el) });
+      }
+    }
+
+    // Loose text (a caption in a <span>, a price in a <div>) can collide too. It joins the
+    // collision check only — the typography sample stays with semantic text elements.
+    for (const el of Array.from(document.querySelectorAll('span,div,strong,em,small,b,i,dt,dd,figcaption,time'))) {
+      if (texts.length >= 500) break;
+      if (ownText(el).length < 2 || el.closest('a,button,[role="button"],label')) continue;
+      const r = el.getBoundingClientRect();
+      if (!visible(el, r, getComputedStyle(el))) continue;
+      const tr = textBox(el);
+      if (tr) texts.push({ el, r: tr, fixed: isFixed(el) });
     }
 
     /* ── interactive geometry ── */
@@ -289,6 +321,37 @@ async function collect(page: Page, touch: boolean, minTarget: number): Promise<C
       }
     }
 
+    // Text collisions. Rect maths finds candidates; each is then confirmed in the
+    // scroll phase below, because layered UI (hero text over a banner, stacked
+    // slides, a label on an opaque chip) overlaps on purpose.
+    const intersect = (a: DOMRect, b: DOMRect) => {
+      const w = Math.min(a.right, b.right) - Math.max(a.left, b.left), h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+      return w > 3 && h > 3 ? { w, h, ratio: (w * h) / Math.min(a.width * a.height, b.width * b.height) } : null;
+    };
+    const candidates: { kind: 'text-overlap' | 'text-over-control'; a: Element; b: Element; ratio: number }[] = [];
+    for (let i = 0; i < texts.length && candidates.length < 60; i++) {
+      for (let j = i + 1; j < texts.length; j++) {
+        const A = texts[i], B = texts[j];
+        if (A.fixed !== B.fixed || A.el.contains(B.el) || B.el.contains(A.el)) continue;
+        const x = intersect(A.r, B.r);
+        if (x && x.ratio > 0.25) candidates.push({ kind: 'text-overlap', a: A.el, b: B.el, ratio: x.ratio });
+      }
+      for (const C of inter) {
+        const A = texts[i];
+        if (A.fixed !== C.fixed || A.el.contains(C.el) || C.el.contains(A.el)) continue;
+        if (A.el.tagName === 'LABEL' && ((A.el as HTMLLabelElement).control === C.el || A.el.parentElement === C.el.parentElement)) continue; // floating labels
+        const x = intersect(A.r, C.r);
+        if (x && x.ratio > 0.35) candidates.push({ kind: 'text-over-control', a: A.el, b: C.el, ratio: x.ratio });
+      }
+    }
+    const alphaOf = (c: string): number => {
+      if (!ink || !c || c === 'transparent') return 0;
+      ink.clearRect(0, 0, 1, 1); ink.fillStyle = 'rgba(0,0,0,0)'; ink.fillStyle = c; ink.fillRect(0, 0, 1, 1);
+      return ink.getImageData(0, 0, 1, 1).data[3] / 255;
+    };
+    const opaque = (el: Element) => { const cs = getComputedStyle(el); return cs.backgroundImage !== 'none' || alphaOf(cs.backgroundColor) >= 0.9; };
+    const commonAncestor = (a: Element, b: Element): Element | null => { for (let n: Element | null = a; n; n = n.parentElement) if (n.contains(b)) return n; return null; };
+
     // Occlusion: is each control actually on top at its centre? Scroll it into view first.
     const prevBehavior = document.documentElement.style.scrollBehavior;
     document.documentElement.style.scrollBehavior = 'auto';
@@ -306,10 +369,34 @@ async function collect(page: Page, touch: boolean, minTarget: number): Promise<C
       list.push({ el: it.el, r: new DOMRect(r.left + window.scrollX - sx, r.top + window.scrollY - sy, r.width, r.height) });
       occluders.set(top, list);
     }
+    for (const c of candidates) {
+      try { (c.a as HTMLElement).scrollIntoView({ block: 'center', inline: 'nearest' }); } catch { continue; }
+      const ra = c.kind === 'text-overlap' ? textBox(c.a) : textBox(c.a), rb = c.kind === 'text-overlap' ? textBox(c.b) : c.b.getBoundingClientRect();
+      if (!ra || !rb) continue;
+      const w = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left), h = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
+      if (w <= 3 || h <= 3) continue; // no longer overlapping once in view (sticky / lazy layout)
+      const px = Math.max(ra.left, rb.left) + w / 2, py = Math.max(ra.top, rb.top) + h / 2;
+      if (px < 0 || py < 0 || px > window.innerWidth || py > window.innerHeight) continue;
+      const top = document.elementFromPoint(px, py);
+      if (!top) continue;
+      // Hit-testing skips pointer-events:none elements, so decorative text laid over a control would
+      // look like it is underneath. Such an element is by construction the layer on top.
+      const passthrough = (el: Element) => getComputedStyle(el).pointerEvents === 'none';
+      const upper = passthrough(c.a) ? c.a : passthrough(c.b) ? c.b : c.a === top || c.a.contains(top) ? c.a : c.b === top || c.b.contains(top) ? c.b : null;
+      if (!upper) continue; // a third layer covers both — not a visible collision
+      // Anything opaque between the top layer and the shared container hides the text underneath: layered on purpose.
+      const stopAt = commonAncestor(c.a, c.b);
+      let hidden = false;
+      for (let n: Element | null = upper; n && n !== stopAt; n = n.parentElement) if (opaque(n)) { hidden = true; break; }
+      if (hidden) continue;
+      const lower = upper === c.a ? c.b : c.a;
+      const r = (upper === c.a ? ra : rb);
+      add({ kind: c.kind, sel: cssPath(upper), text: snippet(upper), x: Math.round(r.left + window.scrollX), y: Math.round(r.top + window.scrollY), w: Math.round(r.width), h: Math.round(r.height), other: cssPath(lower), actual: `${Math.round(c.ratio * 100)}% of "${snippet(lower) || lower.tagName.toLowerCase()}" is underneath` });
+    }
     window.scrollTo(sx, sy);
     document.documentElement.style.scrollBehavior = prevBehavior;
     for (const [top, covered] of occluders) {
-      if (covered.length >= 4) {
+      if (covered.length >= 4 || isFixed(top)) {
         const r = top.getBoundingClientRect();
         add({ kind: 'overlay', ...box(top, r), count: covered.length, actual: `covers ${covered.length} controls`, other: covered.slice(0, 3).map((c) => cssPath(c.el)).join(' , ') });
       } else {
@@ -337,6 +424,8 @@ function layoutIssues(c: Collected, device: DeviceProfile): Issue[] {
   for (const i of c.issues) {
     const what = i.text ? `"${i.text}"` : i.sel;
     if (i.kind === 'overlap') out.push(issue('ux-overlap', i, `${what} and ${i.other} are drawn on top of each other — ${i.actual}.`, { actual: i.actual }));
+    else if (i.kind === 'text-overlap') out.push(issue('ux-text-overlap', i, `${what} is drawn over other text (${i.other}) with nothing opaque between them — ${i.actual}.`, { actual: i.actual }));
+    else if (i.kind === 'text-over-control') out.push(issue('ux-text-over-control', i, `${what} collides with the control ${i.other} — ${i.actual}.`, { actual: i.actual }));
     else if (i.kind === 'occluded') out.push(issue('ux-occluded', i, `${what} cannot be clicked at its centre: it is ${i.actual}.`, { actual: i.actual }));
     else if (i.kind === 'overlay') out.push(issue('ux-overlay-blocks', i, `${i.sel} ${i.actual} (${i.other}). If this is a cookie or consent bar it is expected on first load; if not, it is blocking the page.`, { actual: i.actual, count: 1 }));
     else if (i.kind === 'overflow-x') { const o = issue('ux-overflow-x', i, `The ${i.actual}, so it scrolls sideways on ${device.label}. Widest offenders: ${i.other || i.sel}.`, { actual: i.actual, expected: i.expected }); if (device.kind === 'desktop') o.severity = 'moderate'; out.push(o); }
@@ -410,7 +499,7 @@ function consistencyIssues(c: Collected): Issue[] {
 export interface EvidenceBudget { dir: string | null; left: number; seq: number; perRuleDevice?: Map<string, number> }
 const MAX_EVIDENCE_PER_RULE_DEVICE = 3;
 /** Rules where each element has its own measurement — one finding per page, elements listed inside it. */
-const GROUP_BY_RULE = new Set(['ux-touch-target', 'ux-overlap', 'ux-occluded', 'ux-clipped-text', 'ux-misaligned', 'ux-uneven-gap']);
+const GROUP_BY_RULE = new Set(['ux-touch-target', 'ux-overlap', 'ux-text-overlap', 'ux-text-over-control', 'ux-occluded', 'ux-clipped-text', 'ux-misaligned', 'ux-uneven-gap']);
 
 async function capture(page: Page, rect: Issue['rect'], budget: EvidenceBudget): Promise<string | undefined> {
   if (!budget.dir || budget.left <= 0 || rect.w < 1 || rect.h < 1) return undefined;
