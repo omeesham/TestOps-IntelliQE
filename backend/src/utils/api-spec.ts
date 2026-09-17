@@ -47,9 +47,11 @@ export function sanitizeApiSpec(raw: any): ApiSpec | null {
   const authType: AuthType = (['none', 'bearer', 'basic', 'apikey'] as const).includes(authTypeRaw as any)
     ? (authTypeRaw as AuthType)
     : 'none';
+  const headerNameRaw = String(raw?.auth?.headerName ?? '').trim().replace(/[^A-Za-z0-9-_]/g, '').slice(0, 100);
   const auth: NonNullable<ApiSpec['auth']> = {
     type: authType,
     value: authType === 'none' ? undefined : String(raw?.auth?.value ?? '').slice(0, 4000) || undefined,
+    headerName: authType === 'apikey' && headerNameRaw ? headerNameRaw : undefined,
   };
 
   const statusNum = Number(raw.expectedStatus);

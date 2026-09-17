@@ -360,6 +360,153 @@ export async function parseApiSpecFromFile(file: File, format?: string): Promise
 }
 
 /* ─────────────────────────────────────────────────────────────
+   API Automation workspace — /api/api-automation
+   Intake (12 methods), pattern intelligence, environments, the
+   dashboard and the headless run. Every import answers with the
+   same shape: the endpoints it produced plus the profile derived
+   from them.
+   ───────────────────────────────────────────────────────────── */
+export interface ApiImportResponse {
+  endpoints: any[];
+  count: number;
+  parser: string;
+  format: string;
+  warnings: string[];
+  notice?: string;
+  profile: any | null;
+  /** Bulk file import only — per-file outcome. */
+  files?: { fileName: string; count: number; parser?: string; format?: string; error?: string; warnings: string[] }[];
+  /** Live probe only. */
+  observed?: { status: number; durationMs: number; contentType: string };
+}
+
+const IMPORT_TIMEOUT = 180_000;
+
+export async function importApiFiles(files: File[], format = 'auto'): Promise<ApiImportResponse> {
+  const form = new FormData();
+  for (const f of files) form.append('files', f);
+  form.append('format', format);
+  const { data } = await api.post('/api-automation/import/files', form, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: IMPORT_TIMEOUT });
+  return data;
+}
+
+export async function importApiText(text: string, opts: { format?: string; method?: string; name?: string; variables?: Record<string, string> } = {}): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/text', { text, ...opts }, { timeout: IMPORT_TIMEOUT });
+  return data;
+}
+
+export async function importApiUrl(url: string, opts: { format?: string; headers?: { key: string; value: string }[]; baseUrl?: string } = {}): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/url', { url, ...opts }, { timeout: IMPORT_TIMEOUT });
+  return data;
+}
+
+export async function importApiEndpoint(input: { url: string; method?: string; headers?: { key: string; value: string }[]; auth?: { type: string; value?: string; headerName?: string }; body?: string; discover?: boolean }): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/endpoint', input, { timeout: 60_000 });
+  return data;
+}
+
+export async function importApiCurl(curl: string): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/curl', { curl });
+  return data;
+}
+
+export async function importApiGraphql(url: string, headers?: { key: string; value: string }[], auth?: { type: string; value?: string }): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/graphql', { url, headers, auth }, { timeout: 60_000 });
+  return data;
+}
+
+export async function importApiMcp(url: string, headers?: { key: string; value: string }[], auth?: { type: string; value?: string }): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/mcp', { url, headers, auth }, { timeout: 60_000 });
+  return data;
+}
+
+export async function importApiConnector(manifest: string | object, name?: string): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/connector', { manifest, name });
+  return data;
+}
+
+export async function importApiWebhook(def: { url: string; method?: string; signatureHeader?: string; secret?: string; headers?: { key: string; value: string }[]; expectedStatus?: number; events: { name: string; payload: string; description?: string }[] }): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/webhook', def);
+  return data;
+}
+
+/** SDK source or middleware/route definitions — pasted text or an uploaded file. */
+export async function importApiSource(method: 'sdk' | 'middleware', input: { text?: string; file?: File; name?: string }): Promise<ApiImportResponse> {
+  const form = new FormData();
+  if (input.file) form.append('file', input.file);
+  if (input.text) form.append('text', input.text);
+  if (input.name) form.append('name', input.name);
+  const { data } = await api.post(`/api-automation/import/${method}`, form, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: IMPORT_TIMEOUT });
+  return data;
+}
+
+/**
+ * Design scenarios as a background job — one model call per endpoint means a
+ * big catalogue outlives any single HTTP request. Returns the jobId to poll.
+ */
+export async function designApiScenarios(input: { apiSpecs: ApiSpecPayload[]; apiLayers?: string[]; apiProfile?: { insights?: string[] } | null; requirements?: string }): Promise<{ jobId: string; pollUrl: string }> {
+  const { data } = await api.post('/api-automation/design', input, { timeout: 60_000 });
+  return data;
+}
+
+export interface ApiJob<T = any> {
+  status: 'running' | 'completed' | 'failed';
+  result?: T;
+  error?: string;
+  progress?: { phase?: string; done?: number; total?: number; flows?: number; message?: string; detail?: string };
+  createdAt: number;
+  finishedAt?: number;
+}
+
+export async function getApiJob<T = any>(jobId: string): Promise<ApiJob<T>> {
+  const { data } = await api.get(`/api-automation/jobs/${encodeURIComponent(jobId)}`, { timeout: 30_000 });
+  return data;
+}
+
+export async function analyzeApi(endpoints: any[], deep = false): Promise<{ profile: any }> {
+  const { data } = await api.post('/api-automation/analyze', { endpoints, deep }, { timeout: deep ? 120_000 : 30_000 });
+  return data;
+}
+
+export async function listApiEnvironments(): Promise<{ environments: any[] }> {
+  const { data } = await api.get('/api-automation/environments');
+  return data;
+}
+export async function createApiEnvironment(input: { name: string; baseUrl?: string; variables?: any[]; isDefault?: boolean }): Promise<{ environment: any }> {
+  const { data } = await api.post('/api-automation/environments', input);
+  return data;
+}
+export async function updateApiEnvironment(id: string, input: { name?: string; baseUrl?: string; variables?: any[]; isDefault?: boolean }): Promise<{ environment: any }> {
+  const { data } = await api.put(`/api-automation/environments/${encodeURIComponent(id)}`, input);
+  return data;
+}
+export async function deleteApiEnvironment(id: string): Promise<void> {
+  await api.delete(`/api-automation/environments/${encodeURIComponent(id)}`);
+}
+/** Resolve {{vars}} + base URL server-side (secrets never leave the server in a list). */
+export async function resolveApiEnvironment(id: string, endpoints: any[]): Promise<{ endpoints: any[]; environment: { id: string; name: string; baseUrl: string } }> {
+  const { data } = await api.post(`/api-automation/environments/${encodeURIComponent(id)}/resolve`, { endpoints });
+  return data;
+}
+
+export async function getApiOverview(): Promise<any> {
+  const { data } = await api.get('/api-automation/overview', { timeout: 60_000 });
+  return data;
+}
+export async function listApiRuns(page = 1, pageSize = 20): Promise<{ items: any[]; total: number; page: number; pageSize: number }> {
+  const { data } = await api.get('/api-automation/runs', { params: { page, pageSize }, timeout: 60_000 });
+  return data;
+}
+export async function getApiRun(id: string): Promise<any> {
+  const { data } = await api.get(`/api-automation/runs/${encodeURIComponent(id)}`, { timeout: 60_000 });
+  return data;
+}
+export async function listApiImports(limit = 50): Promise<{ items: any[] }> {
+  const { data } = await api.get('/api-automation/imports', { params: { limit } });
+  return data;
+}
+
+/* ─────────────────────────────────────────────────────────────
    Test generation (chat wizard core)
    ───────────────────────────────────────────────────────────── */
 export async function generateTests(
@@ -383,6 +530,14 @@ export async function generateTests(
      *  present the backend generates real HTTP test cases + Playwright request
      *  specs and needs no configured browser application. */
     apiSpec?: ApiSpecPayload;
+    /** API Automation, multi-endpoint — several selected endpoints from an
+     *  imported collection/spec. The backend generates a suite for each and
+     *  merges them into one aggregated set of cases + specs. */
+    apiSpecs?: ApiSpecPayload[];
+    /** API Automation — the test layers the reviewer switched on. */
+    apiLayers?: string[];
+    /** API Automation — AI insights from the deep analysis, as generator context. */
+    apiProfile?: { insights?: string[] } | null;
   },
 ) {
   const body = {
@@ -396,6 +551,9 @@ export async function generateTests(
     roles: options?.roles,
     appId: options?.appId,
     apiSpec: options?.apiSpec,
+    apiSpecs: options?.apiSpecs,
+    apiLayers: options?.apiLayers,
+    apiProfile: options?.apiProfile,
   };
   const post = () => api.post('/generate', body, { timeout: PIPELINE_TIMEOUT_MS });
 
@@ -449,7 +607,7 @@ export interface ApiSpecPayload {
   method: string;
   url: string;
   headers?: { key: string; value: string }[];
-  auth?: { type: string; value?: string };
+  auth?: { type: string; value?: string; headerName?: string };
   body?: string;
   expectedStatus?: number;
   expectedResponse?: string;

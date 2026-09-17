@@ -56,13 +56,13 @@ function Marker({ status, index }: { status: Stage['status']; index: number }) {
 
 export default function StageRail({ stages }: { stages: Stage[] }) {
   return (
-    <div className="flex items-stretch bg-white border-b border-gray-200 flex-shrink-0 overflow-x-auto">
+    <div className="relative z-10 flex items-stretch bg-gradient-to-b from-white to-[#FCFBFF] border-b border-[#E9E5FB] flex-shrink-0 overflow-x-auto shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_6px_16px_-12px_rgba(76,29,149,0.45)]">
       {stages.map((s, i) => (
         <div
           key={s.key}
           className={`flex items-center gap-2 px-3 py-2 min-w-[190px] flex-1 border-r border-gray-100 last:border-r-0 transition-colors ${
             s.status === 'running'
-              ? 'bg-gradient-to-b from-[#F5F3FF] to-[#EDE9FE] shadow-[inset_0_2px_0_rgba(124,58,237,0.45)]'
+              ? 'bg-gradient-to-b from-[#F5F3FF] to-[#EDE9FE] shadow-[inset_0_2px_0_rgba(124,58,237,0.45),inset_0_-1px_0_rgba(255,255,255,0.8),0_4px_12px_-8px_rgba(76,29,149,0.45)]'
               : ''
           }`}
           title={s.hint}

@@ -397,10 +397,16 @@ export abstract class BaseApi {
    */
   protected async send(method: string, url: string, options: RequestOptions = {}): Promise<APIResponse> {
     const started = Date.now();
+    console.log('[api] -> ' + method + ' ' + url);
     try {
-      return await this.request.fetch(url, { method, ...options });
-    } finally {
+      const response = await this.request.fetch(url, { method, ...options });
       this.lastDurationMs = Date.now() - started;
+      console.log('[api] <- ' + response.status() + ' (' + this.lastDurationMs + 'ms) ' + method + ' ' + url);
+      return response;
+    } catch (err) {
+      this.lastDurationMs = Date.now() - started;
+      console.log('[api] x  request errored after ' + this.lastDurationMs + 'ms: ' + method + ' ' + url);
+      throw err;
     }
   }
 
@@ -431,6 +437,26 @@ export abstract class BaseApi {
 export function getPath(obj: any, path: string): any {
   if (!path) return obj;
   return path.split('.').reduce((o: any, k: string) => (o == null ? undefined : o[k]), obj);
+}
+
+/** Values a multi-step flow carries from one request to the next. */
+export type Vars = Record<string, string>;
+
+/**
+ * Fill \`{{name}}\` placeholders in a URL, header or body template from the
+ * flow's variables (the id a create step returned, a token a login step
+ * minted). Unknown names are left in place so a missing hand-over fails
+ * visibly at the endpoint rather than silently sending an empty value.
+ */
+export function fill(template: string, vars: Vars = {}): string {
+  return template.replace(/\\{\\{\\s*([A-Za-z0-9_.\\-]+)\\s*\\}\\}/g, (m, k) => (vars[k] !== undefined ? vars[k] : m));
+}
+
+/** fill() over every header value. */
+export function fillHeaders(headers: Record<string, string>, vars: Vars = {}): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) out[k] = fill(v, vars);
+  return out;
 }
 `;
 

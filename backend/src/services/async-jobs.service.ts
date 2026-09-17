@@ -20,6 +20,8 @@ interface Job {
   status: JobStatus;
   result?: unknown;
   error?: string;
+  /** Free-form progress the runner may publish while running (phase, counts). */
+  progress?: unknown;
   createdAt: number;
   finishedAt?: number;
 }
@@ -40,12 +42,12 @@ function sweep(): void {
 }
 
 /** Start `run` detached and return a jobId the client can poll. */
-export function startJob(tenantId: string, run: () => Promise<unknown>): string {
+export function startJob(tenantId: string, run: (jobId: string) => Promise<unknown>): string {
   sweep();
   const id = `job-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const job: Job = { tenantId, status: 'running', createdAt: Date.now() };
   jobs.set(id, job);
-  run()
+  run(id)
     .then((result) => {
       job.status = 'completed';
       job.result = result;
@@ -59,9 +61,15 @@ export function startJob(tenantId: string, run: () => Promise<unknown>): string 
   return id;
 }
 
+/** Publish intermediate progress on a running job (no-op once it settled). */
+export function setJobProgress(id: string, progress: unknown): void {
+  const job = jobs.get(id);
+  if (job && job.status === 'running') job.progress = progress;
+}
+
 /** Look up a job — tenant-scoped so one tenant can never poll another's job. */
-export function getJob(tenantId: string, id: string): { status: JobStatus; result?: unknown; error?: string } | null {
+export function getJob(tenantId: string, id: string): { status: JobStatus; result?: unknown; error?: string; progress?: unknown; createdAt: number; finishedAt?: number } | null {
   const job = jobs.get(id);
   if (!job || job.tenantId !== tenantId) return null;
-  return { status: job.status, result: job.result, error: job.error };
+  return { status: job.status, result: job.result, error: job.error, progress: job.progress, createdAt: job.createdAt, finishedAt: job.finishedAt };
 }

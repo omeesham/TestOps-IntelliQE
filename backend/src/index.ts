@@ -47,6 +47,8 @@ import allureRoutes from './routes/allure.routes.js';
 import tenantSettingsRoutes from './routes/tenant-settings.routes.js';
 import llmConfigRoutes from './routes/llm-config.routes.js';
 import publicApiRoutes from './routes/public/public-api.routes.js';
+import apiAutomationRoutes from './routes/api-automation.routes.js';
+import apiAutomationPublicRoutes from './routes/public/api-automation-public.routes.js';
 import clientLogsRoutes from './routes/client-logs.routes.js';
 import bugsRoutes from './routes/bugs.routes.js';
 import featureTogglesRoutes from './routes/feature-toggles.routes.js';
@@ -299,6 +301,9 @@ app.use('/api/artifacts', authMiddleware, artifactsRoutes);
 app.use('/api/users', authMiddleware, userManagementRoutes);
 app.use('/api/feature-toggles', authMiddleware, featureTogglesRoutes);
 app.use('/api/agent-performance', authMiddleware, agentPerformanceRoutes);
+// API Automation workspace — intake (12 methods), pattern intelligence,
+// environments, dashboard/history and the headless run.
+app.use('/api/api-automation', authMiddleware, apiAutomationRoutes);
 app.use('/api/allure', allureRoutes);
 
 /* ─────────────────────────────────────────────────────────────
@@ -308,6 +313,9 @@ app.use('/api/allure', allureRoutes);
    - Audit middleware automatically logs every call.
    ───────────────────────────────────────────────────────────── */
 app.use('/api/v1/public', authMiddleware, auditMutations, publicApiRoutes);
+// RESTful test-information access for CI and the `intelliqe-api` CLI —
+// projects / plans / builds / sessions, headless runs, imports, analysis.
+app.use('/api/v1/public/api-automation', authMiddleware, auditMutations, apiAutomationPublicRoutes);
 
 /* ─────────────────────────────────────────────────────────────
    404 + global error handler — standard JSON shape everywhere.

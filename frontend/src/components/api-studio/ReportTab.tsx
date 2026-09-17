@@ -11,7 +11,7 @@ import {
   GitBranch, AlertTriangle,
 } from 'lucide-react';
 import { EmptyState, MethodBadge } from './primitives';
-import { formatDuration } from './format';
+import { formatDuration, RAISED, RAISED_HOVER, SECONDARY_3D, CARD, STRIP, TILE_ACTIVE } from './format';
 import type { RunReport, RunRow, Scenario, PushState } from './types';
 
 interface Props {
@@ -42,7 +42,7 @@ function Stat({
     accent: 'text-[#6D28D9] bg-[#F5F3FF] border-[#DDD6FE]',
   }[tone];
   return (
-    <div className={`flex-1 min-w-[110px] border rounded-lg px-3 py-2.5 ${cls}`}>
+    <div className={`flex-1 min-w-[110px] border rounded-lg px-3 py-2.5 ${RAISED} ${RAISED_HOVER} ${cls}`}>
       <div className="flex items-center gap-1.5">
         <Icon className="w-3.5 h-3.5 opacity-70" />
         <span className="text-[10px] font-semibold uppercase tracking-wide opacity-80">{label}</span>
@@ -73,12 +73,12 @@ export default function ReportTab({
   const green = report.failed === 0 && report.notRun === 0 && report.total > 0;
 
   return (
-    <div className="h-full overflow-y-auto min-h-0 bg-gray-50/40">
+    <div className="h-full overflow-y-auto min-h-0">
       <div className="max-w-4xl mx-auto p-5 space-y-5">
         {/* Verdict */}
-        <div className={`rounded-xl border p-4 ${green ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-gray-200'}`}>
+        <div className={`rounded-xl border p-4 ${RAISED} ${green ? 'bg-gradient-to-b from-emerald-50 to-[#E6F7EF] border-emerald-200' : 'bg-gradient-to-b from-white to-[#FCFBFF] border-[#E9E5FB]'}`}>
           <div className="flex items-start gap-3">
-            <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${green ? 'bg-emerald-500' : 'bg-[#7C3AED]'}`}>
+            <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ring-1 ring-white/40 ${green ? 'bg-gradient-to-br from-emerald-400 to-emerald-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_3px_0_0_#047857,0_8px_16px_-6px_rgba(16,185,129,0.6)]' : TILE_ACTIVE + ' shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_3px_0_0_#4338CA,0_8px_16px_-6px_rgba(124,58,237,0.6)]'}`}>
               {green ? <CheckCircle2 className="w-5 h-5 text-white" /> : <BarChart3 className="w-5 h-5 text-white" />}
             </div>
             <div className="min-w-0 flex-1">
@@ -130,7 +130,7 @@ export default function ReportTab({
             type="button"
             onClick={() => onExport('excel')}
             disabled={exporting || !canExport}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-700 bg-white border border-gray-200 rounded-md hover:border-[#C4B5FD] hover:text-[#6D28D9] transition-colors disabled:opacity-40"
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-700 bg-gradient-to-b from-white to-[#FAFAFE] border border-[#E4E0F5] rounded-md hover:border-[#C4B5FD] hover:text-[#6D28D9] transition-all disabled:opacity-40 ${SECONDARY_3D}`}
           >
             {exporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
             Export scenarios (CSV)
@@ -139,7 +139,7 @@ export default function ReportTab({
             type="button"
             onClick={() => onExport('json')}
             disabled={exporting || !canExport}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-700 bg-white border border-gray-200 rounded-md hover:border-[#C4B5FD] hover:text-[#6D28D9] transition-colors disabled:opacity-40"
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-700 bg-gradient-to-b from-white to-[#FAFAFE] border border-[#E4E0F5] rounded-md hover:border-[#C4B5FD] hover:text-[#6D28D9] transition-all disabled:opacity-40 ${SECONDARY_3D}`}
           >
             <Download className="w-3.5 h-3.5" />Export (JSON)
           </button>
@@ -153,7 +153,7 @@ export default function ReportTab({
             title={canPush
               ? 'Commit the generated specs to the repository connected under System Configuration → Code Repositories'
               : 'There are no generated specs to push'}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-700 bg-white border border-gray-200 rounded-md hover:border-[#C4B5FD] hover:text-[#6D28D9] transition-colors disabled:opacity-40"
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-700 bg-gradient-to-b from-white to-[#FAFAFE] border border-[#E4E0F5] rounded-md hover:border-[#C4B5FD] hover:text-[#6D28D9] transition-all disabled:opacity-40 ${SECONDARY_3D}`}
           >
             {pushState.status === 'pushing'
               ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -192,8 +192,8 @@ export default function ReportTab({
 
         {/* Failures — the actionable part of any red run */}
         {(failures.length > 0 || notRun.length > 0) && (
-          <section className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-            <div className="px-4 py-2.5 border-b border-gray-100">
+          <section className={`${CARD} overflow-hidden`}>
+            <div className={`px-4 py-2.5 border-b border-[#EDE9FE] ${STRIP}`}>
               <h3 className="text-[12px] font-semibold text-gray-800">
                 Needs attention · {failures.length + notRun.length}
               </h3>
@@ -227,7 +227,7 @@ export default function ReportTab({
 
         {/* What healing did — including what it deliberately did not do */}
         {healNotes.length > 0 && (
-          <section className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <section className={`${CARD} overflow-hidden`}>
             <div className="px-4 py-2.5 border-b border-gray-100 flex items-center gap-1.5">
               <Wrench className="w-3.5 h-3.5 text-[#7C3AED]" />
               <h3 className="text-[12px] font-semibold text-gray-800">Self-healing · {healNotes.length} reviewed</h3>

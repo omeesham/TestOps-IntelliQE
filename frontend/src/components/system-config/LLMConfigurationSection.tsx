@@ -10,6 +10,7 @@ import {
 } from '@/services/api';
 import { useToast } from '@/components/feedback/ToastProvider';
 
+import Loader from '@/components/feedback/Loader';
 type ProviderId = 'anthropic' | 'gemini' | 'openai';
 type ConnStatus = LlmProviderConfig['status'];
 
@@ -277,8 +278,7 @@ export default function LlmConfigurationSection() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-7 h-7 text-[#7C3AED] animate-spin" />
-        <span className="ml-3 text-sm text-[#6B7280]">Loading LLM configuration…</span>
+        <Loader label="Loading LLM configuration" />
       </div>
     );
   }

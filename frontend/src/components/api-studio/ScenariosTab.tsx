@@ -11,7 +11,7 @@ import { ChevronRight, ListChecks, Search } from 'lucide-react';
 import {
   MethodBadge, CategoryChip, PriorityChip, StatusCode, CodeBlock, EmptyState,
 } from './primitives';
-import { prettyJson, categoryMeta } from './format';
+import { prettyJson, categoryMeta, STRIP, THEAD, INSET, RAISED } from './format';
 import type { Scenario } from './types';
 
 interface Props {
@@ -58,7 +58,7 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
       <EmptyState
         icon={ListChecks}
         title="No scenarios yet"
-        hint="Fill in the endpoint and its expected response, then run the suite. Every scenario the generator designs lands here for review before anything is automated."
+        hint="Import a collection or spec, or enter an endpoint and its expected response, then run. Every scenario the generator designs lands here for review before anything is automated."
       />
     );
   }
@@ -68,7 +68,7 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
   return (
     <div className="h-full flex flex-col min-h-0">
       {/* Toolbar */}
-      <div className="flex items-center gap-2 px-3 h-10 border-b border-gray-200 bg-white flex-shrink-0">
+      <div className={`relative z-10 flex items-center gap-2 px-3 h-10 border-b border-[#E9E5FB] flex-shrink-0 ${STRIP} shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_6px_14px_-12px_rgba(76,29,149,0.45)]`}>
         <label className="flex items-center gap-1.5 text-[11px] text-gray-600 cursor-pointer select-none">
           <input
             type="checkbox"
@@ -88,7 +88,7 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Filter scenarios…"
-            className="w-52 pl-6 pr-2 py-1 bg-white border border-gray-200 rounded text-[11px] text-gray-700 placeholder-gray-300 outline-none focus:border-[#A5B4FC] focus:ring-2 focus:ring-[#EDE9FE] transition-all"
+            className={`w-52 pl-6 pr-2 py-1 bg-[#FCFBFF] border border-[#E4E0F5] rounded text-[11px] text-gray-700 placeholder-gray-300 outline-none focus:bg-white focus:border-[#A5B4FC] focus:ring-2 focus:ring-[#EDE9FE] transition-all ${INSET}`}
           />
         </div>
 
@@ -126,7 +126,7 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
             losing characters — scroll the table rather than crush it. */}
         <table className="w-full min-w-[680px] border-collapse">
           <thead className="sticky top-0 z-10">
-            <tr className="bg-gray-50 border-b border-gray-200">
+            <tr className={`border-b border-[#E9E5FB] ${THEAD}`}>
               <th className="w-8" />
               <th className="w-14 px-2 py-1.5 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wide">ID</th>
               <th className="px-2 py-1.5 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Scenario</th>
@@ -142,6 +142,16 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
               const isOpen = expanded === s.id;
               const isSelected = selected.has(s.id);
               const assertions = s.steps.filter((t) => /assert/i.test(t));
+              // Prefer the structured steps (each with its own expected result);
+              // fall back to parsing the "N. action → Expected: result" strings.
+              const stepList = (s.testSteps && s.testSteps.length)
+                ? s.testSteps
+                : s.steps.map((str, i) => {
+                    const m = /^\s*(\d+)\.\s*(.*?)\s*→\s*Expected:\s*(.*)$/.exec(str);
+                    return m
+                      ? { step: Number(m[1]), action: m[2], expected: m[3] }
+                      : { step: i + 1, action: str, expected: '' };
+                  });
               return (
                 <Fragment key={s.id}>
                   <tr
@@ -185,7 +195,7 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
                           {/* What gets sent */}
                           <div className="space-y-2 min-w-0">
                             <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Request</p>
-                            <div className="bg-white border border-gray-200 rounded-md p-2.5 space-y-1.5">
+                            <div className={`bg-white border border-[#E9E5FB] rounded-md p-2.5 space-y-1.5 ${RAISED}`}>
                               <div className="flex items-center gap-1.5">
                                 <MethodBadge method={s.api?.method || ''} />
                                 <span className="font-mono text-[11px] text-gray-700 break-all">
@@ -214,19 +224,29 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
                             )}
                           </div>
 
-                          {/* What gets checked */}
+                          {/* Steps & expected results — every step carries its
+                              own expected outcome, not one result for the case */}
                           <div className="space-y-2 min-w-0">
                             <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">
-                              Assertions ({assertions.length})
+                              Steps &amp; expected results ({stepList.length})
                             </p>
-                            <ol className="bg-white border border-gray-200 rounded-md p-2.5 space-y-1">
-                              {assertions.length === 0 && (
-                                <li className="text-[11px] text-gray-400">No assertions were recorded for this scenario.</li>
+                            <ol className={`bg-white border border-[#E9E5FB] rounded-md divide-y divide-gray-100 overflow-hidden ${RAISED}`}>
+                              {stepList.length === 0 && (
+                                <li className="text-[11px] text-gray-400 p-2.5">No steps were recorded for this scenario.</li>
                               )}
-                              {assertions.map((a, i) => (
-                                <li key={i} className="flex gap-1.5 text-[11px] text-gray-700 leading-relaxed">
-                                  <span className="text-gray-300 font-mono flex-shrink-0">{String(i + 1).padStart(2, '0')}</span>
-                                  <span>{a.replace(/^\d+\.\s*Assert:\s*/i, '').replace(/\s*→ Expected:.*$/, '')}</span>
+                              {stepList.map((st, i) => (
+                                <li key={i} className="flex gap-2 p-2.5">
+                                  <span className="text-[10px] font-mono font-semibold text-white bg-[#A5B4FC] rounded w-4 h-4 flex items-center justify-center flex-shrink-0 mt-px tabular-nums">
+                                    {st.step}
+                                  </span>
+                                  <div className="min-w-0">
+                                    <p className="text-[11px] text-gray-800 leading-relaxed">{st.action}</p>
+                                    {st.expected && (
+                                      <p className="text-[10.5px] text-emerald-700 leading-relaxed mt-0.5">
+                                        <span className="text-gray-400 font-medium">Expected: </span>{st.expected}
+                                      </p>
+                                    )}
+                                  </div>
                                 </li>
                               ))}
                             </ol>

@@ -745,7 +745,40 @@ export async function initDb(): Promise<void> {
     // plain additive ALTER that backfills existing rows to 'manual'.
     await addColumn('bugs', 'bug_type', "NVARCHAR(20) NOT NULL DEFAULT 'manual'");
 
+    // ─── 10b. API Automation ───
+    // Environments: a named base URL + variables (secrets AES-encrypted at
+    // rest) that {{var}} placeholders in imported endpoints resolve against.
+    await createTable('api_environments', `
+      CREATE TABLE ${SCHEMA}.api_environments (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        name        NVARCHAR(120) NOT NULL,
+        base_url    NVARCHAR(1000),
+        variables   NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        is_default  BIT NOT NULL DEFAULT 0,
+        created_by  NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    // Import history: every intake (file, URL, cURL, GraphQL, MCP…) with what
+    // it produced — the dashboard's "sources" panel and the REST /imports feed.
+    await createTable('api_import_sources', `
+      CREATE TABLE ${SCHEMA}.api_import_sources (
+        id             UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id      UNIQUEIDENTIFIER NOT NULL,
+        method         NVARCHAR(30) NOT NULL,
+        name           NVARCHAR(500),
+        format         NVARCHAR(120),
+        parser         NVARCHAR(30),
+        endpoint_count INT NOT NULL DEFAULT 0,
+        warnings       NVARCHAR(MAX),
+        created_by     NVARCHAR(100),
+        created_at     DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+
     // ─── 11. Indexes ───
+    await createIndex('idx_api_environments_tenant', 'api_environments', '(tenant_id)');
+    await createIndex('idx_api_import_sources_tenant', 'api_import_sources', '(tenant_id, created_at DESC)');
     await createIndex('idx_users_tenant', 'users', '(tenant_id)');
     await createIndex('idx_client_configs_tenant', 'client_configurations', '(tenant_id)');
     await createIndex('idx_conversations_username', 'conversations', '(username)');

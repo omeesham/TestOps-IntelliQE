@@ -45,7 +45,64 @@ const CATEGORY_LABELS: Record<string, string> = {
   data: 'Schema',
   edge: 'Edge',
   performance: 'Perf',
+  e2e: 'Flow',
+  flow: 'Flow',
 };
+
+/* ── Surfaces — the 3D language ──
+   The workspace borrows the raised, tactile surfaces of Postman and Bruno
+   while staying in the app's violet-indigo palette. Three rules keep it
+   coherent: RAISED things (cards, buttons, chips) get a top highlight plus a
+   violet-tinted drop shadow; INSET things (inputs, tables, wells) get an inner
+   shadow; PRESSABLE things get a hard bottom edge that collapses on click.
+   Purely presentational — no run logic depends on any of these classes. */
+
+/** A raised surface: white highlight along the top edge, soft violet ambient shadow. */
+export const RAISED =
+  'shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(15,23,42,0.05),0_12px_28px_-16px_rgba(76,29,149,0.4)]';
+/** A raised surface that lifts further on hover. */
+export const RAISED_HOVER =
+  'transition-all duration-150 hover:-translate-y-0.5 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_2px_4px_rgba(15,23,42,0.05),0_20px_36px_-16px_rgba(76,29,149,0.5)]';
+/** A recessed surface: inputs, wells, table bodies. */
+export const INSET =
+  'shadow-[inset_0_1.5px_3px_rgba(30,27,75,0.08),inset_0_0_0_1px_rgba(221,214,254,0.35)]';
+/** Small embossed chip: badges, pills, status codes. */
+export const CHIP_3D =
+  'shadow-[inset_0_1px_0_rgba(255,255,255,0.75),0_1px_2px_rgba(30,27,75,0.10)]';
+
+export const BRAND_BUTTON =
+  'bg-gradient-to-b from-[#8B5CF6] to-[#6366F1] hover:from-[#7C3AED] hover:to-[#4F46E5]';
+export const BAR_3D =
+  'shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(15,23,42,0.05),0_8px_20px_-10px_rgba(76,29,149,0.35)]';
+/** The primary key: a hard bottom edge for the raised face, a soft violet
+    ambient glow, a lift on hover and a real press-down on click. */
+export const BUTTON_3D =
+  'shadow-[0_3px_0_0_#4338CA,0_8px_18px_-6px_rgba(99,102,241,0.55)] ' +
+  'hover:-translate-y-px hover:shadow-[0_4px_0_0_#4338CA,0_12px_24px_-6px_rgba(99,102,241,0.6)] ' +
+  'active:translate-y-[3px] active:shadow-[0_0_0_0_#4338CA,0_4px_10px_-6px_rgba(99,102,241,0.5)] ' +
+  'disabled:translate-y-0 disabled:shadow-[0_2px_0_0_#c7d2fe] ' +
+  'ring-1 ring-inset ring-white/25';
+/** The secondary key: the same press mechanics on a white face with a violet edge. */
+export const SECONDARY_3D =
+  'shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_2px_0_0_#DDD6FE,0_6px_14px_-8px_rgba(76,29,149,0.35)] ' +
+  'hover:-translate-y-px hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_3px_0_0_#C4B5FD,0_10px_18px_-8px_rgba(76,29,149,0.45)] ' +
+  'active:translate-y-[2px] active:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_0_0_0_#DDD6FE,0_2px_6px_-6px_rgba(76,29,149,0.3)] ' +
+  'disabled:translate-y-0 disabled:shadow-[0_1px_0_0_#EDE9FE]';
+/** The primary call-to-action, fully assembled. */
+export const PRIMARY_BTN = `inline-flex items-center gap-1.5 px-3.5 py-2 text-[12px] font-semibold text-white ${BRAND_BUTTON} ${BUTTON_3D} rounded-lg disabled:opacity-40 transition-all`;
+export const SECONDARY_BTN = `inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] font-medium text-gray-600 bg-gradient-to-b from-white to-[#FAFAFE] border border-[#E4E0F5] rounded-md hover:text-[#7C3AED] hover:border-[#DDD6FE] transition-all disabled:opacity-40 ${SECONDARY_3D}`;
+export const CARD = `bg-gradient-to-b from-white to-[#FCFBFF] border border-[#E9E5FB] rounded-xl ${RAISED}`;
+/** An interactive card that lifts on hover. */
+export const CARD_HOVER = `${CARD} ${RAISED_HOVER}`;
+export const INPUT = `w-full px-2.5 py-1.5 text-[12px] text-gray-800 bg-[#FCFBFF] border border-[#E4E0F5] rounded-md outline-none placeholder-gray-300 focus:bg-white focus:border-[#A5B4FC] focus:ring-2 focus:ring-[#EDE9FE] disabled:bg-gray-50 disabled:text-gray-500 ${INSET}`;
+export const LABEL = 'block text-[10.5px] font-semibold uppercase tracking-wide text-gray-500 mb-1';
+/** Table header strip: a light gradient with a bevelled bottom edge. */
+export const THEAD = 'bg-gradient-to-b from-[#FAFAFE] to-[#F3F1FB] shadow-[inset_0_-1px_0_#E9E5FB,inset_0_1px_0_rgba(255,255,255,0.9)]';
+/** Section/toolbar strip inside a card. */
+export const STRIP = 'bg-gradient-to-b from-[#FCFBFF] to-[#F7F5FE] shadow-[inset_0_-1px_0_#EDE9FE,inset_0_1px_0_rgba(255,255,255,0.9)]';
+/** Icon tile — the little squircle that holds a lucide icon. */
+export const TILE = 'bg-gradient-to-br from-[#F5F3FF] to-[#EDE9FE] border border-[#DDD6FE] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_2px_5px_-2px_rgba(76,29,149,0.35)]';
+export const TILE_ACTIVE = 'bg-gradient-to-br from-[#8B5CF6] to-[#6366F1] border border-transparent shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_4px_10px_-3px_rgba(124,58,237,0.6)]';
 
 export function categoryMeta(type: string) {
   const key = (type || '').toLowerCase();
@@ -125,3 +182,55 @@ export function clock(at: number): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
+
+/* ── Relative time ── */
+
+export function relativeTime(iso: string | number | null | undefined): string {
+  if (!iso) return '';
+  const t = typeof iso === 'number' ? iso : Date.parse(iso);
+  if (!Number.isFinite(t)) return '';
+  const diff = Date.now() - t;
+  const s = Math.round(diff / 1000);
+  if (s < 45) return 'just now';
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  if (d < 30) return `${d}d ago`;
+  return new Date(t).toLocaleDateString();
+}
+
+/* ── Catalogue helpers ── */
+
+let seq = 0;
+/** A client-side id for a catalogue endpoint — unique for the session. */
+export function newEndpointId(): string {
+  return `ep-${Date.now().toString(36)}-${(++seq).toString(36)}`;
+}
+
+/** `https://api.x.com/v1/users?limit=1` → `/v1/users` (what the table shows). */
+export function pathOf(url: string): string {
+  try { return new URL(url).pathname || '/'; } catch { return url; }
+}
+
+export function hostOf(url: string): string {
+  try { return new URL(url).host; } catch { return ''; }
+}
+
+/** Human label for an import method id. */
+export const IMPORT_METHOD_LABELS: Record<string, string> = {
+  openapi: 'OpenAPI / Swagger',
+  postman: 'Postman',
+  endpoint: 'API URL',
+  curl: 'cURL',
+  'docs-url': 'Docs URL',
+  connector: 'Connector',
+  sdk: 'SDK',
+  webhook: 'Webhook',
+  graphql: 'GraphQL',
+  mcp: 'MCP server',
+  middleware: 'Middleware',
+  manual: 'Manual',
+  file: 'File',
+};

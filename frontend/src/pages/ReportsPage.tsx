@@ -12,6 +12,7 @@ import ErrorAlert from '@/components/feedback/ErrorAlert';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { normalizeError } from '@/utils/apiError';
 
+import Loader from '@/components/feedback/Loader';
 /* ── helpers ── */
 function fmtDate(iso?: string): string {
   if (!iso) return '—';
@@ -195,9 +196,8 @@ export default function ReportsPage() {
             </div>
           </div>
           {viewLoading ? (
-            <div className="flex flex-col items-center justify-center gap-3" style={{ height: 'calc(100vh - 200px)', minHeight: 460 }}>
-              <Loader2 className="w-7 h-7 text-[#7C3AED] animate-spin" />
-              <p className="text-xs text-[#6B7280]">Loading report…</p>
+            <div className="flex flex-col items-center justify-center" style={{ height: 'calc(100vh - 200px)', minHeight: 460 }}>
+              <Loader size="lg" label="Loading report" />
             </div>
           ) : viewUrl ? (
             <iframe key={viewUrl} src={viewUrl} className="w-full border-0" style={{ height: 'calc(100vh - 200px)', minHeight: 460 }} title="Test report" />
@@ -258,7 +258,7 @@ export default function ReportsPage() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={5} className="px-4 py-16 text-center"><Loader2 className="w-6 h-6 text-[#7C3AED] animate-spin inline" /></td></tr>
+                <tr><td colSpan={5} className="px-4 py-16 text-center"><Loader label="Loading runs" /></td></tr>
               ) : items.length === 0 ? (
                 <tr><td colSpan={5} className="px-4 py-16 text-center text-[#6B7280]">
                   <FileText className="w-10 h-10 text-[#A5B4FC] mx-auto mb-3" />

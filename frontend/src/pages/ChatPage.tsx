@@ -37,6 +37,7 @@ import { initTTS, speak, speakAsync, waitForSpeech, waitForVoices, stopSpeaking,
 import ApiStudio from '@/components/api-studio/ApiStudio';
 import { useToast } from '@/components/feedback/ToastProvider';
 
+import Loader from '@/components/feedback/Loader';
 /* ═══════════════════════════════════════════════════════════════
    TYPES
    ═══════════════════════════════════════════════════════════════ */
@@ -2190,9 +2191,7 @@ export default function ChatPage() {
           >
             {uploadInProgress ? (
               <>
-                <Loader2 className="w-8 h-8 text-violet-500 mx-auto mb-3 animate-spin" />
-                <p className="text-sm font-medium text-gray-700">Extracting text from your document…</p>
-                <p className="text-xs text-gray-400 mt-1">This usually takes a few seconds.</p>
+                <Loader size="lg" label="Extracting text from your document" hint="This usually takes a few seconds." />
               </>
             ) : (
               <>

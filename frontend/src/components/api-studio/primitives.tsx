@@ -8,14 +8,14 @@
  */
 import { useState, type ReactNode } from 'react';
 import { ChevronRight, Copy, Check } from 'lucide-react';
-import { methodColor, categoryMeta } from './format';
+import { methodColor, categoryMeta, CHIP_3D } from './format';
 
 /* ── HTTP method ────────────────────────────────────────────────────────── */
 
 export function MethodBadge({ method, className = '' }: { method: string; className?: string }) {
   return (
     <span
-      className={`inline-flex items-center justify-center px-1.5 py-0.5 rounded border font-mono text-[10px] font-bold tracking-tight ${methodColor(method)} ${className}`}
+      className={`inline-flex items-center justify-center px-1.5 py-0.5 rounded border font-mono text-[10px] font-bold tracking-tight ${CHIP_3D} ${methodColor(method)} ${className}`}
     >
       {(method || '').toUpperCase()}
     </span>
@@ -32,7 +32,7 @@ export function MethodBadge({ method, className = '' }: { method: string; classN
 export function CategoryChip({ type }: { type: string }) {
   const m = categoryMeta(type);
   return (
-    <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-medium ${m.cls}`}>
+    <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-medium ${CHIP_3D} ${m.cls}`}>
       {m.label}
     </span>
   );
@@ -54,7 +54,7 @@ const PRIORITY_CLS: Record<string, string> = {
 export function PriorityChip({ priority }: { priority: string }) {
   const p = (priority || 'P1').toUpperCase();
   return (
-    <span className={`inline-flex items-center px-1.5 py-0.5 rounded font-mono text-[10px] font-semibold ${PRIORITY_CLS[p] || PRIORITY_CLS.P2}`}>
+    <span className={`inline-flex items-center px-1.5 py-0.5 rounded font-mono text-[10px] font-semibold ${CHIP_3D} ${PRIORITY_CLS[p] || PRIORITY_CLS.P2}`}>
       {p}
     </span>
   );
@@ -74,7 +74,7 @@ const STATUS_META: Record<string, { label: string; dot: string; cls: string }> =
 export function StatusPill({ status }: { status: string }) {
   const m = STATUS_META[status] || STATUS_META.pending;
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[11px] font-medium ${m.cls}`}>
+    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[11px] font-medium ${CHIP_3D} ${m.cls}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${m.dot}`} />
       {m.label}
     </span>
@@ -99,7 +99,7 @@ export function StatusCode({ code }: { code: string | number }) {
     : 'text-[#6B7280] bg-gray-50 border-gray-200';
   if (!text) return <span className="text-gray-300">—</span>;
   return (
-    <span className={`inline-flex items-center whitespace-nowrap px-1.5 py-0.5 rounded border font-mono text-[11px] font-semibold ${cls}`}>
+    <span className={`inline-flex items-center whitespace-nowrap px-1.5 py-0.5 rounded border font-mono text-[11px] font-semibold ${CHIP_3D} ${cls}`}>
       {text}
     </span>
   );
@@ -215,7 +215,7 @@ export function CopyButton({ text, label = 'Copy', className = '' }: { text: str
           () => { /* clipboard blocked — the code is on screen and selectable */ },
         );
       }}
-      className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded border transition-colors ${
+      className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded border transition-all ${CHIP_3D} active:translate-y-px active:shadow-none ${
         copied
           ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
           : 'text-[#6B7280] bg-white border-gray-200 hover:text-[#7C3AED] hover:border-[#DDD6FE]'
@@ -232,8 +232,8 @@ export function CopyButton({ text, label = 'Copy', className = '' }: { text: str
 export function EmptyState({ icon: Icon, title, hint }: { icon: React.ElementType; title: string; hint?: string }) {
   return (
     <div className="h-full flex flex-col items-center justify-center text-center px-8 py-16">
-      <div className="w-11 h-11 rounded-xl bg-gray-50 border border-gray-200 flex items-center justify-center mb-3">
-        <Icon className="w-5 h-5 text-gray-300" />
+      <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-white to-[#F5F3FF] border border-[#E9E5FB] flex items-center justify-center mb-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_8px_18px_-10px_rgba(76,29,149,0.4)]">
+        <Icon className="w-5 h-5 text-[#A78BFA]" />
       </div>
       <p className="text-sm font-medium text-gray-600">{title}</p>
       {hint && <p className="text-xs text-gray-400 mt-1 max-w-sm leading-relaxed">{hint}</p>}

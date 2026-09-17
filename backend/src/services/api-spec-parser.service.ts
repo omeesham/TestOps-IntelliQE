@@ -26,7 +26,12 @@ export interface ParsedApiSpec {
   method: string;
   url: string;
   headers: { key: string; value: string }[];
-  auth: { type: 'none' | 'bearer' | 'basic' | 'apikey'; value?: string };
+  auth: {
+    type: 'none' | 'bearer' | 'basic' | 'apikey';
+    value?: string;
+    /** apikey only — the header the key travels in when it is not X-API-Key. */
+    headerName?: string;
+  };
   body?: string;
   /** Expected success HTTP status code, when the doc states one. */
   expectedStatus?: number;
@@ -51,11 +56,25 @@ interface RawSpec {
   expectedResponse?: unknown;
 }
 
+/** Format-specific reading guidance for the sources the deterministic parsers cannot handle. */
+const FORMAT_GUIDANCE: Record<string, string> = {
+  sdk: 'This is SDK / client-library SOURCE CODE (TypeScript, JavaScript, Python, Java, C#, Go…). Every method that issues an HTTP call — fetch/axios/requests/HttpClient/RestTemplate, a generated client operation, a decorated service method — is one endpoint. Recover the method, the URL (base URL constant + path template), the headers it sets, the payload it serialises and the auth scheme it attaches.',
+  middleware: 'These are SERVER ROUTE DEFINITIONS (Express/Koa/Fastify/NestJS controllers, Spring @RequestMapping, FastAPI/Flask/Django routes, ASP.NET controllers, Go handlers, API-gateway/middleware route tables). Every route registration / decorated handler is one endpoint. Compose the full path from router prefixes + the route path, use the handler\'s validation schema or request model for the body, and the handler\'s response model or `res.json(...)` for the expected response.',
+  docs: 'This is the readable text of an API DOCUMENTATION WEB PAGE. Endpoints are usually presented as "METHOD /path" headings followed by parameter tables, request examples and response examples — read every one of them.',
+  xml: 'This is a WSDL / SOAP contract or an XML API description. Each operation/binding is one endpoint: POST to the service address with Content-Type text/xml and a SOAPAction header, and a SOAP envelope body built from the operation\'s input message.',
+  graphql: 'This is a GraphQL SDL schema. Each field of the Query and Mutation types is one endpoint: POST to the GraphQL URL with a JSON body { "query": "<operation>" } whose selection set covers the field\'s scalar sub-fields.',
+  excel: 'This is a spreadsheet rendered as CSV rows — typically one endpoint per row with columns like endpoint / method / headers / payload / expected response / status.',
+};
+
 function buildPrompt(text: string, fileName: string, formatHint?: string): string {
-  const hint = formatHint && formatHint !== 'auto'
-    ? `The user indicated this file is in "${formatHint}" format, but verify against the actual content.`
-    : 'Auto-detect the format from the content.';
-  return `You are an API integration specialist. Extract EVERY HTTP endpoint described in the API document below and return them as a STRICT JSON ARRAY. The document may be an OpenAPI/Swagger spec (JSON or YAML), a Postman collection, a Bruno collection (\`.bru\` files — a text DSL with blocks like \`get {\`, \`post {\`, \`url:\`, \`headers {\`, \`body:json {\`), a WSDL/XML contract, an Excel/CSV table (rendered as CSV rows — typically one endpoint per row with columns like endpoint/method/headers), a set of cURL commands, or free-form API documentation extracted from a PDF or Word file.
+  const key = (formatHint || '').toLowerCase();
+  const guidance = FORMAT_GUIDANCE[key];
+  const hint = guidance
+    ? guidance
+    : formatHint && formatHint !== 'auto'
+      ? `The user indicated this file is in "${formatHint}" format, but verify against the actual content.`
+      : 'Auto-detect the format from the content.';
+  return `You are an API integration specialist. Extract EVERY HTTP endpoint described in the API document below and return them as a STRICT JSON ARRAY. The document may be an OpenAPI/Swagger spec (JSON or YAML), a Postman collection, a Bruno collection (\`.bru\` files — a text DSL with blocks like \`get {\`, \`post {\`, \`url:\`, \`headers {\`, \`body:json {\`), a WSDL/XML contract, an Excel/CSV table (rendered as CSV rows — typically one endpoint per row with columns like endpoint/method/headers), a set of cURL commands, SDK/client source code, server route definitions, or free-form API documentation extracted from a PDF, Word file or web page.
 
 ${hint}
 

@@ -228,6 +228,8 @@ export interface ApiSpec {
     type: 'none' | 'bearer' | 'basic' | 'apikey';
     /** Bearer token, "username:password" for basic, or the API key value. */
     value?: string;
+    /** apikey only — the header the key is sent in (defaults to X-API-Key). */
+    headerName?: string;
   };
   /** Raw request body (JSON text) the user entered for POST/PUT/PATCH. */
   body?: string;
@@ -373,6 +375,34 @@ export interface TestOpsState {
    * `request` specs) instead of the browser/UI generator.
    */
   apiSpec?: ApiSpec | null;
+  /**
+   * API Automation, multi-endpoint. When an imported collection/spec is run
+   * across several endpoints at once, each endpoint's contract is one entry
+   * here; apiGeneratorAgent generates a suite for every one and merges them
+   * into a single set of test cases + specs (ids and service-object paths kept
+   * collision-free by a single planning pass). When present this takes priority
+   * over the single `apiSpec`.
+   */
+  apiSpecs?: ApiSpec[] | null;
+  /**
+   * API Automation — the pattern profile derived from the whole imported
+   * surface (resources, CRUD chains, auth, pagination, flows). Rendered into
+   * every generation prompt as context and used to design multi-step flows.
+   * Shape: ApiProfile from api-intelligence.service — kept loose here so the
+   * agent state does not import the service layer.
+   */
+  apiProfile?: Record<string, any> | null;
+  /**
+   * API Automation — which test layers the reviewer switched on for this run
+   * (smoke, contract, schema, negative, auth, security, performance, flow).
+   * Absent = every layer that applies.
+   */
+  apiLayers?: string[] | null;
+  /**
+   * API Automation — optional progress sink for long generations (one model
+   * call per endpoint). Not serialised; set by the async design job.
+   */
+  onProgress?: ((p: { phase: string; done: number; total: number; flows?: number; message?: string }) => void) | null;
   /** Resolved per-tenant LLM credentials (DB-backed). Null = none configured. */
   llm?: LlmConfig | null;
   generationOptions?: GenerationOptions;
@@ -426,6 +456,9 @@ export function createInitialState(requirements: string, appContext?: AppContext
     requirements,
     appContext: appContext || null,
     apiSpec: null,
+    apiSpecs: null,
+    apiProfile: null,
+    apiLayers: null,
     llm: llm || null,
     exploredApp: null,
     parsedRequirements: null,

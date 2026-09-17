@@ -127,7 +127,12 @@ export async function runPipeline(
 
 export async function runGenerationOnly(
   requirements: string,
-  options?: { maxTestCases?: number; appContext?: AppContext; llm?: LlmConfig | null; tenantId?: string; apiSpec?: ApiSpec | null },
+  options?: {
+    maxTestCases?: number; appContext?: AppContext; llm?: LlmConfig | null; tenantId?: string;
+    apiSpec?: ApiSpec | null; apiSpecs?: ApiSpec[] | null;
+    apiProfile?: Record<string, any> | null; apiLayers?: string[] | null;
+    onProgress?: TestOpsState['onProgress'];
+  },
 ): Promise<TestOpsState> {
   const tenantId = options?.tenantId;
   let state = createInitialState(requirements, options?.appContext, options?.llm);
@@ -139,8 +144,13 @@ export async function runGenerationOnly(
   // headers, auth, body). Skip the browser/UI pipeline entirely (no explore,
   // no requirement/audit/planner UI passes) and generate real HTTP test cases
   // plus self-contained Playwright `request` specs grounded in that endpoint.
-  if (options?.apiSpec) {
-    state.apiSpec = options.apiSpec;
+  if (options?.apiSpec || (options?.apiSpecs && options.apiSpecs.length)) {
+    const multi = options.apiSpecs && options.apiSpecs.length ? options.apiSpecs : null;
+    state.apiSpecs = multi;
+    state.apiSpec = options.apiSpec || multi?.[0] || null;
+    state.apiProfile = options.apiProfile || null;
+    state.apiLayers = options.apiLayers && options.apiLayers.length ? options.apiLayers : null;
+    state.onProgress = options.onProgress || null;
     state = await timed(tenantId, 'generator', () => apiGeneratorAgent(state),
       (s) => ({ testCases: s.testCases.length }));
     return state;

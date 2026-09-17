@@ -408,7 +408,7 @@ router.post('/scripts/start', (req: Request, res: Response) => {
  * `summary.executed` is false with a human-readable reason — the flow then
  * continues gracefully to the report rather than stalling.
  */
-async function executeStage(tenantId: string, body: any): Promise<any> {
+export async function executeStage(tenantId: string, body: any): Promise<any> {
   const stageStartedAt = Date.now();
   const { testCases, scripts, pageObjects, appId, testRunId } = body || {};
 
@@ -532,7 +532,7 @@ router.get('/jobs/:jobId', (req: Request, res: Response) => {
  * caller gets fresh, real pass/fail. Returns the updated scripts, new execution
  * details and a per-test healing log.
  */
-async function healStage(tenantId: string, body: any): Promise<any> {
+export async function healStage(tenantId: string, body: any): Promise<any> {
   const stageStartedAt = Date.now();
   const { testCases, scripts, pageObjects, executionDetails, appId, testRunId, apiSpec: rawApiSpec } = body || {};
 

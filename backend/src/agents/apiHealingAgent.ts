@@ -547,6 +547,16 @@ export async function apiHealingAgent(
       healingNotes[tc.id] = 'Not an API request spec — skipped by the API healer';
       return null;
     }
+    // A multi-step flow fails at ONE step, and replaying step 1 in isolation
+    // says nothing about a failure in step 3 that depended on step 1's id.
+    // The failure is reported with the step that broke rather than "healed"
+    // against the wrong request.
+    if (/^\/\/ @flow /m.test(script.code)) {
+      const error = failuresByTc[tc.id] || state.failureReason || 'Test failed';
+      const stepMatch = /(\d+)\.\s+[a-z0-9 _-]+ — (GET|POST|PUT|PATCH|DELETE)\s+\S+/i.exec(error);
+      healingNotes[tc.id] = `Multi-step flow — left as-is. ${stepMatch ? `It broke at step ${stepMatch[1]} (${stepMatch[2]} request)` : 'A flow failure usually means a real contract or data-setup problem'}: ${error.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 2).join(' · ').slice(0, 300)}`;
+      return null;
+    }
 
     const error = failuresByTc[tc.id] || state.failureReason || 'Test failed';
     const parsed = resolveRequestFor(script.code, serviceObjects);
