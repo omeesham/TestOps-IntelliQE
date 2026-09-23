@@ -17,7 +17,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/feedback/ToastProvider';
 import {
   designApiScenarios, getApiJob, executePipeline, healPipeline, saveTestCases, exportTestCases, publishToGit, getConfigurations,
-  resolveApiEnvironment, type ApiSpecPayload, type ApiJob,
+  resolveApiEnvironment, notifyApiRun, type ApiSpecPayload, type ApiJob,
 } from '@/services/api';
 import { formatDuration } from '../format';
 import type {
@@ -169,6 +169,8 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
         apiSpecs: endpoints.map((e) => specFrom(e, inputs.strategy.coverage)),
         apiLayers: inputs.strategy.layers,
         apiProfile: inputs.profile?.insights?.length ? { insights: inputs.profile.insights } : null,
+        // Optional NL-authored brief; undefined keeps the prior behaviour.
+        requirements: inputs.strategy.requirements || undefined,
       });
       let res: any = null;
       let lastProgress = '';
@@ -264,6 +266,15 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
     setPhase('report');
     if (failed > 0 || notRun > 0) toast.warning('Run complete', `${passed}/${total} passed`);
     else toast.success('Run complete', `All ${total} scenarios passed`);
+    // Fire-and-forget: notify any configured webhooks. Off the run's critical
+    // path — a failure to notify is swallowed and never surfaces to the user.
+    void notifyApiRun({
+      title: runLabel || 'API run',
+      runId: testRunId || undefined,
+      reportUrl,
+      status: (failed > 0 || notRun > 0) ? 'failed' : 'passed',
+      stats: { total, passed, failed, notRun, passRate },
+    }).catch(() => { /* webhooks are best-effort */ });
   };
 
   /* ═══════════════════════════════════════════════════════════════

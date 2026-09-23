@@ -775,10 +775,92 @@ export async function initDb(): Promise<void> {
         created_by     NVARCHAR(100),
         created_at     DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
       )`);
+    // Response baselines: a captured snapshot of an endpoint's live response
+    // (status, content-type, JSON body) that later runs diff against to catch
+    // silent contract drift. One row per endpoint signature (method + url);
+    // opt-in, standalone — the generation/execute/heal pipeline never reads it.
+    await createTable('api_response_baselines', `
+      CREATE TABLE ${SCHEMA}.api_response_baselines (
+        id            UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id     UNIQUEIDENTIFIER NOT NULL,
+        sig           NVARCHAR(4100) NOT NULL,
+        method        NVARCHAR(10) NOT NULL,
+        url           NVARCHAR(4000) NOT NULL,
+        title         NVARCHAR(300),
+        status        INT,
+        content_type  NVARCHAR(200),
+        body          NVARCHAR(MAX),
+        captured_by   NVARCHAR(100),
+        captured_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at    DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+
+    // Schedules: a saved endpoint set that the in-process scheduler re-runs on
+    // an interval by calling the SAME headless run the UI and CLI use. Opt-in
+    // and per-tenant; the generation/execute/heal pipeline is unchanged — the
+    // scheduler only invokes it on a clock.
+    await createTable('api_schedules', `
+      CREATE TABLE ${SCHEMA}.api_schedules (
+        id               UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id        UNIQUEIDENTIFIER NOT NULL,
+        name             NVARCHAR(200) NOT NULL,
+        endpoints        NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        environment_id   NVARCHAR(80),
+        coverage         NVARCHAR(20),
+        interval_minutes INT NOT NULL DEFAULT 1440,
+        execute          BIT NOT NULL DEFAULT 1,
+        heal             BIT NOT NULL DEFAULT 1,
+        enabled          BIT NOT NULL DEFAULT 1,
+        created_by       NVARCHAR(100),
+        next_run_at      DATETIMEOFFSET,
+        last_run_at      DATETIMEOFFSET,
+        last_run_id      NVARCHAR(100),
+        last_status      NVARCHAR(20),
+        last_summary     NVARCHAR(MAX),
+        created_at       DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at       DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    // Webhooks: opt-in outbound notifications posted when a run finishes (Slack,
+    // Teams, or a generic JSON endpoint). Fire-and-forget; failure to notify
+    // never affects a run.
+    await createTable('api_webhooks', `
+      CREATE TABLE ${SCHEMA}.api_webhooks (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id    UNIQUEIDENTIFIER NOT NULL,
+        name         NVARCHAR(200) NOT NULL,
+        url          NVARCHAR(2000) NOT NULL,
+        kind         NVARCHAR(20) NOT NULL DEFAULT 'generic',
+        secret       NVARCHAR(500),
+        on_failure_only BIT NOT NULL DEFAULT 0,
+        enabled      BIT NOT NULL DEFAULT 1,
+        created_by   NVARCHAR(100),
+        last_status  NVARCHAR(20),
+        last_sent_at DATETIMEOFFSET,
+        created_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+
+    // Run reviews: a sign-off / comment thread on an API run — approve, reject,
+    // needs-work, or a plain comment — for team review. Uses the existing tenant
+    // + user context; it records decisions and changes no permissions.
+    await createTable('api_run_reviews', `
+      CREATE TABLE ${SCHEMA}.api_run_reviews (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        run_id      NVARCHAR(100) NOT NULL,
+        decision    NVARCHAR(20) NOT NULL,
+        note        NVARCHAR(MAX),
+        reviewer    NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
 
     // ─── 11. Indexes ───
     await createIndex('idx_api_environments_tenant', 'api_environments', '(tenant_id)');
     await createIndex('idx_api_import_sources_tenant', 'api_import_sources', '(tenant_id, created_at DESC)');
+    await createIndex('idx_api_response_baselines_tenant', 'api_response_baselines', '(tenant_id)');
+    await createIndex('idx_api_schedules_due', 'api_schedules', '(enabled, next_run_at)');
+    await createIndex('idx_api_webhooks_tenant', 'api_webhooks', '(tenant_id)');
+    await createIndex('idx_api_run_reviews_run', 'api_run_reviews', '(tenant_id, run_id, created_at DESC)');
     await createIndex('idx_users_tenant', 'users', '(tenant_id)');
     await createIndex('idx_client_configs_tenant', 'client_configurations', '(tenant_id)');
     await createIndex('idx_conversations_username', 'conversations', '(username)');

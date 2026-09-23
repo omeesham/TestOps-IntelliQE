@@ -468,6 +468,235 @@ export async function analyzeApi(endpoints: any[], deep = false): Promise<{ prof
   return data;
 }
 
+/* ── Contract / schema validation (opt-in, standalone) ── */
+export interface ContractViolation { kind: 'transport' | 'status' | 'content-type' | 'schema'; message: string; path?: string }
+export interface ContractResult {
+  id: string; title: string; method: string; url: string;
+  reachable: boolean; status?: number; elapsedMs?: number;
+  expectedStatus?: number; statusOk: boolean;
+  schemaChecked: boolean; schemaValid: boolean;
+  violations: ContractViolation[];
+}
+export interface ContractReport {
+  results: ContractResult[];
+  summary: { total: number; passed: number; failed: number; unreachable: number; checkedSchema: number };
+}
+/** Live-probe the given endpoints and validate each response against its contract. */
+export async function validateApiContract(endpoints: any[]): Promise<ContractReport> {
+  const { data } = await api.post('/api-automation/contract/validate', { endpoints }, { timeout: 120_000 });
+  return data;
+}
+
+/* ── Async / streaming probe (WebSocket + SSE, opt-in) ── */
+export interface AsyncFrame { at: number; preview: string }
+export interface AsyncProbeResult {
+  protocol: 'websocket' | 'sse'; url: string; connected: boolean; received: number;
+  frames: AsyncFrame[]; firstByteMs?: number; durationMs: number;
+  matched?: boolean; expectContains?: string; error?: string;
+}
+export async function runAsyncProbe(input: { url: string; message?: string; headers?: { key: string; value: string }[]; waitMs?: number; expectContains?: string }): Promise<AsyncProbeResult> {
+  const { data } = await api.post('/api-automation/async/probe', input, { timeout: 30_000 });
+  return data;
+}
+
+/* ── Contract-drift maintenance (opt-in, standalone) ── */
+export interface DriftShapeChange { kind: 'added' | 'removed' | 'type-changed'; path: string; detail?: string }
+export interface DriftResult {
+  id: string; title: string; method: string; url: string; reachable: boolean;
+  hasStoredStatus: boolean; hasStoredShape: boolean; liveStatus?: number; storedStatus?: number;
+  statusDrift: boolean; shapeDrift: boolean; changes: DriftShapeChange[];
+  suggestedStatus?: number; suggestedResponse?: string; note?: string;
+}
+export interface DriftReport {
+  results: DriftResult[];
+  summary: { total: number; drifted: number; clean: number; unreachable: number; noExpectation: number };
+}
+export async function scanApiDrift(endpoints: any[]): Promise<DriftReport> {
+  const { data } = await api.post('/api-automation/drift/scan', { endpoints }, { timeout: 120_000 });
+  return data;
+}
+
+/* ── Load test (opt-in, standalone) ── */
+export interface LoadTestResult {
+  url: string; method: string; totalRequests: number; concurrency: number; durationMs: number;
+  completed: number; failed: number; non2xx: number; throughputRps: number;
+  latency: { min: number; p50: number; p90: number; p95: number; p99: number; max: number; avg: number };
+  statusCounts: Record<string, number>;
+  errors: { message: string; count: number }[];
+}
+export async function runApiLoadTest(input: { endpoint: any; totalRequests?: number; concurrency?: number; allowWrites?: boolean }): Promise<LoadTestResult> {
+  const { data } = await api.post('/api-automation/loadtest', input, { timeout: 180_000 });
+  return data;
+}
+
+/* ── Security scan (opt-in, standalone) ── */
+export interface SecurityFinding {
+  endpointId: string; title: string; method: string; url: string; check: string;
+  severity: 'high' | 'medium' | 'low' | 'info'; status: 'vulnerable' | 'ok' | 'info' | 'skipped'; detail: string;
+}
+export interface SecurityReport {
+  findings: SecurityFinding[];
+  summary: { endpoints: number; vulnerable: number; high: number; medium: number; low: number; info: number };
+}
+export async function runApiSecurityScan(endpoints: any[]): Promise<SecurityReport> {
+  const { data } = await api.post('/api-automation/security/scan', { endpoints }, { timeout: 180_000 });
+  return data;
+}
+
+/* ── AI root-cause diagnosis (opt-in, standalone) ── */
+export interface Diagnosis {
+  category: string; rootCause: string; suggestedFix: string;
+  confidence: 'high' | 'medium' | 'low'; reproCurl: string;
+}
+export async function diagnoseApiFailure(failure: {
+  title?: string; method: string; url: string; error: string;
+  expectedStatus?: number; requestBody?: string; responseStatus?: number; responseBody?: string;
+}): Promise<Diagnosis> {
+  const { data } = await api.post('/api-automation/diagnose', { failure }, { timeout: 60_000 });
+  return data;
+}
+
+/* ── Run sign-off / review thread (collaboration) ── */
+export type ReviewDecision = 'approved' | 'rejected' | 'needs_work' | 'comment';
+export interface RunReview {
+  id: string; runId: string; decision: ReviewDecision; note?: string; reviewer?: string; createdAt: string;
+}
+export interface RunReviewThread { reviews: RunReview[]; status: ReviewDecision | null }
+export async function listApiRunReviews(runId: string): Promise<RunReviewThread> {
+  const { data } = await api.get(`/api-automation/runs/${runId}/reviews`);
+  return data;
+}
+export async function addApiRunReview(runId: string, decision: ReviewDecision, note?: string): Promise<{ review: RunReview }> {
+  const { data } = await api.post(`/api-automation/runs/${runId}/reviews`, { decision, note });
+  return data;
+}
+
+/* ── NL authoring (opt-in, standalone) ── */
+export interface NlBrief {
+  requirements: string;
+  coverage: 'essential' | 'standard' | 'exhaustive';
+  layers: string[];
+  focus: string[];
+  outline: string[];
+}
+export async function authorApiBrief(description: string, endpoints: any[]): Promise<NlBrief> {
+  const { data } = await api.post('/api-automation/nl-author', { description, endpoints }, { timeout: 60_000 });
+  return data.brief;
+}
+
+/* ── Response-diff regression baselines (opt-in, standalone) ── */
+export interface BaselineRecord {
+  id: string; sig: string; method: string; url: string; title: string;
+  status?: number; contentType?: string; capturedBy?: string; capturedAt: string; updatedAt: string;
+}
+export type DriftKind = 'status' | 'added' | 'removed' | 'type-changed' | 'value-changed' | 'transport' | 'content';
+export interface DriftEntry { kind: DriftKind; path: string; before?: string; after?: string }
+export interface BaselineCompareResult {
+  id: string; title: string; method: string; url: string;
+  hasBaseline: boolean; reachable: boolean; status?: number; baselineStatus?: number;
+  drift: DriftEntry[]; capturedAt?: string;
+}
+export interface BaselineCompareReport {
+  results: BaselineCompareResult[];
+  summary: { total: number; compared: number; unchanged: number; drifted: number; unreachable: number; noBaseline: number };
+}
+export interface BaselineCaptureReport { captured: number; skipped: number; total: number; baselines: BaselineRecord[] }
+
+export async function listApiBaselines(): Promise<{ baselines: BaselineRecord[] }> {
+  const { data } = await api.get('/api-automation/baselines');
+  return data;
+}
+export async function captureApiBaselines(endpoints: any[]): Promise<BaselineCaptureReport> {
+  const { data } = await api.post('/api-automation/baselines/capture', { endpoints }, { timeout: 180_000 });
+  return data;
+}
+export async function compareApiBaselines(endpoints: any[]): Promise<BaselineCompareReport> {
+  const { data } = await api.post('/api-automation/baselines/compare', { endpoints }, { timeout: 180_000 });
+  return data;
+}
+export async function deleteApiBaseline(id: string): Promise<{ ok: boolean }> {
+  const { data } = await api.delete(`/api-automation/baselines/${id}`);
+  return data;
+}
+
+/* ── Data-driven testing (opt-in, standalone) ── */
+export interface DataDrivenRowResult {
+  index: number; values: Record<string, string>; url: string; reachable: boolean;
+  status?: number; expectedStatus?: number; elapsedMs?: number; pass: boolean; error?: string;
+}
+export interface DataDrivenReport {
+  method: string; title: string; results: DataDrivenRowResult[];
+  summary: { total: number; passed: number; failed: number; unreachable: number; avgMs: number };
+}
+export async function runApiDataDriven(endpoint: any, rows: Record<string, any>[]): Promise<DataDrivenReport> {
+  const { data } = await api.post('/api-automation/datadriven', { endpoint, rows }, { timeout: 180_000 });
+  return data;
+}
+
+/* ── Schedules (opt-in recurring runs) ── */
+export interface ApiSchedule {
+  id: string; name: string; endpointCount: number; environmentId?: string; coverage?: string;
+  intervalMinutes: number; execute: boolean; heal: boolean; enabled: boolean; createdBy?: string;
+  nextRunAt?: string; lastRunAt?: string; lastRunId?: string; lastStatus?: string; lastSummary?: string;
+  createdAt: string; updatedAt: string;
+}
+export async function listApiSchedules(): Promise<{ schedules: ApiSchedule[] }> {
+  const { data } = await api.get('/api-automation/schedules');
+  return data;
+}
+export async function createApiSchedule(input: { name: string; endpoints: any[]; environmentId?: string; coverage?: string; intervalMinutes?: number; execute?: boolean; heal?: boolean; enabled?: boolean }): Promise<{ schedule: ApiSchedule }> {
+  const { data } = await api.post('/api-automation/schedules', input);
+  return data;
+}
+export async function updateApiSchedule(id: string, input: Partial<{ name: string; endpoints: any[]; environmentId: string; coverage: string; intervalMinutes: number; execute: boolean; heal: boolean; enabled: boolean }>): Promise<{ schedule: ApiSchedule }> {
+  const { data } = await api.put(`/api-automation/schedules/${id}`, input);
+  return data;
+}
+export async function deleteApiSchedule(id: string): Promise<{ ok: boolean }> {
+  const { data } = await api.delete(`/api-automation/schedules/${id}`);
+  return data;
+}
+export async function runApiScheduleNow(id: string): Promise<{ ok: boolean; message: string }> {
+  const { data } = await api.post(`/api-automation/schedules/${id}/run`, {});
+  return data;
+}
+
+/* ── Webhooks (opt-in run notifications) ── */
+export interface ApiWebhook {
+  id: string; name: string; url: string; kind: 'slack' | 'teams' | 'generic'; hasSecret: boolean;
+  onFailureOnly: boolean; enabled: boolean; createdBy?: string; lastStatus?: string; lastSentAt?: string;
+  createdAt: string; updatedAt: string;
+}
+export async function listApiWebhooks(): Promise<{ webhooks: ApiWebhook[] }> {
+  const { data } = await api.get('/api-automation/webhooks');
+  return data;
+}
+export async function createApiWebhook(input: { name: string; url: string; kind?: string; secret?: string; onFailureOnly?: boolean; enabled?: boolean }): Promise<{ webhook: ApiWebhook }> {
+  const { data } = await api.post('/api-automation/webhooks', input);
+  return data;
+}
+export async function updateApiWebhook(id: string, input: Partial<{ name: string; url: string; kind: string; secret: string; onFailureOnly: boolean; enabled: boolean }>): Promise<{ webhook: ApiWebhook }> {
+  const { data } = await api.put(`/api-automation/webhooks/${id}`, input);
+  return data;
+}
+export async function deleteApiWebhook(id: string): Promise<{ ok: boolean }> {
+  const { data } = await api.delete(`/api-automation/webhooks/${id}`);
+  return data;
+}
+export async function testApiWebhook(id: string): Promise<{ ok: boolean }> {
+  const { data } = await api.post(`/api-automation/webhooks/${id}/test`, {}, { timeout: 20_000 });
+  return data;
+}
+/** Fire-and-forget: notify configured webhooks about a run the UI just finished. */
+export async function notifyApiRun(notification: {
+  title: string; runId?: string; reportUrl?: string; status: 'passed' | 'failed';
+  stats?: { total: number; passed: number; failed: number; notRun: number; passRate: number };
+  failures?: { title: string; error?: string }[];
+}): Promise<{ sent: number; failed: number }> {
+  const { data } = await api.post('/api-automation/notify', { notification }, { timeout: 15_000 });
+  return data;
+}
+
 export async function listApiEnvironments(): Promise<{ environments: any[] }> {
   const { data } = await api.get('/api-automation/environments');
   return data;

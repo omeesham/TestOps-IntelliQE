@@ -103,6 +103,8 @@ export interface ApiProfile {
 export interface Strategy {
   coverage: 'essential' | 'standard' | 'exhaustive';
   layers: StrategyLayerId[];
+  /** Optional natural-language brief (from NL authoring) that steers generation. */
+  requirements?: string;
 }
 
 /* ═══════════════════════════════════════════════════════════════

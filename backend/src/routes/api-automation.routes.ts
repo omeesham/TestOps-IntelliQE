@@ -41,6 +41,18 @@ import {
   type ImportResult, type ImportedEndpoint, type ImportMethod,
 } from '../services/api-import.service.js';
 import { analyzeApiSurface, enrichProfileWithLlm } from '../services/api-intelligence.service.js';
+import { validateContract } from '../services/api-contract.service.js';
+import { runLoadTest } from '../services/api-loadtest.service.js';
+import { runSecurityScan } from '../services/api-security.service.js';
+import { diagnoseFailure } from '../services/api-diagnose.service.js';
+import { captureBaselines, listBaselines, compareBaselines, deleteBaseline } from '../services/api-baseline.service.js';
+import { runDataDriven } from '../services/api-datadriven.service.js';
+import { listSchedules, createSchedule, updateSchedule, deleteSchedule, runScheduleNow } from '../services/api-scheduler.service.js';
+import { listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, dispatchWebhooks } from '../services/api-webhooks.service.js';
+import { authorBrief } from '../services/api-nl-author.service.js';
+import { scanDrift } from '../services/api-drift.service.js';
+import { runAsyncProbe } from '../services/api-async.service.js';
+import { listReviews, addReview } from '../services/api-reviews.service.js';
 import {
   listEnvironments, getEnvironment, createEnvironment, updateEnvironment, deleteEnvironment, applyEnvironment,
 } from '../services/api-environments.service.js';
@@ -311,6 +323,234 @@ router.post('/analyze', async (req: Request, res: Response) => {
       }
     }
     res.json({ profile });
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Contract / schema validation (opt-in; standalone — touches no pipeline) ──
+   Live-probes the given endpoints and checks each response against its
+   contract (status, JSON body, inferred-or-explicit JSON Schema). */
+router.post('/contract/validate', async (req: Request, res: Response) => {
+  try {
+    const report = await validateContract(req.body?.endpoints);
+    if (report.summary.total === 0) { res.status(400).json({ error: 'Send at least one endpoint with an http(s) URL to validate.' }); return; }
+    res.json(report);
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Load test (opt-in; in-house concurrency runner — touches no pipeline) ── */
+router.post('/loadtest', async (req: Request, res: Response) => {
+  try {
+    const ep = req.body?.endpoint;
+    if (!ep || typeof ep !== 'object' || !/^https?:\/\//i.test(String(ep.url || ''))) {
+      res.status(400).json({ error: 'Send an endpoint with an http(s) URL to load-test.' }); return;
+    }
+    const result = await runLoadTest({
+      endpoint: ep,
+      totalRequests: Number(req.body?.totalRequests) || undefined,
+      concurrency: Number(req.body?.concurrency) || undefined,
+      allowWrites: !!req.body?.allowWrites,
+    });
+    res.json(result);
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Async / streaming probe (opt-in; WebSocket + SSE — separate from HTTP pipeline) ── */
+router.post('/async/probe', async (req: Request, res: Response) => {
+  try {
+    res.json(await runAsyncProbe(req.body));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Contract-drift maintenance (opt-in; suggests catalogue updates only) ── */
+router.post('/drift/scan', async (req: Request, res: Response) => {
+  try {
+    const report = await scanDrift(req.body?.endpoints);
+    if (report.summary.total === 0) { res.status(400).json({ error: 'Send at least one endpoint with an http(s) URL to scan.' }); return; }
+    res.json(report);
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Security scan (opt-in; non-destructive OWASP-lite — touches no pipeline) ── */
+router.post('/security/scan', async (req: Request, res: Response) => {
+  try {
+    const report = await runSecurityScan(req.body?.endpoints);
+    if (report.summary.endpoints === 0) { res.status(400).json({ error: 'Send at least one endpoint with an http(s) URL to scan.' }); return; }
+    res.json(report);
+  } catch (err) { fail(res, err); }
+});
+
+/* ── NL authoring: plain English → a brief for the SAME generator (opt-in) ── */
+router.post('/nl-author', async (req: Request, res: Response) => {
+  try {
+    const description = String(req.body?.description || '');
+    if (!description.trim()) { res.status(400).json({ error: 'Describe what you want to test.' }); return; }
+    const llm = await getTenantLlm(req.user!.tenantId);
+    if (!llm) { res.status(400).json({ error: 'NL authoring needs an LLM — add an Anthropic API key under System Configuration → LLM Configuration.' }); return; }
+    const endpoints = endpointsFromBody(req.body?.endpoints).map((e) => ({ method: e.method, url: e.url, title: e.title }));
+    const brief = await authorBrief(description, endpoints, llm);
+    res.json({ brief });
+  } catch (err) { fail(res, err); }
+});
+
+/* ── AI root-cause triage for one failure (opt-in; heals nothing) ── */
+router.post('/diagnose', async (req: Request, res: Response) => {
+  try {
+    const f = req.body?.failure;
+    if (!f || typeof f !== 'object' || !f.url) { res.status(400).json({ error: 'Send the failed request to diagnose.' }); return; }
+    const llm = await getTenantLlm(req.user!.tenantId);
+    if (!llm) { res.status(400).json({ error: 'AI diagnosis needs an LLM — add an Anthropic API key under System Configuration → LLM Configuration.' }); return; }
+    const diagnosis = await diagnoseFailure({
+      title: f.title ? String(f.title) : undefined,
+      method: String(f.method || 'GET'),
+      url: String(f.url),
+      error: String(f.error || ''),
+      expectedStatus: typeof f.expectedStatus === 'number' ? f.expectedStatus : undefined,
+      requestBody: f.requestBody ? String(f.requestBody) : undefined,
+      responseStatus: typeof f.responseStatus === 'number' ? f.responseStatus : undefined,
+      responseBody: f.responseBody ? String(f.responseBody) : undefined,
+    }, llm);
+    res.json(diagnosis);
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Response-diff regression baselines (opt-in; record/replay, no pipeline) ── */
+router.get('/baselines', async (req: Request, res: Response) => {
+  try { res.json({ baselines: await listBaselines(req.user!.tenantId) }); }
+  catch (err) { fail(res, err, 500); }
+});
+
+router.post('/baselines/capture', async (req: Request, res: Response) => {
+  try {
+    const report = await captureBaselines(req.user!.tenantId, req.user!.username, req.body?.endpoints);
+    if (report.total === 0) { res.status(400).json({ error: 'Send at least one endpoint with an http(s) URL to snapshot.' }); return; }
+    res.json(report);
+  } catch (err) { fail(res, err); }
+});
+
+router.post('/baselines/compare', async (req: Request, res: Response) => {
+  try {
+    const report = await compareBaselines(req.user!.tenantId, req.body?.endpoints);
+    if (report.summary.total === 0) { res.status(400).json({ error: 'Send at least one endpoint with an http(s) URL to compare.' }); return; }
+    res.json(report);
+  } catch (err) { fail(res, err); }
+});
+
+router.delete('/baselines/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteBaseline(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Baseline not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Data-driven testing (opt-in; one endpoint × many rows — no pipeline) ── */
+router.post('/datadriven', async (req: Request, res: Response) => {
+  try {
+    res.json(await runDataDriven(req.body?.endpoint, req.body?.rows));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Schedules (opt-in; recurring runs invoke the SAME headless pipeline) ── */
+router.get('/schedules', async (req: Request, res: Response) => {
+  try { res.json({ schedules: await listSchedules(req.user!.tenantId) }); }
+  catch (err) { fail(res, err, 500); }
+});
+
+router.post('/schedules', async (req: Request, res: Response) => {
+  try { res.status(201).json({ schedule: await createSchedule(req.user!.tenantId, req.user!.username, req.body || {}) }); }
+  catch (err) { fail(res, err); }
+});
+
+router.put('/schedules/:id', async (req: Request, res: Response) => {
+  try {
+    const schedule = await updateSchedule(req.user!.tenantId, String(req.params.id), req.body || {});
+    if (!schedule) { res.status(404).json({ error: 'Schedule not found.' }); return; }
+    res.json({ schedule });
+  } catch (err) { fail(res, err); }
+});
+
+router.delete('/schedules/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteSchedule(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Schedule not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+
+router.post('/schedules/:id/run', async (req: Request, res: Response) => {
+  try {
+    const ok = await runScheduleNow(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Schedule not found.' }); return; }
+    res.status(202).json({ ok: true, message: 'Run started — it will finish in the background.' });
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Webhooks (opt-in; fire-and-forget run notifications) ── */
+router.get('/webhooks', async (req: Request, res: Response) => {
+  try { res.json({ webhooks: await listWebhooks(req.user!.tenantId) }); }
+  catch (err) { fail(res, err, 500); }
+});
+
+router.post('/webhooks', async (req: Request, res: Response) => {
+  try { res.status(201).json({ webhook: await createWebhook(req.user!.tenantId, req.user!.username, req.body || {}) }); }
+  catch (err) { fail(res, err); }
+});
+
+router.put('/webhooks/:id', async (req: Request, res: Response) => {
+  try {
+    const webhook = await updateWebhook(req.user!.tenantId, String(req.params.id), req.body || {});
+    if (!webhook) { res.status(404).json({ error: 'Webhook not found.' }); return; }
+    res.json({ webhook });
+  } catch (err) { fail(res, err); }
+});
+
+router.delete('/webhooks/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteWebhook(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Webhook not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+
+router.post('/webhooks/:id/test', async (req: Request, res: Response) => {
+  try { res.json(await testWebhook(req.user!.tenantId, String(req.params.id))); }
+  catch (err) { fail(res, err); }
+});
+
+/**
+ * Notify the tenant's webhooks about a run the UI just completed. Optional and
+ * caller-driven — the run pipeline never calls this itself, so it stays off the
+ * critical path. Scheduled runs notify from the scheduler directly.
+ */
+router.post('/notify', async (req: Request, res: Response) => {
+  try {
+    const b = req.body?.notification || {};
+    const status = b.status === 'failed' ? 'failed' : 'passed';
+    const result = await dispatchWebhooks(req.user!.tenantId, {
+      event: 'run.completed',
+      title: String(b.title || 'API run').slice(0, 300),
+      runId: b.runId ? String(b.runId) : null,
+      reportUrl: b.reportUrl ? String(b.reportUrl) : undefined,
+      status,
+      stats: b.stats && typeof b.stats === 'object' ? b.stats : null,
+      failures: Array.isArray(b.failures) ? b.failures.slice(0, 20).map((f: any) => ({ title: String(f?.title || ''), error: f?.error ? String(f.error) : undefined })) : [],
+      source: 'manual',
+      at: new Date().toISOString(),
+    });
+    res.json(result);
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Run sign-off / review thread (collaboration; no permission changes) ── */
+router.get('/runs/:id/reviews', async (req: Request, res: Response) => {
+  try { res.json(await listReviews(req.user!.tenantId, String(req.params.id))); }
+  catch (err) { fail(res, err, 500); }
+});
+
+router.post('/runs/:id/reviews', async (req: Request, res: Response) => {
+  try {
+    const review = await addReview(req.user!.tenantId, req.user!.username, String(req.params.id), req.body?.decision, req.body?.note);
+    res.status(201).json({ review });
   } catch (err) { fail(res, err); }
 });
 

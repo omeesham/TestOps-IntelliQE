@@ -55,6 +55,7 @@ import featureTogglesRoutes from './routes/feature-toggles.routes.js';
 import agentPerformanceRoutes from './routes/agent-performance.routes.js';
 import { initDb } from './db.js';
 import pool from './db.js';
+import { startApiScheduler } from './services/api-scheduler.service.js';
 import { decryptField } from './utils/crypto.js';
 import { signToken } from './utils/jwt.js';
 import { authMiddleware } from './middleware/auth.middleware.js';
@@ -328,6 +329,9 @@ setEventCallback((runId, event) => broadcastSSE(runId, event));
 
 initDb()
   .then(() => {
+    // Opt-in recurring API runs: the poller only invokes the existing headless
+    // pipeline on a clock — it needs the DB, so it starts only after init.
+    startApiScheduler();
     app.listen(PORT, () => {
       logger.info(`JBS IntelliQE API listening`, { port: PORT, env: NODE_ENV });
     });

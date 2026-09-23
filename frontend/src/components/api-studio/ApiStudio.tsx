@@ -195,7 +195,7 @@ export default function ApiStudio({ onExit }: ApiStudioProps) {
           {view === 'overview' && <OverviewView catalog={catalog} onNavigate={navigate} onOpenRun={openRun} refreshKey={overviewKey} />}
           {view === 'import' && <ImportView catalog={catalog} onOpenCatalogue={() => navigate('endpoints')} log={run.log} />}
           {view === 'integrations' && <IntegrationsView />}
-          {view === 'endpoints' && <EndpointsView catalog={catalog} running={run.running} onDesign={design} onImport={() => navigate('import')} />}
+          {view === 'endpoints' && <EndpointsView catalog={catalog} running={run.running} onDesign={design} onImport={() => navigate('import')} scenarios={run.scenarios} />}
           {view === 'scenarios' && (
             run.scenarios.length === 0 && run.phase !== 'generating' ? (
               <div className="h-full flex flex-col">
@@ -214,7 +214,7 @@ export default function ApiStudio({ onExit }: ApiStudioProps) {
           )}
           {view === 'runs' && <RunsView run={run} openRunId={openRunId} onOpenRun={setOpenRunId} onShowReport={() => navigate('report')} />}
           {view === 'report' && (
-            <ReportTab report={run.report} rows={run.rows} scenarios={run.scenarios} endpointLabel={run.runLabel} onExport={run.handleExport} exporting={run.exporting} canExport={!!run.testRunId} onPushToRepo={run.handlePushToRepo} pushState={run.pushState} canPush={run.specs.length > 0 && run.selected.size > 0} />
+            <ReportTab report={run.report} rows={run.rows} scenarios={run.scenarios} endpointLabel={run.runLabel} onExport={run.handleExport} exporting={run.exporting} canExport={!!run.testRunId} onPushToRepo={run.handlePushToRepo} pushState={run.pushState} canPush={run.specs.length > 0 && run.selected.size > 0} runId={run.testRunId || undefined} />
           )}
           {view === 'environments' && <EnvironmentsView />}
           {view === 'developer' && <DeveloperView />}

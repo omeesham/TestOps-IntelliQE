@@ -1,0 +1,65 @@
+# IntelliQE API Automation — reusable GitHub composite action.
+#
+# Wraps the intelliqe-api CLI so a workflow can run a full API suite
+# (import → design → execute → heal → report) and fail the build on
+# regressions. Copy this folder into a consumer repo, or reference the
+# published package (see ./README.md).
+#
+# Usage (from this repo):
+#   - uses: ./cli/ci
+#     with:
+#       url:   ${{ secrets.INTELLIQE_URL }}
+#       token: ${{ secrets.INTELLIQE_TOKEN }}
+#       source: https://api.acme.com/openapi.json
+name: IntelliQE API Automation
+description: Run an IntelliQE API Automation suite and fail the build on regressions.
+inputs:
+  url:
+    description: IntelliQE base URL (or set INTELLIQE_URL in the environment).
+    required: false
+  token:
+    description: IntelliQE API token — pass a repository/organization secret.
+    required: true
+  source:
+    description: A spec or docs URL to import and run (OpenAPI / Postman / docs page).
+    required: false
+  endpoints:
+    description: Path to an endpoints.json file (an alternative to `source`).
+    required: false
+  env:
+    description: Named IntelliQE environment to run against (base URL + variables).
+    required: false
+  coverage:
+    description: Generation depth — essential | standard | exhaustive.
+    required: false
+    default: standard
+  layers:
+    description: Comma-separated strategy layers (e.g. smoke,contract,negative,auth,flow).
+    required: false
+  title:
+    description: A title for the run, shown on the Reports page.
+    required: false
+    default: CI run
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    - name: Run IntelliQE API Automation
+      shell: bash
+      env:
+        INTELLIQE_URL: ${{ inputs.url }}
+        INTELLIQE_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+        CLI="${{ github.action_path }}/../intelliqe-api.mjs"
+        args=(run)
+        [ -n "${{ inputs.endpoints }}" ] && args+=("${{ inputs.endpoints }}")
+        [ -n "${{ inputs.source }}" ]    && args+=(--url "${{ inputs.source }}")
+        [ -n "${{ inputs.env }}" ]       && args+=(--env "${{ inputs.env }}")
+        [ -n "${{ inputs.layers }}" ]    && args+=(--layers "${{ inputs.layers }}")
+        args+=(--coverage "${{ inputs.coverage }}" --title "${{ inputs.title }}" --wait)
+        echo "intelliqe-api ${args[*]}"
+        # Exit code 3 = the run completed but had failing scenarios → fail the build.
+        node "$CLI" "${args[@]}"

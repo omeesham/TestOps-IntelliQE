@@ -6,12 +6,15 @@
  * the execution details — a scenario the runner never reached is reported as
  * "not run", never folded into either passed or failed.
  */
+import { useState } from 'react';
 import {
   BarChart3, ExternalLink, Download, Loader2, CheckCircle2, XCircle, MinusCircle, Wrench,
-  GitBranch, AlertTriangle,
+  GitBranch, AlertTriangle, Sparkles,
 } from 'lucide-react';
 import { EmptyState, MethodBadge } from './primitives';
 import { formatDuration, RAISED, RAISED_HOVER, SECONDARY_3D, CARD, STRIP, TILE_ACTIVE } from './format';
+import Diagnose, { type FailurePayload } from './Diagnose';
+import RunSignoff from './RunSignoff';
 import type { RunReport, RunRow, Scenario, PushState } from './types';
 
 interface Props {
@@ -27,6 +30,8 @@ interface Props {
   pushState: PushState;
   /** False when the run produced no specs to push. */
   canPush: boolean;
+  /** The saved run's id, when it was persisted — enables the sign-off thread. */
+  runId?: string;
 }
 
 function Stat({
@@ -54,8 +59,9 @@ function Stat({
 
 export default function ReportTab({
   report, rows, scenarios, endpointLabel, onExport, exporting, canExport,
-  onPushToRepo, pushState, canPush,
+  onPushToRepo, pushState, canPush, runId,
 }: Props) {
+  const [diagnoseFor, setDiagnoseFor] = useState<FailurePayload | null>(null);
   if (!report) {
     return (
       <EmptyState
@@ -204,6 +210,23 @@ export default function ReportTab({
                     <div className="flex items-center gap-2">
                       <MethodBadge method={sc?.api?.method || ''} />
                       <span className="text-[12px] text-gray-800 flex-1 min-w-0 truncate">{sc?.title || r.name}</span>
+                      {r.status === 'failed' && (
+                        <button
+                          type="button"
+                          onClick={() => setDiagnoseFor({
+                            title: sc?.title || r.name,
+                            method: sc?.api?.method || 'GET',
+                            url: sc?.api?.endpoint || '',
+                            error: r.error || '',
+                            expectedStatus: sc?.api?.expectedStatus ? Number(sc.api.expectedStatus) || undefined : undefined,
+                            requestBody: sc?.api?.requestBody,
+                          })}
+                          title="AI root-cause analysis"
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[#DDD6FE] text-[10px] font-semibold text-[#6D28D9] bg-[#F5F3FF] hover:bg-[#EDE9FE] transition-colors flex-shrink-0"
+                        >
+                          <Sparkles className="w-2.5 h-2.5" />Explain
+                        </button>
+                      )}
                       <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${r.status === 'failed' ? 'text-red-700 bg-red-50' : 'text-gray-600 bg-gray-100'}`}>
                         {r.status === 'failed' ? 'failed' : 'not run'}
                       </span>
@@ -248,7 +271,11 @@ export default function ReportTab({
             </div>
           </section>
         )}
+
+        {runId && <RunSignoff runId={runId} />}
       </div>
+
+      {diagnoseFor && <Diagnose failure={diagnoseFor} onClose={() => setDiagnoseFor(null)} />}
     </div>
   );
 }
