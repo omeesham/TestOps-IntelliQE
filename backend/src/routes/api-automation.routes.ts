@@ -363,7 +363,9 @@ router.post('/environments/:id/resolve', async (req: Request, res: Response) => 
    ═══════════════════════════════════════════════════════════════ */
 
 router.get('/overview', async (req: Request, res: Response) => {
-  try { res.json(await getApiOverview(req.user!.tenantId)); }
+  // The roll-up is cached for 20s; `?fresh=1` (the Refresh button, and the
+  // reload after a run finishes) always recomputes it.
+  try { res.json(await getApiOverview(req.user!.tenantId, { fresh: req.query.fresh === '1' })); }
   catch (err) { fail(res, err, 500); }
 });
 

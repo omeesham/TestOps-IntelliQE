@@ -47,7 +47,7 @@ export interface RunInputs {
   endpoints: CatalogEndpoint[];
   strategy: Strategy;
   profile: ApiProfile | null;
-  environment: ApiEnvironment | null;
+  environment?: ApiEnvironment | null;
 }
 
 function specFrom(ep: CatalogEndpoint, coverage: Strategy['coverage']): ApiSpecPayload {
@@ -155,7 +155,7 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
     }
     setRunEndpoints(endpoints);
     const placeholder = endpoints.filter((e) => /^https?:\/\/api\.example\.com/i.test(e.url));
-    if (placeholder.length) log('run', `${placeholder.length} endpoint${placeholder.length === 1 ? '' : 's'} still point at the placeholder host api.example.com — scenarios can be designed, but execution will not reach a real API. Set a base URL in Environments.`, 'warn');
+    if (placeholder.length) log('run', `${placeholder.length} endpoint${placeholder.length === 1 ? '' : 's'} still point at the placeholder host api.example.com — scenarios can be designed, but execution will not reach a real API. Edit the endpoint URL in the catalogue.`, 'warn');
 
     setStage('scenarios', 'running', `Designing coverage across ${endpoints.length} endpoint${endpoints.length === 1 ? '' : 's'}…`);
     log('scenarios', `Strategy: ${inputs.strategy.coverage} depth · layers ${inputs.strategy.layers.join(', ')}`);

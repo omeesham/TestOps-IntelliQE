@@ -7,6 +7,8 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import type { TestOpsState, TestCase, PageObjectFile } from './state.js';
 import { collectClientDeliverableBundle } from '../services/client-deliverable.service.js';
+import { isApiRun } from './apiHealingAgent.js';
+import { runTuning } from '../utils/playwright-tuning.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -212,6 +214,13 @@ async function runPlaywrightInMemory(
   }
 
   const configPath = path.join(workspace, 'playwright.config.cjs');
+  // API suites are I/O-bound and browser suites are CPU-bound, so they get
+  // different worker counts, timeouts and artefacts. See utils/playwright-tuning.
+  const apiMode = isApiRun(scripts);
+  const tuning = runTuning(apiMode, scripts.length);
+  if (apiMode) {
+    console.log(`[executionAgent] API run — ${scripts.length} specs across ${tuning.workers} workers, ${tuning.testTimeoutMs / 1000}s per test`);
+  }
   const baseUrlLine = targetUrl ? `    baseURL: ${JSON.stringify(targetUrl)},\n` : '';
   // Persist a full Playwright HTML report when a destination is given, so it can
   // be served (and linked from notifications). `open:'never'` keeps CI headless.
@@ -239,14 +248,15 @@ module.exports = defineConfig({
   // that actually passed. Keep artifacts inside this run's own workspace.
   outputDir: ${JSON.stringify(path.join(workspace, 'test-results'))},
   fullyParallel: true,
-  retries: 0,
-  timeout: 90_000,
+${tuning.workersLine}  retries: 0,
+  timeout: ${tuning.testTimeoutMs},
   // Real apps (especially SPAs) render asynchronously and can be
   // slow over the network from a container. The default 5s expect timeout is too
   // short and surfaces as "element not found" on the very first assertion. Give
   // visibility/action/navigation generous ceilings so genuinely-correct selectors
-  // aren't failed purely for being slow to appear.
-  expect: { timeout: 20_000 },
+  // aren't failed purely for being slow to appear. An API run needs none of that
+  // slack — a request either answers or it doesn't.
+  expect: { timeout: ${tuning.expectTimeoutMs} },
   reporter: [
     ['line'],
     ['json', { outputFile: './pw-summary.json' }],
@@ -254,11 +264,8 @@ ${htmlReporterLine}${allureReporterLine}  ],
   use: {
 ${baseUrlLine}    actionTimeout: 20_000,
     navigationTimeout: 45_000,
-    trace: 'retain-on-failure',
-    screenshot: 'only-on-failure',
-  },
-  projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
-});
+${tuning.traceLine}${tuning.screenshotLine}  },
+${tuning.projectsLine}});
 `;
   await fs.writeFile(configPath, configSrc, 'utf-8');
 
@@ -281,7 +288,9 @@ ${baseUrlLine}    actionTimeout: 20_000,
       const result = await execFileAsync(
         isWindows ? 'npx.cmd' : 'npx',
         ['playwright', 'test', '--config', configPath],
-        { cwd: BACKEND_ROOT, env, timeout: 600_000, maxBuffer: 50 * 1024 * 1024, shell: isWindows },
+        // The ceiling scales with the suite: a flat 10 minutes silently killed
+        // large runs mid-flight and reported them as "could not be executed".
+        { cwd: BACKEND_ROOT, env, timeout: tuning.processTimeoutMs, maxBuffer: 50 * 1024 * 1024, shell: isWindows },
       );
       stdout = result.stdout;
       stderr = result.stderr;

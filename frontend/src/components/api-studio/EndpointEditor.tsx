@@ -125,7 +125,7 @@ export default function EndpointEditor({ initial, title, onSave, onClose }: Prop
                 <div>
                   <label className={LABEL}>{authType === 'bearer' ? 'Token' : authType === 'basic' ? 'user:password' : 'Key'}</label>
                   <input value={authValue} onChange={(e) => setAuthValue(e.target.value)} type="password" autoComplete="off" placeholder={authType === 'basic' ? 'alice:s3cret' : '{{token}} or the literal value'} className={`${INPUT} font-mono`} />
-                  <p className="text-[10.5px] text-gray-400 mt-1">Use <code className="font-mono">{'{{token}}'}</code>-style placeholders and keep the real value in an environment.</p>
+                  <p className="text-[10.5px] text-gray-400 mt-1">Stored encrypted and sent only from the server at run time.</p>
                 </div>
               </div>
             )}

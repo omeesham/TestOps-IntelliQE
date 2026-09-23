@@ -37,6 +37,7 @@
  */
 import type { TestOpsState, AutomationScript, ApiSpec } from './state.js';
 import { runLLM, llmForStage } from './claude-runner.js';
+import { sanitizeChatContent } from '../utils/crypto.js';
 
 /* ────────────────────────────────────────────────────────────────
    Recognising an API spec
@@ -52,6 +53,25 @@ export function isApiSpecScript(code: string): boolean {
   const usesRequestFixture = /async\s*\(\s*\{\s*request\s*\}\s*\)/.test(code);
   const usesPage = /\bpage\s*\./.test(code) || /\{\s*page\s*[,}]/.test(code);
   return usesRequestFixture && !usesPage;
+}
+
+/**
+ * How many failing specs are diagnosed at once. Each heal is a live replay
+ * plus a model call, so the ceiling is the API's rate limit, not the CPU.
+ */
+const HEAL_CONCURRENCY = Math.max(1, Math.min(8, parseInt(process.env.API_HEAL_CONCURRENCY || '', 10) || 4));
+
+/** Run `fn` over `items` with at most `limit` in flight; results keep input order. */
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]!, i);
+    }
+  }));
+  return results;
 }
 
 /** True when the run as a whole is an API run (every spec is a request spec). */
@@ -295,6 +315,7 @@ export type FailureKind =
   | 'unreachable'     // the request never completed — nothing to heal
   | 'server-defect'   // the API answered 5xx — a real defect
   | 'auth-defect'     // 401/403 on a case that expects success — bad credential
+  | 'rate-limited'    // 429 — the host throttled us; neither a defect nor healable
   | 'contract-defect' // the happy path did not return the user's expected status
   | 'assertion-drift' // the spec asserted something the endpoint never promised
   | 'unknown';
@@ -332,6 +353,17 @@ export function diagnose(error: string, probe: Probe, spec: ApiSpec | null | und
   }
 
   const status = probe.status ?? 0;
+
+  // Shared public sandboxes throttle by source IP; a whole suite can hit the
+  // ceiling at once. Rewriting the assertion would only hide that.
+  if (status === 429) {
+    const retryAfter = probe.headers?.['retry-after'];
+    return {
+      kind: 'rate-limited',
+      summary: `The API throttled this request (429${retryAfter ? `, Retry-After ${retryAfter}` : ''}). Not a product defect and not healable — rerun later or lower the coverage depth.`,
+      healable: false,
+    };
+  }
 
   if (status >= 500) {
     return {
@@ -415,11 +447,13 @@ function isPlausibleSpec(code: string): boolean {
 
 function summariseProbe(probe: Probe): string {
   if (!probe.reachable) return `The endpoint could not be reached: ${probe.transportError}`;
+  // An echo-style sandbox reflects the request — headers, tokens and all — in
+  // its body, and that body is about to become part of an LLM prompt.
   const headerLines = Object.entries(probe.headers || {})
     .filter(([k]) => /^(content-type|content-length|cache-control|etag|location|retry-after|www-authenticate|x-ratelimit)/i.test(k))
-    .map(([k, v]) => `  ${k}: ${v}`)
+    .map(([k, v]) => `  ${k}: ${sanitizeChatContent(String(v))}`)
     .join('\n') || '  (none of interest)';
-  const body = probe.bodyText?.trim() ? probe.bodyText.trim().slice(0, 2500) : '(empty body)';
+  const body = probe.bodyText?.trim() ? sanitizeChatContent(probe.bodyText.trim().slice(0, 2500)) : '(empty body)';
   return `Status: ${probe.status} ${probe.statusText || ''}
 Round trip: ${probe.elapsedMs}ms
 Notable response headers:
@@ -537,7 +571,9 @@ export async function apiHealingAgent(
 
   // Heal each failing spec concurrently — the probes and LLM calls are
   // independent, and serialising 10+ of them costs minutes for no benefit.
-  const outcomes = await Promise.all(failedCases.map(async (tc): Promise<AutomationScript | null> => {
+  // Bounded, though: firing 60 failures at the model at once earns 429s, and
+  // the backoff that follows is slower than a steady pool would have been.
+  const outcomes = await mapWithConcurrency(failedCases, HEAL_CONCURRENCY, async (tc): Promise<AutomationScript | null> => {
     const script = scriptMap.get(tc.id);
     if (!script) {
       healingNotes[tc.id] = 'No script found for this test case';
@@ -606,7 +642,7 @@ export async function apiHealingAgent(
       healingNotes[tc.id] = `Healing failed: ${(err as Error).message}`;
       return null;
     }
-  }));
+  });
 
   const healedById = new Map<string, AutomationScript>();
   for (const s of outcomes) if (s) healedById.set(s.testCaseId, s);

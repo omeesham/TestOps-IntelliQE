@@ -6,7 +6,7 @@
  * visible without opening Allure.
  */
 import { useEffect, useState } from 'react';
-import { ChevronLeft, ExternalLink, Loader2, RefreshCw, Activity, AlertTriangle, Wrench } from 'lucide-react';
+import { ChevronLeft, ChevronDown, ExternalLink, Loader2, RefreshCw, Activity, AlertTriangle, Wrench } from 'lucide-react';
 import { listApiRuns, getApiRun } from '@/services/api';
 import { StatusPill, MethodBadge, CategoryChip, PriorityChip, EmptyState } from '../primitives';
 import { CARD, CARD_HOVER, SECONDARY_BTN, MUTED_CHIP, STRIP, THEAD, relativeTime, formatDuration } from '../format';
@@ -14,6 +14,10 @@ import type { ApiRun } from '../hooks/useApiRun';
 import type { ApiRunSummary, ApiRunDetail } from '../types';
 
 import Loader from '@/components/feedback/Loader';
+
+/** Whether the run-history card is expanded — a UI preference, kept across sessions. */
+const HISTORY_OPEN_KEY = 'intelliqe_api_history_open';
+
 interface Props { run: ApiRun; openRunId: string | null; onOpenRun: (id: string | null) => void; onShowReport: () => void }
 
 export default function RunsView({ run, openRunId, onOpenRun, onShowReport }: Props) {
@@ -34,11 +38,11 @@ function LiveRun({ run, onShowReport }: { run: ApiRun; onShowReport: () => void 
   const total = run.rows.length;
   return (
     <div className={`${CARD} overflow-hidden`}>
-      <div className={`flex items-center gap-2 px-4 h-11 border-b border-[#EDE9FE] ${STRIP}`}>
+      <div className={`flex items-center gap-2 px-4 h-11 min-w-0 border-b border-[#EDE9FE] ${STRIP}`}>
         {run.running ? <Loader2 className="w-4 h-4 text-[#7C3AED] animate-spin" /> : <Activity className="w-4 h-4 text-[#7C3AED]" />}
         <h3 className="text-[12.5px] font-semibold text-gray-900">Current run</h3>
         <span className="text-[11px] text-gray-500 truncate min-w-0">{run.runLabel}</span>
-        {total > 0 && <span className="ml-auto font-mono text-[11px] tabular-nums"><span className="text-emerald-600">{passed} ✓</span> · <span className="text-red-600">{failed} ✗</span> · {total}</span>}
+        {total > 0 && <span className="ml-auto flex-shrink-0 font-mono text-[11px] tabular-nums"><span className="text-emerald-600">{passed} ✓</span> · <span className="text-red-600">{failed} ✗</span> · {total}</span>}
         {run.phase === 'report' && <button type="button" onClick={onShowReport} className={SECONDARY_BTN}>Open report</button>}
       </div>
       {run.rows.length === 0 ? (
@@ -82,14 +86,31 @@ function History({ onOpen, refreshKey }: { onOpen: (id: string) => void; refresh
   };
   useEffect(() => { void load(page); }, [page, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /* Collapsed or not is a preference, so it survives reloads like the other
+     UI preferences do (localStorage, not the per-session catalogue). The
+     header — and its run count — stays visible either way. */
+  const [open, setOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem(HISTORY_OPEN_KEY) !== '0'; } catch { return true; }
+  });
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    try { localStorage.setItem(HISTORY_OPEN_KEY, next ? '1' : '0'); } catch { /* preference only */ }
+  };
+
   const pages = Math.max(1, Math.ceil(total / pageSize));
   return (
     <div className={`${CARD} overflow-hidden`}>
-      <div className={`flex items-center gap-2 px-4 h-11 border-b border-[#EDE9FE] ${STRIP}`}>
-        <h3 className="text-[12.5px] font-semibold text-gray-900">Run history</h3>
+      <div className={`flex items-center gap-2 px-4 h-11 ${open ? 'border-b border-[#EDE9FE]' : ''} ${STRIP}`}>
+        <button type="button" onClick={toggle} aria-expanded={open} title={open ? 'Hide the run history' : 'Show the run history'} className="flex items-center gap-1.5 -ml-1 px-1 rounded text-left hover:text-[#7C3AED] transition-colors group">
+          <ChevronDown className={`w-3.5 h-3.5 text-gray-400 group-hover:text-[#7C3AED] transition-transform ${open ? '' : '-rotate-90'}`} />
+          <h3 className="text-[12.5px] font-semibold text-gray-900 group-hover:text-[#7C3AED]">Run history</h3>
+        </button>
         <span className="text-[11px] text-gray-400 tabular-nums">{total} runs</span>
-        <button type="button" onClick={() => load()} className="ml-auto p-1 text-gray-300 hover:text-[#7C3AED]" title="Refresh"><RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /></button>
+        <button type="button" onClick={toggle} className="ml-auto text-[11px] font-medium text-gray-400 hover:text-[#7C3AED] transition-colors">{open ? 'Hide' : 'Show'}</button>
+        {open && <button type="button" onClick={() => load()} className="p-1 text-gray-300 hover:text-[#7C3AED]" title="Refresh"><RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /></button>}
       </div>
+      {!open ? null : <>
       {error && <p className="px-4 py-2 text-[11.5px] text-red-600 flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5" />{error}</p>}
       {!loading && items.length === 0 && !error ? (
         <EmptyState icon={Activity} title="No API runs yet" hint="Runs land here once a suite has been executed — from this workspace, the CLI or the public API." />
@@ -124,6 +145,7 @@ function History({ onOpen, refreshKey }: { onOpen: (id: string) => void; refresh
           <button type="button" disabled={page >= pages} onClick={() => setPage((p) => p + 1)} className={SECONDARY_BTN}>Next</button>
         </div>
       )}
+      </>}
     </div>
   );
 }

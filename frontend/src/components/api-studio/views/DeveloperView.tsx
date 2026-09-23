@@ -20,12 +20,11 @@ const ROUTES: { method: string; path: string; what: string; body?: string }[] = 
   { method: 'GET', path: '/builds', what: 'Builds — executed runs with pass/fail/duration from the report' },
   { method: 'GET', path: '/builds/:id', what: 'One build: stats + per-scenario status' },
   { method: 'GET', path: '/builds/:id/sessions/:tc', what: 'One session — a single scenario\'s result, error and timing' },
-  { method: 'POST', path: '/runs', what: 'Start a headless run: import → analyze → design → execute → heal → report. Returns 202 + jobId', body: '{ "endpoints": [...] | "source": {kind,...}, "environmentId"?, "coverage"?, "layers"?, "title"? }' },
+  { method: 'POST', path: '/runs', what: 'Start a headless run: import → analyze → design → execute → heal → report. Returns 202 + jobId', body: '{ "endpoints": [...] | "source": {kind,...}, "coverage"?, "layers"?, "title"? }' },
   { method: 'GET', path: '/runs/:jobId', what: 'Poll the run job: status, progress, phases, result' },
   { method: 'POST', path: '/imports', what: 'Import without running. `kind`: text | url | curl | graphql | mcp | connector', body: '{ "kind": "url", "url": "https://api.acme.com/openapi.json" }' },
   { method: 'GET', path: '/imports', what: 'Import history' },
   { method: 'POST', path: '/analyze', what: 'Pattern intelligence for a set of endpoints', body: '{ "endpoints": [...] }' },
-  { method: 'GET', path: '/environments', what: 'Environments (secrets masked)' },
 ];
 
 export default function DeveloperView() {

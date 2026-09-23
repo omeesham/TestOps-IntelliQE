@@ -4,11 +4,11 @@
  * KPIs across every API run this tenant has made, the pass-rate trend,
  * anomalies the platform spotted (flaky, new failures, slow), the slowest
  * scenarios, recent runs and recent imports — plus the workspace's current
- * state (catalogue size, active environment) so the next step is obvious.
+ * state (catalogue size, selection) so the next step is obvious.
  */
 import { useEffect, useState } from 'react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Activity, AlertTriangle, ArrowRight, Clock, RefreshCw, Layers, Upload, Server, Gauge, Zap, TrendingUp } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowRight, Clock, RefreshCw, Layers, Upload, Gauge, Zap, TrendingUp } from 'lucide-react';
 import { getApiOverview } from '@/services/api';
 import { CARD, CARD_HOVER, TILE_ACTIVE, THEAD, PRIMARY_BTN, SECONDARY_BTN, BRAND_CHIP, MUTED_CHIP, relativeTime, formatDuration, IMPORT_METHOD_LABELS } from '../format';
 import { StatusPill } from '../primitives';
@@ -23,13 +23,15 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const load = async () => {
+  /** `fresh` bypasses the server's 20s roll-up cache — the Refresh button and
+      the reload after a run both want the new numbers, not the cached ones. */
+  const load = async (fresh = false) => {
     setLoading(true); setError('');
-    try { setData(await getApiOverview()); }
+    try { setData(await getApiOverview(fresh)); }
     catch (err: any) { setError(err?.response?.data?.error || err?.message || 'Could not load the dashboard.'); }
     finally { setLoading(false); }
   };
-  useEffect(() => { void load(); }, [refreshKey]);
+  useEffect(() => { void load(refreshKey > 0); }, [refreshKey]);
 
   const k = data?.kpis;
   const trend = (data?.trend || []).map((t) => ({ ...t, label: new Date(t.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }));
@@ -47,7 +49,7 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
               <p className="text-[13px] font-semibold text-gray-900">{catalog.endpoints.length > 0 ? `${catalog.endpoints.length} endpoints in the catalogue` : 'Start by importing an API'}</p>
               <p className="text-[11px] text-gray-500">
                 {catalog.endpoints.length > 0
-                  ? `${catalog.selected.size} selected · ${catalog.profile?.resources.length || 0} resources · ${catalog.profile?.flows.length || 0} flows · environment: ${catalog.activeEnv?.name || 'none'}`
+                  ? `${catalog.selected.size} selected · ${catalog.profile?.resources.length || 0} resources · ${catalog.profile?.flows.length || 0} flows`
                   : 'OpenAPI, Postman, cURL, docs page, SDK, GraphQL, MCP, webhook, middleware, connector or a manual request.'}
               </p>
             </div>
@@ -58,22 +60,21 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
           </div>
         </div>
 
-        {error && <div className="flex items-center gap-2 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg text-[12px] text-red-700"><AlertTriangle className="w-4 h-4" />{error}<button type="button" onClick={load} className="ml-auto underline">Retry</button></div>}
+        {error && <div className="flex items-center gap-2 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg text-[12px] text-red-700"><AlertTriangle className="w-4 h-4" />{error}<button type="button" onClick={() => load(true)} className="ml-auto underline">Retry</button></div>}
 
         {/* KPIs */}
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
           <Kpi icon={Activity} label="API runs" value={k ? k.runs : '—'} sub={k ? `${k.runsLast30d} in 30 days` : ''} loading={loading} />
           <Kpi icon={Gauge} label="Avg pass rate" value={k?.avgPassRate != null ? `${k.avgPassRate}%` : '—'} sub={k?.lastPassRate != null ? `last run ${k.lastPassRate}%` : 'no executed runs yet'} loading={loading} tone={k?.avgPassRate != null ? (k.avgPassRate >= 90 ? 'good' : k.avgPassRate >= 70 ? 'warn' : 'bad') : 'neutral'} />
           <Kpi icon={Layers} label="Scenarios" value={k ? k.scenarios : '—'} sub={k ? `${k.endpointsCovered} endpoints covered` : ''} loading={loading} />
           <Kpi icon={Zap} label="Anomalies" value={data ? data.anomalies.length : '—'} sub={data ? `${data.anomalies.filter((a) => a.kind === 'flaky').length} flaky · ${data.anomalies.filter((a) => a.kind === 'new-failure').length} new` : ''} loading={loading} tone={data?.anomalies.length ? 'warn' : 'neutral'} />
-          <Kpi icon={Upload} label="Imports" value={k ? k.imports : '—'} sub={data ? Object.keys(data.imports.byMethod).length + ' methods used' : ''} loading={loading} />
-          <Kpi icon={Server} label="Environments" value={k ? k.environments : '—'} sub={k?.lastRunAt ? `last run ${relativeTime(k.lastRunAt)}` : ''} loading={loading} />
+          <Kpi icon={Upload} label="Imports" value={k ? k.imports : '—'} sub={k?.lastRunAt ? `last run ${relativeTime(k.lastRunAt)}` : data ? Object.keys(data.imports.byMethod).length + ' methods used' : ''} loading={loading} />
         </div>
 
         {/* Trend + categories */}
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
           <div className={`${CARD} p-4 xl:col-span-2`}>
-            <div className="flex items-center gap-2 mb-2"><TrendingUp className="w-4 h-4 text-[#7C3AED]" /><h3 className="text-[12.5px] font-semibold text-gray-900">Pass-rate trend</h3><span className="text-[11px] text-gray-400">last {trend.length} executed runs</span><button type="button" onClick={load} className="ml-auto p-1 text-gray-300 hover:text-[#7C3AED]" title="Refresh"><RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /></button></div>
+            <div className="flex items-center gap-2 mb-2"><TrendingUp className="w-4 h-4 text-[#7C3AED]" /><h3 className="text-[12.5px] font-semibold text-gray-900">Pass-rate trend</h3><span className="text-[11px] text-gray-400">last {trend.length} executed runs</span><button type="button" onClick={() => load(true)} className="ml-auto p-1 text-gray-300 hover:text-[#7C3AED]" title="Refresh"><RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /></button></div>
             {trend.length === 0 ? (
               <p className="text-[11.5px] text-gray-400 py-10 text-center">No executed runs yet — the trend appears after the first suite runs.</p>
             ) : (

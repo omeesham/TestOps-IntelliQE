@@ -94,7 +94,18 @@ export const SECONDARY_BTN = `inline-flex items-center gap-1.5 px-2.5 py-1.5 tex
 export const CARD = `bg-gradient-to-b from-white to-[#FCFBFF] border border-[#E9E5FB] rounded-xl ${RAISED}`;
 /** An interactive card that lifts on hover. */
 export const CARD_HOVER = `${CARD} ${RAISED_HOVER}`;
-export const INPUT = `w-full px-2.5 py-1.5 text-[12px] text-gray-800 bg-[#FCFBFF] border border-[#E4E0F5] rounded-md outline-none placeholder-gray-300 focus:bg-white focus:border-[#A5B4FC] focus:ring-2 focus:ring-[#EDE9FE] disabled:bg-gray-50 disabled:text-gray-500 ${INSET}`;
+/**
+ * A form field WITHOUT a width, so the call site can size it. Use this whenever
+ * the control is not meant to fill its row.
+ *
+ * Two utilities that set the same property never "override" each other by the
+ * order they are written in a className — Tailwind emits them in its own order
+ * and the later rule in the stylesheet wins. `INPUT w-auto` therefore stayed
+ * full-width and stretched across the toolbar; `FIELD w-auto` has no conflict.
+ */
+export const FIELD = `px-2.5 py-1.5 text-[12px] text-gray-800 bg-[#FCFBFF] border border-[#E4E0F5] rounded-md outline-none placeholder-gray-300 focus:bg-white focus:border-[#A5B4FC] focus:ring-2 focus:ring-[#EDE9FE] disabled:bg-gray-50 disabled:text-gray-500 ${INSET}`;
+/** The same field, filling its container — the common case in forms. */
+export const INPUT = `w-full ${FIELD}`;
 export const LABEL = 'block text-[10.5px] font-semibold uppercase tracking-wide text-gray-500 mb-1';
 /** Table header strip: a light gradient with a bevelled bottom edge. */
 export const THEAD = 'bg-gradient-to-b from-[#FAFAFE] to-[#F3F1FB] shadow-[inset_0_-1px_0_#E9E5FB,inset_0_1px_0_rgba(255,255,255,0.9)]';
@@ -209,9 +220,17 @@ export function newEndpointId(): string {
   return `ep-${Date.now().toString(36)}-${(++seq).toString(36)}`;
 }
 
-/** `https://api.x.com/v1/users?limit=1` → `/v1/users` (what the table shows). */
+/**
+ * `https://api.x.com/v1/users?limit=1` → `/v1/users` (what the table shows).
+ *
+ * `URL.pathname` percent-encodes the braces of a templated path, so an OpenAPI
+ * `/orders/{id}` would otherwise read `/orders/%7Bid%7D` everywhere it appears.
+ */
 export function pathOf(url: string): string {
-  try { return new URL(url).pathname || '/'; } catch { return url; }
+  try {
+    const path = new URL(url).pathname || '/';
+    try { return decodeURIComponent(path); } catch { return path; }
+  } catch { return url; }
 }
 
 export function hostOf(url: string): string {

@@ -489,8 +489,9 @@ export async function resolveApiEnvironment(id: string, endpoints: any[]): Promi
   return data;
 }
 
-export async function getApiOverview(): Promise<any> {
-  const { data } = await api.get('/api-automation/overview', { timeout: 60_000 });
+/** The dashboard roll-up; `fresh` bypasses the server's short cache (Refresh, post-run reload). */
+export async function getApiOverview(fresh = false): Promise<any> {
+  const { data } = await api.get('/api-automation/overview', { timeout: 60_000, params: fresh ? { fresh: 1 } : undefined });
   return data;
 }
 export async function listApiRuns(page = 1, pageSize = 20): Promise<{ items: any[]; total: number; page: number; pageSize: number }> {

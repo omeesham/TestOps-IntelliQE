@@ -106,21 +106,58 @@ async function attachReports(tenantId: string, runs: Map<string, ApiRunSummary>)
   }
 }
 
+/**
+ * Per-run result cache.
+ *
+ * A finished run's report never changes, but the dashboard re-read every one
+ * of them — hundreds of small JSON files across the last eight runs — on every
+ * page load, and again for the trend, the anomalies and the slowest list. The
+ * rows are cached by run so the disk is touched once per run per process, with
+ * a TTL so a report rebuilt in place is still picked up.
+ */
+const RESULT_TTL_MS = 5 * 60_000;
+const RESULT_CACHE_MAX = 200;
+const resultCache = new Map<string, { at: number; rows: ReportResultRow[] }>();
+
 async function resultsFor(tenantId: string, runId: string, hasAllure: boolean): Promise<ReportResultRow[]> {
-  if (hasAllure) {
-    const rows = await readAllureResults(tenantId, runId);
-    if (rows.length) return rows;
+  const key = `${tenantId}:${runId}`;
+  const hit = resultCache.get(key);
+  if (hit && Date.now() - hit.at < RESULT_TTL_MS) return hit.rows;
+
+  let rows: ReportResultRow[] = [];
+  if (hasAllure) rows = await readAllureResults(tenantId, runId);
+  if (!rows.length) {
+    const basic = await readBasicReport(tenantId, runId);
+    rows = basic?.results || [];
   }
-  const basic = await readBasicReport(tenantId, runId);
-  return basic?.results || [];
+  // An empty result is not cached — the report may still be rendering.
+  if (rows.length) {
+    if (resultCache.size >= RESULT_CACHE_MAX) resultCache.delete(resultCache.keys().next().value as string);
+    resultCache.set(key, { at: Date.now(), rows });
+  }
+  return rows;
 }
+
+/** Drop a run's cached results — called when its report is (re)built. */
+export function invalidateApiRunCache(tenantId: string, runId: string): void {
+  resultCache.delete(`${tenantId}:${runId}`);
+  overviewCache.delete(tenantId);
+}
+
+/** The assembled overview, cached briefly: it is a read-only roll-up. */
+const OVERVIEW_TTL_MS = 20_000;
+const overviewCache = new Map<string, { at: number; data: ApiOverview }>();
 
 /** "TC-003 — Verify GET /posts returns 200" → "Verify GET /posts returns 200" */
 function scenarioKey(name: string): string {
   return name.replace(/^\s*TC-\d+\s*[—-]\s*/i, '').trim().toLowerCase();
 }
 
-export async function getApiOverview(tenantId: string): Promise<ApiOverview> {
+export async function getApiOverview(tenantId: string, opts: { fresh?: boolean } = {}): Promise<ApiOverview> {
+  if (!opts.fresh) {
+    const hit = overviewCache.get(tenantId);
+    if (hit && Date.now() - hit.at < OVERVIEW_TTL_MS) return hit.data;
+  }
   const runs = await loadApiRuns(tenantId);
   await attachReports(tenantId, runs);
   const ordered = [...runs.values()].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
@@ -218,7 +255,7 @@ export async function getApiOverview(tenantId: string): Promise<ApiOverview> {
     environments = Number(rows[0]?.n) || 0;
   } catch { /* ignore */ }
 
-  return {
+  const overview: ApiOverview = {
     kpis: {
       runs: ordered.length,
       runsLast30d,
@@ -238,6 +275,8 @@ export async function getApiOverview(tenantId: string): Promise<ApiOverview> {
     slowest,
     imports: { total: importsTotal, byMethod, recent: recentImports },
   };
+  overviewCache.set(tenantId, { at: Date.now(), data: overview });
+  return overview;
 }
 
 export async function listApiRuns(tenantId: string, page = 1, pageSize = 20): Promise<{ items: ApiRunSummary[]; total: number; page: number; pageSize: number }> {
@@ -294,6 +333,8 @@ export async function getApiRunDetail(tenantId: string, runId: string): Promise<
 }
 
 export async function recordImport(tenantId: string, username: string, input: { method: string; name: string; format: string; parser: string; endpointCount: number; warnings?: string[] }): Promise<void> {
+  // A new import changes the roll-up's import counts — drop the cached copy.
+  overviewCache.delete(tenantId);
   try {
     await pool.query(
       `INSERT INTO api_import_sources (tenant_id, method, name, format, parser, endpoint_count, warnings, created_by)

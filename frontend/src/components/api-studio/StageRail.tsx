@@ -4,11 +4,12 @@
  * The run's spine, always on screen: which of the five stages is happening,
  * what each one produced, and how long it took. Before a stage runs it shows
  * what it is *for*, so the rail also explains the pipeline to someone seeing it
- * for the first time rather than being five empty labels.
+ * for the first time rather than being five empty labels. Once the run has
+ * finished, a Push to repo control sits at the tail, just past Report.
  */
-import { Check, Loader2, X, Ban } from 'lucide-react';
-import { formatDuration } from './format';
-import type { Stage } from './types';
+import { Check, Loader2, X, Ban, GitBranch, ExternalLink, AlertTriangle } from 'lucide-react';
+import { formatDuration, SECONDARY_3D } from './format';
+import type { Stage, PushState } from './types';
 
 const LABEL_CLS: Record<Stage['status'], string> = {
   done: 'text-gray-800',
@@ -54,7 +55,74 @@ function Marker({ status, index }: { status: Stage['status']; index: number }) {
   );
 }
 
-export default function StageRail({ stages }: { stages: Stage[] }) {
+/**
+ * The push-to-repo control that sits at the tail of the rail, right after
+ * Report — the natural next step once a run has proved its specs. It is the
+ * same action offered in the Report tab, surfaced on the spine so it is one
+ * click away from wherever you are watching the run.
+ */
+function PushAction({ push }: { push: PushRailProps }) {
+  const { pushState, canPush, onPushToRepo } = push;
+  const pushing = pushState.status === 'pushing';
+
+  // Once the push lands, the button becomes a link to what it produced.
+  if (pushState.status === 'done') {
+    return (
+      <a
+        href={pushState.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={`${pushState.mode === 'pr' ? 'Pull request opened' : 'Committed'} on ${pushState.branch}${pushState.repo ? ` in ${pushState.repo}` : ''} · ${pushState.fileCount} file${pushState.fileCount === 1 ? '' : 's'}`}
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11.5px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md hover:bg-emerald-100 transition-all whitespace-nowrap"
+      >
+        <ExternalLink className="w-3.5 h-3.5" />
+        {pushState.mode === 'pr' ? 'View pull request' : 'View branch'}
+      </a>
+    );
+  }
+
+  // Error keeps the red retry signal; idle / pushing wear the green primary.
+  if (pushState.status === 'error') {
+    return (
+      <button
+        type="button"
+        onClick={onPushToRepo}
+        title={pushState.error}
+        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[11.5px] font-semibold rounded-md transition-all whitespace-nowrap text-red-700 bg-gradient-to-b from-white to-[#FEF4F4] border border-red-200 hover:border-red-300 ${SECONDARY_3D}`}
+      >
+        <AlertTriangle className="w-3.5 h-3.5" />Retry push
+      </button>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onPushToRepo}
+      disabled={!canPush || pushing}
+      title={canPush
+        ? 'Commit the generated specs to the repository connected under System Configuration → Code Repositories'
+        : 'There are no generated specs to push'}
+      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11.5px] font-semibold text-white rounded-md transition-all whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed bg-gradient-to-b from-emerald-400 to-emerald-600 border border-emerald-500/50 ring-1 ring-inset ring-white/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_3px_0_0_#047857,0_8px_18px_-6px_rgba(16,185,129,0.55)] hover:from-emerald-500 hover:to-emerald-700 hover:-translate-y-px active:translate-y-[2px] active:shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_0_0_0_#047857,0_4px_10px_-6px_rgba(16,185,129,0.5)] disabled:translate-y-0 disabled:shadow-[0_2px_0_0_#A7F3D0]"
+    >
+      {pushing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <GitBranch className="w-3.5 h-3.5" />}
+      {pushing ? 'Pushing…' : 'Push to repo'}
+    </button>
+  );
+}
+
+/** Everything the tail-of-rail push button needs. Optional so the rail can be
+    rendered without it (e.g. before a run finishes wiring it up). */
+export interface PushRailProps {
+  onPushToRepo: () => void;
+  pushState: PushState;
+  /** False when the run produced no specs to push. */
+  canPush: boolean;
+  /** Only surface the control once the run has finished. */
+  show: boolean;
+}
+
+export default function StageRail({ stages, push }: { stages: Stage[]; push?: PushRailProps }) {
   return (
     <div className="relative z-10 flex items-stretch bg-gradient-to-b from-white to-[#FCFBFF] border-b border-[#E9E5FB] flex-shrink-0 overflow-x-auto shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_6px_16px_-12px_rgba(76,29,149,0.45)]">
       {stages.map((s, i) => (
@@ -81,6 +149,13 @@ export default function StageRail({ stages }: { stages: Stage[] }) {
           </div>
         </div>
       ))}
+
+      {/* Push to repo — pinned to the tail of the rail, just past Report. */}
+      {push?.show && (
+        <div className="flex items-center px-3 py-2 flex-shrink-0 border-l border-[#E9E5FB] bg-gradient-to-b from-white to-[#FCFBFF]">
+          <PushAction push={push} />
+        </div>
+      )}
     </div>
   );
 }

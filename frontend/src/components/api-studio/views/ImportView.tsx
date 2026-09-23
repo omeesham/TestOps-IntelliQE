@@ -14,7 +14,7 @@ import {
 } from '@/services/api';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { IMPORT_METHODS, BULK_ACCEPT, type ImportMethodDef, type ImportInput } from '../importMethods';
-import { PRIMARY_BTN, SECONDARY_BTN, INPUT, LABEL, CARD, CARD_HOVER, BRAND_CHIP, TILE, TILE_ACTIVE, THEAD } from '../format';
+import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, LABEL, CARD, CARD_HOVER, BRAND_CHIP, MUTED_CHIP, CHIP_3D, TILE, TILE_ACTIVE, THEAD } from '../format';
 import { KeyValueRows } from '../EndpointEditor';
 import EndpointEditor from '../EndpointEditor';
 import type { Catalog } from '../hooks/useCatalog';
@@ -27,6 +27,9 @@ interface Props {
 }
 
 interface Outcome { method: ImportMethod; name: string; res: ApiImportResponse; added: number; duplicates: number }
+
+/** What the drop zone takes, named the way a tester thinks of them. */
+const ACCEPTED = ['OpenAPI', 'Swagger', 'Postman', 'HAR', 'Bruno', 'WSDL / XML', 'PDF', 'Word', 'Excel', 'Markdown', 'Source code'];
 
 export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
   const toast = useToast();
@@ -91,9 +94,7 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
             {busy === 'bulk' ? <Loader2 className="w-5 h-5 text-white animate-spin" /> : <UploadCloud className="w-5 h-5 text-white" />}
           </div>
           <h2 className="mt-3 text-[15px] font-semibold text-gray-900">Bulk upload — any API document</h2>
-          <p className="mt-1 text-[12px] text-gray-500 max-w-xl mx-auto leading-relaxed">
-            Drop OpenAPI, Swagger, Postman, HAR, Bruno, WSDL/XML, PDF, Word, Excel, Markdown or source files — up to 20 at a time. Each file is parsed with the right parser; documents without a machine-readable spec are read by the platform's AI and every endpoint they describe is extracted.
-          </p>
+          <p className="mt-1 text-[12px] text-gray-500">Up to 20 files at a time — each one parsed automatically.</p>
           <div className="mt-4 flex items-center justify-center gap-2">
             <button type="button" onClick={() => fileRef.current?.click()} disabled={!!busy} className={PRIMARY_BTN}>
               <UploadCloud className="w-3.5 h-3.5" />Choose files
@@ -101,7 +102,12 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
             <span className="text-[11px] text-gray-400">or drag them here</span>
           </div>
           <input ref={fileRef} type="file" multiple accept={BULK_ACCEPT} className="hidden" onChange={(e) => { bulk(Array.from(e.target.files || [])); e.target.value = ''; }} />
-          <p className="mt-3 text-[10.5px] text-gray-400 font-mono">{BULK_ACCEPT.split(',').join(' ')}</p>
+          {/* What's accepted, as scannable chips rather than a paragraph. */}
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5">
+            {ACCEPTED.map((f) => (
+              <span key={f} className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[10.5px] font-medium ${MUTED_CHIP} ${CHIP_3D}`}>{f}</span>
+            ))}
+          </div>
         </div>
 
         {/* Outcome / error */}
@@ -138,7 +144,7 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
                     <span className="text-[12.5px] font-semibold text-gray-900 leading-tight">{m.label}</span>
                     {m.ai && <span className={`ml-auto inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-[9.5px] font-semibold ${BRAND_CHIP}`}><Sparkles className="w-2.5 h-2.5" />AI</span>}
                   </div>
-                  <p className="mt-2 text-[11px] text-gray-500 leading-relaxed line-clamp-3">{m.desc}</p>
+                  <p className="mt-2 text-[11px] text-gray-500 truncate">{m.desc}</p>
                 </button>
               );
             })}
@@ -253,6 +259,9 @@ function MethodForm({ def, busy, onClose, onRun }: { def: ImportMethodDef; busy:
         )}
         <button type="button" onClick={onClose} className="ml-auto p-1 rounded text-gray-400 hover:text-[#7C3AED]"><X className="w-4 h-4" /></button>
       </div>
+      {/* The full explanation lives here rather than on the card: it is worth
+          reading once you have chosen a method, and noise before that. */}
+      <p className="-mt-1 mb-3 text-[11.5px] text-gray-500 leading-relaxed">{def.detail}</p>
       {input === 'files' && <FilesForm def={def} busy={busy} onRun={onRun} />}
       {input === 'url' && <UrlForm def={def} busy={busy} onRun={onRun} />}
       {input === 'text' && <TextForm def={def} busy={busy} onRun={onRun} />}
@@ -367,11 +376,11 @@ function AuthFields({ type, value, headerName, onType, onValue, onHeaderName }: 
     <div className="flex flex-wrap items-end gap-2">
       <div>
         <label className={LABEL}>Auth</label>
-        <select value={type} onChange={(e) => onType(e.target.value as AuthType)} className={`${INPUT} w-[120px]`}>
+        <select value={type} onChange={(e) => onType(e.target.value as AuthType)} className={`${FIELD} w-[120px]`}>
           <option value="none">None</option><option value="bearer">Bearer</option><option value="basic">Basic</option><option value="apikey">API key</option>
         </select>
       </div>
-      {type === 'apikey' && <div><label className={LABEL}>Header</label><input value={headerName} onChange={(e) => onHeaderName(e.target.value)} className={`${INPUT} w-[150px] font-mono`} /></div>}
+      {type === 'apikey' && <div><label className={LABEL}>Header</label><input value={headerName} onChange={(e) => onHeaderName(e.target.value)} className={`${FIELD} w-[150px] font-mono`} /></div>}
       {type !== 'none' && <div className="flex-1 min-w-[200px]"><label className={LABEL}>{type === 'basic' ? 'user:password' : 'Value'}</label><input type="password" autoComplete="off" value={value} onChange={(e) => onValue(e.target.value)} className={`${INPUT} font-mono`} /></div>}
     </div>
   );
@@ -482,7 +491,7 @@ function WebhookForm({ busy, onRun }: { busy: boolean; onRun: RunFn }) {
       </div>
       <div>
         <label className={LABEL}>Signing secret (HMAC-SHA256)</label>
-        <input type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="whsec_… — or {{webhookSecret}} from an environment" className={`${INPUT} font-mono`} />
+        <input type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="whsec_…" className={`${INPUT} font-mono`} />
       </div>
       <div>
         <label className={LABEL}>Events</label>

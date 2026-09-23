@@ -123,9 +123,24 @@ export default function ReportTab({
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-white bg-gradient-to-r from-[#7C3AED] to-[#6366F1] rounded-md hover:from-[#6D28D9] hover:to-[#4F46E5] transition-all"
             >
-              <ExternalLink className="w-3.5 h-3.5" />Open Html report
+              <ExternalLink className="w-3.5 h-3.5" />Html report
             </a>
           )}
+          {/* Push to repo — commit the generated specs to the connected repository. */}
+          <button
+            type="button"
+            onClick={onPushToRepo}
+            disabled={!canPush || pushState.status === 'pushing'}
+            title={canPush
+              ? 'Commit the generated specs to the repository connected under System Configuration → Code Repositories'
+              : 'There are no generated specs to push'}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-semibold text-white rounded-md transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-gradient-to-b from-emerald-400 to-emerald-600 border border-emerald-500/50 ring-1 ring-inset ring-white/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_3px_0_0_#047857,0_8px_18px_-6px_rgba(16,185,129,0.55)] hover:from-emerald-500 hover:to-emerald-700 hover:-translate-y-px active:translate-y-[2px] active:shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_0_0_0_#047857,0_4px_10px_-6px_rgba(16,185,129,0.5)] disabled:translate-y-0 disabled:shadow-[0_2px_0_0_#A7F3D0]"
+          >
+            {pushState.status === 'pushing'
+              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              : <GitBranch className="w-3.5 h-3.5" />}
+            {pushState.status === 'pushing' ? 'Pushing…' : 'Push to repo'}
+          </button>
           <button
             type="button"
             onClick={() => onExport('excel')}
@@ -142,23 +157,6 @@ export default function ReportTab({
             className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-700 bg-gradient-to-b from-white to-[#FAFAFE] border border-[#E4E0F5] rounded-md hover:border-[#C4B5FD] hover:text-[#6D28D9] transition-all disabled:opacity-40 ${SECONDARY_3D}`}
           >
             <Download className="w-3.5 h-3.5" />Export (JSON)
-          </button>
-
-          {/* Push to repo — only reachable once a report exists, because the
-              specs worth committing are the ones a run has just proved. */}
-          <button
-            type="button"
-            onClick={onPushToRepo}
-            disabled={!canPush || pushState.status === 'pushing'}
-            title={canPush
-              ? 'Commit the generated specs to the repository connected under System Configuration → Code Repositories'
-              : 'There are no generated specs to push'}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-700 bg-gradient-to-b from-white to-[#FAFAFE] border border-[#E4E0F5] rounded-md hover:border-[#C4B5FD] hover:text-[#6D28D9] transition-all disabled:opacity-40 ${SECONDARY_3D}`}
-          >
-            {pushState.status === 'pushing'
-              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              : <GitBranch className="w-3.5 h-3.5" />}
-            {pushState.status === 'pushing' ? 'Pushing…' : 'Push to repo'}
           </button>
         </div>
 

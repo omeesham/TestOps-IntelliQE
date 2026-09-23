@@ -9,7 +9,7 @@
 import { useMemo, useState } from 'react';
 import { Search, Trash2, Pencil, Loader2, Layers, Plus, Download, ChevronDown, ChevronRight, Globe, Sparkles } from 'lucide-react';
 import { MethodBadge, StatusCode, EmptyState } from '../primitives';
-import { PRIMARY_BTN, SECONDARY_BTN, INPUT, CARD, BRAND_CHIP, MUTED_CHIP, STRIP, THEAD, IMPORT_METHOD_LABELS, pathOf, hostOf } from '../format';
+import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, CARD, BRAND_CHIP, MUTED_CHIP, STRIP, THEAD, IMPORT_METHOD_LABELS, pathOf, hostOf } from '../format';
 import EndpointEditor from '../EndpointEditor';
 import InsightsPanel from './InsightsPanel';
 import StrategyBar from './StrategyBar';
@@ -87,37 +87,43 @@ export default function EndpointsView({ catalog, running, onDesign, onImport }: 
   return (
     <div className="h-full flex min-h-0">
       {/* ── Table ── */}
-      <div className="flex-1 min-w-0 flex flex-col min-h-0">
-        <div className={`relative z-10 flex items-center gap-2 px-4 h-11 border-b border-[#E9E5FB] flex-shrink-0 ${STRIP} shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_6px_14px_-12px_rgba(76,29,149,0.45)]`}>
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-600 cursor-pointer select-none">
-            <input type="checkbox" checked={allVisibleSelected} onChange={() => catalog.selectMany(visible.map((e) => e.id), !allVisibleSelected)} className="w-3.5 h-3.5 rounded border-gray-300 text-[#7C3AED] focus:ring-[#A5B4FC] focus:ring-offset-0" />
-            <span className="font-medium tabular-nums">{selectedCount}/{endpoints.length} selected</span>
-          </label>
-          <div className="relative ml-2">
-            <Search className="w-3.5 h-3.5 text-gray-300 absolute left-2 top-1/2 -translate-y-1/2" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by path, name, tag…" className={`${INPUT} pl-7 w-[260px] py-1`} />
-          </div>
-          <select value={methodFilter} onChange={(e) => setMethodFilter(e.target.value)} className={`${INPUT} w-auto py-1`}>
-            <option value="all">All methods</option>
-            {methods.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
-          {resourceFocus && (
-            <button type="button" onClick={() => setResourceFocus(null)} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] ${BRAND_CHIP}`}>{resourceFocus} ×</button>
-          )}
-          <div className="ml-auto flex items-center gap-1.5">
-            {selectedCount > 0 && (
-              <button type="button" onClick={() => catalog.removeEndpoints([...selected])} disabled={running} className={SECONDARY_BTN} title="Remove the selected endpoints from the catalogue"><Trash2 className="w-3.5 h-3.5" />Remove</button>
+      <div className="@container flex-1 min-w-0 flex flex-col min-h-0">
+        {/* The filters shrink, the actions never do, and nothing leaves the column.
+            Sizes come from @container queries because the constraint is this
+            column’s width — the nav rail and the insights panel take their cut
+            first, so a viewport breakpoint would report room that is not here. */}
+        <div className={`relative z-10 flex items-center gap-2 px-4 h-11 min-w-0 overflow-hidden border-b border-[#E9E5FB] flex-shrink-0 ${STRIP} shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_6px_14px_-12px_rgba(76,29,149,0.45)]`}>
+          <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
+            <label className="flex items-center gap-1.5 text-[11px] text-gray-600 cursor-pointer select-none flex-shrink-0">
+              <input type="checkbox" checked={allVisibleSelected} onChange={() => catalog.selectMany(visible.map((e) => e.id), !allVisibleSelected)} className="w-3.5 h-3.5 rounded border-gray-300 text-[#7C3AED] focus:ring-[#A5B4FC] focus:ring-offset-0" />
+              <span className="font-medium tabular-nums whitespace-nowrap">{selectedCount}/{endpoints.length}<span className="hidden @[560px]:inline"> selected</span></span>
+            </label>
+            <div className="relative min-w-0 flex-1 max-w-[260px] hidden @[420px]:block">
+              <Search className="w-3.5 h-3.5 text-gray-300 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter…" title="Filter by path, name or tag" className={`${INPUT} pl-7 py-1`} />
+            </div>
+            <select value={methodFilter} onChange={(e) => setMethodFilter(e.target.value)} className={`${FIELD} w-auto py-1 flex-shrink-0 hidden @[680px]:block`}>
+              <option value="all">All methods</option>
+              {methods.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+            {resourceFocus && (
+              <button type="button" onClick={() => setResourceFocus(null)} title="Clear the resource filter" className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] min-w-0 max-w-[140px] flex-shrink ${BRAND_CHIP}`}><span className="truncate">{resourceFocus}</span> ×</button>
             )}
-            <button type="button" onClick={exportManifest} className={SECONDARY_BTN} title="Download the catalogue as a connector manifest"><Download className="w-3.5 h-3.5" />Export</button>
-            <button type="button" onClick={onImport} className={SECONDARY_BTN}><Plus className="w-3.5 h-3.5" />Import</button>
-            <button type="button" onClick={onDesign} disabled={running || selectedCount === 0} className={PRIMARY_BTN}>
+          </div>
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            {selectedCount > 0 && (
+              <button type="button" onClick={() => catalog.removeEndpoints([...selected])} disabled={running} className={SECONDARY_BTN} title="Remove the selected endpoints from the catalogue"><Trash2 className="w-3.5 h-3.5" /><span className="hidden @[1000px]:inline">Remove</span></button>
+            )}
+            <button type="button" onClick={exportManifest} className={SECONDARY_BTN} title="Download the catalogue as a connector manifest"><Download className="w-3.5 h-3.5" /><span className="hidden @[1000px]:inline">Export</span></button>
+            <button type="button" onClick={onImport} className={SECONDARY_BTN} title="Import more APIs"><Plus className="w-3.5 h-3.5" /><span className="hidden @[1000px]:inline">Import</span></button>
+            <button type="button" onClick={onDesign} disabled={running || selectedCount === 0} title={`Design scenarios for ${selectedCount} selected endpoint${selectedCount === 1 ? '' : 's'}`} className={`${PRIMARY_BTN} whitespace-nowrap`}>
               {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-              {running ? 'Designing…' : `Design scenarios for ${selectedCount}`}
+              {running ? 'Designing…' : <>Design<span className="hidden @[820px]:inline"> scenarios</span> ({selectedCount})</>}
             </button>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto min-h-0 bg-white shadow-[inset_0_3px_8px_-6px_rgba(30,27,75,0.18)]">
+        <div className="flex-1 overflow-auto min-w-0 min-h-0 bg-white shadow-[inset_0_3px_8px_-6px_rgba(30,27,75,0.18)]">
           {visible.length === 0 ? (
             <EmptyState icon={Search} title="No endpoints match" hint="Clear the filter or pick another resource." />
           ) : (
@@ -129,7 +135,7 @@ export default function EndpointsView({ catalog, running, onDesign, onImport }: 
                   <th className="text-left px-2 py-1.5 font-semibold">Endpoint</th>
                   <th className="text-left px-2 py-1.5 font-semibold w-[90px]">Auth</th>
                   <th className="text-left px-2 py-1.5 font-semibold w-[70px]">Expect</th>
-                  <th className="text-left px-2 py-1.5 font-semibold w-[110px]">Source</th>
+                  <th className="text-left px-2 py-1.5 font-semibold w-[110px] hidden @[900px]:table-cell">Source</th>
                   <th className="w-[64px]" />
                 </tr>
               </thead>
@@ -153,9 +159,9 @@ export default function EndpointsView({ catalog, running, onDesign, onImport }: 
       </div>
 
       {/* ── Intelligence & strategy ── */}
-      <aside className="w-[340px] flex-shrink-0 border-l border-[#E9E5FB] bg-[#F7F5FE] overflow-y-auto min-h-0 p-3 space-y-3 shadow-[inset_6px_0_14px_-12px_rgba(30,27,75,0.2)]">
+      <aside className="relative z-20 w-[340px] flex-shrink-0 border-l border-[#E9E5FB] bg-[#F7F5FE] overflow-y-auto min-h-0 p-3 space-y-3 shadow-[inset_6px_0_14px_-12px_rgba(30,27,75,0.2)]">
         <StrategyBar strategy={catalog.strategy} profile={profile} onCoverage={(c) => catalog.setStrategy({ coverage: c })} onToggleLayer={catalog.toggleLayer} onAdopt={catalog.adoptRecommendation} />
-        <InsightsPanel profile={profile} analyzing={catalog.analyzing} error={catalog.analysisError} onDeepAnalyze={() => void catalog.analyze(true)} onFocusResource={setResourceFocus} />
+        <InsightsPanel profile={profile} analyzing={catalog.analyzing} error={catalog.analysisError} endpoints={endpoints} onDeepAnalyze={() => void catalog.analyze(true)} onFocusResource={setResourceFocus} />
         {catalog.imports.length > 0 && (
           <div className={`${CARD} p-3.5`}>
             <h3 className="text-[11px] font-semibold text-gray-700 uppercase tracking-wide mb-2">Imports this session</h3>
@@ -191,7 +197,7 @@ function GroupRows({ label, list, collapsed, groupSelected, onToggleCollapse, on
     <>
       <tr className="bg-gradient-to-b from-[#FCFBFF] to-[#F5F3FF] border-y border-[#EDE9FE] shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
         <td className="px-2 py-1"><input type="checkbox" checked={groupSelected} onChange={onToggleGroup} className="w-3.5 h-3.5 rounded border-gray-300 text-[#7C3AED] focus:ring-[#A5B4FC] focus:ring-offset-0" /></td>
-        <td colSpan={6} className="px-2 py-1">
+        <td colSpan={7} className="px-2 py-1">
           <button type="button" onClick={onToggleCollapse} className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-gray-700 hover:text-[#7C3AED]">
             {collapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
             <Globe className="w-3 h-3 text-gray-400" />{label}
@@ -205,16 +211,16 @@ function GroupRows({ label, list, collapsed, groupSelected, onToggleCollapse, on
           <tr key={e.id} className={`border-b border-gray-50 hover:bg-[#FAFAFE] hover:shadow-[inset_3px_0_0_0_#C4B5FD] transition-[background,box-shadow] group ${on ? '' : 'opacity-60'}`}>
             <td className="px-2 py-1.5 align-top"><input type="checkbox" checked={on} onChange={() => onToggle(e.id)} className="w-3.5 h-3.5 rounded border-gray-300 text-[#7C3AED] focus:ring-[#A5B4FC] focus:ring-offset-0" /></td>
             <td className="px-2 py-1.5 align-top"><MethodBadge method={e.method} /></td>
-            <td className="px-2 py-1.5 align-top min-w-0">
-              <div className="font-mono text-[11.5px] text-gray-800 truncate max-w-[520px]" title={e.url}>{pathOf(e.url)}</div>
-              <div className="text-[10.5px] text-gray-500 truncate max-w-[520px]">
+            <td className="px-2 py-1.5 align-top max-w-0 w-full">
+              <div className="font-mono text-[11.5px] text-gray-800 truncate" title={e.url}>{pathOf(e.url)}</div>
+              <div className="text-[10.5px] text-gray-500 truncate">
                 {e.title}{e.deprecated && <span className="ml-1 text-amber-600">· deprecated</span>}{e.discovered && <span className="ml-1 text-[#7C3AED]">· discovered</span>}
                 {e.style && e.style !== 'rest' && <span className="ml-1 uppercase text-gray-400">· {e.style}</span>}
               </div>
             </td>
             <td className="px-2 py-1.5 align-top text-[11px] text-gray-500">{e.auth.type === 'none' ? <span className="text-gray-300">—</span> : e.auth.type === 'apikey' ? `key · ${e.auth.headerName || 'X-API-Key'}` : e.auth.type}</td>
             <td className="px-2 py-1.5 align-top"><StatusCode code={e.expectedStatus || ''} /></td>
-            <td className="px-2 py-1.5 align-top text-[10.5px] text-gray-500 truncate max-w-[110px]" title={e.source?.name}>{e.source ? IMPORT_METHOD_LABELS[e.source.method] || e.source.method : ''}</td>
+            <td className="px-2 py-1.5 align-top text-[10.5px] text-gray-500 truncate max-w-[110px] hidden @[900px]:table-cell" title={e.source?.name}>{e.source ? IMPORT_METHOD_LABELS[e.source.method] || e.source.method : ''}</td>
             <td className="px-2 py-1.5 align-top">
               <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button type="button" onClick={() => onEdit(e)} disabled={running} className="p-1 rounded text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>

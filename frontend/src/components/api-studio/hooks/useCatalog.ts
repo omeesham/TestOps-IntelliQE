@@ -3,16 +3,16 @@
  *
  * Owns the endpoint catalogue (whatever the twelve import methods produced),
  * which of it is selected to run, the pattern profile the platform derived
- * from it, the reviewer's strategy choices, and the environments. Persisted
+ * from it, and the reviewer's strategy choices. Persisted
  * to sessionStorage so a page refresh in the middle of a long review does not
  * throw an hour of imports away.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  analyzeApi, listApiEnvironments, createApiEnvironment, updateApiEnvironment, deleteApiEnvironment,
+  analyzeApi,
 } from '@/services/api';
 import { newEndpointId } from '../format';
-import type { CatalogEndpoint, ApiProfile, Strategy, ApiEnvironment, StrategyLayerId, ImportMethod } from '../types';
+import type { CatalogEndpoint, ApiProfile, Strategy, StrategyLayerId, ImportMethod } from '../types';
 
 const STORAGE_KEY = 'intelliqe_api_catalog_v2';
 const MAX_ENDPOINTS = 600;
@@ -34,7 +34,6 @@ interface Persisted {
   selected: string[];
   profile: ApiProfile | null;
   strategy: Strategy;
-  activeEnvId: string | null;
   imports: ImportRecord[];
 }
 
@@ -54,7 +53,6 @@ function load(): Persisted | null {
       selected: Array.isArray(p.selected) ? p.selected : [],
       profile: p.profile || null,
       strategy: p.strategy && Array.isArray(p.strategy.layers) ? p.strategy : DEFAULT_STRATEGY,
-      activeEnvId: p.activeEnvId || null,
       imports: Array.isArray(p.imports) ? p.imports : [],
     };
   } catch { return null; }
@@ -97,17 +95,14 @@ export function useCatalog() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState('');
 
-  const [environments, setEnvironments] = useState<ApiEnvironment[]>([]);
-  const [envLoading, setEnvLoading] = useState(false);
-  const [activeEnvId, setActiveEnvId] = useState<string | null>(initial.current?.activeEnvId || null);
 
   /* ── Persist ── */
   useEffect(() => {
     try {
-      const p: Persisted = { endpoints, selected: [...selected], profile, strategy, activeEnvId, imports: imports.slice(0, 30) };
+      const p: Persisted = { endpoints, selected: [...selected], profile, strategy, imports: imports.slice(0, 30) };
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify(p));
     } catch { /* quota — the session simply is not persisted */ }
-  }, [endpoints, selected, profile, strategy, activeEnvId, imports]);
+  }, [endpoints, selected, profile, strategy, imports]);
 
   /* ── Analysis — re-derived whenever the catalogue changes ── */
   const analyze = useCallback(async (list: CatalogEndpoint[], deep = false) => {
@@ -209,30 +204,6 @@ export function useCatalog() {
     setStrategyState({ coverage: profile.strategy.recommendedCoverage, layers: profile.strategy.layers.filter((l) => l.enabled).map((l) => l.id) });
   }, [profile]);
 
-  /* ── Environments ── */
-  const loadEnvironments = useCallback(async () => {
-    setEnvLoading(true);
-    try {
-      const { environments: list } = await listApiEnvironments();
-      setEnvironments(list);
-      setActiveEnvId((cur) => (cur && list.some((e: ApiEnvironment) => e.id === cur) ? cur : (list.find((e: ApiEnvironment) => e.isDefault)?.id || null)));
-    } catch { /* the workspace works without environments */ }
-    finally { setEnvLoading(false); }
-  }, []);
-  useEffect(() => { void loadEnvironments(); }, [loadEnvironments]);
-
-  const saveEnvironment = useCallback(async (input: { id?: string; name: string; baseUrl?: string; variables?: any[]; isDefault?: boolean }) => {
-    const { environment } = input.id ? await updateApiEnvironment(input.id, input) : await createApiEnvironment(input);
-    await loadEnvironments();
-    return environment as ApiEnvironment;
-  }, [loadEnvironments]);
-  const removeEnvironment = useCallback(async (id: string) => {
-    await deleteApiEnvironment(id);
-    if (activeEnvId === id) setActiveEnvId(null);
-    await loadEnvironments();
-  }, [activeEnvId, loadEnvironments]);
-  const activeEnv = useMemo(() => environments.find((e) => e.id === activeEnvId) || null, [environments, activeEnvId]);
-
   return {
     endpoints, selected, selectedEndpoints, profile, strategy, imports,
     analyzing, analysisError,
@@ -240,7 +211,6 @@ export function useCatalog() {
     toggle, selectMany, selectAll, clearSelection,
     analyze: (deep = false) => analyze(endpoints, deep),
     setStrategy, toggleLayer, adoptRecommendation,
-    environments, envLoading, activeEnv, activeEnvId, setActiveEnvId, loadEnvironments, saveEnvironment, removeEnvironment,
   };
 }
 
