@@ -68,7 +68,7 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
   return (
     <div className="h-full flex flex-col min-h-0">
       {/* Toolbar */}
-      <div className={`relative z-10 flex items-center gap-2 px-3 h-10 min-w-0 overflow-hidden border-b border-[#E9E5FB] flex-shrink-0 ${STRIP} shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_6px_14px_-12px_rgba(76,29,149,0.45)]`}>
+      <div className={`relative z-10 flex items-center gap-2 px-3 h-10 min-w-0 overflow-hidden border-b border-gray-100 flex-shrink-0 ${STRIP}`}>
         <label className="flex items-center gap-1.5 text-[11px] text-gray-600 cursor-pointer select-none">
           <input
             type="checkbox"

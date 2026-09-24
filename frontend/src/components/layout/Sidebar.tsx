@@ -6,7 +6,7 @@ import { PATH_TO_FEATURE } from '@/config/featureCatalog';
 import { getMenuConfig } from '@/services/api';
 import {
   Home, ClipboardList, BarChart3, Users, Settings,
-  ChevronLeft, ChevronRight, Bug, ToggleRight, Activity,
+  ChevronLeft, ChevronRight, Bug, ToggleRight, Activity, Plug,
 } from 'lucide-react';
 
 interface NavItem {
@@ -31,6 +31,7 @@ const HIDDEN_PATHS: string[] = ['/agent-performance', '/feature-toggles'];
 const navItems: NavItem[] = [
   { name: 'Chat',                  path: '/chat',                 icon: Home,            roles: ALL },
   { name: 'Generated Test Cases',  path: '/generated-tests',      icon: ClipboardList,   roles: ALL },
+  { name: 'API Automation',        path: '/automation',           icon: Plug,            roles: ALL },
   { name: 'Reports',               path: '/reports',              icon: BarChart3,       roles: ALL },
   { name: 'Bug Tracker',           path: '/bug-tracker',          icon: Bug,             roles: ALL },
   { name: 'Agent Performance',     path: '/agent-performance',    icon: Activity,        roles: ALL },

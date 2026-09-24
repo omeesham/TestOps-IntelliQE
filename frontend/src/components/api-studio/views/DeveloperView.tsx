@@ -6,9 +6,10 @@
  * and base URL substituted so every snippet is copy-paste ready.
  */
 import { useMemo, useState } from 'react';
-import { Terminal, Globe, Puzzle, KeyRound, Eye, EyeOff } from 'lucide-react';
-import { CARD, BRAND_CHIP, MUTED_CHIP, SECONDARY_BTN, STRIP, INSET, CHIP_3D, methodColor } from '../format';
+import { Terminal, Globe, Puzzle, KeyRound, Eye, EyeOff, AlertTriangle, ShieldAlert, Copy } from 'lucide-react';
+import { CARD, BRAND_CHIP, MUTED_CHIP, SECONDARY_BTN, PRIMARY_BTN, STRIP, INSET, CHIP_3D, methodColor } from '../format';
 import { CodeBlock, CopyButton } from '../primitives';
+import { useToast } from '@/components/feedback/ToastProvider';
 
 const BASE = '/api/v1/public/api-automation';
 
@@ -28,10 +29,20 @@ const ROUTES: { method: string; path: string; what: string; body?: string }[] = 
 ];
 
 export default function DeveloperView() {
-  const [showToken, setShowToken] = useState(false);
+  const toast = useToast();
+  const [revealed, setRevealed] = useState(false);
+  const [confirm, setConfirm] = useState<null | 'reveal' | 'copy'>(null);
   const token = useMemo(() => { try { return sessionStorage.getItem('intelliqe_token') || ''; } catch { return ''; } }, []);
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://intelliqe.example.com';
-  const masked = token ? `${token.slice(0, 10)}…${token.slice(-4)}` : '(sign in to get a token)';
+  // Base URL comes from configuration (env), not the current window — a token
+  // pasted into CI needs the real API host, which may differ from this origin.
+  const origin = (import.meta.env.VITE_PUBLIC_API_BASE_URL as string) || (typeof window !== 'undefined' ? window.location.origin : 'https://intelliqe.example.com');
+  const hasToken = !!token;
+  const dots = '•'.repeat(28);
+  const doCopy = async () => {
+    try { await navigator.clipboard.writeText(token); toast.success('Token copied', 'Handle it like a password.'); }
+    catch { toast.error('Copy failed', 'Reveal it and copy manually.'); }
+    setConfirm(null);
+  };
 
   const curlRun = `curl -s -X POST ${origin}${BASE}/runs \\
   -H "Authorization: Bearer $INTELLIQE_TOKEN" \\
@@ -84,22 +95,36 @@ intelliqe-api session <runId> TC-003
 }`;
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="max-w-[1100px] mx-auto px-6 py-5 space-y-4">
+    <div className="max-w-[1100px] space-y-4">
         <div>
-          <h2 className="text-[14px] font-semibold text-gray-900">Developer access</h2>
+          <h2 className="text-[14px] font-semibold text-gray-900">Developer &amp; API access</h2>
           <p className="text-[11.5px] text-gray-500">Everything the workspace does is available over a RESTful API and a CLI — standard GET / POST / PUT / DELETE, JSON in, <code className="font-mono">{'{ data, meta }'}</code> out, Bearer auth.</p>
         </div>
 
-        {/* Token */}
+        {/* Token — sensitive: hidden by default, Reveal/Copy both require confirmation. */}
         <div className={`${CARD} p-4`}>
-          <div className="flex items-center gap-2"><KeyRound className="w-4 h-4 text-[#7C3AED]" /><h3 className="text-[12.5px] font-semibold text-gray-900">Your token</h3><span className="text-[11px] text-gray-400">the same session token this browser uses</span></div>
-          <div className="mt-2 flex items-center gap-2">
-            <code className={`flex-1 min-w-0 font-mono text-[11.5px] text-gray-700 bg-[#FCFBFF] border border-[#E4E0F5] rounded-md px-2.5 py-1.5 truncate ${INSET}`}>{showToken ? token || masked : masked}</code>
-            <button type="button" onClick={() => setShowToken((s) => !s)} className={SECONDARY_BTN}>{showToken ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}{showToken ? 'Hide' : 'Reveal'}</button>
-            <CopyButton text={token} label="Copy token" />
+          <div className="flex items-center gap-2">
+            <KeyRound className="w-4 h-4 text-[#7C3AED]" />
+            <h3 className="text-[12.5px] font-semibold text-gray-900">Your API token</h3>
+            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5"><ShieldAlert className="w-3 h-3" />Sensitive</span>
           </div>
-          <p className="mt-2 text-[10.5px] text-gray-400">Base URL: <code className="font-mono">{origin}{BASE}</code> · header <code className="font-mono">Authorization: Bearer &lt;token&gt;</code>. For CI, mint a token with <code className="font-mono">POST /api/auth/login</code>.</p>
+          <div className="mt-2 flex items-center gap-2">
+            <code className={`flex-1 min-w-0 font-mono text-[11.5px] rounded-md px-2.5 py-1.5 truncate border ${revealed ? 'text-gray-700 bg-[#FCFBFF] border-[#E4E0F5]' : 'text-gray-400 bg-gray-50 border-gray-200 select-none'} ${INSET}`}>{!hasToken ? '(sign in to get a token)' : revealed ? token : dots}</code>
+            <button type="button" onClick={() => { if (revealed) setRevealed(false); else setConfirm('reveal'); }} disabled={!hasToken} className={SECONDARY_BTN}>{revealed ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}{revealed ? 'Hide' : 'Reveal'}</button>
+            <button type="button" onClick={() => setConfirm('copy')} disabled={!hasToken} className={SECONDARY_BTN}><Copy className="w-3.5 h-3.5" />Copy</button>
+          </div>
+
+          {confirm && (
+            <div className="mt-2 flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200">
+              <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+              <p className="text-[11.5px] text-amber-800 min-w-0 flex-1">{confirm === 'reveal' ? 'Reveal your token on screen? Anyone who can see the screen can read it.' : 'Copy your token to the clipboard? Treat it like a password.'}</p>
+              <button type="button" onClick={() => { if (confirm === 'reveal') { setRevealed(true); setConfirm(null); } else void doCopy(); }} className={PRIMARY_BTN}>{confirm === 'reveal' ? 'Reveal' : 'Copy'}</button>
+              <button type="button" onClick={() => setConfirm(null)} className={SECONDARY_BTN}>Cancel</button>
+            </div>
+          )}
+
+          <p className="mt-2 text-[10.5px] text-gray-500">This is your browser <span className="font-semibold">session token</span> — treat it like a password. For CI/CD, mint a dedicated token with <code className="font-mono">POST /api/auth/login</code> rather than reusing this one.</p>
+          <p className="mt-1 text-[10.5px] text-gray-400">Base URL <code className="font-mono">{origin}{BASE}</code> · header <code className="font-mono">Authorization: Bearer &lt;token&gt;</code></p>
         </div>
 
         {/* REST */}
@@ -133,7 +158,6 @@ intelliqe-api session <runId> TC-003
           <div className={`flex items-center gap-2 px-4 h-11 border-b border-[#EDE9FE] ${STRIP}`}><Puzzle className="w-4 h-4 text-[#7C3AED]" /><h3 className="text-[12.5px] font-semibold text-gray-900">Custom connector manifest</h3><span className="text-[11px] text-gray-400">keep it next to the code; import it with the Connector method, the CLI or POST /imports</span><CopyButton text={manifest} className="ml-auto" /></div>
           <CodeBlock code={manifest} className="p-4" />
         </div>
-      </div>
     </div>
   );
 }

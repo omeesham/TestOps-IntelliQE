@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   connectJira,
@@ -34,7 +35,6 @@ import {
   SkipForward, XCircle, Volume2, VolumeX, Settings, Github, LifeBuoy,
 } from 'lucide-react';
 import { initTTS, speak, speakAsync, waitForSpeech, waitForVoices, stopSpeaking, isTTSEnabled, toggleTTS } from '@/utils/tts';
-import ApiStudio from '@/components/api-studio/ApiStudio';
 import { useToast } from '@/components/feedback/ToastProvider';
 
 import Loader from '@/components/feedback/Loader';
@@ -278,6 +278,7 @@ function gitRepoLabel(url?: string): string {
    ═══════════════════════════════════════════════════════════════ */
 export default function ChatPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const toast = useToast();
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -498,7 +499,8 @@ export default function ChatPage() {
       const s = JSON.parse(saved);
       if (s.messages?.length)       setMessages(s.messages);
       if (s.step)                   setStep(s.step);
-      if (s.category)               setCategory(s.category);
+      // 'api' now lives at its own route — never restore it into the chat shell.
+      if (s.category && s.category !== 'api') setCategory(s.category);
       if (s.source)                 setSource(s.source);
       if (s.pendingRequirements)    setPendingRequirements(s.pendingRequirements);
       if (s.storyMeta)              setStoryMeta(s.storyMeta);
@@ -603,14 +605,13 @@ export default function ChatPage() {
       push('tessa', `${c.title} is coming soon.`);
       return;
     }
+
+    // API Automation is now a first-class page with its own route — leave the
+    // chat shell entirely rather than swapping the studio in beneath this header.
+    if (c.id === 'api') { navigate('/automation'); return; }
+
     setCategory(c.id);
     setSubCategory(c.title);
-
-    // API Automation has its own workspace — a conversational wizard has
-    // nothing to add to a flow whose entire input is one HTTP request. Nothing
-    // is pushed to the chat log for it: the studio replaces this screen, so a
-    // message here would sit unanswered.
-    if (c.id === 'api') return;
 
     push('user', c.title);
     setSelectedColumns(defaultColumnsFor());
@@ -3131,21 +3132,8 @@ export default function ChatPage() {
   /* ═══════════════════════════════════════════════════════════════
      MAIN RENDER
      ═══════════════════════════════════════════════════════════════ */
-  // API Automation runs in its own workspace. Its whole input is one HTTP
-  // request, so a conversational wizard adds nothing — the studio replaces the
-  // chat shell (and Tessa) outright rather than being embedded in it.
-  if (category === 'api') {
-    return (
-      <ApiStudio
-        onExit={() => {
-          stopSpeaking();
-          setCategory(null);
-          setSubCategory('');
-          setStep('welcome');
-        }}
-      />
-    );
-  }
+  // API Automation is a first-class page (/api-automation) — selecting it from
+  // the category picker navigates there, so it never renders inside the chat.
 
   return (
     <div className="h-full flex flex-col bg-[#FAFAFE]">

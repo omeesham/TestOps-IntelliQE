@@ -61,7 +61,7 @@ export default function StrategyBar({ strategy, profile, onCoverage, onToggleLay
             <button
               key={c.id} type="button" onClick={() => onCoverage(c.id)} title={c.hint}
               className={`flex-1 px-2 py-1 rounded-md text-[11px] font-medium transition-colors ${strategy.coverage === c.id
-                ? 'bg-gradient-to-b from-white to-[#FCFBFF] text-[#6D28D9] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(30,27,75,0.15)]'
+                ? 'bg-white text-[#6D28D9] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(30,27,75,0.15)]'
                 : 'text-gray-500 hover:text-gray-700'}`}
             >
               {c.label}

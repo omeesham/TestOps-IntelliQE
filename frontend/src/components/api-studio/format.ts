@@ -57,43 +57,34 @@ const CATEGORY_LABELS: Record<string, string> = {
    shadow; PRESSABLE things get a hard bottom edge that collapses on click.
    Purely presentational — no run logic depends on any of these classes. */
 
-/** A raised surface: white highlight along the top edge, soft violet ambient shadow. */
-export const RAISED =
-  'shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(15,23,42,0.05),0_12px_28px_-16px_rgba(76,29,149,0.4)]';
-/** A raised surface that lifts further on hover. */
-export const RAISED_HOVER =
-  'transition-all duration-150 hover:-translate-y-0.5 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_2px_4px_rgba(15,23,42,0.05),0_20px_36px_-16px_rgba(76,29,149,0.5)]';
-/** A recessed surface: inputs, wells, table bodies. */
-export const INSET =
-  'shadow-[inset_0_1.5px_3px_rgba(30,27,75,0.08),inset_0_0_0_1px_rgba(221,214,254,0.35)]';
-/** Small embossed chip: badges, pills, status codes. */
-export const CHIP_3D =
-  'shadow-[inset_0_1px_0_rgba(255,255,255,0.75),0_1px_2px_rgba(30,27,75,0.10)]';
+/*
+ * Native alignment: the app's global stylesheet (src/index.css) already skins
+ * `.bg-white.rounded-xl/2xl` cards, buttons, inputs and `thead` with the violet
+ * raised/hover/inset polish shared by every native page. The studio used to opt
+ * out (`data-surface="3d"`) and hand-roll the same effects here. It no longer
+ * opts out, so these helpers are neutralised — the shared layer does the work,
+ * and the tokens below carry only the native flat class strings. Kept as
+ * exported names so call sites need no churn.
+ */
+export const RAISED = '';
+export const RAISED_HOVER = '';
+export const INSET = '';
+export const CHIP_3D = '';
+export const BAR_3D = '';
+export const BUTTON_3D = '';
+export const SECONDARY_3D = '';
 
+/** The app's primary gradient — matches every native primary button. */
 export const BRAND_BUTTON =
-  'bg-gradient-to-b from-[#8B5CF6] to-[#6366F1] hover:from-[#7C3AED] hover:to-[#4F46E5]';
-export const BAR_3D =
-  'shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(15,23,42,0.05),0_8px_20px_-10px_rgba(76,29,149,0.35)]';
-/** The primary key: a hard bottom edge for the raised face, a soft violet
-    ambient glow, a lift on hover and a real press-down on click. */
-export const BUTTON_3D =
-  'shadow-[0_3px_0_0_#4338CA,0_8px_18px_-6px_rgba(99,102,241,0.55)] ' +
-  'hover:-translate-y-px hover:shadow-[0_4px_0_0_#4338CA,0_12px_24px_-6px_rgba(99,102,241,0.6)] ' +
-  'active:translate-y-[3px] active:shadow-[0_0_0_0_#4338CA,0_4px_10px_-6px_rgba(99,102,241,0.5)] ' +
-  'disabled:translate-y-0 disabled:shadow-[0_2px_0_0_#c7d2fe] ' +
-  'ring-1 ring-inset ring-white/25';
-/** The secondary key: the same press mechanics on a white face with a violet edge. */
-export const SECONDARY_3D =
-  'shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_2px_0_0_#DDD6FE,0_6px_14px_-8px_rgba(76,29,149,0.35)] ' +
-  'hover:-translate-y-px hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_3px_0_0_#C4B5FD,0_10px_18px_-8px_rgba(76,29,149,0.45)] ' +
-  'active:translate-y-[2px] active:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_0_0_0_#DDD6FE,0_2px_6px_-6px_rgba(76,29,149,0.3)] ' +
-  'disabled:translate-y-0 disabled:shadow-[0_1px_0_0_#EDE9FE]';
-/** The primary call-to-action, fully assembled. */
-export const PRIMARY_BTN = `inline-flex items-center gap-1.5 px-3.5 py-2 text-[12px] font-semibold text-white ${BRAND_BUTTON} ${BUTTON_3D} rounded-lg disabled:opacity-40 transition-all`;
-export const SECONDARY_BTN = `inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] font-medium text-gray-600 bg-gradient-to-b from-white to-[#FAFAFE] border border-[#E4E0F5] rounded-md hover:text-[#7C3AED] hover:border-[#DDD6FE] transition-all disabled:opacity-40 ${SECONDARY_3D}`;
-export const CARD = `bg-gradient-to-b from-white to-[#FCFBFF] border border-[#E9E5FB] rounded-xl ${RAISED}`;
-/** An interactive card that lifts on hover. */
-export const CARD_HOVER = `${CARD} ${RAISED_HOVER}`;
+  'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:from-[#6D28D9] hover:to-[#4F46E5]';
+/** The primary call-to-action — native gradient + soft violet shadow. */
+export const PRIMARY_BTN = `inline-flex items-center gap-1.5 px-3.5 py-2 text-[13px] font-semibold text-white ${BRAND_BUTTON} rounded-lg shadow-md shadow-purple-500/25 disabled:opacity-40 transition-all`;
+/** The secondary call-to-action — the native white/outline button. */
+export const SECONDARY_BTN = 'inline-flex items-center gap-1.5 px-3 py-2 text-[13px] font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:text-[#7C3AED] transition-colors disabled:opacity-40';
+/** The native card/panel — the global stylesheet adds the violet raise + hover. */
+export const CARD = 'bg-white rounded-2xl border border-gray-100 shadow-sm';
+/** An interactive card (hover handled globally, with an explicit fallback). */
+export const CARD_HOVER = `${CARD} transition-shadow hover:shadow-md`;
 /**
  * A form field WITHOUT a width, so the call site can size it. Use this whenever
  * the control is not meant to fill its row.
@@ -107,13 +98,13 @@ export const FIELD = `px-2.5 py-1.5 text-[12px] text-gray-800 bg-[#FCFBFF] borde
 /** The same field, filling its container — the common case in forms. */
 export const INPUT = `w-full ${FIELD}`;
 export const LABEL = 'block text-[10.5px] font-semibold uppercase tracking-wide text-gray-500 mb-1';
-/** Table header strip: a light gradient with a bevelled bottom edge. */
-export const THEAD = 'bg-gradient-to-b from-[#FAFAFE] to-[#F3F1FB] shadow-[inset_0_-1px_0_#E9E5FB,inset_0_1px_0_rgba(255,255,255,0.9)]';
-/** Section/toolbar strip inside a card. */
-export const STRIP = 'bg-gradient-to-b from-[#FCFBFF] to-[#F7F5FE] shadow-[inset_0_-1px_0_#EDE9FE,inset_0_1px_0_rgba(255,255,255,0.9)]';
-/** Icon tile — the little squircle that holds a lucide icon. */
-export const TILE = 'bg-gradient-to-br from-[#F5F3FF] to-[#EDE9FE] border border-[#DDD6FE] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_2px_5px_-2px_rgba(76,29,149,0.35)]';
-export const TILE_ACTIVE = 'bg-gradient-to-br from-[#8B5CF6] to-[#6366F1] border border-transparent shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_4px_10px_-3px_rgba(124,58,237,0.6)]';
+/** Table header strip — the native `bg-gray-50` head (global CSS bevels it). */
+export const THEAD = 'bg-gray-50';
+/** Section/toolbar strip inside a card — a light native tint. */
+export const STRIP = 'bg-gray-50/60 border-gray-100';
+/** Icon tile — the little squircle that holds a lucide icon (native flat violet). */
+export const TILE = 'bg-[#F5F3FF] border border-[#DDD6FE]';
+export const TILE_ACTIVE = 'bg-gradient-to-br from-[#7C3AED] to-[#6366F1] border border-transparent';
 
 export function categoryMeta(type: string) {
   const key = (type || '').toLowerCase();

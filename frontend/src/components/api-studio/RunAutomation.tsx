@@ -135,7 +135,7 @@ function SchedulesTab({ endpoints, schedules, busyId, setBusyId, onChange, toast
   return (
     <div className="space-y-4">
       {/* New schedule */}
-      <div className="border border-[#E9E5FB] rounded-lg p-3 bg-gradient-to-b from-white to-[#FCFBFF]">
+      <div className="border border-[#E9E5FB] rounded-lg p-3 bg-white">
         <div className="grid grid-cols-[1fr_150px] gap-2.5 items-end">
           <div>
             <label className={LABEL}>New schedule name</label>
@@ -233,7 +233,7 @@ function WebhooksTab({ webhooks, busyId, setBusyId, onChange, toast }: {
 
   return (
     <div className="space-y-4">
-      <div className="border border-[#E9E5FB] rounded-lg p-3 bg-gradient-to-b from-white to-[#FCFBFF]">
+      <div className="border border-[#E9E5FB] rounded-lg p-3 bg-white">
         <div className="grid grid-cols-[1fr_130px] gap-2.5 items-end">
           <div>
             <label className={LABEL}>Name</label>

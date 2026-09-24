@@ -9,6 +9,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/login': 'Sign In',
   '/user-management': 'User Management',
   '/generated-tests': 'Generated Test Cases',
+  '/automation': 'API Automation',
 };
 
 export default function Header() {

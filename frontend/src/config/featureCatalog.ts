@@ -56,6 +56,15 @@ export const FEATURE_CATALOG: FeatureDef[] = [
     path: '/generated-tests',
   },
   {
+    // Route is /automation (not /api-automation) so the client path never
+    // collides with the /api backend proxy prefix in dev or production.
+    key: 'api-automation',
+    name: 'API Automation',
+    description: 'Import any API, then design, run, self-heal and report automatically.',
+    group: 'Core',
+    path: '/automation',
+  },
+  {
     key: 'reports',
     name: 'Reports',
     description: 'Execution reports, Allure reports and export history.',

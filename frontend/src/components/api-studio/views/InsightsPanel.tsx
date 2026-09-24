@@ -149,7 +149,7 @@ export default function InsightsPanel({ profile, analyzing, error, endpoints, on
         {profile.flows.length === 0 ? <p className="text-[11px] text-gray-400">No create→read→update→delete chains found — flows need at least a create and a read on the same resource.</p> : (
           <div className="space-y-1.5">
             {profile.flows.map((f) => (
-              <div key={f.id} className="px-2 py-1.5 rounded-md bg-gradient-to-b from-white to-[#FAFAFE] border border-[#EDE9FE] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_2px_5px_-3px_rgba(76,29,149,0.3)]">
+              <div key={f.id} className="px-2 py-1.5 rounded-md bg-white border border-[#EDE9FE] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_2px_5px_-3px_rgba(76,29,149,0.3)]">
                 <p className="flex items-center gap-1.5 text-[11.5px] font-medium text-gray-800">
                   <span className="truncate">{f.name}</span>
                   <span className="ml-auto flex-shrink-0 font-mono text-[9.5px] text-[#6D28D9] bg-[#F5F3FF] border border-[#DDD6FE] rounded px-1 tabular-nums">{f.steps.length} steps</span>

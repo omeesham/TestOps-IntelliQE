@@ -82,7 +82,7 @@ export default function ReportTab({
     <div className="h-full overflow-y-auto min-h-0">
       <div className="max-w-4xl mx-auto p-5 space-y-5">
         {/* Verdict */}
-        <div className={`rounded-xl border p-4 ${RAISED} ${green ? 'bg-gradient-to-b from-emerald-50 to-[#E6F7EF] border-emerald-200' : 'bg-gradient-to-b from-white to-[#FCFBFF] border-[#E9E5FB]'}`}>
+        <div className={`rounded-xl border p-4 ${RAISED} ${green ? 'bg-gradient-to-b from-emerald-50 to-[#E6F7EF] border-emerald-200' : 'bg-white border-[#E9E5FB]'}`}>
           <div className="flex items-start gap-3">
             <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ring-1 ring-white/40 ${green ? 'bg-gradient-to-br from-emerald-400 to-emerald-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_3px_0_0_#047857,0_8px_16px_-6px_rgba(16,185,129,0.6)]' : TILE_ACTIVE + ' shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_3px_0_0_#4338CA,0_8px_16px_-6px_rgba(124,58,237,0.6)]'}`}>
               {green ? <CheckCircle2 className="w-5 h-5 text-white" /> : <BarChart3 className="w-5 h-5 text-white" />}
@@ -151,7 +151,7 @@ export default function ReportTab({
             type="button"
             onClick={() => onExport('excel')}
             disabled={exporting || !canExport}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-700 bg-gradient-to-b from-white to-[#FAFAFE] border border-[#E4E0F5] rounded-md hover:border-[#C4B5FD] hover:text-[#6D28D9] transition-all disabled:opacity-40 ${SECONDARY_3D}`}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-700 bg-white border border-[#E4E0F5] rounded-md hover:border-[#C4B5FD] hover:text-[#6D28D9] transition-all disabled:opacity-40 ${SECONDARY_3D}`}
           >
             {exporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
             Export scenarios (CSV)
@@ -160,7 +160,7 @@ export default function ReportTab({
             type="button"
             onClick={() => onExport('json')}
             disabled={exporting || !canExport}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-700 bg-gradient-to-b from-white to-[#FAFAFE] border border-[#E4E0F5] rounded-md hover:border-[#C4B5FD] hover:text-[#6D28D9] transition-all disabled:opacity-40 ${SECONDARY_3D}`}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-700 bg-white border border-[#E4E0F5] rounded-md hover:border-[#C4B5FD] hover:text-[#6D28D9] transition-all disabled:opacity-40 ${SECONDARY_3D}`}
           >
             <Download className="w-3.5 h-3.5" />Export (JSON)
           </button>

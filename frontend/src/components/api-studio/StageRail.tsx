@@ -29,7 +29,7 @@ function Marker({ status, index }: { status: Stage['status']; index: number }) {
   }
   if (status === 'running') {
     return (
-      <div className="w-5 h-5 rounded-full bg-gradient-to-b from-[#8B5CF6] to-[#6D28D9] flex items-center justify-center ring-2 ring-white shadow-[0_0_0_4px_rgba(124,58,237,0.15),0_2px_6px_-1px_rgba(124,58,237,0.6)]">
+      <div className="w-5 h-5 rounded-full bg-gradient-to-b from-[#7C3AED] to-[#6D28D9] flex items-center justify-center ring-2 ring-white shadow-[0_0_0_4px_rgba(124,58,237,0.15),0_2px_6px_-1px_rgba(124,58,237,0.6)]">
         <Loader2 className="w-3 h-3 text-white animate-spin" />
       </div>
     );
@@ -124,13 +124,13 @@ export interface PushRailProps {
 
 export default function StageRail({ stages, push }: { stages: Stage[]; push?: PushRailProps }) {
   return (
-    <div className="relative z-10 flex items-stretch bg-gradient-to-b from-white to-[#FCFBFF] border-b border-[#E9E5FB] flex-shrink-0 overflow-x-auto shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_6px_16px_-12px_rgba(76,29,149,0.45)]">
+    <div className="relative z-10 flex items-stretch bg-white rounded-2xl border border-gray-100 shadow-sm flex-shrink-0 overflow-x-auto">
       {stages.map((s, i) => (
         <div
           key={s.key}
           className={`flex items-center gap-2 px-3 py-2 min-w-[190px] flex-1 border-r border-gray-100 last:border-r-0 transition-colors ${
             s.status === 'running'
-              ? 'bg-gradient-to-b from-[#F5F3FF] to-[#EDE9FE] shadow-[inset_0_2px_0_rgba(124,58,237,0.45),inset_0_-1px_0_rgba(255,255,255,0.8),0_4px_12px_-8px_rgba(76,29,149,0.45)]'
+              ? 'bg-purple-50'
               : ''
           }`}
           title={s.hint}
@@ -152,7 +152,7 @@ export default function StageRail({ stages, push }: { stages: Stage[]; push?: Pu
 
       {/* Push to repo — pinned to the tail of the rail, just past Report. */}
       {push?.show && (
-        <div className="flex items-center px-3 py-2 flex-shrink-0 border-l border-[#E9E5FB] bg-gradient-to-b from-white to-[#FCFBFF]">
+        <div className="flex items-center px-3 py-2 flex-shrink-0 border-l border-[#E9E5FB] bg-white">
           <PushAction push={push} />
         </div>
       )}

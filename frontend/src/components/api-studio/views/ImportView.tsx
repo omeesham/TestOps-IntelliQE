@@ -89,7 +89,7 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
           onDrop={onDrop}
           className={`${CARD} relative overflow-hidden px-6 py-7 text-center transition-all ${dragging ? 'border-[#A5B4FC] bg-[#F5F3FF] scale-[1.01] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_24px_48px_-16px_rgba(76,29,149,0.55)]' : ''}`}
         >
-          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#8B5CF6] to-[#6366F1] shadow-[0_2px_6px_rgba(124,58,237,0.45)]" />
+          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] shadow-[0_2px_6px_rgba(124,58,237,0.45)]" />
           <div className={`mx-auto w-14 h-14 rounded-2xl flex items-center justify-center ${TILE_ACTIVE} shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_4px_0_0_#4338CA,0_14px_28px_-8px_rgba(124,58,237,0.65)]`}>
             {busy === 'bulk' ? <Loader2 className="w-5 h-5 text-white animate-spin" /> : <UploadCloud className="w-5 h-5 text-white" />}
           </div>
@@ -253,7 +253,7 @@ function MethodForm({ def, busy, onClose, onRun }: { def: ImportMethodDef; busy:
         {tabs.length > 1 && (
           <div className="ml-3 flex gap-0.5 bg-[#EEEBFA] rounded-md p-0.5 shadow-[inset_0_1px_3px_rgba(30,27,75,0.12)]">
             {tabs.map((t) => (
-              <button key={t.id} type="button" onClick={() => setInput(t.id)} className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${input === t.id ? 'bg-gradient-to-b from-white to-[#FCFBFF] text-[#6D28D9] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(30,27,75,0.15)]' : 'text-gray-500 hover:text-gray-700'}`}>{t.label}</button>
+              <button key={t.id} type="button" onClick={() => setInput(t.id)} className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${input === t.id ? 'bg-white text-[#6D28D9] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(30,27,75,0.15)]' : 'text-gray-500 hover:text-gray-700'}`}>{t.label}</button>
             ))}
           </div>
         )}

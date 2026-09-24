@@ -134,7 +134,7 @@ export default function LoadTest({ endpoints, onClose }: { endpoints: CatalogEnd
 function Metric({ label, value, unit, tone = 'neutral', small = false }: { label: string; value: string; unit?: string; tone?: 'neutral' | 'good' | 'bad' | 'warn'; small?: boolean }) {
   const color = { neutral: 'text-gray-800', good: 'text-emerald-700', bad: 'text-red-700', warn: 'text-amber-700' }[tone];
   return (
-    <div className="border border-[#E9E5FB] rounded-lg px-2.5 py-2 bg-gradient-to-b from-white to-[#FCFBFF]">
+    <div className="border border-[#E9E5FB] rounded-lg px-2.5 py-2 bg-white">
       <div className="text-[9.5px] font-semibold uppercase tracking-wide text-gray-400">{label}</div>
       <div className={`${small ? 'text-[15px]' : 'text-xl'} font-semibold tabular-nums leading-none mt-0.5 ${color}`}>{value}</div>
       {unit && <div className="text-[9.5px] text-gray-400 mt-0.5">{unit}</div>}

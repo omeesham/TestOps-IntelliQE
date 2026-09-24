@@ -89,7 +89,7 @@ export default function BaselineDiff({ endpoints, onClose }: { endpoints: Catalo
         <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 border-b border-[#EDE9FE] flex-shrink-0">
           <button
             type="button" onClick={() => void capture()} disabled={running || endpoints.length === 0}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold text-white bg-gradient-to-b from-[#8B5CF6] to-[#6D28D9] border border-[#6D28D9]/50 ring-1 ring-inset ring-white/20 ${RAISED} hover:from-[#7C3AED] hover:to-[#5B21B6] disabled:opacity-50`}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold text-white bg-gradient-to-b from-[#7C3AED] to-[#6D28D9] border border-[#6D28D9]/50 ring-1 ring-inset ring-white/20 ${RAISED} hover:from-[#7C3AED] hover:to-[#5B21B6] disabled:opacity-50`}
           >
             {busy === 'capturing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />}
             Capture baseline

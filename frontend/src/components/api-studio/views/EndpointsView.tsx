@@ -113,7 +113,7 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
             Sizes come from @container queries because the constraint is this
             column’s width — the nav rail and the insights panel take their cut
             first, so a viewport breakpoint would report room that is not here. */}
-        <div className={`relative z-10 flex items-center gap-2 px-4 h-11 min-w-0 overflow-hidden border-b border-[#E9E5FB] flex-shrink-0 ${STRIP} shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_6px_14px_-12px_rgba(76,29,149,0.45)]`}>
+        <div className={`relative z-10 flex items-center gap-2 px-4 h-11 min-w-0 overflow-hidden border-b border-gray-100 flex-shrink-0 ${STRIP}`}>
           <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
             <label className="flex items-center gap-1.5 text-[11px] text-gray-600 cursor-pointer select-none flex-shrink-0">
               <input type="checkbox" checked={allVisibleSelected} onChange={() => catalog.selectMany(visible.map((e) => e.id), !allVisibleSelected)} className="w-3.5 h-3.5 rounded border-gray-300 text-[#7C3AED] focus:ring-[#A5B4FC] focus:ring-offset-0" />
@@ -197,7 +197,7 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
           </div>
         </div>
 
-        <div className="flex-1 overflow-auto min-w-0 min-h-0 bg-white shadow-[inset_0_3px_8px_-6px_rgba(30,27,75,0.18)]">
+        <div className="flex-1 overflow-auto min-w-0 min-h-0 bg-white">
           {visible.length === 0 ? (
             <EmptyState icon={Search} title="No endpoints match" hint="Clear the filter or pick another resource." />
           ) : (
@@ -233,7 +233,7 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
       </div>
 
       {/* ── Intelligence & strategy ── */}
-      <aside className="relative z-20 w-[340px] flex-shrink-0 border-l border-[#E9E5FB] bg-[#F7F5FE] overflow-y-auto min-h-0 p-3 space-y-3 shadow-[inset_6px_0_14px_-12px_rgba(30,27,75,0.2)]">
+      <aside className="relative z-20 w-[340px] flex-shrink-0 border-l border-gray-100 bg-gray-50/60 overflow-y-auto min-h-0 p-3 space-y-3">
         <StrategyBar strategy={catalog.strategy} profile={profile} onCoverage={(c) => catalog.setStrategy({ coverage: c })} onToggleLayer={catalog.toggleLayer} onAdopt={catalog.adoptRecommendation} />
         <InsightsPanel profile={profile} analyzing={catalog.analyzing} error={catalog.analysisError} endpoints={endpoints} onDeepAnalyze={() => void catalog.analyze(true)} onFocusResource={setResourceFocus} />
         {catalog.imports.length > 0 && (
@@ -342,7 +342,7 @@ function GroupRows({ label, list, collapsed, groupSelected, onToggleCollapse, on
 }) {
   return (
     <>
-      <tr className="bg-gradient-to-b from-[#FCFBFF] to-[#F5F3FF] border-y border-[#EDE9FE] shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+      <tr className="bg-gray-50 border-y border-gray-100">
         <td className="px-2 py-1"><input type="checkbox" checked={groupSelected} onChange={onToggleGroup} className="w-3.5 h-3.5 rounded border-gray-300 text-[#7C3AED] focus:ring-[#A5B4FC] focus:ring-offset-0" /></td>
         <td colSpan={7} className="px-2 py-1">
           <button type="button" onClick={onToggleCollapse} className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-gray-700 hover:text-[#7C3AED]">

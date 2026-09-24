@@ -145,7 +145,7 @@ export default function ActivityPanel({ run, onClose }: { run: ApiRun; onClose: 
 
       {/* ── What is under test, and how far the pipeline has got ── */}
       {started && (
-        <div className="flex-shrink-0 px-3 pt-2.5 pb-2 border-b border-[#EDE9FE] bg-gradient-to-b from-white to-[#FCFBFF]">
+        <div className="flex-shrink-0 px-3 pt-2.5 pb-2 border-b border-[#EDE9FE] bg-white">
           <div className="flex items-center gap-1.5 min-w-0">
             <Globe className="w-3 h-3 text-gray-300 flex-shrink-0" />
             <span className="text-[11px] text-gray-700 truncate" title={run.runLabel}>{run.runLabel || 'Run'}</span>
@@ -171,7 +171,7 @@ export default function ActivityPanel({ run, onClose }: { run: ApiRun; onClose: 
                 key={s.key}
                 title={`${s.label} — ${s.detail}`}
                 className={`h-1.5 flex-1 rounded-full transition-colors ${
-                  s.status === 'done' ? 'bg-gradient-to-r from-[#8B5CF6] to-[#6366F1]'
+                  s.status === 'done' ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1]'
                     : s.status === 'running' ? 'bg-[#A78BFA] animate-pulse'
                       : s.status === 'failed' ? 'bg-red-400'
                         : s.status === 'skipped' ? 'bg-gray-200'

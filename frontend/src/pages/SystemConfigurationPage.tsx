@@ -8,7 +8,10 @@ import GitRepositoriesSection from '@/components/system-config/GitRepositoriesSe
 import NotificationsSection from '@/components/system-config/NotificationsSection';
 import LlmConfigurationSection from '@/components/system-config/LLMConfigurationSection';
 import VoiceAssistantSection from '@/components/system-config/VoiceAssistantSection';
+import IntegrationsView from '@/components/api-studio/views/IntegrationsView';
+import DeveloperView from '@/components/api-studio/views/DeveloperView';
 import { getConfigurations } from '@/services/api';
+import { useAuth } from '@/contexts/AuthContext';
 import ErrorAlert from '@/components/feedback/ErrorAlert';
 import { normalizeError, type NormalizedError } from '@/utils/apiError';
 
@@ -22,6 +25,8 @@ interface DbConfig {
 }
 
 export default function SystemConfigurationPage() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [activeTab, setActiveTab] = useState<TabKey>('general');
   const [configs, setConfigs] = useState<DbConfig[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,6 +50,12 @@ export default function SystemConfigurationPage() {
   }, [fetchConfigs]);
 
   const renderSection = () => {
+    // Integrations and Developer are static (they read no `configs`), so they
+    // render regardless of a configs-fetch error — a transient error must not
+    // blank the developer docs or the tool catalogue.
+    if (activeTab === 'api-integrations') return <IntegrationsView />;
+    if (activeTab === 'api-developer') return isAdmin ? <DeveloperView /> : null;
+
     // Show errors prominently — but never block rendering on initial load.
     // Sections handle empty `configs` gracefully (they show form defaults),
     // so we render them immediately and let the API fill data in (~400ms).
@@ -83,7 +94,7 @@ export default function SystemConfigurationPage() {
       <div className="flex bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
         {/* Left: Vertical Tabs */}
         <div className="p-3 border-r border-gray-100 bg-gray-50/40 w-56 flex-shrink-0">
-          <ConfigTabNav activeTab={activeTab} onTabChange={setActiveTab} />
+          <ConfigTabNav activeTab={activeTab} onTabChange={setActiveTab} isAdmin={isAdmin} />
         </div>
 
         {/* Right: Active Section */}

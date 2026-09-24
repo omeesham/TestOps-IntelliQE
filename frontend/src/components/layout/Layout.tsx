@@ -9,6 +9,10 @@ import FeatureUnavailable from '@/components/FeatureUnavailable';
 export default function Layout() {
   const location = useLocation();
   const isChat = location.pathname === '/chat';
+  // API Automation is a full-height, app-like surface (like Chat): it manages
+  // its own scroll and chrome, so the shell gives it the full bleed — no page
+  // padding, no outer scroll.
+  const isFullBleed = isChat || location.pathname.startsWith('/automation');
   const chatEnabled = useFeature('chat');
 
   // Lazy-mount ChatPage: only instantiate after the user first visits /chat,
@@ -23,7 +27,7 @@ export default function Layout() {
       <Sidebar />
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <Header />
-        <main className={`flex-1 ${isChat ? 'overflow-hidden' : 'overflow-y-auto p-6'} relative`}>
+        <main className={`flex-1 ${isFullBleed ? 'overflow-hidden' : 'overflow-y-auto p-6'} relative`}>
           {chatMounted && (
             <div className={isChat ? 'h-full' : 'hidden'}>
               <ChatPage />

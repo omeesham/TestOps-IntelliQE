@@ -111,13 +111,12 @@ function ToolLogo({ slug, Icon }: { slug?: string; Icon: React.ElementType }) {
 export default function IntegrationsView() {
   const total = CATEGORIES.reduce((n, c) => n + c.tools.length, 0);
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="max-w-[1180px] mx-auto px-6 py-5 space-y-5">
+    <div className="max-w-[1180px] space-y-5">
         {/* Intro */}
         <div className={`${CARD} relative overflow-hidden p-4`}>
-          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#8B5CF6] to-[#6366F1] shadow-[0_2px_6px_rgba(124,58,237,0.45)]" />
+          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#7C3AED] to-[#6366F1]" />
           <div className="flex items-start gap-3">
-            <span className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${TILE_ACTIVE} shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_3px_0_0_#4338CA,0_10px_20px_-8px_rgba(124,58,237,0.6)]`}>
+            <span className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${TILE_ACTIVE}`}>
               <Blocks className="w-5 h-5 text-white" />
             </span>
             <div className="min-w-0 flex-1">
@@ -160,9 +159,8 @@ export default function IntegrationsView() {
         {/* Where the wired requirement sources live */}
         <p className="flex items-center gap-1.5 text-[11px] text-gray-400">
           <ExternalLink className="w-3 h-3" />
-          JIRA, Azure DevOps, Confluence and SharePoint are connected under System Configuration → Integrations.
+          JIRA, Azure DevOps, Confluence and SharePoint are wired up under the Code Repositories and Requirement Sources tabs.
         </p>
-      </div>
     </div>
   );
 }

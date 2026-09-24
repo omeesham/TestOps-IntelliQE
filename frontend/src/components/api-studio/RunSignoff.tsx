@@ -65,7 +65,7 @@ export default function RunSignoff({ runId }: { runId: string }) {
         {loading && <Loader2 className="w-3 h-3 animate-spin text-gray-300" />}
       </div>
 
-      <div className="border border-[#E9E5FB] rounded-xl bg-gradient-to-b from-white to-[#FCFBFF] p-3 space-y-3">
+      <div className="border border-[#E9E5FB] rounded-xl bg-white p-3 space-y-3">
         {/* Compose */}
         <div>
           <div className="flex flex-wrap gap-1.5 mb-2">
@@ -87,7 +87,7 @@ export default function RunSignoff({ runId }: { runId: string }) {
           {error && <p className="text-[11px] text-red-600 mt-1">{error}</p>}
           <div className="flex justify-end mt-2">
             <button type="button" onClick={() => void submit()} disabled={saving}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold text-white bg-gradient-to-b from-[#8B5CF6] to-[#6D28D9] border border-[#6D28D9]/50 ring-1 ring-inset ring-white/20 hover:from-[#7C3AED] hover:to-[#5B21B6] disabled:opacity-50">
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold text-white bg-gradient-to-b from-[#7C3AED] to-[#6D28D9] border border-[#6D28D9]/50 ring-1 ring-inset ring-white/20 hover:from-[#7C3AED] hover:to-[#5B21B6] disabled:opacity-50">
               {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <>{(() => { const D = decoOf(decision).icon; return <D className="w-3.5 h-3.5" />; })()}</>}
               Record {decoOf(decision).label.toLowerCase()}
             </button>
