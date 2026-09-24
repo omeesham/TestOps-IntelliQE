@@ -3332,11 +3332,12 @@ export default function ChatPage() {
           )}
         </div>
 
-        {/* Right: Pipeline Progress Sidebar. The website audit (ADA) runs its
-            own crawl with its own live log — the six AI pipeline stages do
-            not apply there, so the sidebar is hidden until the user hands the
-            site over to requirements / test generation. */}
-        {step !== 'ada' && renderPipelineSidebar()}
+        {/* Right: Pipeline Progress Sidebar. Hidden on the welcome screen —
+            nothing is running yet, so an empty six-stage panel is just noise;
+            it appears as soon as the user starts a flow. Also hidden during
+            the website audit (ADA), which runs its own crawl with its own live
+            log and does not use the six AI pipeline stages. */}
+        {step !== 'welcome' && step !== 'ada' && renderPipelineSidebar()}
       </div>
     </div>
   );
