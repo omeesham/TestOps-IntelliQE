@@ -16,7 +16,7 @@ import {
   listAdaDevices, listAdaStandards, uploadAdaStandard, deleteAdaStandard, getAdaFindings, getAdaEvidence,
   type AdaDevice, type AdaDesignStandard, type AdaFinding, type AdaSummary, type AdaSeverity, type AdaRemediation,
 } from '@/services/api';
-import { Monitor, Smartphone, Tablet, Upload, Trash2, Loader2, Palette, ChevronDown, ChevronRight, Eye, Info, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Monitor, Smartphone, Tablet, Upload, Trash2, Loader2, Palette, ChevronDown, ChevronRight, Eye, Info, CheckCircle2, AlertTriangle, Check, X } from 'lucide-react';
 
 function errorMessage(err: unknown, fallback: string): string {
   const e = err as { response?: { data?: { error?: string } }; message?: string } | undefined;
@@ -33,6 +33,100 @@ const SEV_STYLE: Record<AdaSeverity, string> = {
 const tone = (s: number | null) => s === null ? 'text-gray-300' : s < 70 ? 'text-red-600' : s < 90 ? 'text-amber-600' : 'text-emerald-600';
 
 /* ═════════════════════════════ SETUP (audit form) ═════════════════════════════ */
+
+const KIND_GROUPS: { key: AdaDevice['kind']; label: string }[] = [
+  { key: 'desktop', label: 'Desktop' },
+  { key: 'mobile', label: 'Phones' },
+  { key: 'tablet', label: 'Tablets' },
+];
+
+/**
+ * Device picker — a single dropdown instead of a wall of chips. Closed, it
+ * shows what is selected as small removable tags; open, it lists every profile
+ * grouped by type with a checkbox each. The primary desktop is always on (the
+ * main audit runs there) and cannot be removed.
+ */
+function DevicePicker({ catalogue, devices, onDevices }: {
+  catalogue: AdaDevice[]; devices: string[]; onDevices: (ids: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+
+  const isOn = (d: AdaDevice) => d.primary || devices.includes(d.id);
+  const toggle = (d: AdaDevice) => { if (!d.primary) onDevices(devices.includes(d.id) ? devices.filter((x) => x !== d.id) : [...devices, d.id]); };
+  const selected = catalogue.filter(isOn);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button" onClick={() => setOpen((v) => !v)} aria-haspopup="listbox" aria-expanded={open}
+        className="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 bg-white border border-gray-200 rounded-lg text-xs text-gray-700 outline-none focus:border-violet-400 hover:border-gray-300"
+      >
+        <span className="truncate text-left text-gray-500">
+          {selected.length === 0 ? 'Select devices to test…' : `${selected.length} device${selected.length === 1 ? '' : 's'} selected`}
+        </span>
+        <ChevronDown className={`w-4 h-4 text-gray-400 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div role="listbox" aria-multiselectable className="absolute z-20 mt-1 w-full max-h-72 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg py-1">
+          {catalogue.length === 0 && <p className="px-3 py-2 text-[11px] text-gray-400">No device profiles available.</p>}
+          {KIND_GROUPS.map((g) => {
+            const items = catalogue.filter((d) => d.kind === g.key);
+            if (!items.length) return null;
+            return (
+              <div key={g.key}>
+                <p className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400">{g.label}</p>
+                {items.map((d) => {
+                  const Icon = KIND_ICON[d.kind];
+                  const on = isOn(d);
+                  return (
+                    <button
+                      key={d.id} type="button" role="option" aria-selected={on} disabled={d.primary} onClick={() => toggle(d)}
+                      title={d.primary ? 'Always included — the main audit runs here' : ''}
+                      className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-gray-50 ${d.primary ? 'cursor-default' : ''}`}
+                    >
+                      <span className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${on ? 'bg-violet-600 border-violet-600' : 'border-gray-300'}`}>
+                        {on && <Check className="w-3 h-3 text-white" />}
+                      </span>
+                      <Icon className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                      <span className={`flex-1 truncate ${on ? 'text-gray-800' : 'text-gray-600'}`}>{d.label}</span>
+                      <span className="text-gray-400 tabular-nums flex-shrink-0">{d.viewport.width} × {d.viewport.height}</span>
+                      {d.primary && <span className="text-[10px] text-violet-500 flex-shrink-0">always</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-1.5">
+          {selected.map((d) => {
+            const Icon = KIND_ICON[d.kind];
+            return (
+              <span key={d.id} className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] ${d.primary ? 'border-gray-200 bg-gray-50 text-gray-500' : 'border-violet-200 bg-violet-50 text-violet-700'}`}>
+                <Icon className="w-3 h-3" /> {d.label} <span className="text-gray-400">{d.viewport.width}</span>
+                {!d.primary && <button type="button" onClick={() => toggle(d)} className="ml-0.5 hover:text-violet-900" title={`Remove ${d.label}`}><X className="w-3 h-3" /></button>}
+              </span>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function UxSetup({ enabled, onEnabled, devices, onDevices, standardId, onStandardId }: {
   enabled: boolean; onEnabled: (v: boolean) => void;
@@ -54,8 +148,6 @@ export function UxSetup({ enabled, onEnabled, devices, onDevices, standardId, on
     listAdaStandards().then(setStandards).catch(() => setStandards([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const toggle = (id: string) => onDevices(devices.includes(id) ? devices.filter((d) => d !== id) : [...devices, id]);
 
   const upload = async (file: File) => {
     setUploading(true); setNote(null);
@@ -94,21 +186,7 @@ export function UxSetup({ enabled, onEnabled, devices, onDevices, standardId, on
         <>
           <div>
             <p className="text-[11px] font-medium text-gray-600 mb-1.5">Devices <span className="font-normal text-gray-400">— one phone per screen width is recommended; each extra device adds time</span></p>
-            <div className="flex flex-wrap gap-1.5">
-              {catalogue.map((d) => {
-                const Icon = KIND_ICON[d.kind];
-                const on = d.primary || devices.includes(d.id);
-                return (
-                  <button
-                    key={d.id} type="button" disabled={d.primary} onClick={() => toggle(d.id)} aria-pressed={on}
-                    title={`${d.viewport.width} × ${d.viewport.height}${d.primary ? ' — always included: the main audit runs here' : ''}`}
-                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors ${on ? 'border-violet-300 bg-violet-50 text-violet-700' : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'} ${d.primary ? 'opacity-80 cursor-default' : ''}`}
-                  >
-                    <Icon className="w-3 h-3" /> {d.label} <span className="text-gray-400">{d.viewport.width}</span>
-                  </button>
-                );
-              })}
-            </div>
+            <DevicePicker catalogue={catalogue} devices={devices} onDevices={onDevices} />
           </div>
 
           <div>
