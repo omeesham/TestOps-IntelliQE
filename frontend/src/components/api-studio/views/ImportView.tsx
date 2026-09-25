@@ -7,14 +7,14 @@
  * Every path ends in the same place — endpoints in the catalogue, profiled.
  */
 import { useCallback, useRef, useState, type DragEvent } from 'react';
-import { UploadCloud, Loader2, CheckCircle2, AlertTriangle, ArrowRight, Sparkles, FileText, X, Plus, Trash2 } from 'lucide-react';
+import { UploadCloud, Loader2, CheckCircle2, AlertTriangle, ArrowRight, FileText, X, Plus, Trash2 } from 'lucide-react';
 import {
   importApiFiles, importApiText, importApiUrl, importApiEndpoint, importApiCurl, importApiGraphql, importApiMcp,
   importApiConnector, importApiWebhook, importApiSource, type ApiImportResponse,
 } from '@/services/api';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { IMPORT_METHODS, BULK_ACCEPT, type ImportMethodDef, type ImportInput } from '../importMethods';
-import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, LABEL, CARD, CARD_HOVER, BRAND_CHIP, MUTED_CHIP, CHIP_3D, TILE, TILE_ACTIVE, THEAD } from '../format';
+import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, LABEL, CARD, CARD_HOVER, MUTED_CHIP, CHIP_3D, TILE, TILE_ACTIVE, THEAD } from '../format';
 import { KeyValueRows } from '../EndpointEditor';
 import EndpointEditor from '../EndpointEditor';
 import type { Catalog } from '../hooks/useCatalog';
@@ -94,7 +94,6 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
             {busy === 'bulk' ? <Loader2 className="w-5 h-5 text-white animate-spin" /> : <UploadCloud className="w-5 h-5 text-white" />}
           </div>
           <h2 className="mt-3 text-[15px] font-semibold text-gray-900">Bulk upload — any API document</h2>
-          <p className="mt-1 text-[12px] text-gray-500">Up to 20 files at a time — each one parsed automatically.</p>
           <div className="mt-4 flex items-center justify-center gap-2">
             <button type="button" onClick={() => fileRef.current?.click()} disabled={!!busy} className={PRIMARY_BTN}>
               <UploadCloud className="w-3.5 h-3.5" />Choose files
@@ -141,9 +140,7 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
                       <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-[#7C3AED]'}`} />
                     </span>
                     <span className="text-[12.5px] font-semibold text-gray-900 leading-tight">{m.label}</span>
-                    {m.ai && <span className={`ml-auto inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-[9.5px] font-semibold ${BRAND_CHIP}`}><Sparkles className="w-2.5 h-2.5" />AI</span>}
                   </div>
-                  <p className="mt-2 text-[11px] text-gray-500 truncate">{m.desc}</p>
                 </button>
               );
             })}
