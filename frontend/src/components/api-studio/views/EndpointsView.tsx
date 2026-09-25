@@ -7,7 +7,7 @@
  * "Design scenarios", which starts the run for the selected endpoints.
  */
 import { useMemo, useState } from 'react';
-import { Search, Trash2, Pencil, Loader2, Layers, Plus, Download, ChevronDown, ChevronRight, Globe, Sparkles, ShieldCheck, Gauge, ShieldAlert, ScrollText, Target, Wrench, GitCompare, Table2, Clock, Wand2, GitPullRequestArrow, Radio } from 'lucide-react';
+import { Search, Trash2, Pencil, Layers, Plus, Download, ChevronDown, ChevronRight, Globe, ShieldCheck, Gauge, ShieldAlert, ScrollText, Target, Wrench, GitCompare, Table2, Clock, Wand2, GitPullRequestArrow, Radio } from 'lucide-react';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { MethodBadge, StatusCode, EmptyState } from '../primitives';
 import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, CARD, BRAND_CHIP, MUTED_CHIP, STRIP, THEAD, IMPORT_METHOD_LABELS, pathOf, hostOf } from '../format';
@@ -28,6 +28,24 @@ import InsightsPanel from './InsightsPanel';
 import StrategyBar from './StrategyBar';
 import type { Catalog } from '../hooks/useCatalog';
 import type { CatalogEndpoint, Scenario, StrategyLayerId } from '../types';
+
+/**
+ * The right-hand "Intelligence & strategy" panels are hidden for API automation
+ * for now. None of these hides disturbs the run:
+ *  - SHOW_STRATEGY_BAR — useCatalog seeds `strategy` with DEFAULT_STRATEGY
+ *    (standard coverage, all layers), which still steers every run.
+ *  - SHOW_INSIGHTS_PANEL — the pattern analysis (`profile`) is still computed
+ *    automatically in useCatalog and still passed into generation; only its
+ *    on-screen display (and the optional "Deep analysis" button) is hidden.
+ *  - SHOW_IMPORTS — the import log (`catalog.imports`) is still tracked; only
+ *    the "Imports this session" card is hidden.
+ * The whole aside is skipped when all three are off, so the endpoints table
+ * takes the full width. Flip any flag to `true` to restore that panel.
+ */
+const SHOW_STRATEGY_BAR = false;
+const SHOW_INSIGHTS_PANEL = false;
+const SHOW_IMPORTS = false;
+const SHOW_ASIDE = SHOW_STRATEGY_BAR || SHOW_INSIGHTS_PANEL || SHOW_IMPORTS;
 
 interface Props {
   catalog: Catalog;
@@ -190,9 +208,8 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
               )}
             </div>
             <button type="button" onClick={onImport} className={SECONDARY_BTN} title="Import more APIs"><Plus className="w-3.5 h-3.5" /><span className="hidden @[1000px]:inline">Import</span></button>
-            <button type="button" onClick={onDesign} disabled={running || selectedCount === 0} title={`Design scenarios for ${selectedCount} selected endpoint${selectedCount === 1 ? '' : 's'}`} className={`${PRIMARY_BTN} whitespace-nowrap`}>
-              {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-              {running ? 'Designing…' : <>Design<span className="hidden @[820px]:inline"> scenarios</span> ({selectedCount})</>}
+            <button type="button" onClick={onDesign} disabled={running || selectedCount === 0} title={`Testcase generation for ${selectedCount} selected endpoint${selectedCount === 1 ? '' : 's'}`} className={`${PRIMARY_BTN} whitespace-nowrap`}>
+              {running ? 'Generating…' : <>Testcase generation ({selectedCount})</>}
             </button>
           </div>
         </div>
@@ -233,24 +250,26 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
       </div>
 
       {/* ── Intelligence & strategy ── */}
-      <aside className="relative z-20 w-[340px] flex-shrink-0 border-l border-gray-100 bg-gray-50/60 overflow-y-auto min-h-0 p-3 space-y-3">
-        <StrategyBar strategy={catalog.strategy} profile={profile} onCoverage={(c) => catalog.setStrategy({ coverage: c })} onToggleLayer={catalog.toggleLayer} onAdopt={catalog.adoptRecommendation} />
-        <InsightsPanel profile={profile} analyzing={catalog.analyzing} error={catalog.analysisError} endpoints={endpoints} onDeepAnalyze={() => void catalog.analyze(true)} onFocusResource={setResourceFocus} />
-        {catalog.imports.length > 0 && (
-          <div className={`${CARD} p-3.5`}>
-            <h3 className="text-[11px] font-semibold text-gray-700 uppercase tracking-wide mb-2">Imports this session</h3>
-            <ul className="space-y-1">
-              {catalog.imports.slice(0, 8).map((im) => (
-                <li key={im.id} className="flex items-center gap-2 text-[11px]">
-                  <span className={`inline-flex px-1.5 py-0.5 rounded border text-[9.5px] font-semibold ${MUTED_CHIP}`}>{IMPORT_METHOD_LABELS[im.method] || im.method}</span>
-                  <span className="truncate text-gray-700 flex-1 min-w-0" title={im.name}>{im.name}</span>
-                  <span className="font-mono text-gray-400 tabular-nums">{im.count}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </aside>
+      {SHOW_ASIDE && (
+        <aside className="relative z-20 w-[340px] flex-shrink-0 border-l border-gray-100 bg-gray-50/60 overflow-y-auto min-h-0 p-3 space-y-3">
+          {SHOW_STRATEGY_BAR && <StrategyBar strategy={catalog.strategy} profile={profile} onCoverage={(c) => catalog.setStrategy({ coverage: c })} onToggleLayer={catalog.toggleLayer} onAdopt={catalog.adoptRecommendation} />}
+          {SHOW_INSIGHTS_PANEL && <InsightsPanel profile={profile} analyzing={catalog.analyzing} error={catalog.analysisError} endpoints={endpoints} onDeepAnalyze={() => void catalog.analyze(true)} onFocusResource={setResourceFocus} />}
+          {SHOW_IMPORTS && catalog.imports.length > 0 && (
+            <div className={`${CARD} p-3.5`}>
+              <h3 className="text-[11px] font-semibold text-gray-700 uppercase tracking-wide mb-2">Imports this session</h3>
+              <ul className="space-y-1">
+                {catalog.imports.slice(0, 8).map((im) => (
+                  <li key={im.id} className="flex items-center gap-2 text-[11px]">
+                    <span className={`inline-flex px-1.5 py-0.5 rounded border text-[9.5px] font-semibold ${MUTED_CHIP}`}>{IMPORT_METHOD_LABELS[im.method] || im.method}</span>
+                    <span className="truncate text-gray-700 flex-1 min-w-0" title={im.name}>{im.name}</span>
+                    <span className="font-mono text-gray-400 tabular-nums">{im.count}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </aside>
+      )}
 
       {editing && (
         <EndpointEditor

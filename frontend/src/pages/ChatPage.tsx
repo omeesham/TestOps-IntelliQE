@@ -91,7 +91,7 @@ interface AgentStep {
    ═══════════════════════════════════════════════════════════════ */
 const CATEGORIES: { id: Category; title: string; icon: React.ElementType; desc: string; comingSoon?: boolean }[] = [
   { id: 'application', title: 'Web Application Automation', icon: Monitor, desc: 'Validate functional workflows, E2E testing and cross-browser behavior.' },
-  { id: 'api',         title: 'API Automation',     icon: Plug,        desc: 'Test REST services, endpoints, and system integrations.' },
+  { id: 'api',         title: 'API Automation',     icon: Plug,        desc: 'Automate API testing, validate responses, and end-to-end integrations.' },
 ];
 
 const REQ_SOURCES: { id: ReqSource; title: string; icon: React.ElementType; desc: string }[] = [

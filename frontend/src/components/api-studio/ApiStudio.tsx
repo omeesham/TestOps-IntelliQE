@@ -15,8 +15,8 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  RotateCcw, Activity, Loader2, AlertTriangle, X, ListChecks, ArrowRight, Play, Upload,
-  LayoutDashboard, Layers, FileCheck2, PlayCircle, BarChart3, Server, Sparkles,
+  RotateCcw, AlertTriangle, X, ListChecks, ArrowRight, Upload,
+  LayoutDashboard, Layers, FileCheck2, PlayCircle, BarChart3, Server,
 } from 'lucide-react';
 import { useCatalog } from './hooks/useCatalog';
 import { useApiRun } from './hooks/useApiRun';
@@ -70,32 +70,11 @@ export default function ApiStudio() {
     if (v !== 'runs') setOpenRunId(null);
   };
 
-  /* Surfaced on the Activity button so a problem is visible while the drawer is closed. */
-  const logErrors = run.logs.filter((l) => l.level === 'error').length;
-  const logIssues = logErrors + run.logs.filter((l) => l.level === 'warn').length;
   const openRun = (id: string) => { setOpenRunId(id); setView('runs'); };
 
   const design = () => run.runScenarios({ endpoints: catalog.selectedEndpoints, strategy: catalog.strategy, profile: catalog.profile });
 
-  /* The design/run action — never disabled (the brief bans faded CTAs). When
-     there is nothing to design yet, it points you at the catalogue instead. */
-  const primaryDesignAction = () => {
-    if (run.running) return;
-    if (run.phase === 'review' || run.finished) { void run.runSuite(); return; }
-    if (catalog.selectedEndpoints.length === 0) { setView('endpoints'); return; }
-    design();
-  };
   const sel = catalog.selectedEndpoints.length;
-  const designLabel = run.running ? 'Designing…'
-    : run.phase === 'review' ? `Run ${run.selected.size} scenario${run.selected.size === 1 ? '' : 's'}`
-    : run.finished ? `Re-run ${run.selected.size}`
-    : 'Design scenarios';
-  const designTitle = run.running ? 'Designing scenarios — progress is in the activity log'
-    : run.phase === 'review' ? 'Run the selected scenarios through automation, execution, healing and the report'
-    : run.finished ? 'Run the same scenarios again — use New run to design a fresh suite'
-    : sel > 0 ? `Design scenarios for ${sel} selected endpoint${sel === 1 ? '' : 's'}`
-    : 'Select endpoints in the catalogue first — this opens it for you';
-  const DesignIcon = run.running ? Loader2 : run.finished ? Play : run.phase === 'review' ? ArrowRight : Sparkles;
 
   const tabs: TabItem[] = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -111,41 +90,11 @@ export default function ApiStudio() {
     <div className="h-full flex flex-col min-h-0">
       {/* ── Chrome: toolbar + tabs (padded to align with each view's own gutter) ── */}
       <div className="flex-shrink-0 px-6 pt-5">
-        <div className="flex items-center gap-3 flex-wrap">
-          <p className="flex-1 min-w-56 text-sm text-gray-500">
-            Import any API, then design, run, self-heal and report — automatically.
-          </p>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            {/* Activity — opens the slide-over log */}
-            <button
-              type="button"
-              onClick={() => setActivityOpen(true)}
-              title="Activity log"
-              aria-label={`Activity log${logIssues ? `, ${logIssues} issue${logIssues === 1 ? '' : 's'}` : ''}`}
-              className="relative inline-flex items-center justify-center w-9 h-9 rounded-lg text-gray-500 bg-white border border-gray-200 hover:text-[#7C3AED] transition-colors"
-            >
-              <Activity className={`w-4 h-4 ${run.running ? 'text-[#7C3AED]' : ''}`} />
-              {run.running
-                ? <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#7C3AED] animate-pulse" />
-                : logIssues > 0 && (
-                  <span className={`absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full text-[10px] font-semibold text-white flex items-center justify-center ${logErrors > 0 ? 'bg-red-500' : 'bg-amber-500'}`}>{logIssues}</span>
-                )}
-            </button>
-            {run.started && (
-              <button type="button" onClick={() => { run.resetRun(); setView('endpoints'); }} className={SECONDARY_BTN} title="Start a fresh run"><RotateCcw className="w-3.5 h-3.5" /><span className="hidden lg:inline">New run</span></button>
-            )}
-            <button type="button" onClick={primaryDesignAction} title={designTitle} aria-busy={run.running} className={`${SECONDARY_BTN} whitespace-nowrap`}>
-              <DesignIcon className={`w-3.5 h-3.5 ${run.running ? 'animate-spin' : ''}`} />
-              {designLabel}
-            </button>
-            <button type="button" onClick={() => setImportOpen(true)} title="Import an API — OpenAPI, Postman, cURL, a docs page and more" className={`${PRIMARY_BTN} whitespace-nowrap`}>
-              <Upload className="w-3.5 h-3.5" />Import API
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-4">
-          <PageTabs tabs={tabs} active={activeTab} onChange={(id) => navigate(id as NavView)} ariaLabel="API Automation sections" />
+        <div className="flex items-center gap-3">
+          <PageTabs tabs={tabs} active={activeTab} onChange={(id) => navigate(id as NavView)} ariaLabel="API Automation sections" className="min-w-0" />
+          {run.started && (
+            <button type="button" onClick={() => { run.resetRun(); setView('endpoints'); }} className={`${SECONDARY_BTN} ml-auto flex-shrink-0`} title="Start a fresh run"><RotateCcw className="w-3.5 h-3.5" /><span className="hidden lg:inline">New run</span></button>
+          )}
         </div>
 
         {run.started && (
@@ -166,6 +115,9 @@ export default function ApiStudio() {
           <div className="mt-3 flex items-center gap-2 px-3 py-2 rounded-xl bg-purple-50 border border-purple-100">
             <ListChecks className="w-4 h-4 text-[#7C3AED] flex-shrink-0" />
             <p className="text-sm text-purple-800 min-w-0"><span className="font-semibold">{run.scenarios.length} scenarios designed.</span> Review them and deselect anything you don't want — then run the suite. Automation, execution, healing and the report run straight through from there.</p>
+            <button type="button" onClick={() => void run.runSuite()} title="Run the selected scenarios through automation, execution, healing and the report" className={`${PRIMARY_BTN} ml-auto flex-shrink-0 whitespace-nowrap`}>
+              Run {run.selected.size} scenario{run.selected.size === 1 ? '' : 's'}
+            </button>
           </div>
         )}
 
@@ -187,7 +139,7 @@ export default function ApiStudio() {
             <div className="h-full flex flex-col">
               <EmptyState icon={FileCheck2} title="No scenarios designed yet" hint={sel ? `${sel} endpoints are selected — design scenarios and they land here for review before anything is automated.` : 'Select endpoints in the catalogue, then design scenarios. Every scenario stops here for review before anything is automated.'} />
               <div className="flex justify-center -mt-10 pb-10">
-                {sel ? <button type="button" onClick={design} className={PRIMARY_BTN}><Sparkles className="w-3.5 h-3.5" />Design scenarios for {sel}</button> : <button type="button" onClick={() => setView('endpoints')} className={PRIMARY_BTN}>Open the catalogue<ArrowRight className="w-3.5 h-3.5" /></button>}
+                {sel ? <button type="button" onClick={design} className={PRIMARY_BTN}>Testcase generation for {sel}</button> : <button type="button" onClick={() => setView('endpoints')} className={PRIMARY_BTN}>Open the catalogue<ArrowRight className="w-3.5 h-3.5" /></button>}
               </div>
             </div>
           ) : run.phase === 'generating' && run.scenarios.length === 0 ? (
@@ -200,7 +152,7 @@ export default function ApiStudio() {
         )}
         {view === 'runs' && <RunsView run={run} openRunId={openRunId} onOpenRun={setOpenRunId} onShowReport={() => navigate('report')} />}
         {view === 'report' && (
-          <ReportTab report={run.report} rows={run.rows} scenarios={run.scenarios} endpointLabel={run.runLabel} onExport={run.handleExport} exporting={run.exporting} canExport={!!run.testRunId} onPushToRepo={run.handlePushToRepo} pushState={run.pushState} canPush={run.specs.length > 0 && run.selected.size > 0} runId={run.testRunId || undefined} />
+          <ReportTab report={run.report} rows={run.rows} scenarios={run.scenarios} endpointLabel={run.runLabel} onExport={run.handleExport} exporting={run.exporting} canExport={!!run.testRunId} onPushToRepo={run.handlePushToRepo} pushState={run.pushState} canPush={run.specs.length > 0 && run.selected.size > 0} />
         )}
         {view === 'environments' && <EnvironmentsView />}
       </div>

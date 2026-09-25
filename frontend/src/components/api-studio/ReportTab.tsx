@@ -14,7 +14,6 @@ import {
 import { EmptyState, MethodBadge } from './primitives';
 import { formatDuration, RAISED, RAISED_HOVER, SECONDARY_3D, CARD, STRIP, TILE_ACTIVE } from './format';
 import Diagnose, { type FailurePayload } from './Diagnose';
-import RunSignoff from './RunSignoff';
 import type { RunReport, RunRow, Scenario, PushState } from './types';
 
 interface Props {
@@ -30,8 +29,6 @@ interface Props {
   pushState: PushState;
   /** False when the run produced no specs to push. */
   canPush: boolean;
-  /** The saved run's id, when it was persisted — enables the sign-off thread. */
-  runId?: string;
 }
 
 function Stat({
@@ -59,7 +56,7 @@ function Stat({
 
 export default function ReportTab({
   report, rows, scenarios, endpointLabel, onExport, exporting, canExport,
-  onPushToRepo, pushState, canPush, runId,
+  onPushToRepo, pushState, canPush,
 }: Props) {
   const [diagnoseFor, setDiagnoseFor] = useState<FailurePayload | null>(null);
   if (!report) {
@@ -271,8 +268,6 @@ export default function ReportTab({
             </div>
           </section>
         )}
-
-        {runId && <RunSignoff runId={runId} />}
       </div>
 
       {diagnoseFor && <Diagnose failure={diagnoseFor} onClose={() => setDiagnoseFor(null)} />}
