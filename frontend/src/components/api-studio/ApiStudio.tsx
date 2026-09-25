@@ -6,8 +6,7 @@
  * A first-class IntelliQE page: it wears the app's own chrome (the global
  * sidebar names it, the global header titles it) and, inside, a native toolbar
  * + horizontal tab bar — no second sidebar, no stacked header. Import is a
- * primary call-to-action that opens a modal; the activity log is a slide-over
- * drawer one click away.
+ * primary call-to-action that opens a modal.
  *
  * Two hooks own everything: `useCatalog` (what the workspace knows — endpoints,
  * profile, strategy) and `useApiRun` (the pipeline in flight). The shell routes
@@ -28,11 +27,9 @@ import ImportView from './views/ImportView';
 import EndpointsView from './views/EndpointsView';
 import RunsView from './views/RunsView';
 import EnvironmentsView from './views/EnvironmentsView';
-import ActivityPanel from './ActivityPanel';
 import { EmptyState } from './primitives';
 import { PRIMARY_BTN, SECONDARY_BTN } from './format';
 import PageTabs, { type TabItem } from '@/components/ui/PageTabs';
-import Drawer from '@/components/ui/Drawer';
 import Loader from '@/components/feedback/Loader';
 import type { NavView, Phase } from './types';
 
@@ -46,17 +43,14 @@ export default function ApiStudio() {
     return stored && TAB_IDS.has(stored as NavView) ? (stored as NavView) : 'overview';
   });
   const [openRunId, setOpenRunId] = useState<string | null>(null);
-  const [activityOpen, setActivityOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [overviewKey, setOverviewKey] = useState(0);
 
-  /* Follow the run: design → scenarios, execute → runs, finished → report.
-     A run in flight also opens the log so a long stage is never a silent spinner. */
+  /* Follow the run: design → scenarios, execute → runs, finished → report. */
   const onPhase = (p: Phase) => {
     if (p === 'generating' || p === 'review') setView('scenarios');
     else if (p === 'automating' || p === 'executing' || p === 'healing') setView('runs');
     else if (p === 'report') { setView('report'); setOverviewKey((k) => k + 1); }
-    if (p === 'generating' || p === 'automating') setActivityOpen(true);
   };
   const run = useApiRun({ onPhase });
 
@@ -144,7 +138,7 @@ export default function ApiStudio() {
             </div>
           ) : run.phase === 'generating' && run.scenarios.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center px-8">
-              <Loader size="lg" label={`Designing scenarios for ${run.runEndpoints.length} endpoint${run.runEndpoints.length === 1 ? '' : 's'}`} hint={run.stages.find((s) => s.key === 'scenarios')?.detail?.replace(/…$/, '') || 'Reading the pattern profile, the strategy layers and every endpoint\'s contract. Large catalogues take a few minutes — progress is in the activity log.'} />
+              <Loader size="lg" label={`Designing scenarios for ${run.runEndpoints.length} endpoint${run.runEndpoints.length === 1 ? '' : 's'}`} hint={run.stages.find((s) => s.key === 'scenarios')?.detail?.replace(/…$/, '') || 'Reading the pattern profile, the strategy layers and every endpoint\'s contract. Large catalogues take a few minutes.'} />
             </div>
           ) : (
             <ScenariosTab scenarios={run.scenarios} selected={run.selected} editable={run.phase === 'review' || run.finished} onToggle={run.toggleScenario} onSelectAll={run.selectScenarios} onClearAll={run.clearScenarios} />
@@ -152,15 +146,10 @@ export default function ApiStudio() {
         )}
         {view === 'runs' && <RunsView run={run} openRunId={openRunId} onOpenRun={setOpenRunId} onShowReport={() => navigate('report')} />}
         {view === 'report' && (
-          <ReportTab report={run.report} rows={run.rows} scenarios={run.scenarios} endpointLabel={run.runLabel} onExport={run.handleExport} exporting={run.exporting} canExport={!!run.testRunId} onPushToRepo={run.handlePushToRepo} pushState={run.pushState} canPush={run.specs.length > 0 && run.selected.size > 0} />
+          <ReportTab report={run.report} rows={run.rows} scenarios={run.scenarios} onExport={run.handleExport} exporting={run.exporting} canExport={!!run.testRunId} onPushToRepo={run.handlePushToRepo} pushState={run.pushState} canPush={run.specs.length > 0 && run.selected.size > 0} />
         )}
         {view === 'environments' && <EnvironmentsView />}
       </div>
-
-      {/* ── Activity log — slide-over drawer ── */}
-      <Drawer open={activityOpen} onClose={() => setActivityOpen(false)} widthClass="w-[340px] max-w-[92vw]" ariaLabel="Activity log">
-        <ActivityPanel run={run} onClose={() => setActivityOpen(false)} />
-      </Drawer>
 
       {/* ── Import API — modal ── */}
       {importOpen && (
@@ -200,7 +189,6 @@ function ImportModal({ onClose, children }: { onClose: () => void; children: Rea
             <span className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#7C3AED] to-[#6366F1] flex items-center justify-center flex-shrink-0"><Upload className="w-4 h-4 text-white" /></span>
             <div className="min-w-0">
               <h2 className="text-sm font-semibold text-gray-900 leading-tight">Import API</h2>
-              <p className="text-xs text-gray-500 leading-tight truncate">Bring in any API — it lands in the catalogue, profiled and ready to design.</p>
             </div>
           </div>
           <button type="button" onClick={onClose} aria-label="Close" className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 flex-shrink-0"><X className="w-4 h-4" /></button>

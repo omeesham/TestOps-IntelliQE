@@ -20,7 +20,6 @@ interface Props {
   report: RunReport | null;
   rows: RunRow[];
   scenarios: Scenario[];
-  endpointLabel: string;
   onExport: (format: 'excel' | 'json') => void;
   exporting: boolean;
   canExport: boolean;
@@ -55,7 +54,7 @@ function Stat({
 }
 
 export default function ReportTab({
-  report, rows, scenarios, endpointLabel, onExport, exporting, canExport,
+  report, rows, scenarios, onExport, exporting, canExport,
   onPushToRepo, pushState, canPush,
 }: Props) {
   const [diagnoseFor, setDiagnoseFor] = useState<FailurePayload | null>(null);
@@ -90,7 +89,6 @@ export default function ReportTab({
                   ? `All ${report.total} scenarios passed`
                   : `${report.passed} of ${report.total} scenarios passed`}
               </h2>
-              <p className="text-[12px] text-gray-500 mt-0.5 font-mono truncate">{endpointLabel}</p>
             </div>
             <div className="text-right flex-shrink-0">
               <div className={`text-3xl font-semibold tabular-nums leading-none ${green ? 'text-emerald-600' : report.passRate >= 50 ? 'text-[#7C3AED]' : 'text-red-600'}`}>

@@ -95,7 +95,6 @@ export default function EnvironmentsView() {
         <div className="flex items-center gap-3">
           <div>
             <h2 className="text-[14px] font-semibold text-gray-900">Environments</h2>
-            <p className="text-[11.5px] text-gray-500">Base URL + variables per target. Use <code className="font-mono bg-gray-100 px-1 rounded">{'{{token}}'}</code>-style placeholders in endpoints; the environment fills them in. Secrets are stored encrypted and shown masked.</p>
           </div>
           <button type="button" onClick={() => setEditing({ name: '', baseUrl: '', variables: SUGGESTED, isDefault: environments.length === 0 })} className={`ml-auto ${PRIMARY_BTN}`}><Plus className="w-3.5 h-3.5" />New environment</button>
         </div>

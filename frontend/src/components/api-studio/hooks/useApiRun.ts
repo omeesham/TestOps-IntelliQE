@@ -9,7 +9,7 @@
  *
  * The run is grounded in the catalogue's selected endpoints, resolved against
  * the active environment right before design, and shaped by the reviewer's
- * strategy (depth + layers). Every stage reports into the activity log so a
+ * strategy (depth + layers). Every stage reports its progress so a
  * long stage is never a spinner with nothing behind it.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';

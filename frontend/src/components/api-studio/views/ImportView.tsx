@@ -124,7 +124,6 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
         <div>
           <div className="flex items-baseline gap-2 mb-2.5">
             <h3 className="text-[12px] font-semibold text-gray-700 uppercase tracking-wide">Import by method</h3>
-            <span className="text-[11px] text-gray-400">12 ways in — all land in the same catalogue</span>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
             {IMPORT_METHODS.map((m) => {
@@ -183,7 +182,6 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
 function OutcomePanel({ outcome, onOpenCatalogue, onDismiss }: { outcome: Outcome; onOpenCatalogue: () => void; onDismiss: () => void }) {
   const { res, added, duplicates } = outcome;
   const none = (res.endpoints || []).length === 0;
-  const label = IMPORT_METHODS.find((m) => m.id === outcome.method)?.label || 'Bulk upload';
   return (
     <div className={`${CARD} p-4`}>
       <div className="flex items-start gap-3">
@@ -194,9 +192,6 @@ function OutcomePanel({ outcome, onOpenCatalogue, onDismiss }: { outcome: Outcom
           <p className="text-[13px] font-semibold text-gray-900">
             {none ? 'No endpoints found' : `${added} endpoint${added === 1 ? '' : 's'} added to the catalogue`}
             {duplicates > 0 && <span className="font-normal text-gray-500"> · {duplicates} already present</span>}
-          </p>
-          <p className="text-[11px] text-gray-500 mt-0.5">
-            {label} · <span className="font-mono">{outcome.name}</span> · parsed as <span className="font-mono">{res.parser}</span>{res.format ? ` (${res.format})` : ''}
           </p>
           {res.notice && <p className="mt-2 text-[11.5px] text-[#4C1D95] bg-[#F5F3FF] border border-[#DDD6FE] rounded-md px-2.5 py-1.5">{res.notice}</p>}
           {res.observed && (
