@@ -7,7 +7,7 @@
  * from automation, execution and the report alike.
  */
 import { Fragment, useMemo, useState } from 'react';
-import { ChevronRight, ListChecks, Search, Check, Info } from 'lucide-react';
+import { ChevronRight, ListChecks, Search, Check } from 'lucide-react';
 import {
   MethodBadge, CategoryChip, PriorityChip, StatusCode, CodeBlock, EmptyState,
 } from './primitives';
@@ -219,13 +219,6 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
                                 </div>
                               )}
                             </div>
-                            {s.description && <p className="text-[11px] text-gray-500 leading-relaxed">{s.description}</p>}
-                            {s.precondition && (
-                              <p className="flex gap-1.5 text-[10.5px] text-gray-400 leading-relaxed">
-                                <Info className="w-3 h-3 flex-shrink-0 mt-0.5 text-[#C4B5FD]" />
-                                <span><span className="font-medium text-gray-500">Needs:</span> {s.precondition}</span>
-                              </p>
-                            )}
                           </div>
 
                           {/* What it does, then what it proves. An "Assert that …"
@@ -250,11 +243,6 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
                                   </span>
                                   <div className="min-w-0">
                                     <p className="text-[11px] text-gray-800 leading-snug"><Highlight text={st.action} /></p>
-                                    {/* Clamped: the generator's expected results run long, and two
-                                        lines are enough to know whether to hover for the rest. */}
-                                    {st.expected && !restates(st.action, st.expected) && (
-                                      <p title={st.expected} className="text-[10.5px] text-gray-500 leading-snug mt-0.5 line-clamp-2">→ <Highlight text={st.expected} /></p>
-                                    )}
                                   </div>
                                 </div>
                               ))}
@@ -315,30 +303,6 @@ function splitSteps(steps: Step[]): { actionSteps: Step[]; checkSteps: Check[] }
     }
   }
   return { actionSteps, checkSteps };
-}
-
-/* Words that carry no meaning when comparing two phrasings of the same thing. */
-const FILLER = new Set(['the', 'a', 'an', 'is', 'are', 'be', 'that', 'to', 'of', 'and', 'it', 'its',
-  'should', 'must', 'will', 'exactly', 'successfully', 'this', 'with', 'from', 'for', 'has', 'have',
-  'returns', 'return', 'returned', 'response', 'request', 'endpoint', 'api']);
-
-function meaningful(text: string): Set<string> {
-  const words = text.toLowerCase().match(/[a-z0-9_.\-/{}]+/g) || [];
-  return new Set(words.filter((w) => !FILLER.has(w)));
-}
-
-/**
- * True when the expected result only says the action again. The generator often
- * writes "Send a GET request" / "Expected: the endpoint accepts the request",
- * and printing both wastes the reader's attention.
- */
-function restates(action: string, expected: string): boolean {
-  const e = meaningful(expected);
-  if (e.size === 0) return true;
-  const a = meaningful(action);
-  let shared = 0;
-  for (const w of e) if (a.has(w)) shared++;
-  return shared / e.size >= 0.6;
 }
 
 /** Quoted fragments and status codes read as values, so they are set in mono. */
