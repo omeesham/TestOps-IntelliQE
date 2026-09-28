@@ -8,7 +8,8 @@
  * the live endpoint and stores nothing; the HTTP pipeline is untouched.
  */
 import { useState } from 'react';
-import { X, Loader2, Radio, Play, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
+import { X, Radio, Play, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import { runAsyncProbe, type AsyncProbeResult } from '@/services/api';
 import { CARD, STRIP, INPUT, LABEL, PRIMARY_BTN, INSET } from './format';
 
@@ -87,7 +88,7 @@ export default function AsyncProbe({ initialUrl = '', onClose }: { initialUrl?: 
 
           <div className="flex justify-end">
             <button type="button" onClick={() => void run()} disabled={loading || !protocol} className={PRIMARY_BTN}>
-              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+              {loading ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
               {loading ? `Listening ${waitMs / 1000}s…` : 'Connect & listen'}
             </button>
           </div>

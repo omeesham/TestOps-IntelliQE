@@ -10,9 +10,10 @@
  */
 import { useState } from 'react';
 import {
-  Brain, Loader2, Sparkles, AlertTriangle, GitBranch, Layers, ShieldAlert, Network,
+  Brain, Sparkles, AlertTriangle, GitBranch, Layers, ShieldAlert, Network,
   ChevronDown, ChevronRight, Radar, Clock,
 } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import { CARD, BRAND_CHIP, MUTED_CHIP, SECONDARY_BTN, STRIP, relativeTime, pathOf } from '../format';
 import type { ApiProfile, CatalogEndpoint, CrudOp } from '../types';
 
@@ -40,7 +41,7 @@ export default function InsightsPanel({ profile, analyzing, error, endpoints, on
   if (!profile) {
     return (
       <div className={`${CARD} p-4`}>
-        <div className="flex items-center gap-2"><Brain className="w-4 h-4 text-[#7C3AED]" /><h3 className="text-[12.5px] font-semibold text-gray-900">Pattern intelligence</h3>{analyzing && <Loader2 className="w-3.5 h-3.5 text-[#7C3AED] animate-spin ml-auto" />}</div>
+        <div className="flex items-center gap-2"><Brain className="w-4 h-4 text-[#7C3AED]" /><h3 className="text-[12.5px] font-semibold text-gray-900">Pattern intelligence</h3>{analyzing && <Spinner className="w-3.5 h-3.5 text-[#7C3AED] animate-spin ml-auto" />}</div>
         <p className="mt-2 text-[11.5px] text-gray-500 leading-relaxed">{analyzing ? 'Reading the catalogue…' : error || 'Import endpoints and the platform will map resources, CRUD lifecycles, dependencies and risks before designing any test.'}</p>
       </div>
     );
@@ -68,7 +69,7 @@ export default function InsightsPanel({ profile, analyzing, error, endpoints, on
         <div className="flex items-center gap-2">
           <Brain className="w-4 h-4 text-[#7C3AED]" />
           <h3 className="text-[12.5px] font-semibold text-gray-900">Pattern intelligence</h3>
-          {analyzing && <Loader2 className="w-3.5 h-3.5 text-[#7C3AED] animate-spin" />}
+          {analyzing && <Spinner className="w-3.5 h-3.5 text-[#7C3AED] animate-spin" />}
           <span className={`ml-auto inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-semibold ${BRAND_CHIP}`} title={profile.style === 'mixed' ? Object.entries(profile.styles).map(([s, n]) => `${s}: ${n}`).join(' · ') : `Every endpoint reads as ${styleLabel}`}>{styleLabel}</span>
         </div>
         <p className="mt-2 text-[11.5px] text-gray-600 leading-relaxed">{profile.summary}</p>
@@ -206,7 +207,7 @@ export default function InsightsPanel({ profile, analyzing, error, endpoints, on
           <p className="text-[11px] text-gray-400 leading-relaxed">Ask the platform's AI to read the whole surface for business rules, ordering constraints and edge cases the deterministic analysis cannot see. Its findings become context for scenario design.</p>
         )}
         <button type="button" onClick={onDeepAnalyze} disabled={analyzing} className={`${SECONDARY_BTN} mt-2`}>
-          {analyzing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+          {analyzing ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
           {profile.insights?.length ? 'Re-run deep analysis' : 'Deep analysis'}
         </button>
         {error && <p className="mt-1.5 text-[11px] text-red-600">{error}</p>}

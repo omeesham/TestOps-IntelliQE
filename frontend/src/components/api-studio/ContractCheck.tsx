@@ -7,7 +7,8 @@
  * It reads the live API; it changes nothing in the catalogue or the pipeline.
  */
 import { useEffect, useState } from 'react';
-import { X, Loader2, CheckCircle2, XCircle, AlertTriangle, ShieldCheck, RefreshCw } from 'lucide-react';
+import { X, CheckCircle2, XCircle, AlertTriangle, ShieldCheck, RefreshCw } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import { validateApiContract, type ContractReport, type ContractResult } from '@/services/api';
 import { MethodBadge } from './primitives';
 import { CARD, STRIP, RAISED } from './format';
@@ -58,7 +59,7 @@ export default function ContractCheck({ endpoints, onClose }: { endpoints: Catal
           <span className="text-[11px] text-gray-400">{endpoints.length} endpoint{endpoints.length === 1 ? '' : 's'} · live-probed against their schema</span>
           <div className="ml-auto flex items-center gap-1.5">
             <button type="button" onClick={() => void run()} disabled={loading} className="p-1.5 rounded-md text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF] disabled:opacity-40" title="Re-run">
-              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              {loading ? <Spinner className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             </button>
             <button type="button" onClick={onClose} className="p-1.5 rounded-md text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]" title="Close"><X className="w-4 h-4" /></button>
           </div>
@@ -77,7 +78,7 @@ export default function ContractCheck({ endpoints, onClose }: { endpoints: Catal
         {/* Body */}
         <div className="flex-1 overflow-y-auto min-h-0">
           {loading ? (
-            <div className="flex items-center justify-center gap-2 py-16 text-[12px] text-gray-500"><Loader2 className="w-4 h-4 animate-spin text-[#7C3AED]" />Probing {endpoints.length} endpoint{endpoints.length === 1 ? '' : 's'}…</div>
+            <div className="flex items-center justify-center gap-2 py-16 text-[12px] text-gray-500"><Spinner className="w-4 h-4 animate-spin text-[#7C3AED]" />Probing {endpoints.length} endpoint{endpoints.length === 1 ? '' : 's'}…</div>
           ) : error ? (
             <div className="flex items-start gap-2 m-4 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg">
               <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0 mt-px" />

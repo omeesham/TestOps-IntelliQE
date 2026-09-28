@@ -11,8 +11,9 @@
  */
 import { useEffect, useState } from 'react';
 import {
-  X, Loader2, Camera, GitCompare, AlertTriangle, CheckCircle2, ShieldQuestion,
+  X, Camera, GitCompare, AlertTriangle, CheckCircle2, ShieldQuestion,
 } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import {
   listApiBaselines, captureApiBaselines, compareApiBaselines,
   type BaselineRecord, type BaselineCompareReport, type BaselineCompareResult, type DriftEntry,
@@ -91,7 +92,7 @@ export default function BaselineDiff({ endpoints, onClose }: { endpoints: Catalo
             type="button" onClick={() => void capture()} disabled={running || endpoints.length === 0}
             className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold text-white bg-gradient-to-b from-[#7C3AED] to-[#6D28D9] border border-[#6D28D9]/50 ring-1 ring-inset ring-white/20 ${RAISED} hover:from-[#7C3AED] hover:to-[#5B21B6] disabled:opacity-50`}
           >
-            {busy === 'capturing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />}
+            {busy === 'capturing' ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />}
             Capture baseline
           </button>
           <button
@@ -99,7 +100,7 @@ export default function BaselineDiff({ endpoints, onClose }: { endpoints: Catalo
             className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold text-[#6D28D9] bg-white border border-[#DDD6FE] ${RAISED} hover:bg-[#F5F3FF] disabled:opacity-50`}
             title={covered === 0 ? 'Capture a baseline first' : 'Diff the current responses against the stored baseline'}
           >
-            {busy === 'comparing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <GitCompare className="w-3.5 h-3.5" />}
+            {busy === 'comparing' ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <GitCompare className="w-3.5 h-3.5" />}
             Compare now
           </button>
           <span className="text-[11px] text-gray-400 ml-auto">Snapshots the live response; volatile fields ignored on diff</span>
@@ -125,9 +126,9 @@ export default function BaselineDiff({ endpoints, onClose }: { endpoints: Catalo
         {/* Body */}
         <div className="flex-1 overflow-y-auto min-h-0">
           {busy === 'loading' ? (
-            <div className="flex items-center justify-center gap-2 py-16 text-[12px] text-gray-500"><Loader2 className="w-4 h-4 animate-spin text-[#7C3AED]" />Loading baselines…</div>
+            <div className="flex items-center justify-center gap-2 py-16 text-[12px] text-gray-500"><Spinner className="w-4 h-4 animate-spin text-[#7C3AED]" />Loading baselines…</div>
           ) : running ? (
-            <div className="flex items-center justify-center gap-2 py-16 text-[12px] text-gray-500"><Loader2 className="w-4 h-4 animate-spin text-[#7C3AED]" />{busy === 'capturing' ? 'Snapshotting' : 'Diffing'} {endpoints.length} endpoint{endpoints.length === 1 ? '' : 's'}…</div>
+            <div className="flex items-center justify-center gap-2 py-16 text-[12px] text-gray-500"><Spinner className="w-4 h-4 animate-spin text-[#7C3AED]" />{busy === 'capturing' ? 'Snapshotting' : 'Diffing'} {endpoints.length} endpoint{endpoints.length === 1 ? '' : 's'}…</div>
           ) : report ? (
             <div className="divide-y divide-gray-100">
               {report.results.map((r) => <CompareRow key={r.id} r={r} />)}

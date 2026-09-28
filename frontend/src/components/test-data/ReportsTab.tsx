@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Download, Loader2, BarChart3, Database, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { Download, BarChart3, Database, ShieldCheck, AlertTriangle } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import { getExecutionReport, downloadArtifactZip } from '../../services/api';
 import { useToast } from '@/components/feedback/ToastProvider';
 import type { RunReport } from '../../types';
@@ -47,7 +48,7 @@ export default function ReportsTab({ runId }: ReportsTabProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16 text-gray-400">
-        <Loader2 className="w-5 h-5 animate-spin mr-2" />
+        <Spinner className="w-5 h-5 animate-spin mr-2" />
         Loading report...
       </div>
     );
@@ -73,7 +74,7 @@ export default function ReportsTab({ runId }: ReportsTabProps) {
           disabled={downloading}
           className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
         >
-          {downloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+          {downloading ? <Spinner className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
           {downloading ? 'Preparing ZIP...' : 'Download All Artifacts (ZIP)'}
         </button>
       </div>

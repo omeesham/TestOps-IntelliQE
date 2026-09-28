@@ -6,7 +6,8 @@
  * visible without opening Allure.
  */
 import { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronDown, ExternalLink, Loader2, RefreshCw, Activity, AlertTriangle, Wrench } from 'lucide-react';
+import { ChevronLeft, ChevronDown, ExternalLink, RefreshCw, Activity, AlertTriangle } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import { listApiRuns, getApiRun } from '@/services/api';
 import { StatusPill, MethodBadge, CategoryChip, PriorityChip, EmptyState } from '../primitives';
 import { CARD, CARD_HOVER, SECONDARY_BTN, MUTED_CHIP, STRIP, THEAD, relativeTime, formatDuration } from '../format';
@@ -39,7 +40,7 @@ function LiveRun({ run, onShowReport }: { run: ApiRun; onShowReport: () => void 
   return (
     <div className={`${CARD} overflow-hidden`}>
       <div className={`flex items-center gap-2 px-4 h-11 min-w-0 border-b border-[#EDE9FE] ${STRIP}`}>
-        {run.running ? <Loader2 className="w-4 h-4 text-[#7C3AED] animate-spin" /> : <Activity className="w-4 h-4 text-[#7C3AED]" />}
+        {run.running ? <Spinner className="w-4 h-4 text-[#7C3AED] animate-spin" /> : <Activity className="w-4 h-4 text-[#7C3AED]" />}
         <h3 className="text-[12.5px] font-semibold text-gray-900">Current run</h3>
         <span className="text-[11px] text-gray-500 truncate min-w-0">{run.runLabel}</span>
         {total > 0 && <span className="ml-auto flex-shrink-0 font-mono text-[11px] tabular-nums"><span className="text-emerald-600">{passed} ✓</span> · <span className="text-red-600">{failed} ✗</span> · {total}</span>}
@@ -57,7 +58,6 @@ function LiveRun({ run, onShowReport }: { run: ApiRun; onShowReport: () => void 
                 <td className="px-2 py-1.5">
                   <p className="text-gray-800">{r.name}</p>
                   {r.error && <p className="mt-0.5 text-[11px] text-red-600 font-mono whitespace-pre-wrap break-words">{r.error}</p>}
-                  {r.healNote && <p className={`mt-0.5 text-[11px] flex gap-1 ${r.healed ? 'text-emerald-700' : 'text-amber-700'}`}><Wrench className="w-3 h-3 mt-px flex-shrink-0" />{r.healNote}</p>}
                 </td>
                 <td className="px-2 py-1.5"><StatusPill status={r.status} /></td>
                 <td className="px-4 py-1.5 text-right font-mono text-[11px] text-gray-500 tabular-nums">{r.duration}</td>

@@ -56,7 +56,7 @@ function reportUrlFor(runId: string, hasAllure: boolean): string {
 }
 
 /** Every API run for the tenant (newest first) with its case metadata. */
-async function loadApiRuns(tenantId: string, limit = 200): Promise<Map<string, ApiRunSummary>> {
+export async function loadApiRuns(tenantId: string, limit = 200): Promise<Map<string, ApiRunSummary>> {
   const { rows } = await pool.query(
     `SELECT tr.id, tr.story_title, tr.source, tr.username, tr.created_at,
             tc.type, tc.api_meta
@@ -95,7 +95,7 @@ function safeParse(s: string): any {
 }
 
 /** Attach report stats to runs that have a rendered report. */
-async function attachReports(tenantId: string, runs: Map<string, ApiRunSummary>): Promise<void> {
+export async function attachReports(tenantId: string, runs: Map<string, ApiRunSummary>): Promise<void> {
   const reports = await listReports(tenantId);
   for (const rep of reports) {
     const run = runs.get(rep.runId.toUpperCase());
@@ -119,7 +119,7 @@ const RESULT_TTL_MS = 5 * 60_000;
 const RESULT_CACHE_MAX = 200;
 const resultCache = new Map<string, { at: number; rows: ReportResultRow[] }>();
 
-async function resultsFor(tenantId: string, runId: string, hasAllure: boolean): Promise<ReportResultRow[]> {
+export async function resultsFor(tenantId: string, runId: string, hasAllure: boolean): Promise<ReportResultRow[]> {
   const key = `${tenantId}:${runId}`;
   const hit = resultCache.get(key);
   if (hit && Date.now() - hit.at < RESULT_TTL_MS) return hit.rows;

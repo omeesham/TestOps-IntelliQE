@@ -30,3 +30,7 @@ jobs:
           coverage: standard
           layers: smoke,contract,negative,auth,flow
           title: CI — ${{ github.ref_name }} @ ${{ github.sha }}
+          # Optional quality gate — omit both for the strict all-green gate.
+          min-pass-rate: 95     # fail under 95% pass rate
+          max-failures: 2       # …and if more than 2 scenarios fail
+          # A JUnit report (intelliqe-junit.xml) is written and uploaded as an artifact.

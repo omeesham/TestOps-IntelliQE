@@ -174,9 +174,6 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
                       <div className={`text-[12px] leading-snug ${isSelected ? 'text-gray-800' : 'text-gray-400'}`}>{s.title}</div>
                       <div className="flex items-center gap-1.5 mt-0.5">
                         <MethodBadge method={s.api?.method || ''} />
-                        <span className="font-mono text-[10px] text-gray-400 truncate max-w-[420px]">
-                          {s.api?.endpoint}{s.api?.queryParams ? `?${s.api.queryParams}` : ''}
-                        </span>
                       </div>
                     </td>
                     <td className="px-2 py-1.5"><CategoryChip type={s.type} /></td>
@@ -203,16 +200,6 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
                                   {s.api?.endpoint}{s.api?.queryParams ? `?${s.api.queryParams}` : ''}
                                 </span>
                               </div>
-                              {Object.keys(s.api?.headers || {}).length > 0 && (
-                                <div className="flex flex-wrap gap-1 px-2.5 py-1.5 border-t border-gray-100 bg-[#FCFBFF]">
-                                  {Object.entries(s.api!.headers).map(([k, v]) => (
-                                    <span key={k} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[#EDE9FE] bg-white font-mono text-[10px] max-w-full">
-                                      <span className="text-[#7C3AED] flex-shrink-0">{k}</span>
-                                      <span className="text-gray-500 truncate">{v}</span>
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
                               {s.api?.requestBody && (
                                 <div className="px-2.5 py-1.5 border-t border-gray-100">
                                   <CodeBlock code={prettyJson(s.api.requestBody)} className="max-h-40" />

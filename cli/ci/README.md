@@ -11,7 +11,22 @@ pipeline and **fail the build on regressions**. Everything here wraps the
 | `INTELLIQE_URL` | Your IntelliQE base URL, e.g. `https://intelliqe.your-company.com` |
 | `INTELLIQE_TOKEN` | A token from `intelliqe-api login` or `POST /api/auth/login` |
 
-Exit codes: `0` success · `1` usage · `2` API error · **`3` the run had failing scenarios** (this is what fails the build).
+Exit codes: `0` success · `1` usage · `2` API error · **`3` the quality gate failed** (this is what fails the build).
+
+## Quality gate
+
+By default the build fails if **any** scenario regresses (fails or does not run). To
+gate on a tolerance instead, set either threshold — the CLI then judges the run
+against them rather than demanding all-green:
+
+| CLI flag | Action input | Effect |
+|----------|--------------|--------|
+| `--min-pass-rate N` | `min-pass-rate` | Fail if the pass rate drops below `N` percent |
+| `--max-failures N` | `max-failures` | Fail if more than `N` scenarios fail (`0` = none allowed) |
+| `--junit FILE` | `junit` | Write a JUnit XML report (published as a build artifact) |
+
+Set both to require, say, ≥ 95 % **and** at most 2 failures. The JUnit report lets
+the CI test UI show each scenario as a passed/failed/skipped case.
 
 ## GitHub Actions
 
@@ -26,6 +41,9 @@ Use the composite action in [`action.yml`](./action.yml):
     env: Staging
     coverage: standard
     layers: smoke,contract,negative,auth,flow
+    min-pass-rate: 95            # optional — tolerance gate instead of all-green
+    max-failures: 2              # optional
+    # junit defaults to intelliqe-junit.xml and is uploaded as an artifact
 ```
 
 A ready-to-copy workflow (push + nightly + manual) is in
@@ -38,10 +56,13 @@ steps:
   - task: NodeTool@0
     inputs: { versionSpec: '20.x' }
   - script: npm i -g @intelliqe/api-cli
-  - script: intelliqe-api run --url "$(SPEC_URL)" --coverage standard --wait
+  - script: intelliqe-api run --url "$(SPEC_URL)" --coverage standard --wait --junit intelliqe-junit.xml --min-pass-rate 95
     env:
       INTELLIQE_URL: $(INTELLIQE_URL)
       INTELLIQE_TOKEN: $(INTELLIQE_TOKEN)
+  - task: PublishTestResults@2
+    condition: always()
+    inputs: { testResultsFormat: JUnit, testResultsFiles: intelliqe-junit.xml }
 ```
 
 ## GitLab CI
@@ -51,10 +72,14 @@ api-tests:
   image: node:20
   script:
     - npm i -g @intelliqe/api-cli
-    - intelliqe-api run --url "$SPEC_URL" --coverage standard --wait
+    - intelliqe-api run --url "$SPEC_URL" --coverage standard --wait --junit intelliqe-junit.xml --min-pass-rate 95
   variables:
     INTELLIQE_URL: $INTELLIQE_URL
     INTELLIQE_TOKEN: $INTELLIQE_TOKEN
+  artifacts:
+    when: always
+    reports:
+      junit: intelliqe-junit.xml
 ```
 
 ## Plain curl (no CLI)

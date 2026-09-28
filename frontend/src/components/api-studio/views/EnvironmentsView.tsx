@@ -10,7 +10,8 @@
  * service, so it touches neither the catalogue nor the run pipeline.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { Plus, Server, Star, Trash2, Pencil, Save, X, Lock, Loader2 } from 'lucide-react';
+import { Plus, Server, Star, Trash2, Pencil, Save, X, Lock } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import {
   listApiEnvironments, createApiEnvironment, updateApiEnvironment, deleteApiEnvironment,
 } from '@/services/api';
@@ -168,7 +169,7 @@ function EnvForm({ initial, saving, onCancel, onSave }: { initial: Partial<ApiEn
       </div>
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onCancel} className={SECONDARY_BTN}>Cancel</button>
-        <button type="submit" disabled={saving} className={PRIMARY_BTN}>{saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}Save</button>
+        <button type="submit" disabled={saving} className={PRIMARY_BTN}>{saving ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}Save</button>
       </div>
     </form>
   );

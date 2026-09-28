@@ -1,4 +1,5 @@
-import { XCircle, Loader2, CheckCircle, AlertCircle, Plug, Trash2, Pencil } from 'lucide-react';
+import { XCircle, CheckCircle, AlertCircle, Plug, Trash2, Pencil } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import { LOGOS } from './integrationCatalog';
 
 interface Props {
@@ -67,7 +68,7 @@ export default function IntegrationCard({ id, name, category, description, comin
                 disabled={testing}
                 className="text-xs text-[#7C3AED] hover:underline flex items-center gap-1 disabled:opacity-50"
               >
-                {testing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plug className="w-3 h-3" />}
+                {testing ? <Spinner className="w-3 h-3 animate-spin" /> : <Plug className="w-3 h-3" />}
                 {testing ? 'Testing…' : 'Test connection'}
               </button>
             )}

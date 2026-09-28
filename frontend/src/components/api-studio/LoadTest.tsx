@@ -7,7 +7,8 @@
  * because a load run repeats the request many times.
  */
 import { useState } from 'react';
-import { X, Loader2, Gauge, AlertTriangle, Play } from 'lucide-react';
+import { X, Gauge, AlertTriangle, Play } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import { runApiLoadTest, type LoadTestResult } from '@/services/api';
 import { MethodBadge } from './primitives';
 import { CARD, STRIP, INPUT, LABEL, PRIMARY_BTN } from './format';
@@ -86,7 +87,7 @@ export default function LoadTest({ endpoints, onClose }: { endpoints: CatalogEnd
 
           <div className="flex justify-end">
             <button type="button" onClick={() => void run()} disabled={loading || !ep || (write && !allowWrites)} className={PRIMARY_BTN}>
-              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+              {loading ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
               {loading ? 'Running…' : `Run ${total} requests`}
             </button>
           </div>

@@ -10,9 +10,9 @@
  */
 import { useState } from 'react';
 import {
-  Blocks, ClipboardList, Webhook, Bot, Gauge, MonitorSmartphone, GitBranch, ExternalLink,
+  ClipboardList, Webhook, Bot, Gauge, MonitorSmartphone, GitBranch, ExternalLink,
 } from 'lucide-react';
-import { CARD, TILE, TILE_ACTIVE, MUTED_CHIP, CHIP_3D } from '../format';
+import { CARD, TILE, MUTED_CHIP, CHIP_3D } from '../format';
 
 interface Tool {
   name: string;
@@ -109,25 +109,8 @@ function ToolLogo({ slug, Icon }: { slug?: string; Icon: React.ElementType }) {
 }
 
 export default function IntegrationsView() {
-  const total = CATEGORIES.reduce((n, c) => n + c.tools.length, 0);
   return (
     <div className="max-w-[1180px] space-y-5">
-        {/* Intro */}
-        <div className={`${CARD} relative overflow-hidden p-4`}>
-          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#7C3AED] to-[#6366F1]" />
-          <div className="flex items-start gap-3">
-            <span className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${TILE_ACTIVE}`}>
-              <Blocks className="w-5 h-5 text-white" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <h2 className="text-[15px] font-semibold text-gray-900">Testing tools</h2>
-              <p className="mt-1 text-[12px] text-gray-500 leading-relaxed">
-                The QA tool-chain IntelliQE works with — {total} tools across test management, API testing, automation, performance, the device clouds and CI/CD. More integrations arrive regularly.
-              </p>
-            </div>
-          </div>
-        </div>
-
         {/* Catalogue */}
         {CATEGORIES.map((cat) => {
           const CatIcon = cat.icon;

@@ -6,7 +6,8 @@
  * touches no pipeline state — it only explains.
  */
 import { useEffect, useState } from 'react';
-import { X, Loader2, Sparkles, AlertTriangle, Wrench, Terminal } from 'lucide-react';
+import { X, Sparkles, AlertTriangle, Wrench, Terminal } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import { diagnoseApiFailure, type Diagnosis } from '@/services/api';
 import { CopyButton } from './primitives';
 import { CARD, STRIP, INSET, BRAND_CHIP } from './format';
@@ -55,7 +56,7 @@ export default function Diagnose({ failure, onClose }: { failure: FailurePayload
           </div>
 
           {loading ? (
-            <div className="flex items-center justify-center gap-2 py-10 text-[12px] text-gray-500"><Loader2 className="w-4 h-4 animate-spin text-[#7C3AED]" />Analysing the failure…</div>
+            <div className="flex items-center justify-center gap-2 py-10 text-[12px] text-gray-500"><Spinner className="w-4 h-4 animate-spin text-[#7C3AED]" />Analysing the failure…</div>
           ) : error ? (
             <div className="flex items-start gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg"><AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0 mt-px" /><p className="text-[12px] text-red-700 min-w-0">{error}</p></div>
           ) : diag ? (

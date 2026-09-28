@@ -9,7 +9,8 @@
  * catalogue metadata; the generate → execute → heal pipeline is untouched.
  */
 import { useEffect, useState } from 'react';
-import { X, Loader2, RefreshCw, GitPullRequestArrow, AlertTriangle, CheckCircle2, Check } from 'lucide-react';
+import { X, RefreshCw, GitPullRequestArrow, AlertTriangle, CheckCircle2, Check } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import { scanApiDrift, type DriftReport, type DriftResult } from '@/services/api';
 import { MethodBadge } from './primitives';
 import { CARD, STRIP, RAISED, INSET } from './format';
@@ -59,7 +60,7 @@ export default function ContractDrift({ endpoints, onAdopt, onClose }: {
           <span className="text-[11px] text-gray-400">live vs. the catalogue's stored expectations</span>
           <div className="ml-auto flex items-center gap-1.5">
             <button type="button" onClick={() => void run()} disabled={loading} className="p-1.5 rounded-md text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF] disabled:opacity-40" title="Re-scan">
-              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              {loading ? <Spinner className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             </button>
             <button type="button" onClick={onClose} className="p-1.5 rounded-md text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]"><X className="w-4 h-4" /></button>
           </div>
@@ -76,7 +77,7 @@ export default function ContractDrift({ endpoints, onAdopt, onClose }: {
 
         <div className="flex-1 overflow-y-auto min-h-0">
           {loading ? (
-            <div className="flex items-center justify-center gap-2 py-16 text-[12px] text-gray-500"><Loader2 className="w-4 h-4 animate-spin text-[#7C3AED]" />Comparing {endpoints.length} endpoint{endpoints.length === 1 ? '' : 's'} against the catalogue…</div>
+            <div className="flex items-center justify-center gap-2 py-16 text-[12px] text-gray-500"><Spinner className="w-4 h-4 animate-spin text-[#7C3AED]" />Comparing {endpoints.length} endpoint{endpoints.length === 1 ? '' : 's'} against the catalogue…</div>
           ) : error ? (
             <div className="flex items-start gap-2 m-4 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg">
               <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0 mt-px" /><p className="text-[12px] text-red-700 min-w-0">{error}</p>

@@ -7,7 +7,7 @@
  * "Design scenarios", which starts the run for the selected endpoints.
  */
 import { useMemo, useState } from 'react';
-import { Search, Trash2, Pencil, Layers, Plus, Download, ChevronDown, ChevronRight, Globe, ShieldCheck, Gauge, ShieldAlert, ScrollText, Target, Wrench, GitCompare, Table2, Clock, Wand2, GitPullRequestArrow, Radio } from 'lucide-react';
+import { Search, Trash2, Pencil, Layers, Plus, Download, ChevronDown, ChevronRight, Globe, ShieldCheck, Gauge, ShieldAlert, ScrollText, Target, Wrench, GitCompare, Table2, Clock, Wand2, GitPullRequestArrow, Radio, BadgeCheck, Bug } from 'lucide-react';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { MethodBadge, StatusCode, EmptyState } from '../primitives';
 import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, CARD, BRAND_CHIP, MUTED_CHIP, STRIP, THEAD, IMPORT_METHOD_LABELS, pathOf, hostOf } from '../format';
@@ -15,6 +15,8 @@ import EndpointEditor from '../EndpointEditor';
 import ContractCheck from '../ContractCheck';
 import LoadTest from '../LoadTest';
 import SecurityScan from '../SecurityScan';
+import OwaspCompliance from '../OwaspCompliance';
+import FuzzTest from '../FuzzTest';
 import GovernanceCheck from '../GovernanceCheck';
 import Coverage from '../Coverage';
 import BaselineDiff from '../BaselineDiff';
@@ -67,6 +69,8 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
   const [contractOpen, setContractOpen] = useState(false);
   const [loadOpen, setLoadOpen] = useState(false);
   const [securityOpen, setSecurityOpen] = useState(false);
+  const [owaspOpen, setOwaspOpen] = useState(false);
+  const [fuzzOpen, setFuzzOpen] = useState(false);
   const [governanceOpen, setGovernanceOpen] = useState(false);
   const [coverageOpen, setCoverageOpen] = useState(false);
   const [baselineOpen, setBaselineOpen] = useState(false);
@@ -117,7 +121,7 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
   if (endpoints.length === 0) {
     return (
       <div className="h-full flex flex-col">
-        <EmptyState icon={Layers} title="The catalogue is empty" hint="Import an OpenAPI spec, a Postman collection, a cURL command, a docs page, an SDK — or build a request by hand. Every endpoint lands here for review before anything is designed." />
+        <EmptyState icon={Layers} title="The catalogue is empty" />
         <div className="flex justify-center -mt-10 pb-10"><button type="button" onClick={onImport} className={PRIMARY_BTN}><Plus className="w-3.5 h-3.5" />Import APIs</button></div>
       </div>
     );
@@ -164,6 +168,8 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
                       { icon: ShieldCheck, label: 'Contract validation', desc: 'Live-check status, JSON & schema', open: () => setContractOpen(true) },
                       { icon: GitPullRequestArrow, label: 'Contract drift', desc: 'Adopt live changes into the catalogue', open: () => setDriftOpen(true) },
                       { icon: ShieldAlert, label: 'Security scan', desc: 'Broken auth, injection, headers, CORS', open: () => setSecurityOpen(true) },
+                      { icon: BadgeCheck, label: 'OWASP API Top-10', desc: 'Compliance posture across the 2023 categories', open: () => setOwaspOpen(true) },
+                      { icon: Bug, label: 'Fuzz / property test', desc: 'Boundary & malformed inputs → crashes, leaks', open: () => setFuzzOpen(true) },
                       { icon: Gauge, label: 'Load test', desc: 'Latency, throughput, status mix', open: () => setLoadOpen(true) },
                       { icon: ScrollText, label: 'Governance lint', desc: 'API design smells', open: () => setGovernanceOpen(true) },
                       { icon: Target, label: 'Test coverage', desc: 'Which endpoints are tested', open: () => setCoverageOpen(true) },
@@ -289,6 +295,18 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
         <SecurityScan
           endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
           onClose={() => setSecurityOpen(false)}
+        />
+      )}
+      {owaspOpen && (
+        <OwaspCompliance
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setOwaspOpen(false)}
+        />
+      )}
+      {fuzzOpen && (
+        <FuzzTest
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setFuzzOpen(false)}
         />
       )}
       {loadOpen && (

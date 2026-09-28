@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Bug, Search, X, Trash2, Edit3, Undo2, RotateCcw, AlertTriangle,
-  CheckCircle2, Clock, XCircle, CircleDot, Loader2, RefreshCw, Eye,
+  CheckCircle2, Clock, XCircle, CircleDot, RefreshCw, Eye,
   Activity, User, CalendarDays, Layers, Monitor, Tag, ExternalLink, Upload,
   Zap,
 } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import {
   listBugs, getBug, updateBug, revokeBug, deleteBug,
   subscribeToBugEvents, getBugAdoStatus, pushBugsToAdo, getBugJiraStatus, pushBugsToJira,
@@ -616,7 +617,7 @@ export default function BugTrackerPage() {
             className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-white hover:bg-violet-50 disabled:opacity-40 disabled:cursor-not-allowed text-violet-700 border border-violet-200 rounded-lg text-sm font-medium whitespace-nowrap shrink-0 shadow-sm transition-colors"
             title={selectedIds.size === 0 ? 'Select bugs with the checkboxes first' : 'Notify the JBS SDET team on Teams to fix automation framework issues'}
           >
-            {raisingTicket ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Bug className="w-3.5 h-3.5" />}
+            {raisingTicket ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Bug className="w-3.5 h-3.5" />}
             Raise Ticket
           </button>
 
@@ -629,7 +630,7 @@ export default function BugTrackerPage() {
             className="inline-flex items-center gap-1.5 h-9 px-3.5 bg-sky-600 hover:bg-sky-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium whitespace-nowrap shrink-0 shadow-sm transition-colors"
             title={selectedIds.size === 0 ? 'Select bugs with the checkboxes first' : 'Raise the selected bugs in Azure DevOps or JIRA'}
           >
-            {(pushingAdo || pushingJira) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+            {(pushingAdo || pushingJira) ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
             Raise Bug{selectedIds.size > 1 ? 's' : ''}
           </button>
 
@@ -819,7 +820,7 @@ export default function BugTrackerPage() {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[88vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
             {detailLoading || !detailBug ? (
               <div className="flex items-center justify-center py-16 text-gray-400">
-                <Loader2 className="w-5 h-5 animate-spin mr-2" /> Loading bug details...
+                <Spinner className="w-5 h-5 animate-spin mr-2" /> Loading bug details...
               </div>
             ) : (
               <>
@@ -1017,7 +1018,7 @@ export default function BugTrackerPage() {
                           disabled={actionBusy}
                           className="flex items-center gap-2 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 disabled:bg-rose-300 text-white rounded-xl text-sm font-semibold transition-colors"
                         >
-                          {actionBusy && <Loader2 className="w-4 h-4 animate-spin" />}
+                          {actionBusy && <Spinner className="w-4 h-4 animate-spin" />}
                           <Undo2 className="w-3.5 h-3.5" /> Confirm Revoke
                         </button>
                       </div>
@@ -1036,7 +1037,7 @@ export default function BugTrackerPage() {
                           disabled={actionBusy}
                           className="flex items-center gap-1.5 px-4 py-2.5 text-blue-600 bg-blue-50 border border-blue-200 rounded-xl text-sm font-medium hover:bg-blue-100 disabled:opacity-50 transition-colors"
                         >
-                          {actionBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />} Reopen
+                          {actionBusy ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />} Reopen
                         </button>
                       )}
                       {canRevoke && (
@@ -1160,7 +1161,7 @@ export default function BugTrackerPage() {
                 disabled={saving}
                 className="btn-3d flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:from-[#6D28D9] hover:to-[#4F46E5] disabled:from-[#C4B5FD] disabled:to-[#C7D2FE] text-white rounded-xl text-sm font-semibold transition-all shadow-lg shadow-purple-500/25"
               >
-                {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+                {saving && <Spinner className="w-4 h-4 animate-spin" />}
                 Save Changes
               </button>
             </div>
@@ -1226,7 +1227,7 @@ export default function BugTrackerPage() {
                   </div>
                 </div>
                 {pushingAdo
-                  ? <span className="ml-auto shrink-0 text-sky-600"><Loader2 className="w-5 h-5 animate-spin" /></span>
+                  ? <span className="ml-auto shrink-0 text-sky-600"><Spinner className="w-5 h-5 animate-spin" /></span>
                   : <span className="ml-auto shrink-0 text-sky-400 opacity-0 -translate-x-1 transition-all duration-200 group-hover:opacity-100 group-hover:translate-x-0">→</span>}
               </button>
 
@@ -1262,7 +1263,7 @@ export default function BugTrackerPage() {
                   </div>
                 </div>
                 {pushingJira
-                  ? <span className="ml-auto shrink-0 text-blue-600"><Loader2 className="w-5 h-5 animate-spin" /></span>
+                  ? <span className="ml-auto shrink-0 text-blue-600"><Spinner className="w-5 h-5 animate-spin" /></span>
                   : <span className="ml-auto shrink-0 text-blue-400 opacity-0 -translate-x-1 transition-all duration-200 group-hover:opacity-100 group-hover:translate-x-0">→</span>}
               </button>
             </div>
@@ -1306,7 +1307,7 @@ export default function BugTrackerPage() {
                 disabled={deleting}
                 className="flex items-center gap-1.5 px-4 py-2 text-sm text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:bg-red-300"
               >
-                {deleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Delete
+                {deleting && <Spinner className="w-3.5 h-3.5 animate-spin" />} Delete
               </button>
             </div>
           </div>

@@ -26,7 +26,7 @@ import {
   reportToSupport,
 } from '@/services/api';
 import {
-  Send, Bot, Loader2, CheckCircle, Monitor, Plug,
+  Send, Bot, CheckCircle, Monitor, Plug,
   Globe, Layers, Shield, FileText, Upload, Type, Link2,
   ArrowRight, RotateCcw, ChevronDown, Eye, EyeOff, Check, X,
   Trash2, Download, Clipboard, Cpu, Code, Search, Zap,
@@ -34,6 +34,7 @@ import {
   Play, Heart, GitBranch, Terminal, AlertTriangle, Wrench, ExternalLink, Copy, Package,
   SkipForward, XCircle, Volume2, VolumeX, Settings, Github, LifeBuoy,
 } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import { initTTS, speak, speakAsync, waitForSpeech, waitForVoices, stopSpeaking, isTTSEnabled, toggleTTS } from '@/utils/tts';
 import { useToast } from '@/components/feedback/ToastProvider';
 
@@ -2393,7 +2394,7 @@ export default function ChatPage() {
       const loadingText = step === 'script-generating' ? 'Generating scripts...' : 'Generating test cases...';
       return (
         <div className="max-w-md ml-11 flex items-center gap-2.5 px-4 py-3 bg-white border border-gray-100 rounded-xl shadow-sm">
-          <Loader2 className="w-4 h-4 text-violet-500 animate-spin flex-shrink-0" />
+          <Spinner className="w-4 h-4 text-violet-500 animate-spin flex-shrink-0" />
           <span className="text-sm text-gray-600">{loadingText}</span>
         </div>
       );
@@ -2443,7 +2444,7 @@ export default function ChatPage() {
                 disabled={isSaving || totalTcs === 0}
                 className="px-4 py-1.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-xs font-medium rounded-lg transition-all flex items-center gap-1.5"
               >
-                {isSaving ? <><Loader2 className="w-3 h-3 animate-spin" />Saving...</> : <><Save className="w-3 h-3" />Save Test Cases</>}
+                {isSaving ? <><Spinner className="w-3 h-3 animate-spin" />Saving...</> : <><Save className="w-3 h-3" />Save Test Cases</>}
               </button>
             </div>
           </div>
@@ -2645,7 +2646,7 @@ export default function ChatPage() {
               disabled={isSaving || totalTcs === 0}
               className="px-5 py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center gap-2"
             >
-              {isSaving ? <><Loader2 className="w-4 h-4 animate-spin" />Saving...</> : <><Save className="w-4 h-4" />Save Test Cases</>}
+              {isSaving ? <><Spinner className="w-4 h-4 animate-spin" />Saving...</> : <><Save className="w-4 h-4" />Save Test Cases</>}
             </button>
             <button onClick={reset} className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-600 hover:border-violet-300 hover:text-violet-600 transition-all">
               <RotateCcw className="w-3.5 h-3.5" />Start New
@@ -2811,7 +2812,7 @@ export default function ChatPage() {
             {/* No per-test detail — the customer view never shows which scripts
                 are being changed or how; just that healing is in progress. */}
             <div className="flex items-center gap-2">
-              <Loader2 className="w-4 h-4 text-amber-500 animate-spin" />
+              <Spinner className="w-4 h-4 text-amber-500 animate-spin" />
               <span className="text-xs text-gray-500">Healing the failing tests and re-running the suite...</span>
             </div>
           </div>
@@ -2876,7 +2877,7 @@ export default function ChatPage() {
               className="inline-flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all"
               title="Push the generated test cases and scripts to your connected repository"
             >
-              {gitPush.status === 'pushing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              {gitPush.status === 'pushing' ? <Spinner className="w-3.5 h-3.5 animate-spin" />
                 : gitPush.status === 'done' ? <CheckCircle className="w-3.5 h-3.5" />
                 : null}
               {gitPush.status === 'done' ? 'Pushed to Repository' : gitPush.status === 'pushing' ? 'Pushing…' : 'Push to Repository'}
@@ -3003,7 +3004,7 @@ export default function ChatPage() {
                 disabled={!selectedRepoId || isPublishing}
                 className="mt-4 w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
               >
-                {isPublishing ? <Loader2 className="w-4 h-4 animate-spin" /> : <ExternalLink className="w-4 h-4" />}
+                {isPublishing ? <Spinner className="w-4 h-4 animate-spin" /> : <ExternalLink className="w-4 h-4" />}
                 {isPublishing ? 'Publishing...' : 'Publish'}
               </button>
             </div>
@@ -3070,7 +3071,7 @@ export default function ChatPage() {
                     </div>
                   ) : stage.status === 'running' ? (
                     <div className="w-8 h-8 rounded-full bg-[#7C3AED] flex items-center justify-center shadow-md shadow-violet-300 animate-pulse">
-                      <Loader2 className="w-4 h-4 text-white animate-spin" />
+                      <Spinner className="w-4 h-4 text-white animate-spin" />
                     </div>
                   ) : stage.status === 'skipped' ? (
                     <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center">

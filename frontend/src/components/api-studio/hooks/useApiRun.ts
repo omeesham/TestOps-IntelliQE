@@ -159,7 +159,6 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
 
     setStage('scenarios', 'running', `Designing coverage across ${endpoints.length} endpoint${endpoints.length === 1 ? '' : 's'}…`);
     log('scenarios', `Strategy: ${inputs.strategy.coverage} depth · layers ${inputs.strategy.layers.join(', ')}`);
-    log('scenarios', `Designing coverage for ${endpoints.length} endpoint${endpoints.length === 1 ? '' : 's'}${inputs.profile?.flows.length && inputs.strategy.layers.includes('flow') ? ` + ${inputs.profile.flows.length} lifecycle flow${inputs.profile.flows.length === 1 ? '' : 's'}` : ''}`);
 
     try {
       // Design runs as a server-side job (one model call per endpoint, in a

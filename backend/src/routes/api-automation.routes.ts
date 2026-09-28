@@ -44,6 +44,8 @@ import { analyzeApiSurface, enrichProfileWithLlm } from '../services/api-intelli
 import { validateContract } from '../services/api-contract.service.js';
 import { runLoadTest } from '../services/api-loadtest.service.js';
 import { runSecurityScan } from '../services/api-security.service.js';
+import { runOwaspCompliance } from '../services/api-owasp.service.js';
+import { runApiFuzz } from '../services/api-fuzz.service.js';
 import { diagnoseFailure } from '../services/api-diagnose.service.js';
 import { captureBaselines, listBaselines, compareBaselines, deleteBaseline } from '../services/api-baseline.service.js';
 import { runDataDriven } from '../services/api-datadriven.service.js';
@@ -375,6 +377,24 @@ router.post('/security/scan', async (req: Request, res: Response) => {
   try {
     const report = await runSecurityScan(req.body?.endpoints);
     if (report.summary.endpoints === 0) { res.status(400).json({ error: 'Send at least one endpoint with an http(s) URL to scan.' }); return; }
+    res.json(report);
+  } catch (err) { fail(res, err); }
+});
+
+/* ── OWASP API Security Top-10 compliance pack (opt-in; reuses the scan above + static heuristics) ── */
+router.post('/security/owasp', async (req: Request, res: Response) => {
+  try {
+    const report = await runOwaspCompliance(req.body?.endpoints);
+    if (report.basis.endpoints === 0) { res.status(400).json({ error: 'Send at least one endpoint to assess.' }); return; }
+    res.json(report);
+  } catch (err) { fail(res, err); }
+});
+
+/* ── AI-guided fuzzing / property-based robustness (opt-in; non-destructive, read methods only) ── */
+router.post('/fuzz', async (req: Request, res: Response) => {
+  try {
+    const report = await runApiFuzz(req.body?.endpoints);
+    if (report.summary.endpoints === 0) { res.status(400).json({ error: 'Send at least one endpoint with an http(s) URL to fuzz.' }); return; }
     res.json(report);
   } catch (err) { fail(res, err); }
 });

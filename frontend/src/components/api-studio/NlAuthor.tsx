@@ -8,7 +8,8 @@
  * bypasses design/execute/heal, and produces no test cases of its own.
  */
 import { useState } from 'react';
-import { X, Loader2, Wand2, AlertTriangle, Sparkles, Check } from 'lucide-react';
+import { X, Wand2, AlertTriangle, Sparkles, Check } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import { authorApiBrief, type NlBrief } from '@/services/api';
 import { MethodBadge } from './primitives';
 import { CARD, STRIP, INPUT, LABEL, PRIMARY_BTN, CHIP_3D } from './format';
@@ -80,7 +81,7 @@ export default function NlAuthor({ endpoints, onApply, onClose }: {
 
           <div className="flex justify-end">
             <button type="button" onClick={() => void generate()} disabled={loading || !text.trim()} className={PRIMARY_BTN}>
-              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+              {loading ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
               {loading ? 'Thinking…' : brief ? 'Regenerate' : 'Generate brief'}
             </button>
           </div>

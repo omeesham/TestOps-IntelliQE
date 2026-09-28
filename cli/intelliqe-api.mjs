@@ -27,6 +27,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
+import { pathToFileURL } from 'node:url';
 
 const CONFIG_DIR = path.join(os.homedir(), '.intelliqe');
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
@@ -246,7 +247,7 @@ async function cmdRun(args) {
   console.log(`Run started: job ${started.jobId}`);
   if (!f.wait) { out(args, started, () => console.log(`Poll with: intelliqe-api job ${started.jobId}`)); return; }
   const result = await waitForJob(cfg, started.jobId);
-  finishRun(args, result);
+  await finishRun(args, result);
 }
 
 async function waitForJob(cfg, jobId) {
@@ -261,7 +262,48 @@ async function waitForJob(cfg, jobId) {
   }
 }
 
-function finishRun(args, result) {
+function xmlEsc(s) {
+  return String(s ?? '').replace(/[<>&"']/g, (ch) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[ch]));
+}
+
+/** A JUnit XML report from a run result — full case list when sessions are known, failures otherwise. */
+function buildJUnit(result, sessions) {
+  const s = result.stats || { total: 0, passed: 0, failed: 0, notRun: 0, durationMs: 0 };
+  const suiteTime = ((s.durationMs || 0) / 1000).toFixed(3);
+  const rows = sessions && sessions.length
+    ? sessions.map((se) => ({ name: se.title || se.id, cls: se.type || 'API', time: (se.durationMs || 0) / 1000, status: se.status, error: se.error }))
+    : (result.failures || []).map((fl) => ({ name: fl.title || fl.testCaseId, cls: 'API', time: 0, status: 'failed', error: fl.error }));
+  const body = rows.map((r) => {
+    let inner = '';
+    if (r.status === 'failed' || r.status === 'broken') inner = `\n      <failure message="${xmlEsc((r.error || 'Assertion failed').split('\n')[0].slice(0, 300))}">${xmlEsc(r.error || '')}</failure>\n    `;
+    else if (r.status === 'not_run' || r.status === 'notRun' || r.status === 'skipped') inner = `\n      <skipped/>\n    `;
+    return `    <testcase name="${xmlEsc(r.name)}" classname="${xmlEsc(r.cls)}" time="${(r.time || 0).toFixed(3)}">${inner}</testcase>`;
+  }).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<testsuites name="IntelliQE API" tests="${s.total}" failures="${s.failed}" skipped="${s.notRun}" time="${suiteTime}">\n  <testsuite name="${xmlEsc(result.title || 'API run')}" tests="${s.total}" failures="${s.failed}" skipped="${s.notRun}" time="${suiteTime}">\n${body}\n  </testsuite>\n</testsuites>\n`;
+}
+
+/**
+ * CI quality gate. Custom thresholds (--min-pass-rate / --max-failures) opt into
+ * configurable gating; without them the legacy all-green gate (any failure or
+ * not-run fails the build) is preserved so existing pipelines keep behaving.
+ */
+function evalGate(result, f) {
+  const s = result.stats;
+  if (!s) return { fail: false, reasons: [] };
+  const reasons = [];
+  const custom = f['min-pass-rate'] !== undefined || f['max-failures'] !== undefined;
+  if (custom) {
+    const minPass = f['min-pass-rate'] !== undefined ? Number(f['min-pass-rate']) : 0;
+    const maxFail = f['max-failures'] !== undefined ? Number(f['max-failures']) : Infinity;
+    if (Number.isFinite(minPass) && s.passRate < minPass) reasons.push(`pass rate ${s.passRate}% is below the required ${minPass}%`);
+    if (Number.isFinite(maxFail) && s.failed > maxFail) reasons.push(`${s.failed} failure${s.failed === 1 ? '' : 's'} exceed the allowed ${maxFail}`);
+  } else if (s.failed > 0 || s.notRun > 0) {
+    reasons.push(`${s.failed} failed · ${s.notRun} not run`);
+  }
+  return { fail: reasons.length > 0, reasons };
+}
+
+async function finishRun(args, result) {
   out(args, result, () => {
     console.log(`\nRun: ${result.title}${result.runId ? ` (${result.runId})` : ''}`);
     console.log(`Scenarios: ${result.scenarios.total} (${Object.entries(result.scenarios.byType).map(([k, v]) => `${v} ${k}`).join(', ')})`);
@@ -275,14 +317,25 @@ function finishRun(args, result) {
       }
     } else console.log('Not executed.');
   });
-  if (result.stats && (result.stats.failed > 0 || result.stats.notRun > 0)) process.exit(3);
+
+  // JUnit artifact for the CI test UI (best-effort full case list via the build).
+  if (args.flags.junit) {
+    let sessions = null;
+    if (result.runId) { try { const { data } = await api(loadConfig(), 'GET', `/builds/${result.runId}`); sessions = data?.sessions || null; } catch { /* fall back to failures-only */ } }
+    fs.writeFileSync(String(args.flags.junit), buildJUnit(result, sessions));
+    if (!args.flags.json) process.stderr.write(`JUnit report written to ${args.flags.junit}\n`);
+  }
+
+  // Quality gate → the build's exit code.
+  const gate = evalGate(result, args.flags);
+  if (gate.fail) { process.stderr.write(`\nQuality gate failed: ${gate.reasons.join('; ')}.\n`); process.exit(3); }
 }
 
 async function cmdJob(args) {
   const cfg = loadConfig();
   const id = args._[1];
   if (!id) die('Give the job id.');
-  if (args.flags.wait) { finishRun(args, await waitForJob(cfg, id)); return; }
+  if (args.flags.wait) { await finishRun(args, await waitForJob(cfg, id)); return; }
   const { data } = await api(cfg, 'GET', `/runs/${id}`);
   out(args, data, () => console.log(`${data.status}${data.progress ? ` — ${data.progress.phase}: ${data.progress.detail}` : ''}${data.error ? ` — ${data.error}` : ''}`));
 }
@@ -369,6 +422,7 @@ Commands
   run [endpoints.json] [--spec F|--url U|...] [--env NAME] [--coverage essential|standard|exhaustive]
       [--layers smoke,contract,schema,negative,auth,security,performance,flow] [--title T]
       [--no-execute] [--no-heal] [--wait]
+      [--min-pass-rate N] [--max-failures N] [--junit results.xml]   CI quality gate (exit 3 on breach)
   job <jobId> [--wait]                           poll a started run
   projects | plans | builds | build <id> | session <buildId> <TC-id> | envs
 Options
@@ -385,8 +439,15 @@ const COMMANDS = {
   environments: cmdEnvs,
 };
 
-const args = parseArgs(process.argv.slice(2));
-const cmd = args._[0];
-if (!cmd || cmd === 'help' || args.flags.help) { usage(); process.exit(0); }
-if (!COMMANDS[cmd]) die(`Unknown command "${cmd}". Run \`intelliqe-api help\`.`);
-COMMANDS[cmd](args).catch((err) => die(err?.message || String(err), 2));
+// Run the dispatcher only when invoked as a program, not when imported for tests.
+const isMain = import.meta.url === pathToFileURL(process.argv[1] || '').href;
+if (isMain) {
+  const args = parseArgs(process.argv.slice(2));
+  const cmd = args._[0];
+  if (!cmd || cmd === 'help' || args.flags.help) { usage(); process.exit(0); }
+  if (!COMMANDS[cmd]) die(`Unknown command "${cmd}". Run \`intelliqe-api help\`.`);
+  COMMANDS[cmd](args).catch((err) => die(err?.message || String(err), 2));
+}
+
+// Exposed for unit tests (the CI quality gate and the JUnit writer are pure).
+export { buildJUnit, evalGate, xmlEsc };

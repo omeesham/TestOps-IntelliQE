@@ -8,13 +8,23 @@
  */
 import { useState } from 'react';
 import {
-  BarChart3, ExternalLink, Download, Loader2, CheckCircle2, XCircle, MinusCircle, Wrench,
+  BarChart3, ExternalLink, Download, CheckCircle2, XCircle, MinusCircle, Wrench,
   GitBranch, AlertTriangle, Sparkles,
 } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import { EmptyState, MethodBadge } from './primitives';
 import { formatDuration, RAISED, RAISED_HOVER, SECONDARY_3D, CARD, STRIP, TILE_ACTIVE } from './format';
 import Diagnose, { type FailurePayload } from './Diagnose';
 import type { RunReport, RunRow, Scenario, PushState } from './types';
+
+/**
+ * The report toolbar's "Push to repo" button is hidden for now. This hides only
+ * the button — the push feature itself is untouched: the `onPushToRepo` handler,
+ * the useApiRun hook, the backend push, the push-outcome banner below, and the
+ * separate "Push to repo" control on the StageRail all still work. Flip to
+ * `true` to restore the button here.
+ */
+const SHOW_PUSH_TO_REPO = false;
 
 interface Props {
   report: RunReport | null;
@@ -63,7 +73,6 @@ export default function ReportTab({
       <EmptyState
         icon={BarChart3}
         title="No report yet"
-        hint="The report is assembled once the suite has executed — pass rate, failures, what self-healing changed, and a link to the full Html report."
       />
     );
   }
@@ -100,9 +109,9 @@ export default function ReportTab({
 
           {/* Proportional bar — the shape of the run at a glance */}
           <div className="flex h-2 rounded-full overflow-hidden bg-gray-200 mt-4">
-            {report.passed > 0 && <div className="bg-emerald-500" style={{ width: `${(report.passed / report.total) * 100}%` }} />}
-            {report.failed > 0 && <div className="bg-red-500" style={{ width: `${(report.failed / report.total) * 100}%` }} />}
-            {report.notRun > 0 && <div className="bg-gray-400" style={{ width: `${(report.notRun / report.total) * 100}%` }} />}
+            {report.passed > 0 && <div className="bg-emerald-500" style={{ width: `${(report.passed / report.total) * 100}%` }} title={`Passed · ${report.passed}`} />}
+            {report.failed > 0 && <div className="bg-red-500" style={{ width: `${(report.failed / report.total) * 100}%` }} title={`Failed · ${report.failed}`} />}
+            {report.notRun > 0 && <div className="bg-gray-400" style={{ width: `${(report.notRun / report.total) * 100}%` }} title={`Not run · ${report.notRun}`} />}
           </div>
         </div>
 
@@ -124,31 +133,34 @@ export default function ReportTab({
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-white bg-gradient-to-r from-[#7C3AED] to-[#6366F1] rounded-md hover:from-[#6D28D9] hover:to-[#4F46E5] transition-all"
             >
-              <ExternalLink className="w-3.5 h-3.5" />Html report
+              <ExternalLink className="w-3.5 h-3.5" />HTML report
             </a>
           )}
-          {/* Push to repo — commit the generated specs to the connected repository. */}
-          <button
-            type="button"
-            onClick={onPushToRepo}
-            disabled={!canPush || pushState.status === 'pushing'}
-            title={canPush
-              ? 'Commit the generated specs to the repository connected under System Configuration → Code Repositories'
-              : 'There are no generated specs to push'}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-semibold text-white rounded-md transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-gradient-to-b from-emerald-400 to-emerald-600 border border-emerald-500/50 ring-1 ring-inset ring-white/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_3px_0_0_#047857,0_8px_18px_-6px_rgba(16,185,129,0.55)] hover:from-emerald-500 hover:to-emerald-700 hover:-translate-y-px active:translate-y-[2px] active:shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_0_0_0_#047857,0_4px_10px_-6px_rgba(16,185,129,0.5)] disabled:translate-y-0 disabled:shadow-[0_2px_0_0_#A7F3D0]"
-          >
-            {pushState.status === 'pushing'
-              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              : <GitBranch className="w-3.5 h-3.5" />}
-            {pushState.status === 'pushing' ? 'Pushing…' : 'Push to repo'}
-          </button>
+          {/* Push to repo — commit the generated specs to the connected repository.
+              Hidden here via SHOW_PUSH_TO_REPO; the push feature itself is intact. */}
+          {SHOW_PUSH_TO_REPO && (
+            <button
+              type="button"
+              onClick={onPushToRepo}
+              disabled={!canPush || pushState.status === 'pushing'}
+              title={canPush
+                ? 'Commit the generated specs to the repository connected under System Configuration → Code Repositories'
+                : 'There are no generated specs to push'}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-semibold text-white rounded-md transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-gradient-to-b from-emerald-400 to-emerald-600 border border-emerald-500/50 ring-1 ring-inset ring-white/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_3px_0_0_#047857,0_8px_18px_-6px_rgba(16,185,129,0.55)] hover:from-emerald-500 hover:to-emerald-700 hover:-translate-y-px active:translate-y-[2px] active:shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_0_0_0_#047857,0_4px_10px_-6px_rgba(16,185,129,0.5)] disabled:translate-y-0 disabled:shadow-[0_2px_0_0_#A7F3D0]"
+            >
+              {pushState.status === 'pushing'
+                ? <Spinner className="w-3.5 h-3.5 animate-spin" />
+                : <GitBranch className="w-3.5 h-3.5" />}
+              {pushState.status === 'pushing' ? 'Pushing…' : 'Push to repo'}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => onExport('excel')}
             disabled={exporting || !canExport}
             className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-700 bg-white border border-[#E4E0F5] rounded-md hover:border-[#C4B5FD] hover:text-[#6D28D9] transition-all disabled:opacity-40 ${SECONDARY_3D}`}
           >
-            {exporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+            {exporting ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
             Export scenarios (CSV)
           </button>
           <button
@@ -192,7 +204,8 @@ export default function ReportTab({
         {/* Failures — the actionable part of any red run */}
         {(failures.length > 0 || notRun.length > 0) && (
           <section className={`${CARD} overflow-hidden`}>
-            <div className={`px-4 py-2.5 border-b border-[#EDE9FE] ${STRIP}`}>
+            <div className={`px-4 py-2.5 border-b flex items-center gap-1.5 ${STRIP}`}>
+              <AlertTriangle className="w-3.5 h-3.5 text-red-500 flex-shrink-0" />
               <h3 className="text-[12px] font-semibold text-gray-800">
                 Needs attention · {failures.length + notRun.length}
               </h3>
@@ -226,14 +239,6 @@ export default function ReportTab({
                         {r.status === 'failed' ? 'failed' : 'not run'}
                       </span>
                     </div>
-                    {r.error && (
-                      <p className="font-mono text-[11px] text-red-600 mt-1 leading-relaxed line-clamp-2">
-                        {/* Playwright separates the assertion header from the Expected/Received
-                            pair with a blank line, so skipping empties keeps the lines
-                            that actually inform. */}
-                        {r.error.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 3).join(' · ')}
-                      </p>
-                    )}
                   </div>
                 );
               })}
@@ -244,8 +249,8 @@ export default function ReportTab({
         {/* What healing did — including what it deliberately did not do */}
         {healNotes.length > 0 && (
           <section className={`${CARD} overflow-hidden`}>
-            <div className="px-4 py-2.5 border-b border-gray-100 flex items-center gap-1.5">
-              <Wrench className="w-3.5 h-3.5 text-[#7C3AED]" />
+            <div className={`px-4 py-2.5 border-b flex items-center gap-1.5 ${STRIP}`}>
+              <Wrench className="w-3.5 h-3.5 text-[#7C3AED] flex-shrink-0" />
               <h3 className="text-[12px] font-semibold text-gray-800">Self-healing · {healNotes.length} reviewed</h3>
             </div>
             <div className="divide-y divide-gray-100">
@@ -259,7 +264,6 @@ export default function ReportTab({
                       </span>
                       <span className="text-[12px] text-gray-800 flex-1 min-w-0 truncate">{sc?.title || r.name}</span>
                     </div>
-                    <p className="text-[11px] text-gray-500 mt-1 leading-relaxed">{r.healNote}</p>
                   </div>
                 );
               })}

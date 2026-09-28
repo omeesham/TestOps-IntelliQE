@@ -7,7 +7,8 @@
  * Every path ends in the same place — endpoints in the catalogue, profiled.
  */
 import { useCallback, useRef, useState, type DragEvent } from 'react';
-import { UploadCloud, Loader2, CheckCircle2, AlertTriangle, ArrowRight, FileText, X, Plus, Trash2 } from 'lucide-react';
+import { UploadCloud, CheckCircle2, AlertTriangle, ArrowRight, FileText, X, Plus, Trash2 } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import {
   importApiFiles, importApiText, importApiUrl, importApiEndpoint, importApiCurl, importApiGraphql, importApiMcp,
   importApiConnector, importApiWebhook, importApiSource, type ApiImportResponse,
@@ -91,7 +92,7 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
         >
           <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] shadow-[0_2px_6px_rgba(124,58,237,0.45)]" />
           <div className={`mx-auto w-14 h-14 rounded-2xl flex items-center justify-center ${TILE_ACTIVE} shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_4px_0_0_#4338CA,0_14px_28px_-8px_rgba(124,58,237,0.65)]`}>
-            {busy === 'bulk' ? <Loader2 className="w-5 h-5 text-white animate-spin" /> : <UploadCloud className="w-5 h-5 text-white" />}
+            {busy === 'bulk' ? <Spinner className="w-5 h-5 text-white animate-spin" /> : <UploadCloud className="w-5 h-5 text-white" />}
           </div>
           <h2 className="mt-3 text-[15px] font-semibold text-gray-900">Bulk upload — any API document</h2>
           <div className="mt-4 flex items-center justify-center gap-2">
@@ -217,7 +218,6 @@ function OutcomePanel({ outcome, onOpenCatalogue, onDismiss }: { outcome: Outcom
               </table>
             </div>
           )}
-          {res.profile?.summary && !none && <p className="mt-2 text-[11.5px] text-gray-600 leading-relaxed">{res.profile.summary}</p>}
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
           {!none && <button type="button" onClick={onOpenCatalogue} className={PRIMARY_BTN}>Review catalogue<ArrowRight className="w-3.5 h-3.5" /></button>}
@@ -270,7 +270,7 @@ type RunFn = (name: string, fn: () => Promise<ApiImportResponse>) => Promise<boo
 function SubmitBtn({ busy, label, disabled }: { busy: boolean; label: string; disabled?: boolean }) {
   return (
     <button type="submit" disabled={busy || disabled} className={PRIMARY_BTN}>
-      {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ArrowRight className="w-3.5 h-3.5" />}
+      {busy ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <ArrowRight className="w-3.5 h-3.5" />}
       {busy ? 'Importing…' : label}
     </button>
   );

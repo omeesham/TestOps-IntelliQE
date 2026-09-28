@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  BrainCircuit, Eye, EyeOff, Loader2, Zap, Save, Pencil, Trash2, X,
+  BrainCircuit, Eye, EyeOff, Zap, Save, Pencil, Trash2, X,
   CheckCircle2, AlertTriangle, ShieldCheck, Star, KeyRound, Link2, Cpu,
 } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import {
   getLlmConfig, testLlmConnection, saveLlmConfig,
   setDefaultLlmProvider, deleteLlmConfig,
@@ -624,7 +625,7 @@ export default function LlmConfigurationSection() {
                     title="Run the local `claude` CLI (passes your token via CLAUDE_CODE_OAUTH_TOKEN)"
                     className="inline-flex items-center gap-2 px-4 py-2 border border-[#7C3AED] text-[#7C3AED] rounded-lg text-sm font-medium hover:bg-[#F5F3FF] transition-all disabled:opacity-50"
                   >
-                    {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                    {testing ? <Spinner className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
                     Test CLI
                   </button>
                 ) : (
@@ -633,7 +634,7 @@ export default function LlmConfigurationSection() {
                     disabled={testing || !canTest}
                     className="inline-flex items-center gap-2 px-4 py-2 border border-[#7C3AED] text-[#7C3AED] rounded-lg text-sm font-medium hover:bg-[#F5F3FF] transition-all disabled:opacity-50"
                   >
-                    {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                    {testing ? <Spinner className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
                     {testing ? 'Testing…' : 'Test Connection'}
                   </button>
                 )}
@@ -643,7 +644,7 @@ export default function LlmConfigurationSection() {
                   title={!canSave ? 'Enter an API key/token and choose a model to save' : undefined}
                   className="inline-flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white rounded-lg text-sm font-medium hover:from-[#6D28D9] hover:to-[#4F46E5] shadow-md shadow-purple-500/20 transition-all disabled:opacity-50"
                 >
-                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {saving ? <Spinner className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                   {saving ? 'Saving…' : 'Save Configuration'}
                 </button>
                 {current?.configured && (
@@ -684,7 +685,7 @@ export default function LlmConfigurationSection() {
                 </span>
               ) : current?.configured ? (
                 <button onClick={handleSetDefault} disabled={busyAction} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#7C3AED] border border-[#DDD6FE] rounded-lg hover:bg-[#F5F3FF] transition-colors disabled:opacity-50">
-                  {busyAction ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Star className="w-3.5 h-3.5" />} Set as Default
+                  {busyAction ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Star className="w-3.5 h-3.5" />} Set as Default
                 </button>
               ) : (
                 <span className="text-sm text-[#6B7280]">—</span>

@@ -543,6 +543,46 @@ export async function runApiSecurityScan(endpoints: any[]): Promise<SecurityRepo
   return data;
 }
 
+/* ── OWASP API Security Top-10 (2023) compliance pack (opt-in, standalone) ── */
+export type OwaspStatus = 'pass' | 'warn' | 'fail' | 'review' | 'not_assessed';
+export type OwaspAssessment = 'dynamic' | 'static' | 'none';
+export type OwaspGrade = 'A' | 'B' | 'C' | 'D' | 'F';
+export interface OwaspCategory {
+  id: string; key: string; name: string;
+  status: OwaspStatus; assessment: OwaspAssessment;
+  summary: string; evidence: string[]; affected: string[]; remediation: string;
+}
+export interface OwaspComplianceReport {
+  categories: OwaspCategory[];
+  summary: {
+    total: number; assessed: number; passed: number; warned: number; failed: number; review: number; notAssessed: number;
+    compliancePct: number | null; grade: OwaspGrade | null; high: number; medium: number; low: number;
+  };
+  basis: { endpoints: number; scanned: number; generatedAt: string };
+  security: SecurityReport;
+}
+export async function runApiOwaspCompliance(endpoints: any[]): Promise<OwaspComplianceReport> {
+  const { data } = await api.post('/api-automation/security/owasp', { endpoints }, { timeout: 180_000 });
+  return data;
+}
+
+/* ── AI-guided fuzzing / property-based robustness (opt-in, standalone) ── */
+export type FuzzSeverity = 'high' | 'medium' | 'low' | 'info';
+export type FuzzKind = 'server-error' | 'info-leak' | 'reflection' | 'timeout' | 'weak-validation' | 'handled' | 'unreachable' | 'skipped';
+export interface FuzzFinding {
+  endpointId: string; title: string; method: string; url: string;
+  param: string; category: string; payload: string; status?: number;
+  kind: FuzzKind; severity: FuzzSeverity; detail: string;
+}
+export interface FuzzReport {
+  findings: FuzzFinding[];
+  summary: { endpoints: number; cases: number; crashes: number; leaks: number; reflections: number; timeouts: number; weakValidation: number; handled: number; issues: number };
+}
+export async function runApiFuzz(endpoints: any[]): Promise<FuzzReport> {
+  const { data } = await api.post('/api-automation/fuzz', { endpoints }, { timeout: 180_000 });
+  return data;
+}
+
 /* ── AI root-cause diagnosis (opt-in, standalone) ── */
 export interface Diagnosis {
   category: string; rootCause: string; suggestedFix: string;
@@ -723,6 +763,7 @@ export async function getApiOverview(fresh = false): Promise<any> {
   const { data } = await api.get('/api-automation/overview', { timeout: 60_000, params: fresh ? { fresh: 1 } : undefined });
   return data;
 }
+
 export async function listApiRuns(page = 1, pageSize = 20): Promise<{ items: any[]; total: number; page: number; pageSize: number }> {
   const { data } = await api.get('/api-automation/runs', { params: { page, pageSize }, timeout: 60_000 });
   return data;

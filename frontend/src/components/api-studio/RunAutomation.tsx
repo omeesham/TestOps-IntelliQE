@@ -9,8 +9,9 @@
  */
 import { useEffect, useState } from 'react';
 import {
-  X, Loader2, Clock, Bell, Plus, Trash2, Play, Power, Send, CheckCircle2, XCircle,
+  X, Clock, Bell, Plus, Trash2, Play, Power, Send, CheckCircle2, XCircle,
 } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import {
   listApiSchedules, createApiSchedule, updateApiSchedule, deleteApiSchedule, runApiScheduleNow, type ApiSchedule,
   listApiWebhooks, createApiWebhook, updateApiWebhook, deleteApiWebhook, testApiWebhook, type ApiWebhook,
@@ -73,7 +74,7 @@ export default function RunAutomation({ endpoints, onClose }: { endpoints: Catal
 
         <div className="flex-1 overflow-y-auto min-h-0 p-4">
           {loading ? (
-            <div className="flex items-center justify-center gap-2 py-16 text-[12px] text-gray-500"><Loader2 className="w-4 h-4 animate-spin text-[#7C3AED]" />Loading…</div>
+            <div className="flex items-center justify-center gap-2 py-16 text-[12px] text-gray-500"><Spinner className="w-4 h-4 animate-spin text-[#7C3AED]" />Loading…</div>
           ) : tab === 'schedules' ? (
             <SchedulesTab
               endpoints={endpoints} schedules={schedules} busyId={busyId} setBusyId={setBusyId}
@@ -155,7 +156,7 @@ function SchedulesTab({ endpoints, schedules, busyId, setBusyId, onChange, toast
           </label>
           <span className="text-[10.5px] text-gray-400">{endpoints.length} endpoint{endpoints.length === 1 ? '' : 's'} captured</span>
           <button type="button" onClick={() => void create()} disabled={creating} className={PRIMARY_BTN}>
-            {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}Create
+            {creating ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}Create
           </button>
         </div>
         <p className="text-[10.5px] text-gray-400 mt-2">First run fires one interval from now. Each run uses the endpoints captured above; re-create to refresh them.</p>
@@ -258,7 +259,7 @@ function WebhooksTab({ webhooks, busyId, setBusyId, onChange, toast }: {
             Only notify on failures
           </label>
           <button type="button" onClick={() => void create()} disabled={creating} className={PRIMARY_BTN}>
-            {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}Add
+            {creating ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}Add
           </button>
         </div>
         <p className="text-[10.5px] text-gray-400 mt-2">A scheduled run notifies these automatically. Generic webhooks can add a secret later for HMAC signing.</p>

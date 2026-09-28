@@ -8,7 +8,8 @@
  * the API and changes nothing in the catalogue or the pipeline.
  */
 import { useMemo, useState } from 'react';
-import { X, Loader2, Table2, AlertTriangle, Play, CheckCircle2, XCircle } from 'lucide-react';
+import { X, Table2, AlertTriangle, Play, CheckCircle2, XCircle } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import { runApiDataDriven, type DataDrivenReport } from '@/services/api';
 import { MethodBadge } from './primitives';
 import { CARD, STRIP, INPUT, LABEL, PRIMARY_BTN } from './format';
@@ -153,7 +154,7 @@ export default function DataDriven({ endpoints, onClose }: { endpoints: CatalogE
 
           <div className="flex justify-end">
             <button type="button" onClick={() => void run()} disabled={loading || !ep || parsed.rows.length === 0} className={PRIMARY_BTN}>
-              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+              {loading ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
               {loading ? 'Running…' : `Run ${parsed.rows.length || ''} row${parsed.rows.length === 1 ? '' : 's'}`}
             </button>
           </div>

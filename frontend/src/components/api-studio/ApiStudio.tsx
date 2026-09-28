@@ -83,11 +83,11 @@ export default function ApiStudio() {
   return (
     <div className="h-full flex flex-col min-h-0">
       {/* ── Chrome: toolbar + tabs (padded to align with each view's own gutter) ── */}
-      <div className="flex-shrink-0 px-6 pt-5">
+      <div className="flex-shrink-0 px-6 pt-6 pb-1 relative z-10">
         <div className="flex items-center gap-3">
           <PageTabs tabs={tabs} active={activeTab} onChange={(id) => navigate(id as NavView)} ariaLabel="API Automation sections" className="min-w-0" />
           {run.started && (
-            <button type="button" onClick={() => { run.resetRun(); setView('endpoints'); }} className={`${SECONDARY_BTN} ml-auto flex-shrink-0`} title="Start a fresh run"><RotateCcw className="w-3.5 h-3.5" /><span className="hidden lg:inline">New run</span></button>
+            <button type="button" onClick={() => { run.resetRun(); catalog.clearCatalog(); setView('endpoints'); }} className={`${SECONDARY_BTN} ml-auto flex-shrink-0`} title="Start a fresh run — clears the imported endpoints and the previous run"><RotateCcw className="w-3.5 h-3.5" /><span className="hidden lg:inline">New run</span></button>
           )}
         </div>
 
@@ -108,7 +108,7 @@ export default function ApiStudio() {
         {run.phase === 'review' && view === 'scenarios' && (
           <div className="mt-3 flex items-center gap-2 px-3 py-2 rounded-xl bg-purple-50 border border-purple-100">
             <ListChecks className="w-4 h-4 text-[#7C3AED] flex-shrink-0" />
-            <p className="text-sm text-purple-800 min-w-0"><span className="font-semibold">{run.scenarios.length} scenarios designed.</span> Review them and deselect anything you don't want — then run the suite. Automation, execution, healing and the report run straight through from there.</p>
+            <p className="text-sm text-purple-800 min-w-0"><span className="font-semibold">{run.scenarios.length} scenarios are ready.</span> Select what you want to run and launch the suite. Automation, execution, healing, and reporting</p>
             <button type="button" onClick={() => void run.runSuite()} title="Run the selected scenarios through automation, execution, healing and the report" className={`${PRIMARY_BTN} ml-auto flex-shrink-0 whitespace-nowrap`}>
               Run {run.selected.size} scenario{run.selected.size === 1 ? '' : 's'}
             </button>
@@ -138,7 +138,7 @@ export default function ApiStudio() {
             </div>
           ) : run.phase === 'generating' && run.scenarios.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center px-8">
-              <Loader size="lg" label={`Designing scenarios for ${run.runEndpoints.length} endpoint${run.runEndpoints.length === 1 ? '' : 's'}`} hint={run.stages.find((s) => s.key === 'scenarios')?.detail?.replace(/…$/, '') || 'Reading the pattern profile, the strategy layers and every endpoint\'s contract. Large catalogues take a few minutes.'} />
+              <Loader size="lg" label={`Designing scenarios for ${run.runEndpoints.length} endpoint${run.runEndpoints.length === 1 ? '' : 's'}`} />
             </div>
           ) : (
             <ScenariosTab scenarios={run.scenarios} selected={run.selected} editable={run.phase === 'review' || run.finished} onToggle={run.toggleScenario} onSelectAll={run.selectScenarios} onClearAll={run.clearScenarios} />
