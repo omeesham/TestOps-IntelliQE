@@ -53,6 +53,7 @@ import adaRoutes from './routes/ada.routes.js';
 import { startAdaScheduler } from './services/ada/ada-schedule.service.js';
 import featureTogglesRoutes from './routes/feature-toggles.routes.js';
 import agentPerformanceRoutes from './routes/agent-performance.routes.js';
+import ssoRoutes from './routes/sso.routes.js';
 import { initDb } from './db.js';
 import pool from './db.js';
 import { decryptField } from './utils/crypto.js';
@@ -267,6 +268,52 @@ app.post('/api/auth/signup', authLimiter, async (req, res) => {
   } catch (err: any) {
     logger.error('Signup error', { err: err.message });
     res.status(500).json({ success: false, error: 'Signup failed' });
+  }
+});
+
+/* ─────────────────────────────────────────────────────────────
+   Single sign-on (Microsoft Entra ID). Browser-redirect flow, so these
+   are public; the callback mints the same JWT as /api/auth/login.
+   ───────────────────────────────────────────────────────────── */
+// Provider discovery is a cheap read the login page does on every load —
+// keep it out of the 5/min auth budget so it can't lock a user out.
+app.use('/api/auth/sso', (req, res, next) => (req.path === '/providers' ? next() : authLimiter(req, res, next)), ssoRoutes);
+
+/**
+ * Current-user profile from the session token. Used by the SPA after an
+ * SSO redirect (which only hands back a token) to hydrate its user state,
+ * and generally to re-check the account is still active.
+ */
+app.get('/api/auth/me', authMiddleware, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT u.username, u.full_name, u.role, u.is_active, u.sso_provider,
+              t.id AS tenant_id, t.name AS tenant_name, t.is_platform
+       FROM users u
+       JOIN tenants t ON t.id = u.tenant_id
+       WHERE u.id = $1`,
+      [req.user!.userId],
+    );
+    if (rows.length === 0 || !rows[0].is_active) {
+      res.status(401).json({ success: false, error: 'Account not found or deactivated' });
+      return;
+    }
+    const row = rows[0];
+    res.json({
+      success: true,
+      user: {
+        username: row.username,
+        role: row.role,
+        displayName: row.full_name || row.username,
+        tenantId: row.tenant_id,
+        tenantName: row.tenant_name,
+        isPlatform: row.is_platform,
+        ssoProvider: row.sso_provider || null,
+      },
+    });
+  } catch (err: any) {
+    logger.error('Current-user lookup failed', { err: err.message });
+    res.status(500).json({ success: false, error: 'Could not load profile' });
   }
 });
 

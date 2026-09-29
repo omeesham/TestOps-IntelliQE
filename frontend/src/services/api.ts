@@ -93,7 +93,7 @@ api.interceptors.response.use(
       // Skip auto-redirect on the login endpoint itself — let the form show
       // the "Invalid credentials" message inline.
       const url: string = err?.config?.url || '';
-      const isLoginCall = /\/auth\/(login|signup)/.test(url);
+      const isLoginCall = /\/auth\/(login|signup|me)/.test(url);
       if (!isLoginCall) {
         try {
           sessionStorage.removeItem('intelliqe_token');
@@ -122,6 +122,25 @@ export async function healthCheck() {
 /* ─────────────────────────────────────────────────────────────
    Auth (password is XOR-encrypted in transit; server decrypts then hashes)
    ───────────────────────────────────────────────────────────── */
+/** Which SSO providers the backend is configured for (drives login buttons). */
+export async function getSsoProviders(): Promise<{ microsoft: boolean }> {
+  const { data } = await api.get('/auth/sso/providers');
+  return { microsoft: !!data?.microsoft };
+}
+
+/** Where to send the browser to start Microsoft sign-in (same-origin redirect). */
+export function microsoftSsoStartUrl(returnTo?: string): string {
+  const base = (import.meta.env.VITE_MS_SSO_URL as string | undefined) || '/api/auth/sso/microsoft';
+  if (!returnTo) return base;
+  return `${base}${base.includes('?') ? '&' : '?'}returnTo=${encodeURIComponent(returnTo)}`;
+}
+
+/** Profile of the user behind the current bearer token (used after SSO). */
+export async function fetchCurrentUser() {
+  const { data } = await api.get('/auth/me');
+  return data;
+}
+
 export async function loginUser(username: string, password: string) {
   const { data } = await api.post('/auth/login', {
     username,
@@ -899,15 +918,29 @@ export async function testNotificationIntegration(
 /* ─────────────────────────────────────────────────────────────
    LLM Configuration — centralized provider connectivity
    ───────────────────────────────────────────────────────────── */
+export interface LlmCredentialInfo {
+  /** Where the key was found: Azure Key Vault, an env var (local dev), or nowhere. */
+  source: 'key-vault' | 'env' | 'none';
+  /** Key Vault secret name (or env var name). Never the key itself. */
+  reference: string;
+  /** Vault host, e.g. kv-intelliqe.vault.azure.net. Null when no vault is configured. */
+  vault: string | null;
+  found: boolean;
+  kind: 'api_key' | 'oauth_token';
+  /** Why no key was found (access denied, secret missing, …). */
+  error?: string;
+}
+
 export interface LlmProviderConfig {
   provider: 'anthropic' | 'gemini' | 'openai';
   label: string;
+  /** True when a key is available from Key Vault (or env in local dev). */
   configured: boolean;
   status: 'connected' | 'not_configured' | 'invalid_credentials' | 'connection_failed';
-  /** Anthropic only: 'api_key' (API credits) or 'claude_code' (subscription). */
-  authMethod?: 'api_key' | 'claude_code';
-  /** Claude Code transport: 'api' (OAuth→API) or 'cli' (local claude CLI). */
-  claudeCodeMode?: 'api' | 'cli';
+  statusMessage?: string | null;
+  credential: LlmCredentialInfo;
+  /** Live model catalogue from the provider, newest first. Empty when not connected. */
+  models: string[];
   model: string | null;
   /** Per-agent model overrides (stage → model). Empty object when unset. */
   agentModels?: Record<string, string>;
@@ -916,9 +949,6 @@ export interface LlmProviderConfig {
   /** Extended ("ultra") thinking toggle. */
   extendedThinking?: boolean;
   baseUrl: string;
-  maskedKey: string | null;
-  /** Masked Claude Code OAuth token (Anthropic + claude_code). */
-  maskedToken?: string | null;
   isDefault: boolean;
   updatedBy: string | null;
   updatedAt: string | null;
@@ -929,38 +959,29 @@ export async function getLlmConfig(): Promise<{ providers: LlmProviderConfig[]; 
   return data;
 }
 
+/** Re-reads the key from Key Vault (no cache) and lists the provider's live models. */
 export async function testLlmConnection(
   provider: string,
-  payload: { apiKey?: string; baseUrl?: string; authMethod?: 'api_key' | 'claude_code'; oauthToken?: string; mode?: 'api' | 'cli' },
-): Promise<{ ok: boolean; status: string; message: string; models: string[]; raw?: string }> {
-  const body: Record<string, any> = { baseUrl: payload.baseUrl };
-  if (payload.authMethod) body.authMethod = payload.authMethod;
-  if (payload.mode) body.mode = payload.mode;
-  if (payload.apiKey) body.apiKey = encryptField(payload.apiKey);
-  if (payload.oauthToken) body.oauthToken = encryptField(payload.oauthToken);
-  const { data } = await api.post(`/llm-config/${provider}/test`, body);
+  payload: { baseUrl?: string } = {},
+): Promise<{ ok: boolean; status: string; message: string; models: string[]; credential?: LlmCredentialInfo }> {
+  const { data } = await api.post(`/llm-config/${provider}/test`, { baseUrl: payload.baseUrl });
   return data;
 }
 
+/** Saves model settings only — keys are managed in Azure Key Vault. */
 export async function saveLlmConfig(
   provider: string,
   payload: {
-    apiKey?: string; baseUrl?: string; model?: string | null;
+    baseUrl?: string; model?: string | null;
     agentModels?: Record<string, string>;
-    authMethod?: 'api_key' | 'claude_code'; oauthToken?: string;
-    claudeCodeMode?: 'api' | 'cli';
     effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
     extendedThinking?: boolean;
   },
 ) {
   const body: Record<string, any> = { baseUrl: payload.baseUrl, model: payload.model };
-  if (payload.authMethod) body.authMethod = payload.authMethod;
-  if (payload.claudeCodeMode) body.claudeCodeMode = payload.claudeCodeMode;
   if (payload.agentModels) body.agentModels = payload.agentModels;
   if (payload.effort) body.effort = payload.effort;
   if (typeof payload.extendedThinking === 'boolean') body.extendedThinking = payload.extendedThinking;
-  if (payload.apiKey) body.apiKey = encryptField(payload.apiKey);
-  if (payload.oauthToken) body.oauthToken = encryptField(payload.oauthToken);
   const { data } = await api.put(`/llm-config/${provider}`, body);
   return data;
 }

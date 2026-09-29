@@ -1,41 +1,30 @@
 /**
- * Centralized LLM Configuration — per-tenant connectivity for the platform's
+ * Centralized LLM Configuration — per-tenant model choices for the platform's
  * AI capabilities (Planner, Test Generator, Healer, Test Data Generator, etc.).
  *
- * Supports three providers, each authenticated by API key:
- *   - anthropic  (Anthropic Claude)
- *   - gemini     (Google Gemini)
- *   - openai     (OpenAI ChatGPT)
+ * Credentials are NOT managed here. API keys live in the customer's Azure Key
+ * Vault and are read by the backend's managed identity at call time (see
+ * services/llm-credentials.service.ts). This API only:
+ *   - reports where each provider's key comes from (vault + secret name),
+ *   - tests connectivity with that key and lists the provider's live models,
+ *   - saves the non-secret settings: model, per-agent models, effort,
+ *     thinking, endpoint and the default provider.
  *
- * Storage: rows in `client_configurations` keyed by integration_id
- * `llm-<provider>`. The API key lives under the `apiKey` field, which is a
- * recognised sensitive key — encrypted at rest (AES-256-GCM) and only ever
- * returned masked. One provider may be flagged the tenant default.
- *
- * To keep the existing pipeline worker functional (it reads
- * `tenants.anthropic_api_key`), saving/removing the Anthropic key is mirrored
- * into that column.
+ * Storage: `client_configurations` rows keyed by integration_id `llm-<provider>`
+ * hold only those settings — never a key.
  *
  * Endpoints (all admin-only):
  *   GET    /api/llm-config                  -> { providers: [...], defaultProvider }
- *   POST   /api/llm-config/:provider/test   -> validate creds + list models
- *   PUT    /api/llm-config/:provider        -> save / update (key preserved if omitted)
+ *   POST   /api/llm-config/:provider/test   -> fresh Key Vault read + live model list
+ *   PUT    /api/llm-config/:provider        -> save model settings
  *   POST   /api/llm-config/:provider/default-> mark as the default provider
- *   DELETE /api/llm-config/:provider        -> remove the configuration
+ *   DELETE /api/llm-config/:provider        -> reset model settings
  */
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import pool from '../db.js';
-import {
-  decryptField,
-  decryptStored,
-  encryptAtRest,
-  maskSecret,
-} from '../utils/crypto.js';
 import { logAudit } from '../utils/audit.js';
-import { isClaudeCliAvailable, runClaudePrompt } from '../agents/claude-runner.js';
-
-type AuthMethod = 'api_key' | 'claude_code';
+import { resolveLlmCredential, type LlmCredential } from '../services/llm-credentials.service.js';
 
 const router = Router();
 
@@ -48,20 +37,6 @@ const PROVIDERS: Record<ProviderId, { label: string; defaultBaseUrl: string }> =
 };
 
 type ConnStatus = 'connected' | 'not_configured' | 'invalid_credentials' | 'connection_failed';
-
-// Current Anthropic Claude models exposed via the Messages API. Merged with the
-// account's live /v1/models so the dropdown always lists the full lineup even
-// when an account's models endpoint returns a narrower set.
-const ANTHROPIC_KNOWN_MODELS = [
-  'claude-fable-5',
-  'claude-opus-4-8',
-  'claude-opus-4-7',
-  'claude-opus-4-6',
-  'claude-opus-4-5',
-  'claude-sonnet-4-6',
-  'claude-sonnet-4-5',
-  'claude-haiku-4-5',
-];
 
 function requireAdmin(req: Request, res: Response): boolean {
   if (req.user?.role !== 'admin') {
@@ -110,141 +85,92 @@ async function getRow(tenantId: string, provider: ProviderId): Promise<LlmRow | 
   return rows[0] || null;
 }
 
-/** Resolve the usable plaintext API key for a provider (stored, decrypted). */
-function storedKey(row: LlmRow | null): string | null {
-  const v = row?.config_data?.apiKey;
-  if (!v || typeof v !== 'string') return null;
-  try { return decryptStored(v); } catch { return null; }
+/** Only the non-secret settings — strips any legacy apiKey/oauthToken left in the row. */
+function settingsOf(row: LlmRow | null): Record<string, any> {
+  const { apiKey: _k, oauthToken: _t, authMethod: _a, claudeCodeMode: _m, ...rest } = row?.config_data || {};
+  return rest;
 }
 
-/** Resolve the stored Claude Code OAuth token (decrypted). */
-function storedToken(row: LlmRow | null): string | null {
-  const v = row?.config_data?.oauthToken;
-  if (!v || typeof v !== 'string') return null;
-  try { return decryptStored(v); } catch { return null; }
+/** Public, secret-free description of where a provider's key comes from. */
+function credentialInfo(cred: LlmCredential) {
+  return {
+    source: cred.source,
+    reference: cred.reference,
+    vault: cred.vault,
+    found: !!cred.value,
+    kind: cred.value && /^sk-ant-oat/i.test(cred.value) ? 'oauth_token' : 'api_key',
+    error: cred.value ? undefined : cred.error,
+  };
 }
 
-/** The saved auth method for a row (Anthropic only); defaults to 'api_key'. */
-function authMethodOf(row: LlmRow | null): AuthMethod {
-  return row?.config_data?.authMethod === 'claude_code' ? 'claude_code' : 'api_key';
-}
-
-type TestOutcome = { ok: boolean; status: ConnStatus; message: string; models: string[]; raw?: string };
-
-function classify(msg: string): ConnStatus {
-  return /401|403|invalid|unauthor|expired|bearer/i.test(msg) ? 'invalid_credentials' : 'connection_failed';
-}
+/* ─────────────────────────────────────────────────────────────
+   Live model catalogue
+   ───────────────────────────────────────────────────────────── */
+interface ModelList { ok: boolean; status: ConnStatus; message: string; models: string[] }
 
 /**
- * Test path #1 — the OAuth token against the Anthropic Messages **API**
- * (Authorization: Bearer + OAuth beta). This is the path the pipeline uses when
- * a token is saved, so a green result here guarantees generation works.
+ * Validate the key by listing the account's models. A successful list is a
+ * strong credential check and yields the live model dropdown in one call —
+ * so newly released models appear without a code change.
  */
-async function validateClaudeCodeApi(token: string | null, baseUrl: string): Promise<TestOutcome> {
-  if (!token) {
-    return { ok: false, status: 'not_configured', message: 'Enter a Claude Code OAuth token (run `claude setup-token`) to test the API.', models: [] };
-  }
-  // listModels routes an sk-ant-oat… token to /v1/models with Bearer + the OAuth
-  // beta header — a single call that both validates the token AND returns the
-  // LIVE model lineup the account can use.
-  const result = await listModels('anthropic', token, baseUrl);
-  if (result.ok) {
-    return { ...result, message: 'Connected to the Anthropic API with your Claude Code token.' };
-  }
-  return result;
-}
-
-/**
- * Test path #2 — the local `claude` **CLI**. Runs `claude -p`, passing the saved
- * OAuth token via CLAUDE_CODE_OAUTH_TOKEN so it authenticates non-interactively.
- * Surfaces the CLI's RAW stdout/stderr on failure so the cause is obvious.
- */
-async function validateClaudeCli(token: string | null): Promise<TestOutcome> {
-  if (!isClaudeCliAvailable()) {
-    return { ok: false, status: 'connection_failed', message: 'The `claude` CLI is not installed/visible to the server (`claude --version` failed).', models: [], raw: '' };
-  }
-  try {
-    const out = await runClaudePrompt('Reply with the single word: ok', { model: 'claude-haiku-4-5', oauthToken: token || undefined });
-    if (out && out.trim()) {
-      return {
-        ok: true,
-        status: 'connected',
-        message: `Connected via the Claude CLI${token ? ' (using your saved OAuth token)' : ' (using the CLI login on this server)'}.`,
-        models: ANTHROPIC_KNOWN_MODELS,
-        raw: out.slice(0, 300),
-      };
-    }
-    return { ok: false, status: 'connection_failed', message: 'The Claude CLI returned no output.', models: [], raw: '' };
-  } catch (err: any) {
-    const raw = String(err?.message || 'Claude CLI failed.');
-    return { ok: false, status: classify(raw), message: `Claude CLI did not connect: ${raw}`, models: [], raw };
-  }
-}
-
-/**
- * Validate credentials by listing the account's models. A successful list is a
- * strong credential check and gives us the live model dropdown in one call.
- */
-async function listModels(
-  provider: ProviderId,
-  apiKey: string,
-  baseUrl: string,
-): Promise<{ ok: boolean; status: ConnStatus; message: string; models: string[] }> {
+async function listModels(provider: ProviderId, apiKey: string, baseUrl: string): Promise<ModelList> {
   const base = (baseUrl || PROVIDERS[provider].defaultBaseUrl).replace(/\/+$/, '');
   try {
     if (provider === 'anthropic') {
-      // Route by credential shape: sk-ant-oat… is an OAuth token (Bearer + beta
-      // header); everything else uses x-api-key. Lets the test pass even if the
-      // credential was entered under the "other" auth method.
-      const cred = (apiKey || '').trim();
-      const oauthHeaders = { authorization: `Bearer ${cred}`, 'anthropic-beta': 'oauth-2025-04-20', 'anthropic-version': '2023-06-01' };
-      const keyHeaders = { 'x-api-key': cred, 'anthropic-version': '2023-06-01' };
-      const r = await fetch(`${base}/v1/models`, {
-        headers: /^sk-ant-oat/i.test(cred) ? oauthHeaders : keyHeaders,
-      });
-      if (r.status === 401 || r.status === 403) return { ok: false, status: 'invalid_credentials', message: 'Invalid API key.', models: [] };
-      if (!r.ok) return { ok: false, status: 'connection_failed', message: `Provider returned ${r.status}.`, models: [] };
+      // sk-ant-oat… is a Claude Code OAuth token (Bearer + beta header);
+      // everything else is a regular x-api-key.
+      const cred = apiKey.trim();
+      const headers: Record<string, string> = /^sk-ant-oat/i.test(cred)
+        ? { authorization: `Bearer ${cred}`, 'anthropic-beta': 'oauth-2025-04-20', 'anthropic-version': '2023-06-01' }
+        : { 'x-api-key': cred, 'anthropic-version': '2023-06-01' };
+      // The API returns models newest-first; one page of 1000 covers the catalogue.
+      const r = await fetch(`${base}/v1/models?limit=1000`, { headers });
+      if (r.status === 401 || r.status === 403) return { ok: false, status: 'invalid_credentials', message: 'Key Vault key was rejected by Anthropic (invalid or revoked).', models: [] };
+      if (!r.ok) return { ok: false, status: 'connection_failed', message: `Anthropic returned ${r.status}.`, models: [] };
       const j: any = await r.json();
-      const live = (j.data || []).map((m: any) => m.id).filter(Boolean);
-      // Show the full current lineup, plus any extra models the account exposes.
-      const models = [...ANTHROPIC_KNOWN_MODELS, ...live.filter((id: string) => !ANTHROPIC_KNOWN_MODELS.includes(id))];
-      return { ok: true, status: 'connected', message: 'Connection successful.', models };
+      const models = (j.data || []).map((m: any) => m.id).filter(Boolean);
+      return { ok: true, status: 'connected', message: `Connected. ${models.length} models available.`, models };
     }
     if (provider === 'openai') {
       const r = await fetch(`${base}/models`, { headers: { Authorization: `Bearer ${apiKey}` } });
-      if (r.status === 401 || r.status === 403) return { ok: false, status: 'invalid_credentials', message: 'Invalid API key.', models: [] };
-      if (!r.ok) return { ok: false, status: 'connection_failed', message: `Provider returned ${r.status}.`, models: [] };
+      if (r.status === 401 || r.status === 403) return { ok: false, status: 'invalid_credentials', message: 'Key Vault key was rejected by OpenAI.', models: [] };
+      if (!r.ok) return { ok: false, status: 'connection_failed', message: `OpenAI returned ${r.status}.`, models: [] };
       const j: any = await r.json();
       const models = (j.data || [])
-        .map((m: any) => m.id)
-        .filter((id: string) => /^(gpt|o1|o3|o4|chatgpt)/i.test(id))
-        .sort();
-      return { ok: true, status: 'connected', message: 'Connection successful.', models };
+        .filter((m: any) => /^(gpt|o1|o3|o4|chatgpt)/i.test(m.id || ''))
+        .sort((a: any, b: any) => (b.created || 0) - (a.created || 0))
+        .map((m: any) => m.id);
+      return { ok: true, status: 'connected', message: `Connected. ${models.length} models available.`, models };
     }
-    // gemini
-    const sep = base.includes('?') ? '&' : '?';
-    const r = await fetch(`${base}/v1beta/models${sep}key=${encodeURIComponent(apiKey)}`);
-    if (r.status === 401 || r.status === 403 || r.status === 400) return { ok: false, status: 'invalid_credentials', message: 'Invalid API key.', models: [] };
-    if (!r.ok) return { ok: false, status: 'connection_failed', message: `Provider returned ${r.status}.`, models: [] };
+    // gemini — key goes in a header, not the URL, so it never lands in logs.
+    const r = await fetch(`${base}/v1beta/models?pageSize=1000`, { headers: { 'x-goog-api-key': apiKey } });
+    if (r.status === 401 || r.status === 403 || r.status === 400) return { ok: false, status: 'invalid_credentials', message: 'Key Vault key was rejected by Google.', models: [] };
+    if (!r.ok) return { ok: false, status: 'connection_failed', message: `Google returned ${r.status}.`, models: [] };
     const j: any = await r.json();
     const models = (j.models || [])
       .filter((m: any) => (m.supportedGenerationMethods || []).includes('generateContent'))
       .map((m: any) => String(m.name || '').replace(/^models\//, ''))
       .filter(Boolean)
-      .sort();
-    return { ok: true, status: 'connected', message: 'Connection successful.', models };
+      .sort()
+      .reverse();
+    return { ok: true, status: 'connected', message: `Connected. ${models.length} models available.`, models };
   } catch (err: any) {
     return { ok: false, status: 'connection_failed', message: err?.message || 'Connection failed.', models: [] };
   }
 }
 
-/** Keep the worker's tenant key in sync with the centralized Anthropic config. */
-async function syncTenantAnthropicKey(tenantId: string, plainKey: string | null): Promise<void> {
-  const value = plainKey ? encryptAtRest(plainKey) : null;
-  await pool.query(
-    `UPDATE "JBSTestOpsAI".tenants SET anthropic_api_key = $1, updated_at = NOW() WHERE id = $2`,
-    [value, tenantId],
-  );
+// Model lists are cached per tenant+provider so opening the page doesn't hit
+// every provider each time. Test Connection refreshes the entry.
+const MODEL_TTL_MS = 10 * 60 * 1000;
+const modelCache = new Map<string, { at: number; result: ModelList }>();
+
+async function cachedModels(tenantId: string, provider: ProviderId, key: string, baseUrl: string, fresh = false): Promise<ModelList> {
+  const ck = `${tenantId}:${provider}:${baseUrl}`;
+  const hit = modelCache.get(ck);
+  if (!fresh && hit && Date.now() - hit.at < MODEL_TTL_MS) return hit.result;
+  const result = await listModels(provider, key, baseUrl);
+  modelCache.set(ck, { at: Date.now(), result });
+  return result;
 }
 
 // ─── GET /api/llm-config ───────────────────────────────────────────────
@@ -252,40 +178,36 @@ router.get('/', async (req: Request, res: Response) => {
   if (!requireAdmin(req, res)) return;
   try {
     const tenantId = req.user!.tenantId;
-    const providers = [] as any[];
     let defaultProvider: ProviderId | null = null;
 
-    for (const p of Object.keys(PROVIDERS) as ProviderId[]) {
+    const providers = await Promise.all((Object.keys(PROVIDERS) as ProviderId[]).map(async (p) => {
       const row = await getRow(tenantId, p);
-      const cfg = row?.config_data || {};
-      const key = storedKey(row);
-
-      // Anthropic supports two auth methods; others are API-key only.
-      const authMethod: AuthMethod = p === 'anthropic' ? authMethodOf(row) : 'api_key';
-      const token = p === 'anthropic' ? storedToken(row) : null;
-      const configured =
-        authMethod === 'claude_code' ? (!!token || isClaudeCliAvailable()) : !!key;
+      const cfg = settingsOf(row);
+      const baseUrl = cfg.baseUrl || PROVIDERS[p].defaultBaseUrl;
+      const cred = await resolveLlmCredential(p, tenantId);
+      const configured = !!cred.value;
+      const live = cred.value ? await cachedModels(tenantId, p, cred.value, baseUrl) : null;
+      const status: ConnStatus = !configured ? 'not_configured' : live!.status;
 
       if (configured && cfg.isDefault) defaultProvider = p;
-      providers.push({
+      return {
         provider: p,
         label: PROVIDERS[p].label,
         configured,
-        status: (configured ? (row?.status as ConnStatus) || 'connected' : 'not_configured') as ConnStatus,
-        authMethod,
-        claudeCodeMode: cfg.claudeCodeMode === 'cli' ? 'cli' : 'api',
+        status,
+        statusMessage: live?.message ?? credentialInfo(cred).error ?? null,
+        credential: credentialInfo(cred),
+        models: live?.models ?? [],
         model: cfg.model || null,
         agentModels: (cfg.agentModels && typeof cfg.agentModels === 'object') ? cfg.agentModels : {},
         effort: cfg.effort || null,
         extendedThinking: cfg.extendedThinking === true,
-        baseUrl: cfg.baseUrl || PROVIDERS[p].defaultBaseUrl,
-        maskedKey: key ? maskSecret(key) : null,
-        maskedToken: token ? maskSecret(token) : null,
+        baseUrl,
         isDefault: !!cfg.isDefault,
         updatedBy: row?.connected_by || null,
         updatedAt: row?.last_sync_at || row?.connected_at || row?.updated_at || null,
-      });
-    }
+      };
+    }));
 
     res.json({ providers, defaultProvider });
   } catch (err: any) {
@@ -301,38 +223,21 @@ router.post('/:provider/test', async (req: Request, res: Response) => {
   try {
     const tenantId = req.user!.tenantId;
     const row = await getRow(tenantId, provider);
-    const baseUrl = (req.body?.baseUrl || '').trim() || PROVIDERS[provider].defaultBaseUrl;
+    const baseUrl = (req.body?.baseUrl || '').trim() || settingsOf(row).baseUrl || PROVIDERS[provider].defaultBaseUrl;
 
-    // Anthropic Claude Code (subscription) — validate the OAuth token / CLI.
-    const requestedMethod: AuthMethod =
-      req.body?.authMethod === 'claude_code' ? 'claude_code'
-      : req.body?.authMethod === 'api_key' ? 'api_key'
-      : (provider === 'anthropic' ? authMethodOf(row) : 'api_key');
-
-    if (provider === 'anthropic' && requestedMethod === 'claude_code') {
-      const incomingTok = (req.body?.oauthToken || '') as string;
-      const token = incomingTok ? decryptField(incomingTok).trim() : storedToken(row);
-      // Which path to test: 'api' (OAuth token → Messages API) or 'cli' (local
-      // claude CLI). Defaults to 'api' for back-compat.
-      const testMode = req.body?.mode === 'cli' ? 'cli' : 'api';
-      console.log(
-        `[llm-config/test] claude_code mode=${testMode}: source=${incomingTok ? 'entered-in-field' : 'saved-in-db'}, ` +
-        `token=${token ? `${maskSecret(token)} (${token.length} chars, prefix ${token.slice(0, 11)})` : '(none)'}`,
-      );
-      const result = testMode === 'cli'
-        ? await validateClaudeCli(token)
-        : await validateClaudeCodeApi(token, baseUrl);
-      console.log(`[llm-config/test] claude_code mode=${testMode} → ${result.ok ? 'CONNECTED' : 'FAILED'}: ${result.message}`);
-      res.status(result.ok ? 200 : 400).json(result);
+    // Fresh read so a secret just added/rotated in Key Vault is picked up.
+    const cred = await resolveLlmCredential(provider, tenantId, { fresh: true });
+    const credential = credentialInfo(cred);
+    if (!cred.value) {
+      res.status(400).json({ ok: false, status: 'not_configured', message: cred.error || 'No key found.', models: [], credential });
       return;
     }
 
-    const incoming = (req.body?.apiKey || '') as string;
-    const apiKey = incoming ? decryptField(incoming).trim() : storedKey(row);
-    if (!apiKey) { res.status(400).json({ ok: false, status: 'not_configured', message: 'API key is required.' }); return; }
-
-    const result = await listModels(provider, apiKey, baseUrl);
-    res.status(result.ok ? 200 : 400).json(result);
+    const result = await cachedModels(tenantId, provider, cred.value, baseUrl, true);
+    const where = cred.source === 'key-vault'
+      ? `Key Vault ${cred.vault} → secret "${cred.reference}"`
+      : `environment variable ${cred.reference}`;
+    res.status(result.ok ? 200 : 400).json({ ...result, message: `${result.message}\nKey source: ${where}`, credential });
   } catch (err: any) {
     res.status(500).json({ ok: false, status: 'connection_failed', message: err.message || 'Connection test failed.' });
   }
@@ -343,53 +248,17 @@ router.put('/:provider', async (req: Request, res: Response) => {
   if (!requireAdmin(req, res)) return;
   const provider = req.params.provider as string;
   if (!isProvider(provider)) { res.status(400).json({ error: 'Unknown provider' }); return; }
+  if (req.body?.apiKey || req.body?.oauthToken) {
+    res.status(400).json({ error: 'API keys are managed in Azure Key Vault and cannot be saved here.' });
+    return;
+  }
   try {
     const tenantId = req.user!.tenantId;
-    const existing = await getRow(tenantId, provider);
-    const prevCfg = existing?.config_data || {};
-
-    // Resolve the auth method (Anthropic only); other providers are API-key.
-    const authMethod: AuthMethod =
-      provider === 'anthropic'
-        ? (req.body?.authMethod === 'claude_code' ? 'claude_code'
-           : req.body?.authMethod === 'api_key' ? 'api_key'
-           : (prevCfg.authMethod || 'api_key'))
-        : 'api_key';
-
-    // Preserve the stored key when the caller omits it (masked-on-load case).
-    const incomingKey = (req.body?.apiKey || '') as string;
-    let storedApiKey: string | null = prevCfg.apiKey || null;
-    let plainForMirror = storedKey(existing);
-    if (incomingKey) {
-      const plain = decryptField(incomingKey).trim();
-      if (plain) {
-        storedApiKey = encryptAtRest(plain);
-        plainForMirror = plain;
-      }
-    }
-
-    // Preserve the stored OAuth token when omitted (Claude Code method).
-    const incomingTok = (req.body?.oauthToken || '') as string;
-    let storedOauthToken: string | null = prevCfg.oauthToken || null;
-    if (incomingTok) {
-      const plain = decryptField(incomingTok).trim();
-      if (plain) storedOauthToken = encryptAtRest(plain);
-    }
-
-    // Method-aware requirement: api_key needs a key; claude_code needs a token
-    // (or a logged-in local CLI for dev).
-    if (authMethod === 'claude_code') {
-      if (!storedOauthToken && !isClaudeCliAvailable()) {
-        res.status(400).json({ error: 'A Claude Code OAuth token is required (run `claude setup-token`).' });
-        return;
-      }
-    } else if (!storedApiKey) {
-      res.status(400).json({ error: 'API key is required.' });
-      return;
-    }
+    const prevCfg = settingsOf(await getRow(tenantId, provider));
 
     const baseUrl = (req.body?.baseUrl ?? prevCfg.baseUrl ?? PROVIDERS[provider].defaultBaseUrl) as string;
     const model = (req.body?.model ?? prevCfg.model ?? null) as string | null;
+    if (!model) { res.status(400).json({ error: 'Choose a model.' }); return; }
     // Per-agent model overrides — preserve existing when the caller omits them.
     const agentModels = sanitizeAgentModels(req.body?.agentModels, prevCfg.agentModels || {});
 
@@ -401,25 +270,9 @@ router.put('/:provider', async (req: Request, res: Response) => {
       ? req.body.extendedThinking
       : (prevCfg.extendedThinking ?? false);
 
-    // Claude Code transport (Anthropic + claude_code only): 'api' (OAuth→API) or
-    // 'cli' (local claude CLI). Preserved when the caller omits it.
-    const claudeCodeMode: 'api' | 'cli' =
-      req.body?.claudeCodeMode === 'cli' ? 'cli'
-      : req.body?.claudeCodeMode === 'api' ? 'api'
-      : (prevCfg.claudeCodeMode === 'cli' ? 'cli' : 'api');
-
-    const configData = {
-      apiKey: storedApiKey,
-      oauthToken: storedOauthToken,
-      authMethod,
-      claudeCodeMode,
-      baseUrl,
-      model,
-      agentModels,
-      effort,
-      extendedThinking,
-      isDefault: !!prevCfg.isDefault,
-    };
+    // Settings only. Rewriting the row also drops any legacy key that an older
+    // version stored in config_data.
+    const configData = { baseUrl, model, agentModels, effort, extendedThinking, isDefault: !!prevCfg.isDefault };
 
     await pool.query(
       `MERGE INTO client_configurations WITH (HOLDLOCK) AS t
@@ -435,20 +288,8 @@ router.put('/:provider', async (req: Request, res: Response) => {
       [tenantId, integrationId(provider), 'connected', JSON.stringify(configData), req.user!.username],
     );
 
-    // Mirror only the x-api-key into the worker's column. The worker can't use an
-    // OAuth (subscription) token as an x-api-key, so don't mirror in that mode.
-    if (provider === 'anthropic' && authMethod === 'api_key' && plainForMirror) {
-      await syncTenantAnthropicKey(tenantId, plainForMirror);
-    }
-
-    void logAudit(req, 'update', `llm-config.${provider}`, tenantId, { op: 'save', authMethod });
-    const plainTok = storedOauthToken ? (decryptStored(storedOauthToken) || null) : null;
-    res.json({
-      ok: true,
-      authMethod,
-      maskedKey: plainForMirror ? maskSecret(plainForMirror) : null,
-      maskedToken: plainTok ? maskSecret(plainTok) : null,
-    });
+    void logAudit(req, 'update', `llm-config.${provider}`, tenantId, { op: 'save', model });
+    res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -461,17 +302,13 @@ router.post('/:provider/default', async (req: Request, res: Response) => {
   if (!isProvider(provider)) { res.status(400).json({ error: 'Unknown provider' }); return; }
   try {
     const tenantId = req.user!.tenantId;
-    const target = await getRow(tenantId, provider);
-    const targetConfigured =
-      provider === 'anthropic' && authMethodOf(target) === 'claude_code'
-        ? (!!storedToken(target) || isClaudeCliAvailable())
-        : !!storedKey(target);
-    if (!targetConfigured) { res.status(400).json({ error: 'Configure this provider before making it the default.' }); return; }
+    const cred = await resolveLlmCredential(provider, tenantId);
+    if (!cred.value) { res.status(400).json({ error: 'Add this provider\'s key to Key Vault before making it the default.' }); return; }
 
     for (const p of Object.keys(PROVIDERS) as ProviderId[]) {
       const row = await getRow(tenantId, p);
       if (!row) continue;
-      const cfg = { ...(row.config_data || {}), isDefault: p === provider };
+      const cfg = { ...settingsOf(row), isDefault: p === provider };
       await pool.query(
         `UPDATE client_configurations SET config_data = $1, updated_at = SYSUTCDATETIME()
           WHERE tenant_id = $2 AND integration_id = $3`,
@@ -487,6 +324,7 @@ router.post('/:provider/default', async (req: Request, res: Response) => {
 });
 
 // ─── DELETE /api/llm-config/:provider ──────────────────────────────────
+// Resets the model settings. The key itself stays in Key Vault.
 router.delete('/:provider', async (req: Request, res: Response) => {
   if (!requireAdmin(req, res)) return;
   const provider = req.params.provider as string;
@@ -497,7 +335,6 @@ router.delete('/:provider', async (req: Request, res: Response) => {
       `DELETE FROM client_configurations WHERE tenant_id = $1 AND integration_id = $2`,
       [tenantId, integrationId(provider)],
     );
-    if (provider === 'anthropic') await syncTenantAnthropicKey(tenantId, null);
     void logAudit(req, 'delete', `llm-config.${provider}`, tenantId);
     res.json({ ok: true });
   } catch (err: any) {

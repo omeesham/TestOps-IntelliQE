@@ -11,30 +11,20 @@ import { classifyFailure } from '../orchestrator/failure-classifier.js';
 import { processStageCompletion } from '../orchestrator/orchestrator.js';
 import { loadPipelineDefinitionForClient } from '../orchestrator/orchestrator.js';
 import { broadcastSSE } from '../services/sse-manager.js';
-import { decryptStored } from '../utils/crypto.js';
+import { resolveLlmCredential } from '../services/llm-credentials.service.js';
 
 const router = Router();
 router.use(workerAuthMiddleware);
 
 /**
- * Look up the tenant's own Anthropic API key (HIPAA-architecture pattern:
- * customer-owned LLM credentials). Returns the decrypted plaintext key, or
- * null if the tenant has not configured one. Worker falls back to the
- * platform-default key when null.
+ * Resolve the tenant's Anthropic API key from Azure Key Vault (customer-owned
+ * LLM credentials). Only the backend's managed identity needs vault access —
+ * the key is handed to the worker per task. Returns null when unavailable;
+ * the worker then falls back to its own ANTHROPIC_API_KEY env var.
  */
 async function getTenantAnthropicKey(tenantId: string | null): Promise<string | null> {
-  if (!tenantId) return null;
-  try {
-    const { rows } = await pool.query(
-      `SELECT anthropic_api_key FROM "JBSTestOpsAI".tenants WHERE id = $1`,
-      [tenantId],
-    );
-    const stored = rows[0]?.anthropic_api_key as string | null;
-    if (!stored) return null;
-    return decryptStored(stored);
-  } catch {
-    return null;
-  }
+  const cred = await resolveLlmCredential('anthropic', tenantId);
+  return cred.value;
 }
 
 // GET /next-task — Worker polls for next task

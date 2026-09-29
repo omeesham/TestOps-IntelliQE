@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, type ReactNode } from 'react';
-import { loginUser } from '@/services/api';
+import { loginUser, fetchCurrentUser } from '@/services/api';
 
 export type UserRole = 'admin' | 'qa_engineer' | 'data_analyst';
 
@@ -16,6 +16,8 @@ interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
   login: (username: string, password: string) => Promise<boolean>;
+  /** Complete a sign-in that already produced a session token (SSO redirect). */
+  loginWithToken: (token: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -52,6 +54,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return false;
   };
 
+  // SSO hands the SPA a ready-made JWT in the URL fragment; store it, then
+  // hydrate the user from /auth/me so the profile (display name, tenant,
+  // role) comes from the server rather than being trusted from the URL.
+  const loginWithToken = async (token: string): Promise<void> => {
+    sessionStorage.setItem('intelliqe_token', token);
+    try {
+      const result = await fetchCurrentUser();
+      if (!result?.success) throw new Error(result?.error || 'Could not load profile');
+      const u: User = {
+        username: result.user.username,
+        role: result.user.role as UserRole,
+        displayName: result.user.displayName,
+        tenantId: result.user.tenantId,
+        tenantName: result.user.tenantName,
+        isPlatform: result.user.isPlatform,
+      };
+      setUser(u);
+      sessionStorage.setItem('intelliqe_user', JSON.stringify(u));
+    } catch (err) {
+      sessionStorage.removeItem('intelliqe_token');
+      throw err;
+    }
+  };
+
   const logout = () => {
     setUser(null);
     sessionStorage.removeItem('intelliqe_user');
@@ -59,7 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, logout }}>
+    <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, loginWithToken, logout }}>
       {children}
     </AuthContext.Provider>
   );

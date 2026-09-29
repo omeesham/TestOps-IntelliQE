@@ -93,6 +93,8 @@ Every DB query filters by `tenant_id`. Auth middleware attaches tenant context f
 ### Key Patterns
 
 - **Token format**: `intelliqe-demo-token-{timestamp}:{username}` (not JWT)
+- **Microsoft SSO**: `backend/src/routes/sso.routes.ts` + `services/microsoft-sso.service.ts` (OIDC auth-code + PKCE, no MSAL). Enabled by `MS_SSO_CLIENT_ID`/`MS_SSO_CLIENT_SECRET`; users link via `users.sso_provider`/`sso_subject`. SPA lands on `/auth/sso/callback#token=…` then calls `/api/auth/me`. Setup: `docs/MICROSOFT_SSO_SETUP.md`.
+- **LLM API keys**: read from Azure Key Vault (`AZURE_KEY_VAULT_URL`, secret `anthropic-api-key`, optional `<tenant-slug>-` prefix) via managed identity in `services/llm-credentials.service.ts`; env var fallback for local dev. Never entered in the UI or stored in the DB — the LLM Configuration page only picks models (live `/v1/models`) and tests the connection. Setup: `docs/LLM_KEYS_KEY_VAULT.md`.
 - **Real-time updates**: SSE from backend to frontend per pipeline run
 - **Worker polling**: Workers poll every 5s, heartbeat every 30s
 - **Credential storage**: Fields matching sensitive key names are XOR-encrypted at rest with `__ENC__` prefix

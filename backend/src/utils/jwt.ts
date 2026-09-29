@@ -42,5 +42,26 @@ export function signToken(payload: JwtPayload): string {
 }
 
 export function verifyToken(token: string): JwtPayload {
-  return jwt.verify(token, getSecret(), { algorithms: ['HS256'] }) as JwtPayload;
+  const claims = jwt.verify(token, getSecret(), { algorithms: ['HS256'] }) as JwtPayload & { aud?: unknown };
+  // Scoped tokens (e.g. the SSO state cookie) share the secret but carry an
+  // audience and no user id — never let one masquerade as a session token.
+  if (claims.aud !== undefined || typeof claims.uid !== 'string' || !claims.uid) {
+    throw new Error('Not a session token');
+  }
+  return claims;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Scoped short-lived tokens (SSO state cookie, etc.)
+   Signed with the same secret but tagged with an `aud` so they are
+   rejected by verifyToken() and only accepted by verifyScopedToken()
+   for the matching scope.
+   ───────────────────────────────────────────────────────────── */
+export function signScopedToken(scope: string, payload: object, expiresIn: string): string {
+  const opts: SignOptions = { algorithm: 'HS256', audience: scope, expiresIn: expiresIn as any };
+  return jwt.sign(payload, getSecret(), opts);
+}
+
+export function verifyScopedToken<T extends object>(scope: string, token: string): T {
+  return jwt.verify(token, getSecret(), { algorithms: ['HS256'], audience: scope }) as T;
 }

@@ -1,7 +1,7 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
-import { signupUser } from '@/services/api';
+import { signupUser, getSsoProviders, microsoftSsoStartUrl } from '@/services/api';
 import { Eye, EyeOff, AlertCircle, Zap, UserPlus, ChevronDown } from 'lucide-react';
 import { normalizeError } from '@/utils/apiError';
 
@@ -11,12 +11,30 @@ const ROLES = [
   { value: 'data_analyst', label: 'Data Analyst — data & AI validation' },
 ];
 
-// Microsoft SSO entry point. When VITE_MS_SSO_URL is set (the backend's OAuth
-// start endpoint, e.g. /api/auth/sso/microsoft), a "Continue with Microsoft"
-// button appears on both forms and simply redirects there — the entire SSO
-// conversion is: implement that endpoint + set this env var. Password forms
-// keep working alongside it (or hide them behind the same flag if SSO-only).
-const MS_SSO_URL: string | undefined = import.meta.env.VITE_MS_SSO_URL;
+// Microsoft SSO entry point. The button appears when the backend reports
+// MS_SSO_CLIENT_ID/SECRET are configured (GET /api/auth/sso/providers) or when
+// VITE_MS_SSO_URL forces it at build time. Clicking it is a plain top-level
+// redirect to /api/auth/sso/microsoft; the backend runs the OAuth dance and
+// lands the browser on /auth/sso/callback with a session token.
+const MS_SSO_FORCED = !!import.meta.env.VITE_MS_SSO_URL;
+
+// Error codes the backend appends as ?sso_error=… when the redirect fails.
+const SSO_ERRORS: Record<string, string> = {
+  not_configured: 'Microsoft sign-in is not configured on this server.',
+  cancelled: 'Microsoft sign-in was cancelled.',
+  provider_error: 'Microsoft returned an error. Please try again.',
+  state_mismatch: 'Sign-in session expired or was tampered with. Please try again.',
+  token_exchange_failed: 'Could not complete sign-in with Microsoft. Please try again.',
+  jwks_unavailable: 'Could not reach Microsoft to verify your sign-in. Please try again.',
+  invalid_id_token: 'Microsoft returned an identity we could not verify.',
+  tenant_not_allowed: 'Your Microsoft account belongs to an organisation that is not allowed here.',
+  domain_not_allowed: 'Your email domain is not allowed to sign in here.',
+  no_email: 'Your Microsoft account has no email address we can use.',
+  no_account: 'No IntelliQE account exists for this Microsoft user. Ask your administrator to invite you.',
+  account_inactive: 'Your account is deactivated. Contact your administrator.',
+  provision_failed: 'Could not create your account. Contact your administrator.',
+  missing_token: 'Sign-in did not complete. Please try again.',
+};
 
 export default function LoginPage() {
   const [isSignUp, setIsSignUp] = useState(false);
@@ -30,8 +48,31 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [ssoAvailable, setSsoAvailable] = useState(MS_SSO_FORCED);
   const { login } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Discover whether the backend has Microsoft SSO enabled (no rebuild needed).
+  useEffect(() => {
+    if (MS_SSO_FORCED) return;
+    let cancelled = false;
+    getSsoProviders()
+      .then((p) => { if (!cancelled) setSsoAvailable(p.microsoft); })
+      .catch(() => { /* backend down — password form still shows its own error */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Surface a failed SSO round-trip (?sso_error=code) once, then clean the URL.
+  useEffect(() => {
+    const code = searchParams.get('sso_error');
+    if (!code) return;
+    setError(SSO_ERRORS[code] || 'Microsoft sign-in failed. Please try again.');
+    const next = new URLSearchParams(searchParams);
+    next.delete('sso_error');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const inputCls = 'w-full px-3.5 py-2.5 bg-[#F5F3FF] border border-[#DDD6FE] rounded-lg text-[#1E1B4B] placeholder:text-gray-400 text-sm outline-none focus:ring-2 focus:ring-[#7C3AED]/30 focus:border-[#7C3AED] transition-all';
   const labelCls = 'block text-xs font-medium text-[#1E1B4B] mb-1';
@@ -101,14 +142,17 @@ export default function LoginPage() {
   };
 
   const handleMicrosoftSignIn = () => {
-    if (MS_SSO_URL) window.location.href = MS_SSO_URL;
+    // Full-page navigation (not an XHR): the backend answers with a 302 to
+    // login.microsoftonline.com. Carry the pre-login destination along.
+    const from = searchParams.get('from') || undefined;
+    window.location.href = microsoftSsoStartUrl(from);
   };
 
   const spinner = (
     <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>
   );
 
-  const microsoftButton = MS_SSO_URL && (
+  const microsoftButton = ssoAvailable && (
     <>
       <div className="my-4 flex items-center gap-3">
         <div className="h-px flex-1 bg-[#EDE9FE]" />

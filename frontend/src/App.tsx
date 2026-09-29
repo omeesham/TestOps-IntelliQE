@@ -8,6 +8,7 @@ import RouteBreadcrumbs from '@/components/diagnostics/RouteBreadcrumbs';
 import FeatureUnavailable from '@/components/FeatureUnavailable';
 import Layout from '@/components/layout/Layout';
 import LoginPage from '@/pages/LoginPage';
+import SsoCallbackPage from '@/pages/SsoCallbackPage';
 import ReportsPage from '@/pages/ReportsPage';
 import SystemConfigurationPage from '@/pages/SystemConfigurationPage';
 import GeneratedTestCasesPage from '@/pages/GeneratedTestCasesPage';
@@ -49,6 +50,8 @@ function AppRoutes() {
         path="/login"
         element={isAuthenticated ? <Navigate to="/chat" replace /> : <LoginPage />}
       />
+      {/* Landing point for the Microsoft SSO redirect (token arrives in the URL fragment) */}
+      <Route path="/auth/sso/callback" element={<SsoCallbackPage />} />
 
       {/* Protected routes with sidebar layout */}
       <Route

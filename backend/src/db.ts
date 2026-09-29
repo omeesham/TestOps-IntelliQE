@@ -336,6 +336,10 @@ export async function initDb(): Promise<void> {
         updated_at    DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
       )`);
     await addColumn('users', 'is_active', 'BIT NOT NULL DEFAULT 1');
+    // External identity link (Microsoft Entra SSO): provider name + the
+    // provider's stable subject id (`oid` for Microsoft).
+    await addColumn('users', 'sso_provider', 'NVARCHAR(50) NULL');
+    await addColumn('users', 'sso_subject', 'NVARCHAR(200) NULL');
 
     // ─── 3. Client configurations ───
     await createTable('client_configurations', `
@@ -744,6 +748,7 @@ export async function initDb(): Promise<void> {
 
     // ─── 11. Indexes ───
     await createIndex('idx_users_tenant', 'users', '(tenant_id)');
+    await createIndex('idx_users_sso_subject', 'users', '(sso_provider, sso_subject)');
     await createIndex('idx_client_configs_tenant', 'client_configurations', '(tenant_id)');
     await createIndex('idx_conversations_username', 'conversations', '(username)');
     await createIndex('idx_conversations_tenant', 'conversations', '(tenant_id)');
