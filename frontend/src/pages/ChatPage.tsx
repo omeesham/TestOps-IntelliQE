@@ -606,13 +606,8 @@ export default function ChatPage() {
     setCategory(c.id);
     setSubCategory(c.title);
 
-    if (c.id === 'api') {
-      push('tessa', 'Please provide your API details below.');
-      setStep('api-form');
-    } else {
-      push('tessa', 'How would you like to provide your requirements?');
-      setStep('source-select');
-    }
+    push('tessa', 'How would you like to provide your requirements?');
+    setStep('source-select');
   };
 
   /* --- application-configured guard ---
