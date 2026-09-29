@@ -64,6 +64,8 @@ function AppRoutes() {
       >
         {/* /chat is rendered persistently inside Layout to preserve running flows */}
         <Route path="/chat" element={null} />
+        {/* Web Application Automation is the same persistent ChatPage, showing its wizard */}
+        <Route path="/web-automation" element={null} />
         <Route path="/generated-tests" element={<FeatureRoute feature="generated-tests" name="Generated Test Cases"><GeneratedTestCasesPage /></FeatureRoute>} />
         <Route path="/automation" element={<FeatureRoute feature="api-automation" name="API Automation"><ApiAutomationPage /></FeatureRoute>} />
         {/* Backward-compat: the earlier example path collided with the /api proxy prefix. */}

@@ -8,7 +8,8 @@ import FeatureUnavailable from '@/components/FeatureUnavailable';
 
 export default function Layout() {
   const location = useLocation();
-  const isChat = location.pathname === '/chat';
+  // Chat and Web Application Automation are two views of the same ChatPage.
+  const isChat = location.pathname === '/chat' || location.pathname === '/web-automation';
   // API Automation is a full-height, app-like surface (like Chat): it manages
   // its own scroll and chrome, so the shell gives it the full bleed — no page
   // padding, no outer scroll.

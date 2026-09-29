@@ -266,10 +266,10 @@ export default function AdaCompliancePage() {
     try { await deleteAdaScan(s.id); reload(); } catch (err: unknown) { setError(errorMessage(err, 'Delete failed')); }
   };
 
-  // Hand the crawled site to the Chat wizard's explore flow.
+  // Hand the crawled site to the web automation wizard's explore flow.
   const brownfield = (ctx: BrownfieldHandoff) => {
     sessionStorage.setItem('intelliqe_ada_brownfield', JSON.stringify(ctx));
-    navigate('/chat');
+    navigate('/web-automation');
   };
 
   /* Key numbers, each from the latest finished audit of every site in the list. */

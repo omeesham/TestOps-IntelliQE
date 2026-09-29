@@ -6,7 +6,7 @@ import { PATH_TO_FEATURE } from '@/config/featureCatalog';
 import { getMenuConfig } from '@/services/api';
 import {
   Home, ClipboardList, BarChart3, Users, Settings,
-  ChevronLeft, ChevronRight, Bug, ToggleRight, Activity, Plug,
+  ChevronLeft, ChevronRight, Bug, ToggleRight, Activity, Plug, Monitor,
 } from 'lucide-react';
 import UniversalAccess from '@/components/icons/UniversalAccess';
 
@@ -31,11 +31,12 @@ const HIDDEN_PATHS: string[] = ['/agent-performance', '/feature-toggles'];
 
 const navItems: NavItem[] = [
   { name: 'Chat',                  path: '/chat',                 icon: Home,            roles: ALL },
+  { name: 'Web Application Automation', path: '/web-automation',  icon: Monitor,         roles: ALL },
   { name: 'API Automation',        path: '/automation',           icon: Plug,            roles: ALL },
+  { name: 'ADA Compliance',        path: '/ada-compliance',       icon: UniversalAccess, roles: ALL },
   { name: 'Generated Test Cases',  path: '/generated-tests',      icon: ClipboardList,   roles: ALL },
   { name: 'Reports',               path: '/reports',              icon: BarChart3,       roles: ALL },
   { name: 'Bug Tracker',           path: '/bug-tracker',          icon: Bug,             roles: ALL },
-  { name: 'ADA Compliance',        path: '/ada-compliance',       icon: UniversalAccess, roles: ALL },
   { name: 'Agent Performance',     path: '/agent-performance',    icon: Activity,        roles: ALL },
   { name: 'User Management',       path: '/user-management',      icon: Users,           roles: ['admin', 'qa_engineer'] },
   { name: 'System Configuration',  path: '/system-configuration', icon: Settings,        roles: ['admin', 'qa_engineer'] },
@@ -70,10 +71,12 @@ export default function Sidebar() {
   const visibleItems = navItems.filter((item) => {
     if (HIDDEN_PATHS.includes(item.path)) return false;
     if (!item.roles.includes(role)) return false;
-    if (allowedPaths && !allowedPaths.includes(item.path)) return false;
+    // Web Application Automation is a view of Chat, so it follows Chat's access.
+    const gatePath = item.path === '/web-automation' ? '/chat' : item.path;
+    if (allowedPaths && !allowedPaths.includes(gatePath)) return false;
     // Feature toggle gating: hide nav items whose feature is disabled for this role.
     // (Items without a catalog feature — e.g. the Feature Toggles panel — always show.)
-    const featureKey = PATH_TO_FEATURE[item.path];
+    const featureKey = PATH_TO_FEATURE[gatePath];
     if (featureKey && !isEnabled(featureKey)) return false;
     return true;
   });

@@ -12,6 +12,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/ada-compliance': 'ADA Compliance',
   '/bug-tracker': 'Bug Tracker',
   '/automation': 'API Automation',
+  '/web-automation': 'Web Application Automation',
 };
 
 export default function Header() {

@@ -36,7 +36,7 @@ import UniversalAccess from '@/components/icons/UniversalAccess';
 import { initTTS, speak, speakAsync, waitForSpeech, waitForVoices, stopSpeaking, isTTSEnabled, toggleTTS } from '@/utils/tts';
 import { useToast } from '@/components/feedback/ToastProvider';
 import type { BrownfieldHandoff } from '@/components/ada/AdaCompliancePanel';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES
@@ -71,6 +71,15 @@ type Step =
   | 'publish';
 
 type Category = 'application' | 'api' | 'ada';
+
+// Each category has its own page; Chat is the launcher for them. The web
+// automation wizard below runs on WEB_AUTOMATION_PATH.
+const WEB_AUTOMATION_PATH = '/web-automation';
+const CATEGORY_PATHS: Record<Category, string> = {
+  application: WEB_AUTOMATION_PATH,
+  api: '/automation',
+  ada: '/ada-compliance',
+};
 type ReqSource = 'jira' | 'azure-devops' | 'confluence' | 'sharepoint' | 'upload' | 'text' | 'explore';
 
 interface FormField {
@@ -260,6 +269,9 @@ export default function ChatPage() {
   const { user } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const onWebPage = pathname === WEB_AUTOMATION_PATH;
+  const showLauncher = pathname === '/chat';
   const scrollRef = useRef<HTMLDivElement>(null);
 
   /* --- state --- */
@@ -563,51 +575,51 @@ export default function ChatPage() {
     return c.id === 'application' || c.id === 'api' || c.id === 'ada';
   });
 
+  const greeting = `Hi ${user?.username || 'there'}, I'm Tessa, your AI assistant. What would you like to test today?`;
+
   // welcome — runs once, waits for voices so Zira is used from the start
   const welcomed = useRef(false);
   useEffect(() => {
     if (welcomed.current) return;
     welcomed.current = true;
+    if (!showLauncher) return;
+    waitForVoices().then(() => speak(greeting));
+  }, []);
+
+  // Web Application Automation page: start the wizard on arrival.
+  const webFlowChecked = useRef(false);
+  useEffect(() => {
+    if (!onWebPage) return;
 
     // Arrived from the ADA Compliance page with a site to rebuild requirements for.
     const handoff = sessionStorage.getItem('intelliqe_ada_brownfield');
     if (handoff) {
       sessionStorage.removeItem('intelliqe_ada_brownfield');
-      try { handleAdaBrownfield(JSON.parse(handoff)); return; } catch { /* fall through to the normal welcome */ }
+      try { handleAdaBrownfield(JSON.parse(handoff)); return; } catch { /* fall through to the normal start */ }
     }
 
-    // Skip welcome if a previous session was restored (it already has messages)
-    const hasSavedSession = !!sessionStorage.getItem(SESSION_KEY);
-    if (hasSavedSession) return;
+    // On mount a saved flow is about to be restored; leave the step to it.
+    const firstCheck = !webFlowChecked.current;
+    webFlowChecked.current = true;
+    if (firstCheck) {
+      try {
+        const savedStep = JSON.parse(sessionStorage.getItem(SESSION_KEY) || '{}').step;
+        if (savedStep && savedStep !== 'welcome' && savedStep !== 'ada') return;
+      } catch { /* ignore parse errors */ }
+    }
 
-    waitForVoices().then(() => {
-      push('tessa', `Hi ${user?.username || 'there'}, I'm Tessa, your AI assistant. What would you like to test today?`);
-    });
-  }, []);
+    if (step !== 'welcome') return;
+    setCategory('application');
+    setSubCategory(CATEGORIES.find((c) => c.id === 'application')?.title || null);
+    push('tessa', 'How would you like to provide your requirements?');
+    setStep('source-select');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onWebPage, step]);
 
   /* --- flow handlers --- */
   const pickCategory = (c: typeof CATEGORIES[number]) => {
-    if (c.comingSoon) {
-      push('user', c.title);
-      push('tessa', `${c.title} is coming soon.`);
-      return;
-    }
-    if (c.id === 'ada') {
-      // The website audit has its own page; audits are started there from New audit.
-      navigate('/ada-compliance');
-      return;
-    }
-    if (c.id === 'api') {
-      // API Automation has its own page.
-      navigate('/automation');
-      return;
-    }
-    push('user', c.title);
-    setCategory(c.id);
-    setSubCategory(c.title);
-
-    push('tessa', 'How would you like to provide your requirements?');
-    setStep('source-select');
+    if (c.comingSoon) return;
+    navigate(CATEGORY_PATHS[c.id]);
   };
 
   /* --- application-configured guard ---
@@ -1911,7 +1923,6 @@ export default function ChatPage() {
     setGitPush({ status: 'idle' });
     setSupportState({ status: 'idle' });
     clearSession(); // clear persisted session on explicit reset
-    setTimeout(() => push('tessa', `Welcome back. What would you like to test today?`), 100);
   };
 
   /* ═══════════════════════════════════════════════════════════════
@@ -1951,9 +1962,9 @@ export default function ChatPage() {
   /* ═══════════════════════════════════════════════════════════════
      ACTIVE PANEL — the current interactive element
      ═══════════════════════════════════════════════════════════════ */
-  const renderPanel = () => {
-    /* ── WELCOME: Category Cards ── */
-    if (step === 'welcome') {
+  /* ── Chat launcher: Category Cards ── */
+  const renderCategoryCards = () => {
+    {
       // auto-fit rather than fixed columns: the chat column's width depends on
       // the pipeline sidebar, not the viewport, so breakpoints can't size these.
       return (
@@ -2004,6 +2015,11 @@ export default function ChatPage() {
         </div>
       );
     }
+  };
+
+  const renderPanel = () => {
+    // Transient: the Web Application Automation page starts the wizard on arrival.
+    if (step === 'welcome') return null;
 
     /* ── SOURCE SELECT ── */
     if (step === 'source-select') {
@@ -3216,6 +3232,50 @@ export default function ChatPage() {
     </aside>
   );
 
+  const voiceToggleButton = (
+    <button
+      onClick={handleVoiceToggle}
+      title={voiceEnabled ? 'Mute Tessa voice' : 'Enable Tessa voice'}
+      className={`p-1.5 rounded-lg border transition-all ${
+        voiceEnabled
+          ? 'text-violet-500 bg-white border-violet-200 hover:bg-violet-50'
+          : 'text-gray-400 bg-white border-gray-200 hover:text-gray-600 hover:bg-gray-50'
+      }`}
+    >
+      {voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+    </button>
+  );
+
+  /* ═══════════════════════════════════════════════════════════════
+     CHAT LAUNCHER — greeting + one card per kind of testing
+     ═══════════════════════════════════════════════════════════════ */
+  if (showLauncher) {
+    return (
+      <div className="h-full flex flex-col bg-[#FAFAFE]">
+        <div className="relative flex-1 flex flex-col overflow-hidden min-w-0">
+          <div className="absolute top-3 right-4 z-10 flex items-center gap-2">
+            {voiceToggleButton}
+          </div>
+          <div className="flex-1 overflow-y-auto px-6 py-5">
+            <div className="mx-auto space-y-4 max-w-2xl">
+              <div className="flex justify-start animate-fadeIn">
+                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center mr-2 flex-shrink-0 mt-0.5">
+                  <Bot className="w-3.5 h-3.5 text-white" />
+                </div>
+                <div className="max-w-[75%] px-4 py-2.5 text-sm leading-relaxed bg-white border border-gray-100 text-gray-700 rounded-2xl rounded-bl-md shadow-sm">
+                  {greeting}
+                </div>
+              </div>
+              <div className="pt-1">
+                {renderCategoryCards()}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   /* ═══════════════════════════════════════════════════════════════
      MAIN RENDER
      ═══════════════════════════════════════════════════════════════ */
@@ -3227,17 +3287,7 @@ export default function ChatPage() {
         <div className="relative flex-1 flex flex-col overflow-hidden min-w-0">
           {/* Floating controls (chat area only) */}
           <div className="absolute top-3 right-4 z-10 flex items-center gap-2">
-            <button
-              onClick={handleVoiceToggle}
-              title={voiceEnabled ? 'Mute Tessa voice' : 'Enable Tessa voice'}
-              className={`p-1.5 rounded-lg border transition-all ${
-                voiceEnabled
-                  ? 'text-violet-500 bg-white border-violet-200 hover:bg-violet-50'
-                  : 'text-gray-400 bg-white border-gray-200 hover:text-gray-600 hover:bg-gray-50'
-              }`}
-            >
-              {voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-            </button>
+            {voiceToggleButton}
             {step !== 'welcome' && (
               <button
                 onClick={requestReset}
