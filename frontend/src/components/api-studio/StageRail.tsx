@@ -9,7 +9,7 @@
  */
 import { Check, X, Ban, GitBranch, ExternalLink, AlertTriangle } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
-import { formatDuration, SECONDARY_3D } from './format';
+import { formatDuration, SECONDARY_3D, BRAND_BUTTON } from './format';
 import type { Stage, PushState } from './types';
 
 const LABEL_CLS: Record<Stage['status'], string> = {
@@ -74,7 +74,7 @@ function PushAction({ push }: { push: PushRailProps }) {
         target="_blank"
         rel="noopener noreferrer"
         title={`${pushState.mode === 'pr' ? 'Pull request opened' : 'Committed'} on ${pushState.branch}${pushState.repo ? ` in ${pushState.repo}` : ''} · ${pushState.fileCount} file${pushState.fileCount === 1 ? '' : 's'}`}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11.5px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md hover:bg-emerald-100 transition-all whitespace-nowrap"
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11.5px] font-semibold text-gray-700 bg-white border border-gray-200 rounded-md hover:bg-gray-50 hover:text-[#7C3AED] transition-colors whitespace-nowrap"
       >
         <ExternalLink className="w-3.5 h-3.5" />
         {pushState.mode === 'pr' ? 'View pull request' : 'View branch'}
@@ -104,7 +104,7 @@ function PushAction({ push }: { push: PushRailProps }) {
       title={canPush
         ? 'Commit the generated specs to the repository connected under System Configuration → Code Repositories'
         : 'There are no generated specs to push'}
-      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11.5px] font-semibold text-white rounded-md transition-all whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed bg-gradient-to-b from-emerald-400 to-emerald-600 border border-emerald-500/50 ring-1 ring-inset ring-white/25 hover:from-emerald-500 hover:to-emerald-700"
+      className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[11.5px] font-semibold text-white rounded-md transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed ${BRAND_BUTTON}`}
     >
       {pushing ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <GitBranch className="w-3.5 h-3.5" />}
       {pushing ? 'Pushing…' : 'Push to repo'}
@@ -125,30 +125,37 @@ export interface PushRailProps {
 
 export default function StageRail({ stages, push }: { stages: Stage[]; push?: PushRailProps }) {
   return (
-    <div className="relative z-10 flex items-stretch bg-white rounded-2xl border border-gray-100 shadow-sm flex-shrink-0 overflow-x-auto">
-      {stages.map((s, i) => (
-        <div
-          key={s.key}
-          className={`flex items-center gap-2 px-3 py-2 min-w-[190px] flex-1 border-r border-gray-100 last:border-r-0 transition-colors ${
-            s.status === 'running'
-              ? 'bg-purple-50'
-              : ''
-          }`}
-          title={s.hint}
-        >
-          <div className="flex-shrink-0"><Marker status={s.status} index={i} /></div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-baseline gap-1.5">
-              <span className={`text-[11.5px] font-semibold ${LABEL_CLS[s.status]}`}>{s.label}</span>
-              {s.durationMs !== undefined && (
-                <span className="font-mono text-[9.5px] text-gray-400 tabular-nums">{formatDuration(s.durationMs)}</span>
-              )}
+    <div className="relative z-10 flex items-stretch bg-white rounded-2xl border border-gray-100 shadow-sm flex-shrink-0 overflow-hidden">
+      {/* The five stages share the available width and compress to fit, so the
+          push control at the tail is never pushed off-screen and the page never
+          scrolls horizontally. Only if the window is extremely narrow do the
+          stages themselves scroll — inside this group, not the page. */}
+      <div className="flex items-stretch min-w-0 flex-1 overflow-x-auto">
+        {stages.map((s, i) => (
+          <div
+            key={s.key}
+            className={`flex items-center gap-2 px-3 py-2 min-w-[128px] flex-1 border-r border-gray-100 last:border-r-0 transition-colors ${
+              s.status === 'running'
+                ? 'bg-purple-50'
+                : ''
+            }`}
+            title={s.hint}
+          >
+            <div className="flex-shrink-0"><Marker status={s.status} index={i} /></div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-baseline gap-1.5 min-w-0">
+                <span className={`text-[11.5px] font-semibold truncate ${LABEL_CLS[s.status]}`}>{s.label}</span>
+                {s.durationMs !== undefined && (
+                  <span className="font-mono text-[9.5px] text-gray-400 tabular-nums flex-shrink-0">{formatDuration(s.durationMs)}</span>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
 
-      {/* Push to repo — pinned to the tail of the rail, just past Report. */}
+      {/* Push to repo — a fixed sibling at the tail, just past Report, so it
+          stays visible on the same screen no matter how narrow the rail gets. */}
       {push?.show && (
         <div className="flex items-center px-3 py-2 flex-shrink-0 border-l border-[#E9E5FB] bg-white">
           <PushAction push={push} />

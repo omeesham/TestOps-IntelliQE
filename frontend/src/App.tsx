@@ -12,7 +12,6 @@ import SsoCallbackPage from '@/pages/SsoCallbackPage';
 import ReportsPage from '@/pages/ReportsPage';
 import SystemConfigurationPage from '@/pages/SystemConfigurationPage';
 import GeneratedTestCasesPage from '@/pages/GeneratedTestCasesPage';
-import ApiAutomationPage from '@/pages/ApiAutomationPage';
 import UserManagementPage from '@/pages/UserManagementPage';
 import BugTrackerPage from '@/pages/BugTrackerPage';
 import FeatureTogglesPage from '@/pages/FeatureTogglesPage';
@@ -67,7 +66,10 @@ function AppRoutes() {
         {/* Web Application Automation is the same persistent ChatPage, showing its wizard */}
         <Route path="/web-automation" element={null} />
         <Route path="/generated-tests" element={<FeatureRoute feature="generated-tests" name="Generated Test Cases"><GeneratedTestCasesPage /></FeatureRoute>} />
-        <Route path="/automation" element={<FeatureRoute feature="api-automation" name="API Automation"><ApiAutomationPage /></FeatureRoute>} />
+        {/* API Automation is rendered persistently inside Layout (like Chat) so an
+            in-flight run keeps executing and the workspace position is preserved
+            when the user navigates away and back. */}
+        <Route path="/automation" element={null} />
         {/* Backward-compat: the earlier example path collided with the /api proxy prefix. */}
         <Route path="/api-automation" element={<Navigate to="/automation" replace />} />
         <Route path="/reports" element={<FeatureRoute feature="reports" name="Reports"><ReportsPage /></FeatureRoute>} />

@@ -11,6 +11,7 @@ import Spinner from '@/components/feedback/Spinner';
 import { listApiRuns, getApiRun } from '@/services/api';
 import { StatusPill, MethodBadge, CategoryChip, PriorityChip, EmptyState } from '../primitives';
 import { CARD, CARD_HOVER, SECONDARY_BTN, MUTED_CHIP, STRIP, THEAD, relativeTime, formatDuration } from '../format';
+import { humanizeApiFailure } from '../apiFailure';
 import type { ApiRun } from '../hooks/useApiRun';
 import type { ApiRunSummary, ApiRunDetail } from '../types';
 
@@ -57,7 +58,7 @@ function LiveRun({ run, onShowReport }: { run: ApiRun; onShowReport: () => void 
                 <td className="px-4 py-1.5 font-mono text-[11px] text-gray-500">{r.testCaseId}</td>
                 <td className="px-2 py-1.5">
                   <p className="text-gray-800">{r.name}</p>
-                  {r.error && <p className="mt-0.5 text-[11px] text-red-600 font-mono whitespace-pre-wrap break-words">{r.error}</p>}
+                  {r.error && <FailureText raw={r.error} />}
                 </td>
                 <td className="px-2 py-1.5"><StatusPill status={r.status} /></td>
                 <td className="px-4 py-1.5 text-right font-mono text-[11px] text-gray-500 tabular-nums">{r.duration}</td>
@@ -198,7 +199,7 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
                       <td className="px-2 py-1.5">
                         <div className="flex items-center gap-1.5">{c.api?.method && <MethodBadge method={c.api.method} />}<span className="text-gray-800">{c.title}</span></div>
                         {c.api?.endpoint && <p className="font-mono text-[10.5px] text-gray-400 truncate max-w-[520px]">{c.api.endpoint}</p>}
-                        {c.error && <p className="mt-0.5 text-[11px] text-red-600 font-mono whitespace-pre-wrap break-words">{c.error}</p>}
+                        {c.error && <FailureText raw={c.error} />}
                       </td>
                       <td className="px-2 py-1.5"><CategoryChip type={c.type} /></td>
                       <td className="px-2 py-1.5"><PriorityChip priority={c.priority} /></td>
@@ -212,6 +213,22 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * A failed case's error, in plain language. The headline says what went wrong
+ * and where to fix it; the real runner error is kept underneath (muted) so the
+ * specifics are never lost. A genuine assertion failure has no separate detail
+ * and shows verbatim in monospace, exactly as before.
+ */
+function FailureText({ raw }: { raw: string }) {
+  const { message, detail } = humanizeApiFailure(raw);
+  return (
+    <div className="mt-0.5">
+      <p className={`text-[11px] text-red-600 whitespace-pre-wrap break-words ${detail ? '' : 'font-mono'}`}>{message}</p>
+      {detail && <p className="mt-0.5 text-[10.5px] text-gray-400 font-mono whitespace-pre-wrap break-words">{detail}</p>}
     </div>
   );
 }

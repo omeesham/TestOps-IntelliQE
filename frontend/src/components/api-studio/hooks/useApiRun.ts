@@ -20,6 +20,7 @@ import {
   resolveApiEnvironment, notifyApiRun, type ApiSpecPayload, type ApiJob,
 } from '@/services/api';
 import { formatDuration } from '../format';
+import { apiFailureMessage } from '../apiFailure';
 import type {
   Phase, Stage, StageKey, StageStatus, Scenario, Spec, RunRow, LogLine, LogLevel, RunReport, PushState,
   ServiceObject, CatalogEndpoint, Strategy, ApiProfile, ApiEnvironment,
@@ -329,9 +330,10 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
     } catch (err: any) {
       if (myRun !== runIdRef.current) return;
       const msg = err?.response?.data?.error || err?.message || 'Execution failed.';
-      setStage('execute', 'failed', msg); log('execute', msg, 'error'); setRunError(msg);
+      const clear = apiFailureMessage(msg);
+      setStage('execute', 'failed', clear); log('execute', clear, 'error'); setRunError(clear);
       setRows((prev) => prev.map((r) => ({ ...r, status: 'not_run', error: msg })));
-      setPhase('failed'); toast.error('Execution failed', msg);
+      setPhase('failed'); toast.error('Execution failed', clear);
       return;
     }
     if (myRun !== runIdRef.current) return;
@@ -339,9 +341,10 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
 
     if (exec?.summary?.executed === false) {
       const reason = exec.summary.reason || 'The endpoint could not be reached.';
+      const clear = apiFailureMessage(reason);
       setRows(chosen.map((c) => ({ testCaseId: c.id, name: c.title, status: 'not_run', duration: '', error: reason })));
-      setStage('execute', 'skipped', reason); setStage('heal', 'skipped', 'Nothing ran to heal');
-      log('execute', reason, 'warn');
+      setStage('execute', 'skipped', clear); setStage('heal', 'skipped', 'Nothing ran to heal');
+      log('execute', clear, 'warn');
       finishReport(chosen.length, 0, 0, chosen.length, 0, execMs, exec?.reportUrl);
       return;
     }
