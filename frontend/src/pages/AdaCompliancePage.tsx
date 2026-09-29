@@ -19,7 +19,7 @@ import { CadenceFields, HealthRing, SeverityChips } from '@/components/ada/Share
 import { SEVERITIES, describeSlot, errorMessage, ghostBtn, inputCls, primaryBtn, timeAgo, toUtcSlot } from '@/components/ada/shared';
 import {
   Plus, Trash2, Loader2, Square, ChevronRight, CalendarClock, Play, Lock, Search, Globe, Activity,
-  AlertTriangle, FileBarChart, XCircle, User,
+  FileBarChart, XCircle, User,
 } from 'lucide-react';
 import UniversalAccess from '@/components/icons/UniversalAccess';
 
@@ -39,19 +39,6 @@ const STATUS_STYLE: Record<AdaScanRecord['status'], string> = {
 };
 const isFinished = (s: AdaScanRecord) => s.status === 'completed' || s.status === 'cancelled';
 const issueTotal = (sev: Record<AdaSeverity, number>) => SEVERITIES.reduce((a, s) => a + (sev[s] || 0), 0);
-
-function Kpi({ icon: Icon, label, value, sub, tone }: { icon: React.ElementType; label: string; value: React.ReactNode; sub?: string; tone: string }) {
-  return (
-    <div className={`${card} p-5 flex items-center gap-4 min-w-0`}>
-      <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${tone}`}><Icon className="w-5 h-5" /></div>
-      <div className="min-w-0">
-        <p className="text-xs text-gray-500">{label}</p>
-        <p className="text-2xl font-bold text-[#1E1B4B] leading-tight tabular-nums">{value}</p>
-        {sub && <p className="text-xs text-gray-400 truncate" title={sub}>{sub}</p>}
-      </div>
-    </div>
-  );
-}
 
 function EmptyState({ icon: Icon, title, text, action }: { icon: React.ElementType; title: string; text: string; action?: React.ReactNode }) {
   return (
@@ -272,22 +259,6 @@ export default function AdaCompliancePage() {
     navigate('/web-automation');
   };
 
-  /* Key numbers, each from the latest finished audit of every site in the list. */
-  const kpi = useMemo(() => {
-    const latest = new Map<string, ScanRow>();
-    for (const s of scans || []) if (isFinished(s) && !latest.has(s.target_url)) latest.set(s.target_url, s);
-    const rows = [...latest.values()];
-    const scored = rows.filter((s) => s.overall_score != null);
-    const counted = rows.filter((s) => s.severity);
-    return {
-      sites: rows.length,
-      avg: scored.length ? Math.round(scored.reduce((a, s) => a + (s.overall_score as number), 0) / scored.length) : null,
-      issues: counted.length ? counted.reduce((a, s) => a + issueTotal(s.severity!), 0) : null,
-      critical: counted.reduce((a, s) => a + (s.severity!.critical || 0), 0),
-      running: (scans || []).filter((s) => s.status === 'running').length,
-    };
-  }, [scans]);
-
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return (scans || []).filter((s) =>
@@ -318,7 +289,6 @@ export default function AdaCompliancePage() {
   }
 
   /* ═════════════════════════════ OVERVIEW ═════════════════════════════ */
-  const activeSchedules = (schedules || []).filter((s) => s.enabled).length;
   return (
     <div className="space-y-5 animate-fadeIn">
       <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#1E1B4B] via-[#4C1D95] to-[#4F46E5] px-6 py-6 shadow-lg shadow-purple-900/20">
@@ -329,30 +299,15 @@ export default function AdaCompliancePage() {
             <div className="w-12 h-12 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center flex-shrink-0"><UniversalAccess className="w-6 h-6 text-white" /></div>
             <div className="min-w-0">
               <h2 className="text-xl font-bold text-white">Website audits</h2>
-              <p className="text-sm text-violet-100/90 mt-0.5">Accessibility to WCAG 2.2 AA, broken links, best practices and UX, in one scored report.</p>
             </div>
           </div>
           <button onClick={() => setAuditDrawer(true)} className="px-4 py-2.5 bg-white text-violet-700 hover:bg-violet-50 text-sm font-semibold rounded-lg flex items-center gap-2 shadow-md">
-            <Plus className="w-4 h-4" /> New audit
+            <Plus className="w-4 h-4" /> New Order
           </button>
         </div>
       </div>
 
       {error && <p className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl px-4 py-3" role="alert">{error}</p>}
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <Kpi icon={Globe} label="Sites audited" value={scans === null ? '—' : kpi.sites} sub={kpi.running ? `${kpi.running} audit running now` : 'With a finished audit'} tone="bg-violet-50 text-violet-600" />
-        <div className={`${card} p-5 flex items-center gap-4 min-w-0`}>
-          <HealthRing score={kpi.avg} size={44} stroke={6} bare />
-          <div className="min-w-0">
-            <p className="text-xs text-gray-500">Average health</p>
-            <p className="text-2xl font-bold text-[#1E1B4B] leading-tight tabular-nums">{kpi.avg ?? '—'}{kpi.avg != null && <span className="text-sm font-medium text-gray-400"> / 100</span>}</p>
-            <p className="text-xs text-gray-400 truncate">Latest audit of each site</p>
-          </div>
-        </div>
-        <Kpi icon={AlertTriangle} label="Open issues" value={kpi.issues == null ? '—' : kpi.issues.toLocaleString()} sub={kpi.issues == null ? 'Latest audit of each site' : `${kpi.critical.toLocaleString()} critical`} tone="bg-amber-50 text-amber-600" />
-        <Kpi icon={CalendarClock} label="Scheduled audits" value={schedules === null ? '—' : activeSchedules} sub={schedules && schedules.length > activeSchedules ? `${schedules.length - activeSchedules} paused` : 'Active'} tone="bg-cyan-50 text-cyan-600" />
-      </div>
 
       <div className={card}>
         <div className="flex flex-wrap items-center justify-between gap-3 px-3 border-b border-gray-100">
@@ -386,7 +341,7 @@ export default function AdaCompliancePage() {
         {tab === 'reports' && (scans === null ? (
           <p className="p-6 text-sm text-gray-400 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading</p>
         ) : scans.length === 0 ? (
-          <EmptyState icon={UniversalAccess} title="No audits yet" text="Enter a website address to get a scored report. No requirements or setup needed." action={<button onClick={() => setAuditDrawer(true)} className={primaryBtn}><Plus className="w-4 h-4" /> New audit</button>} />
+          <EmptyState icon={UniversalAccess} title="No audits yet" text="Enter a website address to get a scored report. No requirements or setup needed." action={<button onClick={() => setAuditDrawer(true)} className={primaryBtn}><Plus className="w-4 h-4" /> New Order</button>} />
         ) : filtered.length === 0 ? (
           <EmptyState icon={Search} title="No audits match" text="Try a different search or status." />
         ) : (
