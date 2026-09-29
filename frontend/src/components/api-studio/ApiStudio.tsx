@@ -1,7 +1,10 @@
 /**
  * API Automation — the module shell.
  *
- *   Overview · Endpoints · Scenarios · Runs · Reports · Environments
+ *   Overview · Endpoints · Scenarios · Runs · Environments
+ *
+ * Reports are not a tab here: an API run's report is listed on the Reports
+ * page alongside the web reports, marked with its type.
  *
  * A first-class IntelliQE page: it wears the app's own chrome (the global
  * sidebar names it, the global header titles it) and, inside, a native toolbar
@@ -13,15 +16,15 @@
  * between tabs and follows a live run through its stages.
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   RotateCcw, AlertTriangle, X, ListChecks, ArrowRight, Upload,
-  LayoutDashboard, Layers, FileCheck2, PlayCircle, BarChart3, Server,
+  LayoutDashboard, Layers, FileCheck2, PlayCircle, Server,
 } from 'lucide-react';
 import { useCatalog } from './hooks/useCatalog';
 import { useApiRun } from './hooks/useApiRun';
 import StageRail from './StageRail';
 import ScenariosTab from './ScenariosTab';
-import ReportTab from './ReportTab';
 import OverviewView from './views/OverviewView';
 import ImportView from './views/ImportView';
 import EndpointsView from './views/EndpointsView';
@@ -34,9 +37,10 @@ import Loader from '@/components/feedback/Loader';
 import type { NavView, Phase } from './types';
 
 /** The tabs, left to right, in the order you walk the workflow. */
-const TAB_IDS = new Set<NavView>(['overview', 'endpoints', 'scenarios', 'runs', 'report', 'environments']);
+const TAB_IDS = new Set<NavView>(['overview', 'endpoints', 'scenarios', 'runs', 'environments']);
 
 export default function ApiStudio() {
+  const goTo = useNavigate();
   const catalog = useCatalog();
   const [view, setView] = useState<NavView>(() => {
     const stored = sessionStorage.getItem('intelliqe_api_view');
@@ -46,13 +50,15 @@ export default function ApiStudio() {
   const [importOpen, setImportOpen] = useState(false);
   const [overviewKey, setOverviewKey] = useState(0);
 
-  /* Follow the run: design → scenarios, execute → runs, finished → report. */
+  /* Follow the run: design → scenarios, execute → runs. A finished run stays on
+     Runs; its report lives on the Reports page with the web reports. */
   const onPhase = (p: Phase) => {
     if (p === 'generating' || p === 'review') setView('scenarios');
     else if (p === 'automating' || p === 'executing' || p === 'healing') setView('runs');
-    else if (p === 'report') { setView('report'); setOverviewKey((k) => k + 1); }
+    else if (p === 'report') { setView('runs'); setOverviewKey((k) => k + 1); }
   };
   const run = useApiRun({ onPhase });
+  const openReport = () => goTo(run.testRunId ? `/reports?run=${encodeURIComponent(run.testRunId)}` : '/reports');
 
   useEffect(() => { try { sessionStorage.setItem('intelliqe_api_view', view); } catch { /* ignore */ } }, [view]);
 
@@ -75,7 +81,6 @@ export default function ApiStudio() {
     { id: 'endpoints', label: 'Endpoints', icon: Layers, count: catalog.endpoints.length || undefined },
     { id: 'scenarios', label: 'Scenarios', icon: FileCheck2, count: run.scenarios.length || undefined },
     { id: 'runs', label: 'Runs', icon: PlayCircle },
-    { id: 'report', label: 'Reports', icon: BarChart3 },
     { id: 'environments', label: 'Environments', icon: Server },
   ];
   const activeTab: NavView = TAB_IDS.has(view) ? view : 'overview';
@@ -144,10 +149,7 @@ export default function ApiStudio() {
             <ScenariosTab scenarios={run.scenarios} selected={run.selected} editable={run.phase === 'review' || run.finished} onToggle={run.toggleScenario} onSelectAll={run.selectScenarios} onClearAll={run.clearScenarios} />
           )
         )}
-        {view === 'runs' && <RunsView run={run} openRunId={openRunId} onOpenRun={setOpenRunId} onShowReport={() => navigate('report')} />}
-        {view === 'report' && (
-          <ReportTab report={run.report} rows={run.rows} scenarios={run.scenarios} onExport={run.handleExport} exporting={run.exporting} canExport={!!run.testRunId} onPushToRepo={run.handlePushToRepo} pushState={run.pushState} canPush={run.specs.length > 0 && run.selected.size > 0} />
-        )}
+        {view === 'runs' && <RunsView run={run} openRunId={openRunId} onOpenRun={setOpenRunId} onShowReport={openReport} />}
         {view === 'environments' && <EnvironmentsView />}
       </div>
 

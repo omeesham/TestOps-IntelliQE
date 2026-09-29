@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Loader2, FileText, BarChart3, Download, ArrowLeft,
   CheckCircle2, XCircle, Clock, FileSpreadsheet,
@@ -21,6 +22,19 @@ function fmtDate(iso?: string): string {
 }
 function reportTitle(i: ReportHistoryItem): string {
   return i.story || i.storyKey || (i.runId.startsWith('chat-') ? 'Chat run' : i.runId);
+}
+
+/** UI (web application) or API — both kinds of run share this one list. */
+function TypeBadge({ kind }: { kind: ReportHistoryItem['kind'] }) {
+  const isApi = kind === 'api';
+  return (
+    <span
+      className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${isApi ? 'bg-violet-100 text-violet-700' : 'bg-sky-100 text-sky-700'}`}
+      title={isApi ? 'API Automation report' : 'Web Application Automation report'}
+    >
+      {isApi ? 'API' : 'UI'}
+    </span>
+  );
 }
 
 /**
@@ -79,6 +93,16 @@ export default function ReportsPage() {
     }
   }, [toast]);
 
+  // /reports?run=<id> opens that run's report directly (used by API Automation).
+  const [params, setParams] = useSearchParams();
+  const wantedRun = params.get('run');
+  useEffect(() => {
+    if (!wantedRun || !data) return;
+    const match = data.items.find((i) => i.runId.toUpperCase() === wantedRun.toUpperCase());
+    setParams((p) => { const n = new URLSearchParams(p); n.delete('run'); return n; }, { replace: true });
+    if (match) openReport(match);
+  }, [wantedRun, data, openReport, setParams]);
+
   const doDownload = useCallback(async (runId: string, format: 'xlsx' | 'pdf') => {
     const key = `${runId}:${format}`;
     setDownloadingKey(key);
@@ -123,6 +147,7 @@ export default function ReportsPage() {
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
+            <TypeBadge kind={viewItem.kind} />
             <h1 className="text-sm font-bold text-[#1E1B4B] truncate" title={reportTitle(viewItem)}>{reportTitle(viewItem)}</h1>
           </div>
           <span className="flex items-center gap-1 text-xs text-[#6B7280] flex-shrink-0"><Clock className="w-3 h-3" />{fmtDate(viewItem.generatedAt)}</span>
@@ -184,6 +209,7 @@ export default function ReportsPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-100">
+                <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap w-20">Type</th>
                 <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Report</th>
                 <th className="text-left px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Generated</th>
                 <th className="text-center px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Results</th>
@@ -192,12 +218,12 @@ export default function ReportsPage() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={4} className="px-4 py-16 text-center"><Loader2 className="w-6 h-6 text-[#7C3AED] animate-spin inline" /></td></tr>
+                <tr><td colSpan={5} className="px-4 py-16 text-center"><Loader2 className="w-6 h-6 text-[#7C3AED] animate-spin inline" /></td></tr>
               ) : items.length === 0 ? (
-                <tr><td colSpan={4} className="px-4 py-16 text-center text-[#6B7280]">
+                <tr><td colSpan={5} className="px-4 py-16 text-center text-[#6B7280]">
                   <FileText className="w-10 h-10 text-[#A5B4FC] mx-auto mb-3" />
                   <p className="font-medium text-[#1E1B4B]">No reports yet</p>
-                  <p className="text-xs mt-1">Run a test execution from the Chat flow, then reports appear here.</p>
+                  <p className="text-xs mt-1">Run a Web Application or API Automation suite, then its report appears here.</p>
                 </td></tr>
               ) : items.map((i) => {
                 const st = i.stats;
@@ -208,6 +234,7 @@ export default function ReportsPage() {
                     className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors cursor-pointer"
                     title="Open full-page report"
                   >
+                    <td className="px-3 py-1.5"><TypeBadge kind={i.kind} /></td>
                     <td className="px-3 py-1.5">
                       <div className="text-[#1E1B4B] truncate max-w-[320px]" title={reportTitle(i)}>{reportTitle(i)}</div>
                       {i.module && (
