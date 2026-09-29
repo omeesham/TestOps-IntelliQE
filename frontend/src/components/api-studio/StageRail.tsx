@@ -23,34 +23,34 @@ const LABEL_CLS: Record<Stage['status'], string> = {
 function Marker({ status, index }: { status: Stage['status']; index: number }) {
   if (status === 'done') {
     return (
-      <div className="w-5 h-5 rounded-full bg-gradient-to-b from-emerald-400 to-emerald-600 flex items-center justify-center ring-2 ring-white shadow-[0_2px_5px_-1px_rgba(16,185,129,0.55)]">
+      <div className="w-5 h-5 rounded-full bg-gradient-to-b from-emerald-400 to-emerald-600 flex items-center justify-center ring-2 ring-white">
         <Check className="w-3 h-3 text-white" />
       </div>
     );
   }
   if (status === 'running') {
     return (
-      <div className="w-5 h-5 rounded-full bg-gradient-to-b from-[#7C3AED] to-[#6D28D9] flex items-center justify-center ring-2 ring-white shadow-[0_0_0_4px_rgba(124,58,237,0.15),0_2px_6px_-1px_rgba(124,58,237,0.6)]">
+      <div className="w-5 h-5 rounded-full bg-gradient-to-b from-[#7C3AED] to-[#6D28D9] flex items-center justify-center ring-2 ring-white">
         <Spinner className="w-3 h-3 text-white animate-spin" />
       </div>
     );
   }
   if (status === 'failed') {
     return (
-      <div className="w-5 h-5 rounded-full bg-gradient-to-b from-red-400 to-red-600 flex items-center justify-center ring-2 ring-white shadow-[0_2px_5px_-1px_rgba(239,68,68,0.55)]">
+      <div className="w-5 h-5 rounded-full bg-gradient-to-b from-red-400 to-red-600 flex items-center justify-center ring-2 ring-white">
         <X className="w-3 h-3 text-white" />
       </div>
     );
   }
   if (status === 'skipped') {
     return (
-      <div className="w-5 h-5 rounded-full bg-gradient-to-b from-gray-100 to-gray-200 flex items-center justify-center ring-2 ring-white shadow-[0_1px_3px_rgba(15,23,42,0.12)]">
+      <div className="w-5 h-5 rounded-full bg-gradient-to-b from-gray-100 to-gray-200 flex items-center justify-center ring-2 ring-white">
         <Ban className="w-2.5 h-2.5 text-gray-500" />
       </div>
     );
   }
   return (
-    <div className="w-5 h-5 rounded-full border-2 border-gray-200 bg-white flex items-center justify-center shadow-[inset_0_1px_2px_rgba(15,23,42,0.06)]">
+    <div className="w-5 h-5 rounded-full border-2 border-gray-200 bg-white flex items-center justify-center">
       <span className="text-[9px] font-semibold text-gray-300">{index + 1}</span>
     </div>
   );
@@ -104,7 +104,7 @@ function PushAction({ push }: { push: PushRailProps }) {
       title={canPush
         ? 'Commit the generated specs to the repository connected under System Configuration → Code Repositories'
         : 'There are no generated specs to push'}
-      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11.5px] font-semibold text-white rounded-md transition-all whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed bg-gradient-to-b from-emerald-400 to-emerald-600 border border-emerald-500/50 ring-1 ring-inset ring-white/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_3px_0_0_#047857,0_8px_18px_-6px_rgba(16,185,129,0.55)] hover:from-emerald-500 hover:to-emerald-700 hover:-translate-y-px active:translate-y-[2px] active:shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_0_0_0_#047857,0_4px_10px_-6px_rgba(16,185,129,0.5)] disabled:translate-y-0 disabled:shadow-[0_2px_0_0_#A7F3D0]"
+      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11.5px] font-semibold text-white rounded-md transition-all whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed bg-gradient-to-b from-emerald-400 to-emerald-600 border border-emerald-500/50 ring-1 ring-inset ring-white/25 hover:from-emerald-500 hover:to-emerald-700"
     >
       {pushing ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <GitBranch className="w-3.5 h-3.5" />}
       {pushing ? 'Pushing…' : 'Push to repo'}

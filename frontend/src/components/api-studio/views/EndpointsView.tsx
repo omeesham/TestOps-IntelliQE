@@ -162,7 +162,7 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
               {toolsOpen && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setToolsOpen(false)} />
-                  <div className="absolute right-0 mt-1 z-50 w-60 bg-white border border-[#E4E0F5] rounded-lg py-1 shadow-[0_14px_32px_-12px_rgba(76,29,149,0.5)]">
+                  <div className="absolute right-0 mt-1 z-50 w-60 bg-white border border-[#E4E0F5] rounded-lg py-1">
                     {([
                       { icon: Wand2, label: 'Author in plain English', desc: 'Describe tests → a run strategy', open: () => setNlOpen(true) },
                       { icon: ShieldCheck, label: 'Contract validation', desc: 'Live-check status, JSON & schema', open: () => setContractOpen(true) },
@@ -197,7 +197,7 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
               {exportOpen && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setExportOpen(false)} />
-                  <div className="absolute right-0 mt-1 z-50 w-56 bg-white border border-[#E4E0F5] rounded-lg py-1 shadow-[0_14px_32px_-12px_rgba(76,29,149,0.5)]">
+                  <div className="absolute right-0 mt-1 z-50 w-56 bg-white border border-[#E4E0F5] rounded-lg py-1">
                     {([
                       { k: 'openapi' as const, label: 'OpenAPI 3 spec', desc: 'openapi.json' },
                       { k: 'connector' as const, label: 'Connector manifest', desc: 'round-trips into Import' },
@@ -392,7 +392,7 @@ function GroupRows({ label, list, collapsed, groupSelected, onToggleCollapse, on
       {!collapsed && list.map((e) => {
         const on = selected.has(e.id);
         return (
-          <tr key={e.id} className={`border-b border-gray-50 hover:bg-[#FAFAFE] hover:shadow-[inset_3px_0_0_0_#C4B5FD] transition-[background,box-shadow] group ${on ? '' : 'opacity-60'}`}>
+          <tr key={e.id} className={`border-b border-gray-50 hover:bg-[#FAFAFE] transition-[background,box-shadow] group ${on ? '' : 'opacity-60'}`}>
             <td className="px-2 py-1.5 align-top"><input type="checkbox" checked={on} onChange={() => onToggle(e.id)} className="w-3.5 h-3.5 rounded border-gray-300 text-[#7C3AED] focus:ring-[#A5B4FC] focus:ring-offset-0" /></td>
             <td className="px-2 py-1.5 align-top"><MethodBadge method={e.method} /></td>
             <td className="px-2 py-1.5 align-top max-w-0 w-full">

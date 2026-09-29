@@ -25,7 +25,7 @@ export default function RunsView({ run, openRunId, onOpenRun, onShowReport }: Pr
   if (openRunId) return <RunDetail runId={openRunId} onBack={() => onOpenRun(null)} />;
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-[1200px] mx-auto px-6 py-5 space-y-4">
+      <div className="px-6 py-5 space-y-4">
         {run.started && <LiveRun run={run} onShowReport={onShowReport} />}
         <History onOpen={onOpenRun} refreshKey={run.phase === 'report' ? run.testRunId : ''} />
       </div>
@@ -119,14 +119,14 @@ function History({ onOpen, refreshKey }: { onOpen: (id: string) => void; refresh
           <thead className={`text-[10.5px] uppercase tracking-wide text-gray-500 ${THEAD}`}><tr><th className="text-left px-4 py-1.5 font-semibold">Run</th><th className="text-left px-2 py-1.5 font-semibold w-[110px]">Source</th><th className="text-right px-2 py-1.5 font-semibold w-[90px]">Scenarios</th><th className="text-left px-2 py-1.5 font-semibold w-[200px]">Result</th><th className="text-right px-2 py-1.5 font-semibold w-[80px]">Time</th><th className="text-right px-4 py-1.5 font-semibold w-[110px]">When</th></tr></thead>
           <tbody>
             {items.map((r) => (
-              <tr key={r.runId} onClick={() => onOpen(r.runId)} className="border-t border-gray-50 hover:bg-[#FAFAFE] hover:shadow-[inset_3px_0_0_0_#C4B5FD] transition-[background,box-shadow] cursor-pointer">
+              <tr key={r.runId} onClick={() => onOpen(r.runId)} className="border-t border-gray-50 hover:bg-[#FAFAFE] transition-[background,box-shadow] cursor-pointer">
                 <td className="px-4 py-2"><p className="text-gray-800 truncate max-w-[420px]">{r.title}</p><p className="text-[10.5px] text-gray-400 font-mono">{r.runId} · {r.createdBy}</p></td>
                 <td className="px-2 py-2"><span className={`inline-flex px-1.5 py-0.5 rounded border text-[10px] ${MUTED_CHIP}`}>{r.source || 'api'}</span></td>
                 <td className="px-2 py-2 text-right font-mono tabular-nums text-gray-700">{r.caseCount}</td>
                 <td className="px-2 py-2">
                   {r.stats ? (
                     <div className="flex items-center gap-2">
-                      <div className="flex-1 h-1.5 rounded-full bg-gray-100 overflow-hidden flex shadow-[inset_0_1px_2px_rgba(30,27,75,0.15)]"><span className="bg-emerald-500" style={{ width: `${r.stats.total ? (r.stats.passed / r.stats.total) * 100 : 0}%` }} /><span className="bg-red-500" style={{ width: `${r.stats.total ? ((r.stats.failed + r.stats.broken) / r.stats.total) * 100 : 0}%` }} /></div>
+                      <div className="flex-1 h-1.5 rounded-full bg-gray-100 overflow-hidden flex"><span className="bg-emerald-500" style={{ width: `${r.stats.total ? (r.stats.passed / r.stats.total) * 100 : 0}%` }} /><span className="bg-red-500" style={{ width: `${r.stats.total ? ((r.stats.failed + r.stats.broken) / r.stats.total) * 100 : 0}%` }} /></div>
                       <span className={`font-mono text-[11px] font-semibold tabular-nums w-10 text-right ${r.stats.passRate >= 90 ? 'text-emerald-600' : r.stats.passRate >= 70 ? 'text-amber-600' : 'text-red-600'}`}>{r.stats.passRate}%</span>
                     </div>
                   ) : <StatusPill status="not_run" />}
@@ -165,7 +165,7 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-[1200px] mx-auto px-6 py-5 space-y-3">
+      <div className="px-6 py-5 space-y-3">
         <div className="flex items-center gap-2">
           <button type="button" onClick={onBack} className={SECONDARY_BTN}><ChevronLeft className="w-3.5 h-3.5" />All runs</button>
           {detail && (

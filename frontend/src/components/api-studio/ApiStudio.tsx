@@ -83,9 +83,9 @@ export default function ApiStudio() {
   return (
     <div className="h-full flex flex-col min-h-0">
       {/* ── Chrome: toolbar + tabs (padded to align with each view's own gutter) ── */}
-      <div className="flex-shrink-0 px-6 pt-6 pb-1 relative z-10">
-        <div className="flex items-center gap-3">
-          <PageTabs tabs={tabs} active={activeTab} onChange={(id) => navigate(id as NavView)} ariaLabel="API Automation sections" className="min-w-0" />
+      <div className="flex-shrink-0 px-6 pt-4">
+        <div className="flex items-end gap-3">
+          <PageTabs tabs={tabs} active={activeTab} onChange={(id) => navigate(id as NavView)} ariaLabel="API Automation sections" className="min-w-0 flex-1" />
           {run.started && (
             <button type="button" onClick={() => { run.resetRun(); catalog.clearCatalog(); setView('endpoints'); }} className={`${SECONDARY_BTN} ml-auto flex-shrink-0`} title="Start a fresh run — clears the imported endpoints and the previous run"><RotateCcw className="w-3.5 h-3.5" /><span className="hidden lg:inline">New run</span></button>
           )}

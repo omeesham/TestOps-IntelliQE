@@ -73,7 +73,7 @@ export default function EndpointEditor({ initial, title, onSave, onClose }: Prop
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
       <div className="absolute inset-0 bg-[#1E1B4B]/30 backdrop-blur-[1px]" onClick={onClose} />
-      <aside className="relative w-full max-w-[520px] h-full bg-white flex flex-col border-l border-[#E9E5FB] shadow-[-24px_0_60px_-24px_rgba(30,27,75,0.55),inset_1px_0_0_rgba(255,255,255,0.9)]">
+      <aside className="relative w-full max-w-[520px] h-full bg-white flex flex-col border-l border-[#E9E5FB]">
         <header className={`flex items-center gap-2 px-4 h-12 border-b border-[#E9E5FB] flex-shrink-0 ${STRIP}`}>
           <h2 className="text-[13px] font-semibold text-gray-900">{title || (initial?.url ? 'Edit endpoint' : 'Manual HTTP request')}</h2>
           <button type="button" onClick={onClose} className="ml-auto p-1.5 rounded-md text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]"><X className="w-4 h-4" /></button>
@@ -112,7 +112,7 @@ export default function EndpointEditor({ initial, title, onSave, onClose }: Prop
           <Section title="Auth" badge={authType === 'none' ? 'None' : authType === 'apikey' ? 'API key' : authType[0]!.toUpperCase() + authType.slice(1)}>
             <div className="flex gap-1">
               {(['none', 'bearer', 'basic', 'apikey'] as AuthType[]).map((t) => (
-                <button key={t} type="button" onClick={() => setAuthType(t)} className={`px-2 py-1 rounded-md text-[11px] font-medium border transition-all active:translate-y-px ${CHIP_3D} ${authType === t ? 'bg-gradient-to-b from-[#F5F3FF] to-[#EDE9FE] text-[#6D28D9] border-[#DDD6FE]' : 'bg-white text-gray-500 border-gray-200 hover:border-[#DDD6FE]'}`}>
+                <button key={t} type="button" onClick={() => setAuthType(t)} className={`px-2 py-1 rounded-md text-[11px] font-medium border transition-all ${CHIP_3D} ${authType === t ? 'bg-gradient-to-b from-[#F5F3FF] to-[#EDE9FE] text-[#6D28D9] border-[#DDD6FE]' : 'bg-white text-gray-500 border-gray-200 hover:border-[#DDD6FE]'}`}>
                   {t === 'none' ? 'None' : t === 'bearer' ? 'Bearer' : t === 'basic' ? 'Basic' : 'API key'}
                 </button>
               ))}
@@ -146,7 +146,7 @@ export default function EndpointEditor({ initial, title, onSave, onClose }: Prop
           </Section>
         </div>
 
-        <footer className={`flex items-center gap-2 px-4 h-14 border-t border-[#E9E5FB] flex-shrink-0 ${STRIP} shadow-[inset_0_1px_0_#EDE9FE,0_-8px_20px_-16px_rgba(30,27,75,0.35)]`}>
+        <footer className={`flex items-center gap-2 px-4 h-14 border-t border-[#E9E5FB] flex-shrink-0 ${STRIP}`}>
           <p className="text-[11px] text-gray-400 min-w-0 truncate">Saved to the catalogue; scenarios are designed when you run.</p>
           <button type="button" onClick={onClose} className={`ml-auto ${SECONDARY_BTN}`}>Cancel</button>
           <button type="button" onClick={submit} className={PRIMARY_BTN}><Save className="w-3.5 h-3.5" />{initial?.url ? 'Save changes' : 'Add to catalogue'}</button>

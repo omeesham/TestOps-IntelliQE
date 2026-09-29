@@ -88,10 +88,10 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
           onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
           onDragLeave={() => setDragging(false)}
           onDrop={onDrop}
-          className={`${CARD} relative overflow-hidden px-6 py-7 text-center transition-all ${dragging ? 'border-[#A5B4FC] bg-[#F5F3FF] scale-[1.01] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_24px_48px_-16px_rgba(76,29,149,0.55)]' : ''}`}
+          className={`${CARD} relative overflow-hidden px-6 py-7 text-center transition-all ${dragging ? 'border-[#A5B4FC] bg-[#F5F3FF] scale-[1.01]' : ''}`}
         >
-          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] shadow-[0_2px_6px_rgba(124,58,237,0.45)]" />
-          <div className={`mx-auto w-14 h-14 rounded-2xl flex items-center justify-center ${TILE_ACTIVE} shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_4px_0_0_#4338CA,0_14px_28px_-8px_rgba(124,58,237,0.65)]`}>
+          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#7C3AED] to-[#6366F1]" />
+          <div className={`mx-auto w-14 h-14 rounded-2xl flex items-center justify-center ${TILE_ACTIVE}`}>
             {busy === 'bulk' ? <Spinner className="w-5 h-5 text-white animate-spin" /> : <UploadCloud className="w-5 h-5 text-white" />}
           </div>
           <h2 className="mt-3 text-[15px] font-semibold text-gray-900">Bulk upload — any API document</h2>
@@ -134,7 +134,7 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
                   key={m.id}
                   type="button"
                   onClick={() => { if (m.id === 'manual') { setManualOpen(true); return; } setActive(isActive ? null : m); setError(''); }}
-                  className={`${CARD_HOVER} text-left p-3.5 group hover:border-[#DDD6FE] active:translate-y-0 ${isActive ? 'border-[#A5B4FC] ring-2 ring-[#EDE9FE] -translate-y-0.5' : ''}`}
+                  className={`${CARD_HOVER} text-left p-3.5 group hover:border-[#DDD6FE] ${isActive ? 'border-[#A5B4FC] ring-2 ring-[#EDE9FE]' : ''}`}
                 >
                   <div className="flex items-center gap-2">
                     <span className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${isActive ? TILE_ACTIVE : TILE}`}>
@@ -183,7 +183,7 @@ function OutcomePanel({ outcome, onOpenCatalogue, onDismiss }: { outcome: Outcom
   return (
     <div className={`${CARD} p-4`}>
       <div className="flex items-start gap-3">
-        <span className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_2px_5px_-2px_rgba(30,27,75,0.25)] ${none ? 'bg-gradient-to-br from-amber-50 to-amber-100 border border-amber-200' : 'bg-gradient-to-br from-emerald-50 to-emerald-100 border border-emerald-200'}`}>
+        <span className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${none ? 'bg-gradient-to-br from-amber-50 to-amber-100 border border-amber-200' : 'bg-gradient-to-br from-emerald-50 to-emerald-100 border border-emerald-200'}`}>
           {none ? <AlertTriangle className="w-4 h-4 text-amber-600" /> : <CheckCircle2 className="w-4 h-4 text-emerald-600" />}
         </span>
         <div className="min-w-0 flex-1">
@@ -202,7 +202,7 @@ function OutcomePanel({ outcome, onOpenCatalogue, onDismiss }: { outcome: Outcom
             </ul>
           )}
           {!!res.files?.length && (
-            <div className="mt-3 border border-[#E9E5FB] rounded-md overflow-hidden shadow-[inset_0_1px_3px_rgba(30,27,75,0.06)]">
+            <div className="mt-3 border border-[#E9E5FB] rounded-md overflow-hidden">
               <table className="w-full text-[11px]">
                 <thead className={`text-gray-500 ${THEAD}`}><tr><th className="text-left px-2 py-1 font-medium">File</th><th className="text-left px-2 py-1 font-medium">Parser</th><th className="text-right px-2 py-1 font-medium">Endpoints</th><th className="text-left px-2 py-1 font-medium">Notes</th></tr></thead>
                 <tbody>
@@ -243,9 +243,9 @@ function MethodForm({ def, busy, onClose, onRun }: { def: ImportMethodDef; busy:
         <span className={`w-7 h-7 rounded-lg flex items-center justify-center ${TILE}`}><Icon className="w-4 h-4 text-[#7C3AED]" /></span>
         <h3 className="text-[13px] font-semibold text-gray-900">{def.label}</h3>
         {tabs.length > 1 && (
-          <div className="ml-3 flex gap-0.5 bg-[#EEEBFA] rounded-md p-0.5 shadow-[inset_0_1px_3px_rgba(30,27,75,0.12)]">
+          <div className="ml-3 flex gap-0.5 bg-[#EEEBFA] rounded-md p-0.5">
             {tabs.map((t) => (
-              <button key={t.id} type="button" onClick={() => setInput(t.id)} className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${input === t.id ? 'bg-white text-[#6D28D9] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(30,27,75,0.15)]' : 'text-gray-500 hover:text-gray-700'}`}>{t.label}</button>
+              <button key={t.id} type="button" onClick={() => setInput(t.id)} className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${input === t.id ? 'bg-white text-[#6D28D9]' : 'text-gray-500 hover:text-gray-700'}`}>{t.label}</button>
             ))}
           </div>
         )}
@@ -290,7 +290,7 @@ function FilesForm({ def, busy, onRun }: { def: ImportMethodDef; busy: boolean; 
   };
   return (
     <form onSubmit={submit} className="space-y-3">
-      <div onClick={() => ref.current?.click()} className="border border-dashed border-[#DDD6FE] rounded-lg bg-[#FAFAFE] px-4 py-5 text-center cursor-pointer hover:bg-[#F5F3FF] transition-colors shadow-[inset_0_2px_6px_rgba(30,27,75,0.06)]">
+      <div onClick={() => ref.current?.click()} className="border border-dashed border-[#DDD6FE] rounded-lg bg-[#FAFAFE] px-4 py-5 text-center cursor-pointer hover:bg-[#F5F3FF] transition-colors">
         <p className="text-[12px] text-gray-600">{files.length ? files.map((f) => f.name).join(', ') : 'Click to choose'}{' '}<span className="text-gray-400 font-mono text-[10.5px]">{def.accept}</span></p>
         <input ref={ref} type="file" accept={def.accept} multiple={def.id !== 'sdk' && def.id !== 'middleware'} className="hidden" onChange={(e) => { setFiles(Array.from(e.target.files || [])); e.target.value = ''; }} />
       </div>

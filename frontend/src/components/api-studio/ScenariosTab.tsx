@@ -225,7 +225,7 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
                               )}
                               {actionSteps.map((st, i) => (
                                 <div key={`a${i}`} className="flex gap-2 px-2.5 py-2 border-b border-gray-100 last:border-b-0">
-                                  <span className="text-[9.5px] font-mono font-semibold text-white bg-gradient-to-b from-[#A78BFA] to-[#8B5CF6] rounded-full w-4 h-4 flex items-center justify-center flex-shrink-0 mt-px tabular-nums shadow-[0_1px_2px_rgba(76,29,149,0.35)]">
+                                  <span className="text-[9.5px] font-mono font-semibold text-white bg-gradient-to-b from-[#A78BFA] to-[#8B5CF6] rounded-full w-4 h-4 flex items-center justify-center flex-shrink-0 mt-px tabular-nums">
                                     {i + 1}
                                   </span>
                                   <div className="min-w-0">

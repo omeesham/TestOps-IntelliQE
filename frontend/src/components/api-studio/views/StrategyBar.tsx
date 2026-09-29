@@ -56,12 +56,12 @@ export default function StrategyBar({ strategy, profile, onCoverage, onToggleLay
           <span className="text-[11px] font-semibold text-gray-700 uppercase tracking-wide">Strategy</span>
           {profile && <span className="ml-auto text-[9.5px] text-gray-400 inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[#7C3AED]" />recommended</span>}
         </div>
-        <div className="mt-2 flex gap-0.5 bg-[#EEEBFA] rounded-lg p-0.5 shadow-[inset_0_1px_3px_rgba(30,27,75,0.12)]">
+        <div className="mt-2 flex gap-0.5 bg-[#EEEBFA] rounded-lg p-0.5">
           {COVERAGE.map((c) => (
             <button
               key={c.id} type="button" onClick={() => onCoverage(c.id)} title={c.hint}
               className={`flex-1 px-2 py-1 rounded-md text-[11px] font-medium transition-colors ${strategy.coverage === c.id
-                ? 'bg-white text-[#6D28D9] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(30,27,75,0.15)]'
+                ? 'bg-white text-[#6D28D9]'
                 : 'text-gray-500 hover:text-gray-700'}`}
             >
               {c.label}
@@ -83,7 +83,7 @@ export default function StrategyBar({ strategy, profile, onCoverage, onToggleLay
           {/* Where the number comes from, layer by layer. */}
           {mix.length > 0 && (
             <>
-              <div className="mt-2 flex h-2 rounded-full overflow-hidden shadow-[inset_0_1px_2px_rgba(30,27,75,0.12)] bg-[#F3F1FB]">
+              <div className="mt-2 flex h-2 rounded-full overflow-hidden bg-[#F3F1FB]">
                 {mix.map((l) => (
                   <span key={l.id} title={`${l.label} · ${l.estimatedCases} case${l.estimatedCases === 1 ? '' : 's'}`} style={{ width: `${(l.estimatedCases / estimated) * 100}%`, background: SHADE[l.id] }} />
                 ))}
@@ -128,11 +128,11 @@ export default function StrategyBar({ strategy, profile, onCoverage, onToggleLay
               type="button"
               onClick={() => onToggleLayer(l.id)}
               title={notAdvised && !on ? `${l.rationale} — the analysis did not recommend this layer for this catalogue` : l.rationale}
-              className={`w-full flex items-start gap-2 px-2 py-1.5 rounded-lg border text-left transition-all active:translate-y-px ${on
-                ? 'bg-gradient-to-b from-[#F8F6FF] to-[#F3F0FE] border-[#DDD6FE] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_0_0_#E4DDFB]'
+              className={`w-full flex items-start gap-2 px-2 py-1.5 rounded-lg border text-left transition-all ${on
+                ? 'bg-gradient-to-b from-[#F8F6FF] to-[#F3F0FE] border-[#DDD6FE]'
                 : 'bg-white border-transparent hover:border-[#EDE9FE] hover:bg-[#FCFBFF]'}`}
             >
-              <span className={`mt-px w-3.5 h-3.5 rounded-[4px] border flex items-center justify-center flex-shrink-0 ${on ? 'bg-[#7C3AED] border-[#7C3AED] shadow-[0_1px_2px_rgba(76,29,149,0.4)]' : 'border-gray-300 bg-white shadow-[inset_0_1px_2px_rgba(30,27,75,0.08)]'}`}>
+              <span className={`mt-px w-3.5 h-3.5 rounded-[4px] border flex items-center justify-center flex-shrink-0 ${on ? 'bg-[#7C3AED] border-[#7C3AED]' : 'border-gray-300 bg-white'}`}>
                 {on && <Check className="w-2.5 h-2.5 text-white" />}
               </span>
               <span className="flex-1 min-w-0">

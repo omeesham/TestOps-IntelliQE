@@ -215,7 +215,7 @@ export function CopyButton({ text, label = 'Copy', className = '' }: { text: str
           () => { /* clipboard blocked — the code is on screen and selectable */ },
         );
       }}
-      className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded border transition-all ${CHIP_3D} active:translate-y-px active:shadow-none ${
+      className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded border transition-all ${CHIP_3D} ${
         copied
           ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
           : 'text-[#6B7280] bg-white border-gray-200 hover:text-[#7C3AED] hover:border-[#DDD6FE]'
@@ -232,7 +232,7 @@ export function CopyButton({ text, label = 'Copy', className = '' }: { text: str
 export function EmptyState({ icon: Icon, title, hint }: { icon: React.ElementType; title: string; hint?: string }) {
   return (
     <div className="h-full flex flex-col items-center justify-center text-center px-8 py-16">
-      <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-white to-[#F5F3FF] border border-[#E9E5FB] flex items-center justify-center mb-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_8px_18px_-10px_rgba(76,29,149,0.4)]">
+      <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-white to-[#F5F3FF] border border-[#E9E5FB] flex items-center justify-center mb-3">
         <Icon className="w-5 h-5 text-[#A78BFA]" />
       </div>
       <p className="text-sm font-medium text-gray-600">{title}</p>

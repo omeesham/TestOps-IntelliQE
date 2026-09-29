@@ -49,23 +49,10 @@ const CATEGORY_LABELS: Record<string, string> = {
   flow: 'Flow',
 };
 
-/* ── Surfaces — the 3D language ──
-   The workspace borrows the raised, tactile surfaces of Postman and Bruno
-   while staying in the app's violet-indigo palette. Three rules keep it
-   coherent: RAISED things (cards, buttons, chips) get a top highlight plus a
-   violet-tinted drop shadow; INSET things (inputs, tables, wells) get an inner
-   shadow; PRESSABLE things get a hard bottom edge that collapses on click.
-   Purely presentational — no run logic depends on any of these classes. */
-
-/*
- * Native alignment: the app's global stylesheet (src/index.css) already skins
- * `.bg-white.rounded-xl/2xl` cards, buttons, inputs and `thead` with the violet
- * raised/hover/inset polish shared by every native page. The studio used to opt
- * out (`data-surface="3d"`) and hand-roll the same effects here. It no longer
- * opts out, so these helpers are neutralised — the shared layer does the work,
- * and the tokens below carry only the native flat class strings. Kept as
- * exported names so call sites need no churn.
- */
+/* ── Surfaces — flat ──
+   Static surfaces: a plain border, no drop shadows, nothing lifts or presses.
+   The 3D helpers below are empty and kept only as exported names so call
+   sites need no churn. */
 export const RAISED = '';
 export const RAISED_HOVER = '';
 export const INSET = '';
@@ -78,13 +65,13 @@ export const SECONDARY_3D = '';
 export const BRAND_BUTTON =
   'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:from-[#6D28D9] hover:to-[#4F46E5]';
 /** The primary call-to-action — native gradient + soft violet shadow. */
-export const PRIMARY_BTN = `inline-flex items-center gap-1.5 px-3.5 py-2 text-[13px] font-semibold text-white ${BRAND_BUTTON} rounded-lg shadow-md shadow-purple-500/25 disabled:opacity-40 transition-all`;
+export const PRIMARY_BTN = `inline-flex items-center gap-1.5 px-3.5 py-2 text-[13px] font-semibold text-white ${BRAND_BUTTON} rounded-lg disabled:opacity-40 transition-colors`;
 /** The secondary call-to-action — the native white/outline button. */
 export const SECONDARY_BTN = 'inline-flex items-center gap-1.5 px-3 py-2 text-[13px] font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:text-[#7C3AED] transition-colors disabled:opacity-40';
-/** The native card/panel — the global stylesheet adds the violet raise + hover. */
-export const CARD = 'bg-white rounded-2xl border border-gray-100 shadow-sm';
-/** An interactive card (hover handled globally, with an explicit fallback). */
-export const CARD_HOVER = `${CARD} transition-shadow hover:shadow-md`;
+/** The card/panel — flat: a white surface with a plain border, no shadow. */
+export const CARD = 'bg-white rounded-lg border border-gray-200';
+/** An interactive card — the border tints on hover; nothing lifts. */
+export const CARD_HOVER = `${CARD} transition-colors hover:border-[#DDD6FE]`;
 /**
  * A form field WITHOUT a width, so the call site can size it. Use this whenever
  * the control is not meant to fill its row.

@@ -89,7 +89,7 @@ export default function ReportTab({
         {/* Verdict */}
         <div className={`rounded-xl border p-4 ${RAISED} ${green ? 'bg-gradient-to-b from-emerald-50 to-[#E6F7EF] border-emerald-200' : 'bg-white border-[#E9E5FB]'}`}>
           <div className="flex items-start gap-3">
-            <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ring-1 ring-white/40 ${green ? 'bg-gradient-to-br from-emerald-400 to-emerald-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_3px_0_0_#047857,0_8px_16px_-6px_rgba(16,185,129,0.6)]' : TILE_ACTIVE + ' shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_3px_0_0_#4338CA,0_8px_16px_-6px_rgba(124,58,237,0.6)]'}`}>
+            <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ring-1 ring-white/40 ${green ? 'bg-gradient-to-br from-emerald-400 to-emerald-600' : TILE_ACTIVE + ''}`}>
               {green ? <CheckCircle2 className="w-5 h-5 text-white" /> : <BarChart3 className="w-5 h-5 text-white" />}
             </div>
             <div className="min-w-0 flex-1">
@@ -146,7 +146,7 @@ export default function ReportTab({
               title={canPush
                 ? 'Commit the generated specs to the repository connected under System Configuration → Code Repositories'
                 : 'There are no generated specs to push'}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-semibold text-white rounded-md transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-gradient-to-b from-emerald-400 to-emerald-600 border border-emerald-500/50 ring-1 ring-inset ring-white/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_3px_0_0_#047857,0_8px_18px_-6px_rgba(16,185,129,0.55)] hover:from-emerald-500 hover:to-emerald-700 hover:-translate-y-px active:translate-y-[2px] active:shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_0_0_0_#047857,0_4px_10px_-6px_rgba(16,185,129,0.5)] disabled:translate-y-0 disabled:shadow-[0_2px_0_0_#A7F3D0]"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-semibold text-white rounded-md transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-gradient-to-b from-emerald-400 to-emerald-600 border border-emerald-500/50 ring-1 ring-inset ring-white/25 hover:from-emerald-500 hover:to-emerald-700"
             >
               {pushState.status === 'pushing'
                 ? <Spinner className="w-3.5 h-3.5 animate-spin" />

@@ -47,7 +47,7 @@ export default function PageTabs({ tabs, active, onChange, ariaLabel = 'Sections
     <div
       role="tablist"
       aria-label={ariaLabel}
-      className={`flex gap-1 bg-white rounded-2xl border border-gray-100 shadow-sm px-2 pt-2 overflow-x-auto scrollbar-hide ${className}`}
+      className={`flex gap-1 border-b border-gray-200 overflow-x-auto scrollbar-hide ${className}`}
     >
       {tabs.map((t, i) => {
         const isActive = t.id === active;
@@ -63,10 +63,10 @@ export default function PageTabs({ tabs, active, onChange, ariaLabel = 'Sections
             tabIndex={isActive ? 0 : -1}
             onClick={() => onChange(t.id)}
             onKeyDown={(e) => onKeyDown(e, i)}
-            className={`inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 rounded-t-lg px-4 py-2.5 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#7C3AED]/40 ${
+            className={`inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 -mb-px px-4 py-2.5 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#7C3AED]/40 ${
               isActive
-                ? 'border-[#7C3AED] text-[#7C3AED] bg-purple-50'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                ? 'border-[#7C3AED] text-[#7C3AED]'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
             }`}
           >
             {Icon && <Icon className="w-4 h-4 flex-shrink-0" />}

@@ -92,7 +92,7 @@ export default function EnvironmentsView() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-[1100px] mx-auto px-6 py-5 space-y-4">
+      <div className="px-6 py-5 space-y-4">
         <div className="flex items-center gap-3">
           <div>
             <h2 className="text-[14px] font-semibold text-gray-900">Environments</h2>
@@ -159,7 +159,7 @@ function EnvForm({ initial, saving, onCancel, onSave }: { initial: Partial<ApiEn
             <div key={i} className="flex items-center gap-1.5">
               <input value={v.key} onChange={(e) => update(i, { key: e.target.value.replace(/[^\w.-]/g, '') })} placeholder="token" spellCheck={false} className={`${INPUT} font-mono w-[200px]`} />
               <input value={v.value} onChange={(e) => update(i, { value: e.target.value })} type={v.secret ? 'password' : 'text'} autoComplete="off" placeholder={v.secret ? 'stored encrypted' : 'value'} spellCheck={false} className={`${INPUT} font-mono flex-1`} />
-              <button type="button" onClick={() => update(i, { secret: !v.secret })} title={v.secret ? 'Secret — stored encrypted, masked in the UI' : 'Plain value'} className={`p-1.5 rounded border transition-all active:translate-y-px ${CHIP_3D} ${v.secret ? 'bg-gradient-to-b from-[#F5F3FF] to-[#EDE9FE] border-[#DDD6FE] text-[#6D28D9]' : 'bg-white border-gray-200 text-gray-400 hover:text-[#7C3AED]'}`}><Lock className="w-3.5 h-3.5" /></button>
+              <button type="button" onClick={() => update(i, { secret: !v.secret })} title={v.secret ? 'Secret — stored encrypted, masked in the UI' : 'Plain value'} className={`p-1.5 rounded border transition-all ${CHIP_3D} ${v.secret ? 'bg-gradient-to-b from-[#F5F3FF] to-[#EDE9FE] border-[#DDD6FE] text-[#6D28D9]' : 'bg-white border-gray-200 text-gray-400 hover:text-[#7C3AED]'}`}><Lock className="w-3.5 h-3.5" /></button>
               <button type="button" onClick={() => setVars((p) => p.filter((_, j) => j !== i))} className="p-1.5 text-gray-300 hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
             </div>
           ))}

@@ -40,7 +40,7 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-[1280px] mx-auto px-6 py-5 space-y-4">
+      <div className="px-6 py-5 space-y-4">
         {/* Workspace state — the next step */}
         <div className={`${CARD} p-4 flex items-center gap-4 flex-wrap`}>
           <div className="flex items-center gap-3">
@@ -148,7 +148,7 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
               <ul className="space-y-1">
                 {data.recentRuns.slice(0, 6).map((r) => (
                   <li key={r.runId}>
-                    <button type="button" onClick={() => onOpenRun(r.runId)} className="w-full flex items-center gap-2 text-left px-1.5 py-1 rounded-md hover:bg-[#F5F3FF] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_2px_6px_-4px_rgba(76,29,149,0.4)] transition-all">
+                    <button type="button" onClick={() => onOpenRun(r.runId)} className="w-full flex items-center gap-2 text-left px-1.5 py-1 rounded-md hover:bg-[#F5F3FF] transition-all">
                       <div className="min-w-0 flex-1"><p className="text-[11.5px] text-gray-800 truncate">{r.title}</p><p className="text-[10.5px] text-gray-400">{relativeTime(r.createdAt)} · {r.caseCount} scenarios</p></div>
                       {r.stats ? <span className={`font-mono text-[11px] font-semibold tabular-nums ${r.stats.passRate >= 90 ? 'text-emerald-600' : r.stats.passRate >= 70 ? 'text-amber-600' : 'text-red-600'}`}>{r.stats.passRate}%</span> : <StatusPill status="not_run" />}
                     </button>

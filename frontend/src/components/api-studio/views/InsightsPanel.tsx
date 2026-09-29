@@ -126,7 +126,7 @@ export default function InsightsPanel({ profile, analyzing, error, endpoints, on
                     <span className="text-[11.5px] font-medium text-gray-800 truncate">{r.parent ? <span className="text-gray-400">{r.parent} › </span> : null}{r.name}</span>
                     <span className="ml-auto flex gap-0.5 flex-shrink-0">
                       {CRUD.map((op) => (
-                        <span key={op} title={`${op}${typeof r.operations[op] === 'number' ? '' : ' — not in the catalogue'}`} className={`w-4 h-4 rounded text-[9px] font-bold flex items-center justify-center ${typeof r.operations[op] === 'number' ? 'bg-gradient-to-b from-[#EDE9FE] to-[#DDD6FE] text-[#6D28D9] shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_1px_1px_rgba(30,27,75,0.15)]' : 'bg-gray-100 text-gray-300 shadow-[inset_0_1px_2px_rgba(30,27,75,0.08)]'}`}>{CRUD_SHORT[op]}</span>
+                        <span key={op} title={`${op}${typeof r.operations[op] === 'number' ? '' : ' — not in the catalogue'}`} className={`w-4 h-4 rounded text-[9px] font-bold flex items-center justify-center ${typeof r.operations[op] === 'number' ? 'bg-gradient-to-b from-[#EDE9FE] to-[#DDD6FE] text-[#6D28D9]' : 'bg-gray-100 text-gray-300'}`}>{CRUD_SHORT[op]}</span>
                       ))}
                     </span>
                     <span className="text-[10px] font-mono text-gray-400 tabular-nums w-6 text-right flex-shrink-0">{r.endpoints.length}</span>
@@ -150,7 +150,7 @@ export default function InsightsPanel({ profile, analyzing, error, endpoints, on
         {profile.flows.length === 0 ? <p className="text-[11px] text-gray-400">No create→read→update→delete chains found — flows need at least a create and a read on the same resource.</p> : (
           <div className="space-y-1.5">
             {profile.flows.map((f) => (
-              <div key={f.id} className="px-2 py-1.5 rounded-md bg-white border border-[#EDE9FE] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_2px_5px_-3px_rgba(76,29,149,0.3)]">
+              <div key={f.id} className="px-2 py-1.5 rounded-md bg-white border border-[#EDE9FE]">
                 <p className="flex items-center gap-1.5 text-[11.5px] font-medium text-gray-800">
                   <span className="truncate">{f.name}</span>
                   <span className="ml-auto flex-shrink-0 font-mono text-[9.5px] text-[#6D28D9] bg-[#F5F3FF] border border-[#DDD6FE] rounded px-1 tabular-nums">{f.steps.length} steps</span>
@@ -226,7 +226,7 @@ function Meter({ label, segments, total }: { label: string; segments: { key: str
   return (
     <div>
       <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">{label}</p>
-      <div className="mt-1 flex h-2 rounded-full overflow-hidden shadow-[inset_0_1px_2px_rgba(30,27,75,0.12)] bg-[#F3F1FB]">
+      <div className="mt-1 flex h-2 rounded-full overflow-hidden bg-[#F3F1FB]">
         {segments.map((s) => <span key={s.key} title={`${s.label} · ${s.value}`} style={{ width: `${(s.value / total) * 100}%`, background: s.colour }} />)}
       </div>
       <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5">
