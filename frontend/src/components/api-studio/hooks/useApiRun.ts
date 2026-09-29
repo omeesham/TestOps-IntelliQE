@@ -468,11 +468,52 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
   const selectScenarios = useCallback((ids: string[]) => setSelected((prev) => new Set([...prev, ...ids])), []);
   const clearScenarios = useCallback(() => setSelected(new Set()), []);
 
+  /* ── Review-gate edits ──
+     A scenario is reviewed BEFORE it is saved and run, so an edit updates the
+     in-memory scenario AND mirrors the changed fields into `raw` — the object
+     that saveTestCases persists (test_cases.routes reads title/scenario,
+     description, priority, type, precondition, expectedResult, severity, tags,
+     testSteps and the `api` HTTP detail). The already-rendered Playwright spec
+     is not re-generated here, so a request edit reaches the saved case and the
+     report but not the executed script until the run is re-designed. */
+  const updateScenario = useCallback((id: string, patch: Partial<Scenario>) => {
+    setScenarios((prev) => prev.map((s) => {
+      if (s.id !== id) return s;
+      const next: Scenario = { ...s, ...patch };
+      if (patch.api) next.api = { ...s.api, ...patch.api } as Scenario['api'];
+      next.raw = {
+        ...s.raw,
+        title: next.title,
+        scenario: next.title,
+        description: next.description,
+        priority: next.priority,
+        type: next.type,
+        feature: next.feature,
+        precondition: next.precondition,
+        expectedResult: next.expectedResult,
+        expected: next.expectedResult,
+        severity: next.severity,
+        tags: next.tags,
+        testSteps: next.testSteps,
+        api: next.api,
+      };
+      return next;
+    }));
+  }, []);
+
+  /* Drop a scenario from the run entirely — the list, the selection and its
+     rendered spec (so it can't be executed or pushed later). */
+  const deleteScenario = useCallback((id: string) => {
+    setScenarios((prev) => prev.filter((s) => s.id !== id));
+    setSpecs((prev) => prev.filter((sp) => sp.testCaseId !== id));
+    setSelected((prev) => { const n = new Set(prev); n.delete(id); return n; });
+  }, []);
+
   return {
     phase, stages, scenarios, specs, serviceObjects, selected, rows, report, testRunId, runError, exporting, pushState,
     runEndpoints, runLabel, logs, running, started, finished, baseUrl,
     runScenarios, runSuite, resetRun, handleExport, handlePushToRepo,
-    toggleScenario, selectScenarios, clearScenarios, setRunError, log,
+    toggleScenario, selectScenarios, clearScenarios, updateScenario, deleteScenario, setRunError, log,
     elapsedMs: () => (startedAtRef.current ? Date.now() - startedAtRef.current : 0),
   };
 }
