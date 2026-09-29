@@ -581,7 +581,7 @@ export default function ChatPage() {
     if (hasSavedSession) return;
 
     waitForVoices().then(() => {
-      push('tessa', `Hi ${user?.username || 'there'}. What would you like to test today?`);
+      push('tessa', `Hi ${user?.username || 'there'}, I'm Tessa, your AI assistant. What would you like to test today?`);
     });
   }, []);
 
