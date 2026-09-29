@@ -175,13 +175,13 @@ export async function generateAllureResults(
   return resultsDir;
 }
 
-/* ── Find the allure CLI binary ── */
-function getAllureBin(): string {
-  if (process.platform === 'win32') {
-    return path.join(BACKEND_ROOT, 'node_modules', '.bin', 'allure.cmd');
-  }
-  return path.join(BACKEND_ROOT, 'node_modules', '.bin', 'allure');
-}
+/* ── The allure-commandline distribution ──
+   `<backend>/node_modules/allure-commandline/dist` — the unpacked Allure 2
+   release: `lib/` holds the jars, `lib/config` the bundled plugin config. This
+   is what the shipped launcher scripts call `APP_HOME`. */
+const ALLURE_HOME = path.join(BACKEND_ROOT, 'node_modules', 'allure-commandline', 'dist');
+/** Main class of the Allure 2 CLI — what allure.bat / allure ultimately exec. */
+const ALLURE_MAIN_CLASS = 'io.qameta.allure.CommandLine';
 
 /* ── Locate a Java runtime for the Allure CLI ──
    allure-commandline is a thin launcher around a Java app — no JRE, no report.
@@ -210,43 +210,69 @@ function findJavaHome(): string | null {
       for (const name of readdirSync(root)) candidates.push(path.join(root, name));
     } catch { /* root absent */ }
   }
+  // PATH last. We now invoke the JVM ourselves rather than letting the Allure
+  // launcher find it, so a JRE that is only on PATH (the container's
+  // default-jre-headless, a Homebrew/asdf install) must still be reachable —
+  // otherwise this would refuse to build a report the old code could build.
+  // Entries are <java_home>/bin, so the home is one level up.
+  for (const dir of String(process.env.PATH || '').split(path.delimiter)) {
+    if (dir.trim()) candidates.push(path.resolve(dir, '..'));
+  }
   cachedJavaHome = candidates.find(hasJava) ?? null;
   return cachedJavaHome;
 }
 
 /* ── Generate Allure HTML from result files ── */
 export async function generateAllureHtml(resultsDir: string, outputDir: string): Promise<void> {
-  const allureBin = getAllureBin();
-
-  // Check that allure binary exists
+  // Run the Allure CLI's main class on the JVM DIRECTLY rather than through the
+  // shipped launcher (node_modules/.bin/allure[.cmd] → allure.bat).
+  //
+  // Those launchers must go through a shell, and neither Node's `cmd /c …` form
+  // nor allure-commandline's own `spawn(…, { shell: true })` quotes the script
+  // path it is handed. Any space in the checkout path therefore truncates the
+  // command at the first space — a checkout under
+  // "C:\...\Intelliqe API-Automation LatestCode\..." fails with
+  // "'C:\Automation_code\Intelliqe' is not recognized…", `allure generate`
+  // never runs, and the run is left with an EMPTY allure/ folder: the report
+  // silently has no Allure tab while the Playwright "Basic" report still works.
+  //
+  // execFile with no shell passes argv straight through, so spaces are a
+  // non-issue. The classpath below is exactly what the launcher scripts build.
   try {
-    await fs.access(allureBin);
+    await fs.access(path.join(ALLURE_HOME, 'lib'));
   } catch {
-    throw new Error('allure-commandline binary not found. Run: npm install allure-commandline');
+    throw new Error('allure-commandline is not installed. Run: npm install allure-commandline');
   }
+
+  const javaHome = findJavaHome();
+  if (!javaHome) {
+    throw new Error(
+      'no Java runtime found. The Allure 2 CLI is a Java application — install a JRE (e.g. Temurin 17+) ' +
+      'or set JAVA_HOME. The Playwright "Basic" report is unaffected.',
+    );
+  }
+  const javaExe = path.join(javaHome, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
+  const classpath = [path.join(ALLURE_HOME, 'lib', '*'), path.join(ALLURE_HOME, 'lib', 'config')].join(path.delimiter);
 
   await fs.mkdir(outputDir, { recursive: true });
 
-  const javaHome = findJavaHome();
-  const env = javaHome
-    ? { ...process.env, JAVA_HOME: javaHome, PATH: `${path.join(javaHome, 'bin')}${path.delimiter}${process.env.PATH || ''}` }
-    : process.env;
-
   try {
-    if (process.platform === 'win32') {
-      await execFileAsync('cmd', ['/c', allureBin, 'generate', resultsDir, '-o', outputDir, '--clean'], {
+    await execFileAsync(
+      javaExe,
+      ['-classpath', classpath, ALLURE_MAIN_CLASS, 'generate', resultsDir, '-o', outputDir, '--clean'],
+      {
         timeout: 120_000,
-        env,
-      });
-    } else {
-      await execFileAsync(allureBin, ['generate', resultsDir, '-o', outputDir, '--clean'], {
-        timeout: 120_000,
-        env,
-      });
-    }
+        // APP_HOME is what the launcher exports so the CLI picks up the bundled
+        // plugin config instead of falling back to its built-in defaults.
+        env: { ...process.env, JAVA_HOME: javaHome, APP_HOME: ALLURE_HOME },
+      },
+    );
   } catch (err: any) {
-    // The launcher prints its real error (e.g. "JAVA_HOME is not set") on
-    // STDOUT; stderr often carries only node deprecation noise. Report both.
+    // Leaving the empty output dir behind would look like a built-but-broken
+    // report to every reader that probes for allure/index.html.
+    await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
+    // The CLI prints its real error on STDOUT; stderr often carries only JVM
+    // and node deprecation noise. Report both.
     const detail = [err.stdout, err.stderr].map((s: any) => String(s || '').trim()).filter(Boolean).join(' | ') || err.message;
     throw new Error(`Allure generate failed: ${detail}`);
   }
@@ -326,7 +352,9 @@ export async function getOrGenerateReport(
  * the Reports page. So: check index.html, then read generatedAt from the meta
  * if present, else fall back to the report file's mtime.
  */
-async function readReportMeta(dir: string): Promise<{ exists: boolean; generatedAt?: string }> {
+async function readReportMeta(
+  dir: string,
+): Promise<{ exists: boolean; generatedAt?: string; allureError?: string }> {
   let stat;
   try {
     stat = await fs.stat(path.join(dir, 'index.html'));
@@ -334,13 +362,17 @@ async function readReportMeta(dir: string): Promise<{ exists: boolean; generated
     return { exists: false }; // no rendered report here
   }
   let generatedAt: string | undefined;
+  let allureError: string | undefined;
   try {
     const meta = JSON.parse(await fs.readFile(path.join(dir, 'report-meta.json'), 'utf-8'));
     if (meta?.generatedAt) generatedAt = meta.generatedAt;
+    // Written when the Allure build failed but the Playwright report survived —
+    // it is why this run has no Allure tab, and the only place that says so.
+    if (meta?.allureError) allureError = String(meta.allureError);
   } catch {
     /* no/invalid sidecar — fall back to the report's mtime below */
   }
-  return { exists: true, generatedAt: generatedAt || new Date(stat.mtimeMs).toISOString() };
+  return { exists: true, generatedAt: generatedAt || new Date(stat.mtimeMs).toISOString(), allureError };
 }
 
 /* ── Find the most recently generated report across all runs for a tenant ── */
@@ -376,7 +408,7 @@ export async function getLatestReport(
 export async function getReportStatus(
   tenantId: string,
   runId?: string,
-): Promise<{ exists: boolean; generatedAt?: string; reportUrl?: string; allureReportUrl?: string }> {
+): Promise<{ exists: boolean; generatedAt?: string; reportUrl?: string; allureReportUrl?: string; allureError?: string }> {
   const scope = runId || 'latest';
   const outputDir = path.join(REPORTS_ROOT, tenantId, scope);
 
@@ -397,6 +429,9 @@ export async function getReportStatus(
     generatedAt: meta.generatedAt,
     reportUrl: `/api/allure/report/${tenantId}/${scope}/index.html`,
     allureReportUrl,
+    // Only meaningful when there is no Allure report to show — it tells the
+    // Reports page why the tab is empty instead of silently greying it out.
+    allureError: allureReportUrl ? undefined : meta.allureError,
   };
 }
 

@@ -254,7 +254,12 @@ export async function testAzureStorage(payload: {
 /** Load a run's report — restores it from Azure storage when not cached locally. */
 export async function loadAllureReport(runId: string) {
   const { data } = await api.post('/allure/load', { runId }, { timeout: 120_000 });
-  return data as { exists: boolean; generatedAt?: string; reportUrl?: string; allureReportUrl?: string; source?: 'local' | 'restored' | 'missing' };
+  return data as {
+    exists: boolean; generatedAt?: string; reportUrl?: string; allureReportUrl?: string;
+    /** Why this run has no Allure report, when it has none. */
+    allureError?: string;
+    source?: 'local' | 'restored' | 'missing';
+  };
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -312,7 +317,10 @@ export interface ExtractedDocument {
   sizeBytes: number;
   characterCount: number;
   pageCount?: number;
+  /** Content was lost or degraded while reading the file — a caution. */
   warning?: string;
+  /** What was read, for confirmation — information, not a problem. */
+  notice?: string;
 }
 
 export async function extractDocumentText(file: File): Promise<ExtractedDocument> {
@@ -324,6 +332,467 @@ export async function extractDocumentText(file: File): Promise<ExtractedDocument
     // Big PDFs can take a few seconds to parse — allow a generous timeout.
     timeout: 60_000,
   });
+  return data;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   API-spec upload — "Upload API Spec" button on the chat API form.
+   Uploads a spec in any format (OpenAPI/Swagger, Postman, XML/WSDL,
+   PDF, Word, JSON, YAML, text) and gets back a normalised endpoint
+   the form fields can be populated from.
+   ───────────────────────────────────────────────────────────── */
+export interface ParsedApiEndpoint {
+  /** Short human label for the picker, e.g. "GET /users/{id} — Get user". */
+  title: string;
+  method: string;
+  url: string;
+  headers: { key: string; value: string }[];
+  auth: { type: 'none' | 'bearer' | 'basic' | 'apikey'; value?: string };
+  body?: string;
+  expectedStatus?: number;
+  expectedResponse?: string;
+}
+
+export interface ParsedApiSpecResult {
+  /** Every endpoint found in the file (>=1). One → auto-fill; many → let the user pick. */
+  endpoints: ParsedApiEndpoint[];
+  count: number;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  /** Content was lost or degraded while reading the file — shown as a caution. */
+  warning?: string;
+  /** What was read, for confirmation — shown as plain information, not a problem. */
+  notice?: string;
+}
+
+export async function parseApiSpecFromFile(file: File, format?: string): Promise<ParsedApiSpecResult> {
+  const form = new FormData();
+  form.append('file', file);
+  if (format) form.append('format', format);
+  const { data } = await api.post('/document/parse-api-spec', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    // Parsing extracts text AND makes an LLM call — allow a generous timeout.
+    timeout: 120_000,
+  });
+  return data;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   API Automation workspace — /api/api-automation
+   Intake (12 methods), pattern intelligence, environments, the
+   dashboard and the headless run. Every import answers with the
+   same shape: the endpoints it produced plus the profile derived
+   from them.
+   ───────────────────────────────────────────────────────────── */
+export interface ApiImportResponse {
+  endpoints: any[];
+  count: number;
+  parser: string;
+  format: string;
+  warnings: string[];
+  notice?: string;
+  profile: any | null;
+  /** Bulk file import only — per-file outcome. */
+  files?: { fileName: string; count: number; parser?: string; format?: string; error?: string; warnings: string[] }[];
+  /** Live probe only. */
+  observed?: { status: number; durationMs: number; contentType: string };
+}
+
+const IMPORT_TIMEOUT = 180_000;
+
+export async function importApiFiles(files: File[], format = 'auto'): Promise<ApiImportResponse> {
+  const form = new FormData();
+  for (const f of files) form.append('files', f);
+  form.append('format', format);
+  const { data } = await api.post('/api-automation/import/files', form, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: IMPORT_TIMEOUT });
+  return data;
+}
+
+export async function importApiText(text: string, opts: { format?: string; method?: string; name?: string; variables?: Record<string, string> } = {}): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/text', { text, ...opts }, { timeout: IMPORT_TIMEOUT });
+  return data;
+}
+
+export async function importApiUrl(url: string, opts: { format?: string; headers?: { key: string; value: string }[]; baseUrl?: string } = {}): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/url', { url, ...opts }, { timeout: IMPORT_TIMEOUT });
+  return data;
+}
+
+export async function importApiEndpoint(input: { url: string; method?: string; headers?: { key: string; value: string }[]; auth?: { type: string; value?: string; headerName?: string }; body?: string; discover?: boolean }): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/endpoint', input, { timeout: 60_000 });
+  return data;
+}
+
+export async function importApiCurl(curl: string): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/curl', { curl });
+  return data;
+}
+
+export async function importApiGraphql(url: string, headers?: { key: string; value: string }[], auth?: { type: string; value?: string }): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/graphql', { url, headers, auth }, { timeout: 60_000 });
+  return data;
+}
+
+export async function importApiMcp(url: string, headers?: { key: string; value: string }[], auth?: { type: string; value?: string }): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/mcp', { url, headers, auth }, { timeout: 60_000 });
+  return data;
+}
+
+export async function importApiConnector(manifest: string | object, name?: string): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/connector', { manifest, name });
+  return data;
+}
+
+export async function importApiWebhook(def: { url: string; method?: string; signatureHeader?: string; secret?: string; headers?: { key: string; value: string }[]; expectedStatus?: number; events: { name: string; payload: string; description?: string }[] }): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/webhook', def);
+  return data;
+}
+
+/** SDK source or middleware/route definitions — pasted text or an uploaded file. */
+export async function importApiSource(method: 'sdk' | 'middleware', input: { text?: string; file?: File; name?: string }): Promise<ApiImportResponse> {
+  const form = new FormData();
+  if (input.file) form.append('file', input.file);
+  if (input.text) form.append('text', input.text);
+  if (input.name) form.append('name', input.name);
+  const { data } = await api.post(`/api-automation/import/${method}`, form, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: IMPORT_TIMEOUT });
+  return data;
+}
+
+/**
+ * Design scenarios as a background job — one model call per endpoint means a
+ * big catalogue outlives any single HTTP request. Returns the jobId to poll.
+ */
+export async function designApiScenarios(input: { apiSpecs: ApiSpecPayload[]; apiLayers?: string[]; apiProfile?: { insights?: string[] } | null; requirements?: string }): Promise<{ jobId: string; pollUrl: string }> {
+  const { data } = await api.post('/api-automation/design', input, { timeout: 60_000 });
+  return data;
+}
+
+export interface ApiJob<T = any> {
+  status: 'running' | 'completed' | 'failed';
+  result?: T;
+  error?: string;
+  progress?: { phase?: string; done?: number; total?: number; flows?: number; message?: string; detail?: string };
+  createdAt: number;
+  finishedAt?: number;
+}
+
+export async function getApiJob<T = any>(jobId: string): Promise<ApiJob<T>> {
+  const { data } = await api.get(`/api-automation/jobs/${encodeURIComponent(jobId)}`, { timeout: 30_000 });
+  return data;
+}
+
+export async function analyzeApi(endpoints: any[], deep = false): Promise<{ profile: any }> {
+  const { data } = await api.post('/api-automation/analyze', { endpoints, deep }, { timeout: deep ? 120_000 : 30_000 });
+  return data;
+}
+
+/* ── Contract / schema validation (opt-in, standalone) ── */
+export interface ContractViolation { kind: 'transport' | 'status' | 'content-type' | 'schema'; message: string; path?: string }
+export interface ContractResult {
+  id: string; title: string; method: string; url: string;
+  reachable: boolean; status?: number; elapsedMs?: number;
+  expectedStatus?: number; statusOk: boolean;
+  schemaChecked: boolean; schemaValid: boolean;
+  violations: ContractViolation[];
+}
+export interface ContractReport {
+  results: ContractResult[];
+  summary: { total: number; passed: number; failed: number; unreachable: number; checkedSchema: number };
+}
+/** Live-probe the given endpoints and validate each response against its contract. */
+export async function validateApiContract(endpoints: any[]): Promise<ContractReport> {
+  const { data } = await api.post('/api-automation/contract/validate', { endpoints }, { timeout: 120_000 });
+  return data;
+}
+
+/* ── Async / streaming probe (WebSocket + SSE, opt-in) ── */
+export interface AsyncFrame { at: number; preview: string }
+export interface AsyncProbeResult {
+  protocol: 'websocket' | 'sse'; url: string; connected: boolean; received: number;
+  frames: AsyncFrame[]; firstByteMs?: number; durationMs: number;
+  matched?: boolean; expectContains?: string; error?: string;
+}
+export async function runAsyncProbe(input: { url: string; message?: string; headers?: { key: string; value: string }[]; waitMs?: number; expectContains?: string }): Promise<AsyncProbeResult> {
+  const { data } = await api.post('/api-automation/async/probe', input, { timeout: 30_000 });
+  return data;
+}
+
+/* ── Contract-drift maintenance (opt-in, standalone) ── */
+export interface DriftShapeChange { kind: 'added' | 'removed' | 'type-changed'; path: string; detail?: string }
+export interface DriftResult {
+  id: string; title: string; method: string; url: string; reachable: boolean;
+  hasStoredStatus: boolean; hasStoredShape: boolean; liveStatus?: number; storedStatus?: number;
+  statusDrift: boolean; shapeDrift: boolean; changes: DriftShapeChange[];
+  suggestedStatus?: number; suggestedResponse?: string; note?: string;
+}
+export interface DriftReport {
+  results: DriftResult[];
+  summary: { total: number; drifted: number; clean: number; unreachable: number; noExpectation: number };
+}
+export async function scanApiDrift(endpoints: any[]): Promise<DriftReport> {
+  const { data } = await api.post('/api-automation/drift/scan', { endpoints }, { timeout: 120_000 });
+  return data;
+}
+
+/* ── Load test (opt-in, standalone) ── */
+export interface LoadTestResult {
+  url: string; method: string; totalRequests: number; concurrency: number; durationMs: number;
+  completed: number; failed: number; non2xx: number; throughputRps: number;
+  latency: { min: number; p50: number; p90: number; p95: number; p99: number; max: number; avg: number };
+  statusCounts: Record<string, number>;
+  errors: { message: string; count: number }[];
+}
+export async function runApiLoadTest(input: { endpoint: any; totalRequests?: number; concurrency?: number; allowWrites?: boolean }): Promise<LoadTestResult> {
+  const { data } = await api.post('/api-automation/loadtest', input, { timeout: 180_000 });
+  return data;
+}
+
+/* ── Security scan (opt-in, standalone) ── */
+export interface SecurityFinding {
+  endpointId: string; title: string; method: string; url: string; check: string;
+  severity: 'high' | 'medium' | 'low' | 'info'; status: 'vulnerable' | 'ok' | 'info' | 'skipped'; detail: string;
+}
+export interface SecurityReport {
+  findings: SecurityFinding[];
+  summary: { endpoints: number; vulnerable: number; high: number; medium: number; low: number; info: number };
+}
+export async function runApiSecurityScan(endpoints: any[]): Promise<SecurityReport> {
+  const { data } = await api.post('/api-automation/security/scan', { endpoints }, { timeout: 180_000 });
+  return data;
+}
+
+/* ── OWASP API Security Top-10 (2023) compliance pack (opt-in, standalone) ── */
+export type OwaspStatus = 'pass' | 'warn' | 'fail' | 'review' | 'not_assessed';
+export type OwaspAssessment = 'dynamic' | 'static' | 'none';
+export type OwaspGrade = 'A' | 'B' | 'C' | 'D' | 'F';
+export interface OwaspCategory {
+  id: string; key: string; name: string;
+  status: OwaspStatus; assessment: OwaspAssessment;
+  summary: string; evidence: string[]; affected: string[]; remediation: string;
+}
+export interface OwaspComplianceReport {
+  categories: OwaspCategory[];
+  summary: {
+    total: number; assessed: number; passed: number; warned: number; failed: number; review: number; notAssessed: number;
+    compliancePct: number | null; grade: OwaspGrade | null; high: number; medium: number; low: number;
+  };
+  basis: { endpoints: number; scanned: number; generatedAt: string };
+  security: SecurityReport;
+}
+export async function runApiOwaspCompliance(endpoints: any[]): Promise<OwaspComplianceReport> {
+  const { data } = await api.post('/api-automation/security/owasp', { endpoints }, { timeout: 180_000 });
+  return data;
+}
+
+/* ── AI-guided fuzzing / property-based robustness (opt-in, standalone) ── */
+export type FuzzSeverity = 'high' | 'medium' | 'low' | 'info';
+export type FuzzKind = 'server-error' | 'info-leak' | 'reflection' | 'timeout' | 'weak-validation' | 'handled' | 'unreachable' | 'skipped';
+export interface FuzzFinding {
+  endpointId: string; title: string; method: string; url: string;
+  param: string; category: string; payload: string; status?: number;
+  kind: FuzzKind; severity: FuzzSeverity; detail: string;
+}
+export interface FuzzReport {
+  findings: FuzzFinding[];
+  summary: { endpoints: number; cases: number; crashes: number; leaks: number; reflections: number; timeouts: number; weakValidation: number; handled: number; issues: number };
+}
+export async function runApiFuzz(endpoints: any[]): Promise<FuzzReport> {
+  const { data } = await api.post('/api-automation/fuzz', { endpoints }, { timeout: 180_000 });
+  return data;
+}
+
+/* ── AI root-cause diagnosis (opt-in, standalone) ── */
+export interface Diagnosis {
+  category: string; rootCause: string; suggestedFix: string;
+  confidence: 'high' | 'medium' | 'low'; reproCurl: string;
+}
+export async function diagnoseApiFailure(failure: {
+  title?: string; method: string; url: string; error: string;
+  expectedStatus?: number; requestBody?: string; responseStatus?: number; responseBody?: string;
+}): Promise<Diagnosis> {
+  const { data } = await api.post('/api-automation/diagnose', { failure }, { timeout: 60_000 });
+  return data;
+}
+
+/* ── Run sign-off / review thread (collaboration) ── */
+export type ReviewDecision = 'approved' | 'rejected' | 'needs_work' | 'comment';
+export interface RunReview {
+  id: string; runId: string; decision: ReviewDecision; note?: string; reviewer?: string; createdAt: string;
+}
+export interface RunReviewThread { reviews: RunReview[]; status: ReviewDecision | null }
+export async function listApiRunReviews(runId: string): Promise<RunReviewThread> {
+  const { data } = await api.get(`/api-automation/runs/${runId}/reviews`);
+  return data;
+}
+export async function addApiRunReview(runId: string, decision: ReviewDecision, note?: string): Promise<{ review: RunReview }> {
+  const { data } = await api.post(`/api-automation/runs/${runId}/reviews`, { decision, note });
+  return data;
+}
+
+/* ── NL authoring (opt-in, standalone) ── */
+export interface NlBrief {
+  requirements: string;
+  coverage: 'essential' | 'standard' | 'exhaustive';
+  layers: string[];
+  focus: string[];
+  outline: string[];
+}
+export async function authorApiBrief(description: string, endpoints: any[]): Promise<NlBrief> {
+  const { data } = await api.post('/api-automation/nl-author', { description, endpoints }, { timeout: 60_000 });
+  return data.brief;
+}
+
+/* ── Response-diff regression baselines (opt-in, standalone) ── */
+export interface BaselineRecord {
+  id: string; sig: string; method: string; url: string; title: string;
+  status?: number; contentType?: string; capturedBy?: string; capturedAt: string; updatedAt: string;
+}
+export type DriftKind = 'status' | 'added' | 'removed' | 'type-changed' | 'value-changed' | 'transport' | 'content';
+export interface DriftEntry { kind: DriftKind; path: string; before?: string; after?: string }
+export interface BaselineCompareResult {
+  id: string; title: string; method: string; url: string;
+  hasBaseline: boolean; reachable: boolean; status?: number; baselineStatus?: number;
+  drift: DriftEntry[]; capturedAt?: string;
+}
+export interface BaselineCompareReport {
+  results: BaselineCompareResult[];
+  summary: { total: number; compared: number; unchanged: number; drifted: number; unreachable: number; noBaseline: number };
+}
+export interface BaselineCaptureReport { captured: number; skipped: number; total: number; baselines: BaselineRecord[] }
+
+export async function listApiBaselines(): Promise<{ baselines: BaselineRecord[] }> {
+  const { data } = await api.get('/api-automation/baselines');
+  return data;
+}
+export async function captureApiBaselines(endpoints: any[]): Promise<BaselineCaptureReport> {
+  const { data } = await api.post('/api-automation/baselines/capture', { endpoints }, { timeout: 180_000 });
+  return data;
+}
+export async function compareApiBaselines(endpoints: any[]): Promise<BaselineCompareReport> {
+  const { data } = await api.post('/api-automation/baselines/compare', { endpoints }, { timeout: 180_000 });
+  return data;
+}
+export async function deleteApiBaseline(id: string): Promise<{ ok: boolean }> {
+  const { data } = await api.delete(`/api-automation/baselines/${id}`);
+  return data;
+}
+
+/* ── Data-driven testing (opt-in, standalone) ── */
+export interface DataDrivenRowResult {
+  index: number; values: Record<string, string>; url: string; reachable: boolean;
+  status?: number; expectedStatus?: number; elapsedMs?: number; pass: boolean; error?: string;
+}
+export interface DataDrivenReport {
+  method: string; title: string; results: DataDrivenRowResult[];
+  summary: { total: number; passed: number; failed: number; unreachable: number; avgMs: number };
+}
+export async function runApiDataDriven(endpoint: any, rows: Record<string, any>[]): Promise<DataDrivenReport> {
+  const { data } = await api.post('/api-automation/datadriven', { endpoint, rows }, { timeout: 180_000 });
+  return data;
+}
+
+/* ── Schedules (opt-in recurring runs) ── */
+export interface ApiSchedule {
+  id: string; name: string; endpointCount: number; environmentId?: string; coverage?: string;
+  intervalMinutes: number; execute: boolean; heal: boolean; enabled: boolean; createdBy?: string;
+  nextRunAt?: string; lastRunAt?: string; lastRunId?: string; lastStatus?: string; lastSummary?: string;
+  createdAt: string; updatedAt: string;
+}
+export async function listApiSchedules(): Promise<{ schedules: ApiSchedule[] }> {
+  const { data } = await api.get('/api-automation/schedules');
+  return data;
+}
+export async function createApiSchedule(input: { name: string; endpoints: any[]; environmentId?: string; coverage?: string; intervalMinutes?: number; execute?: boolean; heal?: boolean; enabled?: boolean }): Promise<{ schedule: ApiSchedule }> {
+  const { data } = await api.post('/api-automation/schedules', input);
+  return data;
+}
+export async function updateApiSchedule(id: string, input: Partial<{ name: string; endpoints: any[]; environmentId: string; coverage: string; intervalMinutes: number; execute: boolean; heal: boolean; enabled: boolean }>): Promise<{ schedule: ApiSchedule }> {
+  const { data } = await api.put(`/api-automation/schedules/${id}`, input);
+  return data;
+}
+export async function deleteApiSchedule(id: string): Promise<{ ok: boolean }> {
+  const { data } = await api.delete(`/api-automation/schedules/${id}`);
+  return data;
+}
+export async function runApiScheduleNow(id: string): Promise<{ ok: boolean; message: string }> {
+  const { data } = await api.post(`/api-automation/schedules/${id}/run`, {});
+  return data;
+}
+
+/* ── Webhooks (opt-in run notifications) ── */
+export interface ApiWebhook {
+  id: string; name: string; url: string; kind: 'slack' | 'teams' | 'generic'; hasSecret: boolean;
+  onFailureOnly: boolean; enabled: boolean; createdBy?: string; lastStatus?: string; lastSentAt?: string;
+  createdAt: string; updatedAt: string;
+}
+export async function listApiWebhooks(): Promise<{ webhooks: ApiWebhook[] }> {
+  const { data } = await api.get('/api-automation/webhooks');
+  return data;
+}
+export async function createApiWebhook(input: { name: string; url: string; kind?: string; secret?: string; onFailureOnly?: boolean; enabled?: boolean }): Promise<{ webhook: ApiWebhook }> {
+  const { data } = await api.post('/api-automation/webhooks', input);
+  return data;
+}
+export async function updateApiWebhook(id: string, input: Partial<{ name: string; url: string; kind: string; secret: string; onFailureOnly: boolean; enabled: boolean }>): Promise<{ webhook: ApiWebhook }> {
+  const { data } = await api.put(`/api-automation/webhooks/${id}`, input);
+  return data;
+}
+export async function deleteApiWebhook(id: string): Promise<{ ok: boolean }> {
+  const { data } = await api.delete(`/api-automation/webhooks/${id}`);
+  return data;
+}
+export async function testApiWebhook(id: string): Promise<{ ok: boolean }> {
+  const { data } = await api.post(`/api-automation/webhooks/${id}/test`, {}, { timeout: 20_000 });
+  return data;
+}
+/** Fire-and-forget: notify configured webhooks about a run the UI just finished. */
+export async function notifyApiRun(notification: {
+  title: string; runId?: string; reportUrl?: string; status: 'passed' | 'failed';
+  stats?: { total: number; passed: number; failed: number; notRun: number; passRate: number };
+  failures?: { title: string; error?: string }[];
+}): Promise<{ sent: number; failed: number }> {
+  const { data } = await api.post('/api-automation/notify', { notification }, { timeout: 15_000 });
+  return data;
+}
+
+export async function listApiEnvironments(): Promise<{ environments: any[] }> {
+  const { data } = await api.get('/api-automation/environments');
+  return data;
+}
+export async function createApiEnvironment(input: { name: string; baseUrl?: string; variables?: any[]; isDefault?: boolean }): Promise<{ environment: any }> {
+  const { data } = await api.post('/api-automation/environments', input);
+  return data;
+}
+export async function updateApiEnvironment(id: string, input: { name?: string; baseUrl?: string; variables?: any[]; isDefault?: boolean }): Promise<{ environment: any }> {
+  const { data } = await api.put(`/api-automation/environments/${encodeURIComponent(id)}`, input);
+  return data;
+}
+export async function deleteApiEnvironment(id: string): Promise<void> {
+  await api.delete(`/api-automation/environments/${encodeURIComponent(id)}`);
+}
+/** Resolve {{vars}} + base URL server-side (secrets never leave the server in a list). */
+export async function resolveApiEnvironment(id: string, endpoints: any[]): Promise<{ endpoints: any[]; environment: { id: string; name: string; baseUrl: string } }> {
+  const { data } = await api.post(`/api-automation/environments/${encodeURIComponent(id)}/resolve`, { endpoints });
+  return data;
+}
+
+/** The dashboard roll-up; `fresh` bypasses the server's short cache (Refresh, post-run reload). */
+export async function getApiOverview(fresh = false): Promise<any> {
+  const { data } = await api.get('/api-automation/overview', { timeout: 60_000, params: fresh ? { fresh: 1 } : undefined });
+  return data;
+}
+
+export async function listApiRuns(page = 1, pageSize = 20): Promise<{ items: any[]; total: number; page: number; pageSize: number }> {
+  const { data } = await api.get('/api-automation/runs', { params: { page, pageSize }, timeout: 60_000 });
+  return data;
+}
+export async function getApiRun(id: string): Promise<any> {
+  const { data } = await api.get(`/api-automation/runs/${encodeURIComponent(id)}`, { timeout: 60_000 });
+  return data;
+}
+export async function listApiImports(limit = 50): Promise<{ items: any[] }> {
+  const { data } = await api.get('/api-automation/imports', { params: { limit } });
   return data;
 }
 
@@ -347,6 +816,18 @@ export async function generateTests(
      *  requirements target. Required whenever the tenant has more than one
      *  application configured, so generation is grounded in the right one. */
     appId?: string;
+    /** API Automation — the structured endpoint from the chat API form. When
+     *  present the backend generates real HTTP test cases + Playwright request
+     *  specs and needs no configured browser application. */
+    apiSpec?: ApiSpecPayload;
+    /** API Automation, multi-endpoint — several selected endpoints from an
+     *  imported collection/spec. The backend generates a suite for each and
+     *  merges them into one aggregated set of cases + specs. */
+    apiSpecs?: ApiSpecPayload[];
+    /** API Automation — the test layers the reviewer switched on. */
+    apiLayers?: string[];
+    /** API Automation — AI insights from the deep analysis, as generator context. */
+    apiProfile?: { insights?: string[] } | null;
   },
 ) {
   const body = {
@@ -359,6 +840,10 @@ export async function generateTests(
     explorePrompt: options?.explorePrompt,
     roles: options?.roles,
     appId: options?.appId,
+    apiSpec: options?.apiSpec,
+    apiSpecs: options?.apiSpecs,
+    apiLayers: options?.apiLayers,
+    apiProfile: options?.apiProfile,
   };
   const post = () => api.post('/generate', body, { timeout: PIPELINE_TIMEOUT_MS });
 
@@ -406,6 +891,28 @@ export async function executeTests(
 export interface GeneratedPageObject { path: string; className: string; module: string; methods: string[]; code: string; }
 /** A generated spec, with its POM destination path + the page objects it imports. */
 export interface GeneratedScript { testCaseId: string; fileName: string; code: string; path?: string; uses?: string[]; }
+
+/** The endpoint definition the API Studio sends to every pipeline stage. */
+export interface ApiSpecPayload {
+  method: string;
+  url: string;
+  headers?: { key: string; value: string }[];
+  auth?: { type: string; value?: string; headerName?: string };
+  body?: string;
+  expectedStatus?: number;
+  expectedResponse?: string;
+  /** How wide a scenario net the generator should cast. */
+  coverage?: 'essential' | 'standard' | 'exhaustive';
+}
+
+/** Marks a run as API Automation and carries the endpoint's contract with it.
+ *  Execution uses the endpoint's own origin as its target (the request specs
+ *  carry absolute URLs, so this is just the baseURL); healing needs the spec to
+ *  tell an API defect apart from a test that asserted the wrong thing. */
+export interface ApiRunOptions {
+  mode: 'api';
+  apiSpec: ApiSpecPayload;
+}
 
 /** An inline target-application override for runs when no Application is
  *  configured under System Configuration. The URL/credentials the user types in
@@ -467,8 +974,8 @@ async function pollPipelineJob<T>(jobId: string, deadlineMs: number = PIPELINE_T
  *  Pass testRunId (the saved run) so the Allure report is built for that run and
  *  shows up on the Reports page. `target` supplies an inline URL when no app is configured.
  *  Runs as a detached server job + polling so long Playwright runs survive ingress timeouts. */
-export async function executePipeline(testCases: any[], scripts: any[], pageObjects: any[] = [], appId?: string, testRunId?: string, target?: TargetOverride) {
-  const body = { testCases, scripts, pageObjects, appId, testRunId, ...targetBody(target) };
+export async function executePipeline(testCases: any[], scripts: any[], pageObjects: any[] = [], appId?: string, testRunId?: string, target?: TargetOverride, apiRun?: ApiRunOptions) {
+  const body = { testCases, scripts, pageObjects, appId, testRunId, ...targetBody(target), ...(apiRun || {}) };
   const { data: started } = await api.post('/pipeline-flow/execute/start', body, { timeout: 60_000 });
   return pollPipelineJob<{
     executionDetails: { testCaseId: string; scenario: string; status: string; durationMs?: number; error?: string }[];
@@ -499,8 +1006,9 @@ export async function healPipeline(
   appId?: string,
   testRunId?: string,
   target?: TargetOverride,
+  apiRun?: ApiRunOptions,
 ) {
-  const body = { testCases, scripts, executionDetails, pageObjects, appId, testRunId, ...targetBody(target) };
+  const body = { testCases, scripts, executionDetails, pageObjects, appId, testRunId, ...targetBody(target), ...(apiRun || {}) };
   const { data: started } = await api.post('/pipeline-flow/heal/start', body, { timeout: 60_000 });
   // Live healing replays each failing scenario in a real browser and then
   // re-executes the suite — allow up to 30 minutes of polling.
@@ -734,6 +1242,8 @@ export interface ReportHistoryItem {
   submodule: string | null;
   createdBy: string | null;
   origin: string;
+  /** 'api' = API Automation run, 'web' = Web Application Automation run. */
+  kind: 'api' | 'web';
 }
 export interface ReportHistoryResponse {
   items: ReportHistoryItem[];
@@ -741,10 +1251,10 @@ export interface ReportHistoryResponse {
   page: number;
   pageSize: number;
   totalPages: number;
-  facets: { sources: string[] };
+  facets: { sources: string[]; kinds?: { all: number; api: number; web: number } };
 }
 
-export async function getReportsHistory(params: { page?: number; pageSize?: number; source?: string; type?: string; search?: string } = {}) {
+export async function getReportsHistory(params: { page?: number; pageSize?: number; source?: string; type?: string; kind?: 'api' | 'web'; search?: string } = {}) {
   const { data } = await api.get('/reports/history', { params });
   return data as ReportHistoryResponse;
 }

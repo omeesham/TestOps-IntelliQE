@@ -35,11 +35,15 @@ router.post('/generate', authMiddleware, async (req: Request, res: Response) => 
     if (!req.body?.force) {
       await restoreReport(user.tenantId, runId).catch(() => 'missing');
       const existing = await getReportStatus(user.tenantId, runId);
-      if (existing.exists) {
+      // Short-circuit only on an ALLURE report. `exists` is true as soon as the
+      // Playwright "Basic" report is present, so testing it here made this
+      // endpoint refuse to build Allure for precisely the runs that lack it —
+      // and hand back an allure/index.html URL that 404s.
+      if (existing.allureReportUrl) {
         res.json({
           ok: true,
           generatedAt: existing.generatedAt,
-          reportUrl: `/api/allure/report/${user.tenantId}/${runId}/allure/index.html`,
+          reportUrl: existing.allureReportUrl,
         });
         return;
       }

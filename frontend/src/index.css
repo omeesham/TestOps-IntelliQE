@@ -360,3 +360,262 @@ tbody tr {
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08) !important;
   filter: saturate(0.7);
 }
+
+/* ══════════════════════════════════════════════════════════════
+   12 ▸ IntelliQE 3D — the full-depth surface language
+   Every surface in the app reads as a physical object: RAISED things
+   (cards, keys, chips, tiles) carry a white highlight along their top edge
+   and a violet-tinted drop shadow; RECESSED things (inputs, wells, table
+   bodies, progress troughs) carry an inner shadow; PRESSABLE things (every
+   button) have a hard bottom edge that collapses when clicked.
+
+   Purely presentational, applied globally by pattern. The API Automation
+   workspace hand-tunes the same language in Tailwind, so it opts out with
+   data-surface="3d" and nothing here touches it.
+   ══════════════════════════════════════════════════════════════ */
+
+/* Shared tokens */
+:root {
+  --iq-edge: #4338CA;                       /* keycap edge under a violet key */
+  --iq-edge-soft: #DDD6FE;                  /* keycap edge under a white key   */
+  --iq-hi: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --iq-raise:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 2px rgba(15, 23, 42, 0.05),
+    0 14px 30px -18px rgba(76, 29, 149, 0.42);
+  --iq-raise-hover:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 2px 4px rgba(15, 23, 42, 0.05),
+    0 22px 40px -18px rgba(76, 29, 149, 0.52);
+  --iq-inset:
+    inset 0 1.5px 3px rgba(30, 27, 75, 0.09),
+    inset 0 0 0 1px rgba(221, 214, 254, 0.35);
+  --iq-chip:
+    inset 0 1px 0 rgba(255, 255, 255, 0.75),
+    0 1px 2px rgba(30, 27, 75, 0.10);
+}
+
+/* 12.1 ▸ Page backdrop — deeper light pools so raised surfaces have
+         something to float above. */
+main:not([data-surface="3d"] *) {
+  background-image:
+    radial-gradient(1100px 520px at 8% -5%, rgba(124, 58, 237, 0.13), transparent 60%),
+    radial-gradient(900px 480px at 100% 0%, rgba(99, 102, 241, 0.12), transparent 55%),
+    radial-gradient(1000px 620px at 50% 112%, rgba(6, 182, 212, 0.07), transparent 62%);
+}
+
+/* 12.2 ▸ Cards — anything white with a rounded corner and a border or a
+         shadow is a raised panel. Modals are excluded (12.7 handles them). */
+:where(.bg-white):where(.rounded-xl, .rounded-2xl, .rounded-lg):where(.border, [class*="border-"], .shadow-sm, .shadow-md, .shadow-lg, .shadow):not(.fixed.inset-0 > *):not([data-surface="3d"] *):not(.rounded-full) {
+  background-image: linear-gradient(180deg, #ffffff 0%, #FCFBFF 100%);
+  border-color: #E9E5FB;
+  box-shadow: var(--iq-raise);
+  transition: box-shadow 0.25s ease, transform 0.2s ease, border-color 0.25s ease;
+}
+/* Only compact cards (no tables / editors / frames inside) lift on hover —
+   a lifting form or data grid would be distracting. */
+:where(.bg-white):where(.rounded-xl, .rounded-2xl, .rounded-lg):where(.border, [class*="border-"], .shadow-sm, .shadow-md, .shadow-lg, .shadow):not(.fixed.inset-0 > *):not([data-surface="3d"] *):not(.rounded-full):not(:has(table, textarea, iframe, form, .fixed)):hover {
+  box-shadow: var(--iq-raise-hover);
+  transform: translateY(-2px);
+}
+
+/* Tinted tiles (stat blocks, callouts) get the same emboss on their own colour. */
+:where(div, section, li)[class*="bg-[#F5F3FF]"]:where(.rounded-lg, .rounded-xl, .rounded-2xl):not(button):not([data-surface="3d"] *),
+:where(div, section, li)[class*="bg-[#EDE9FE]"]:where(.rounded-lg, .rounded-xl, .rounded-2xl):not(button):not([data-surface="3d"] *),
+:where(div, section, li).bg-gray-50:where(.rounded-lg, .rounded-xl, .rounded-2xl):not(button):not([data-surface="3d"] *) {
+  box-shadow: var(--iq-hi), 0 1px 2px rgba(30, 27, 75, 0.06), 0 8px 18px -14px rgba(76, 29, 149, 0.35);
+}
+
+/* 12.3 ▸ Buttons — every button is a key.
+         Violet keys: gradient face, hard indigo edge, violet glow. */
+button[class*="bg-[#7C3AED]"]:not([data-surface="3d"] *),
+button[class*="bg-[#6D28D9]"]:not([data-surface="3d"] *),
+button[class*="from-[#7C3AED]"]:not([data-surface="3d"] *),
+button[class*="from-[#8B5CF6]"]:not([data-surface="3d"] *),
+button[class*="from-violet-6"]:not([data-surface="3d"] *),
+button.bg-primary:not([data-surface="3d"] *),
+button[class*="bg-violet-6"]:not([data-surface="3d"] *),
+button[class*="bg-indigo-6"]:not([data-surface="3d"] *) {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 3px 0 0 var(--iq-edge),
+    0 8px 18px -6px rgba(99, 102, 241, 0.55);
+}
+button[class*="bg-[#7C3AED]"]:not(:disabled):not([data-surface="3d"] *):hover,
+button[class*="bg-[#6D28D9]"]:not(:disabled):not([data-surface="3d"] *):hover,
+button[class*="from-[#7C3AED]"]:not(:disabled):not([data-surface="3d"] *):hover,
+button[class*="from-[#8B5CF6]"]:not(:disabled):not([data-surface="3d"] *):hover,
+button[class*="from-violet-6"]:not(:disabled):not([data-surface="3d"] *):hover,
+button.bg-primary:not(:disabled):not([data-surface="3d"] *):hover,
+button[class*="bg-violet-6"]:not(:disabled):not([data-surface="3d"] *):hover,
+button[class*="bg-indigo-6"]:not(:disabled):not([data-surface="3d"] *):hover {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 4px 0 0 var(--iq-edge),
+    0 12px 24px -6px rgba(99, 102, 241, 0.6);
+}
+button[class*="bg-[#7C3AED]"]:not(:disabled):not([data-surface="3d"] *):active,
+button[class*="bg-[#6D28D9]"]:not(:disabled):not([data-surface="3d"] *):active,
+button[class*="from-[#7C3AED]"]:not(:disabled):not([data-surface="3d"] *):active,
+button[class*="from-[#8B5CF6]"]:not(:disabled):not([data-surface="3d"] *):active,
+button[class*="from-violet-6"]:not(:disabled):not([data-surface="3d"] *):active,
+button.bg-primary:not(:disabled):not([data-surface="3d"] *):active,
+button[class*="bg-violet-6"]:not(:disabled):not([data-surface="3d"] *):active,
+button[class*="bg-indigo-6"]:not(:disabled):not([data-surface="3d"] *):active {
+  transform: translateY(3px) scale(1);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 0 0 0 var(--iq-edge),
+    0 4px 10px -6px rgba(99, 102, 241, 0.5);
+  filter: none;
+}
+/* Red and green keys keep their own colour, with a matching edge. */
+button[class*="bg-red-6"]:not([data-surface="3d"] *), button[class*="bg-red-7"]:not([data-surface="3d"] *) {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 3px 0 0 #991B1B, 0 8px 18px -6px rgba(239, 68, 68, 0.5);
+}
+button[class*="bg-emerald-6"]:not([data-surface="3d"] *), button[class*="bg-emerald-7"]:not([data-surface="3d"] *) {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 3px 0 0 #047857, 0 8px 18px -6px rgba(16, 185, 129, 0.5);
+}
+button[class*="bg-red-6"]:not(:disabled):not([data-surface="3d"] *):active, button[class*="bg-red-7"]:not(:disabled):not([data-surface="3d"] *):active,
+button[class*="bg-emerald-6"]:not(:disabled):not([data-surface="3d"] *):active, button[class*="bg-emerald-7"]:not(:disabled):not([data-surface="3d"] *):active {
+  transform: translateY(3px) scale(1);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.18);
+}
+/* White / light keys: soft violet edge, same press. */
+button.bg-white:not([data-surface="3d"] *):not(.rounded-full),
+button[class*="bg-gray-100"]:not([data-surface="3d"] *):not(.rounded-full),
+button[class*="bg-gray-50"]:not([data-surface="3d"] *):not(.rounded-full),
+button[class*="bg-[#F5F3FF]"]:not([data-surface="3d"] *):not(.rounded-full),
+button[class*="bg-[#EDE9FE]"]:not([data-surface="3d"] *):not(.rounded-full) {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0));
+  box-shadow: var(--iq-hi), 0 2px 0 0 var(--iq-edge-soft), 0 6px 14px -8px rgba(76, 29, 149, 0.35);
+}
+button.bg-white:not(:disabled):not([data-surface="3d"] *):not(.rounded-full):hover,
+button[class*="bg-gray-100"]:not(:disabled):not([data-surface="3d"] *):not(.rounded-full):hover,
+button[class*="bg-gray-50"]:not(:disabled):not([data-surface="3d"] *):not(.rounded-full):hover,
+button[class*="bg-[#F5F3FF]"]:not(:disabled):not([data-surface="3d"] *):not(.rounded-full):hover,
+button[class*="bg-[#EDE9FE]"]:not(:disabled):not([data-surface="3d"] *):not(.rounded-full):hover {
+  box-shadow: var(--iq-hi), 0 3px 0 0 #C4B5FD, 0 10px 18px -8px rgba(76, 29, 149, 0.45);
+}
+button.bg-white:not(:disabled):not([data-surface="3d"] *):not(.rounded-full):active,
+button[class*="bg-gray-100"]:not(:disabled):not([data-surface="3d"] *):not(.rounded-full):active,
+button[class*="bg-gray-50"]:not(:disabled):not([data-surface="3d"] *):not(.rounded-full):active,
+button[class*="bg-[#F5F3FF]"]:not(:disabled):not([data-surface="3d"] *):not(.rounded-full):active,
+button[class*="bg-[#EDE9FE]"]:not(:disabled):not([data-surface="3d"] *):not(.rounded-full):active {
+  transform: translateY(2px) scale(1);
+  box-shadow: var(--iq-hi), 0 0 0 0 var(--iq-edge-soft), 0 2px 6px -6px rgba(76, 29, 149, 0.3);
+}
+button:disabled:not([data-surface="3d"] *) {
+  transform: none;
+  box-shadow: 0 1px 0 0 #EDE9FE;
+}
+
+/* 12.4 ▸ Inputs — recessed into the surface, rising to white on focus. */
+select:not([data-surface="3d"] *),
+textarea:not([data-surface="3d"] *),
+input:not([type="radio"]):not([type="checkbox"]):not([type="range"]):not([type="file"]):not([data-surface="3d"] *) {
+  background-color: #FCFBFF;
+  box-shadow: var(--iq-inset);
+}
+select:not([data-surface="3d"] *):focus,
+textarea:not([data-surface="3d"] *):focus,
+input:not([type="radio"]):not([type="checkbox"]):not([type="range"]):not([type="file"]):not([data-surface="3d"] *):focus {
+  background-color: #ffffff;
+  box-shadow: var(--iq-inset), 0 0 0 3px rgba(237, 233, 254, 0.9);
+}
+input[type="checkbox"]:not([data-surface="3d"] *),
+input[type="radio"]:not([data-surface="3d"] *) {
+  box-shadow: inset 0 1px 2px rgba(30, 27, 75, 0.12);
+}
+
+/* 12.5 ▸ Tables — bevelled header strip, recessed body, violet edge on the
+         hovered row. */
+thead:not([data-surface="3d"] *) {
+  background-image: linear-gradient(180deg, #FAFAFE 0%, #F3F1FB 100%);
+  box-shadow: inset 0 -1px 0 #E9E5FB, inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+thead:not([data-surface="3d"] *) th { background-color: transparent; }
+tbody:not([data-surface="3d"] *) tr:hover {
+  box-shadow: inset 3px 0 0 0 #C4B5FD;
+}
+
+/* 12.6 ▸ Chips & pills — small embossed labels. Progress bars are troughs. */
+:where(span, div).rounded-full:where([class*="px-2"], [class*="px-3"], [class*="px-1.5"]):where([class*="text-xs"], [class*="text-[1"], [class*="text-sm"]):not(button):not([data-surface="3d"] *) {
+  box-shadow: var(--iq-chip);
+}
+:where(div).rounded-full.overflow-hidden:not([data-surface="3d"] *) {
+  box-shadow: inset 0 1px 2px rgba(30, 27, 75, 0.16);
+}
+:where(div).rounded-full.overflow-hidden:not([data-surface="3d"] *) > * {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+/* 12.7 ▸ Modals & drawers — a sheet floating high over the page. */
+:where(.fixed.inset-0) > :where(div.bg-white, div[class*="bg-white"]) {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 1px 0 rgba(255, 255, 255, 0.4),
+    0 48px 90px -28px rgba(30, 27, 75, 0.6),
+    0 18px 36px -18px rgba(76, 29, 149, 0.45);
+}
+
+/* 12.8 ▸ Icon tiles — violet gradient squircles become keycaps. */
+:where(div, span)[class*="bg-gradient-to-br"][class*="from-[#7C3AED]"]:not(button):not([data-surface="3d"] *),
+:where(div, span)[class*="bg-gradient-to-br"][class*="from-[#8B5CF6]"]:not(button):not([data-surface="3d"] *) {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    0 3px 0 0 var(--iq-edge),
+    0 8px 16px -6px rgba(124, 58, 237, 0.6);
+}
+
+/* 12.9 ▸ Header — floats above the page; the footer is a bevelled sill. */
+header.h-14:not([data-surface="3d"] *) {
+  box-shadow:
+    inset 0 -1px 0 rgba(221, 214, 254, 0.6),
+    0 8px 24px -16px rgba(76, 29, 149, 0.45);
+}
+footer:not([data-surface="3d"] *) {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 -6px 18px -16px rgba(30, 27, 75, 0.35);
+}
+
+/* 12.10 ▸ Sidebar — a carved panel: right-edge shadow, embossed logo bar,
+          the active item a lit key with an indigo edge, hover items rise. */
+aside[class*="1E1B4B"] {
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.05), 8px 0 28px -18px rgba(0, 0, 0, 0.6);
+  position: relative;
+  z-index: 20;
+}
+aside[class*="1E1B4B"] > div:first-child {
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.06), 0 6px 16px -12px rgba(0, 0, 0, 0.6);
+}
+aside[class*="1E1B4B"] nav a {
+  transition: transform 0.16s ease, box-shadow 0.2s ease, background-color 0.2s ease, color 0.2s ease;
+}
+aside[class*="1E1B4B"] nav a[class*="from-[#7C3AED]"] {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 3px 0 0 #3730A3,
+    0 10px 22px -8px rgba(124, 58, 237, 0.75);
+  transform: translateY(-1px);
+}
+aside[class*="1E1B4B"] nav a:not([class*="from-[#7C3AED]"]):hover {
+  background-color: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 2px 0 0 rgba(0, 0, 0, 0.35), 0 8px 16px -10px rgba(0, 0, 0, 0.6);
+  transform: translateY(-1px);
+}
+aside[class*="1E1B4B"] nav a:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.35);
+}
+aside[class*="1E1B4B"] button {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 2px 0 0 rgba(0, 0, 0, 0.35);
+}
+
+/* 12.11 ▸ Segmented controls — the selected segment is a raised thumb in a
+          recessed rail. */
+:where(div)[class*="bg-gray-100"].rounded-lg:has(> button):not([data-surface="3d"] *),
+:where(div)[class*="bg-gray-100"].rounded-xl:has(> button):not([data-surface="3d"] *),
+:where(div)[class*="bg-[#EDE9FE]"].rounded-lg:has(> button):not([data-surface="3d"] *) {
+  box-shadow: inset 0 1px 3px rgba(30, 27, 75, 0.12);
+}

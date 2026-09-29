@@ -184,6 +184,10 @@ router.get('/history', async (req: Request, res: Response) => {
     const pageSize = Math.min(50, Math.max(1, parseInt(String(req.query.pageSize ?? '10'), 10) || 10));
     const sourceFilter = req.query.source ? String(req.query.source).toLowerCase() : '';
     const typeFilter = req.query.type ? String(req.query.type).toLowerCase() : ''; // 'allure' | 'basic'
+    // Automation kind — 'api' (API Automation) vs 'web' (Web Application
+    // Automation). Lets the Reports page show each kind separately so API and
+    // browser runs aren't mixed together.
+    const kindFilter = req.query.kind ? String(req.query.kind).toLowerCase() : ''; // 'api' | 'web'
     const search = req.query.search ? String(req.query.search).toLowerCase() : '';
 
     // Product rule: the Reports page shows the LATEST 10 reports only —
@@ -204,6 +208,20 @@ router.get('/history', async (req: Request, res: Response) => {
       for (const r of rows) runMeta.set(String(r.id).toUpperCase(), r);
     } catch { /* history still works without run metadata */ }
 
+    // Classify each run as API vs Web automation. API Automation tags every one
+    // of its test cases with module 'API' (see apiGeneratorAgent); browser runs
+    // never do. So a run whose test cases include module 'API' is an API run.
+    const apiRunIds = new Set<string>();
+    try {
+      const { rows } = await pool.query(
+        `SELECT DISTINCT tc.test_run_id AS id
+           FROM test_cases tc JOIN test_runs tr ON tc.test_run_id = tr.id
+          WHERE tr.tenant_id = $1 AND tc.module = 'API'`,
+        [user.tenantId],
+      );
+      for (const r of rows) apiRunIds.add(String(r.id).toUpperCase());
+    } catch { /* history still works without the API classification */ }
+
     let items = reports.map((r) => {
       const m = runMeta.get(r.runId.toUpperCase());
       const isChat = r.runId.startsWith('chat-');
@@ -221,11 +239,14 @@ router.get('/history', async (req: Request, res: Response) => {
         submodule: m?.submodule || null,
         createdBy: m?.created_by || null,
         origin: m ? 'Saved run' : (isChat ? 'Chat run' : 'Ad-hoc run'),
+        // 'api' = API Automation run, 'web' = Web Application Automation run.
+        kind: apiRunIds.has(r.runId.toUpperCase()) ? 'api' : 'web',
       };
     });
 
     if (sourceFilter) items = items.filter((i) => (i.source || '').toLowerCase() === sourceFilter);
     if (typeFilter) items = items.filter((i) => i.reportType === typeFilter);
+    if (kindFilter === 'api' || kindFilter === 'web') items = items.filter((i) => i.kind === kindFilter);
     if (search) items = items.filter((i) =>
       `${i.story || ''} ${i.storyKey || ''} ${i.module || ''} ${i.runId}`.toLowerCase().includes(search));
 
@@ -235,6 +256,11 @@ router.get('/history', async (req: Request, res: Response) => {
       return m?.source || (r.runId.startsWith('chat-') ? 'chat' : 'ad-hoc');
     }))).filter(Boolean);
 
+    // Kind counts (from the full latest-N window) so the Web / API tabs can
+    // show how many reports each holds.
+    const apiCount = reports.reduce((n, r) => n + (apiRunIds.has(r.runId.toUpperCase()) ? 1 : 0), 0);
+    const kinds = { all: reports.length, api: apiCount, web: reports.length - apiCount };
+
     const total = items.length;
     const start = (page - 1) * pageSize;
     res.json({
@@ -243,7 +269,7 @@ router.get('/history', async (req: Request, res: Response) => {
       page,
       pageSize,
       totalPages: Math.max(1, Math.ceil(total / pageSize)),
-      facets: { sources },
+      facets: { sources, kinds },
     });
   } catch (err: any) {
     console.error('Reports history error:', err.message);

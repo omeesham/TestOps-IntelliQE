@@ -12,6 +12,7 @@ import SsoCallbackPage from '@/pages/SsoCallbackPage';
 import ReportsPage from '@/pages/ReportsPage';
 import SystemConfigurationPage from '@/pages/SystemConfigurationPage';
 import GeneratedTestCasesPage from '@/pages/GeneratedTestCasesPage';
+import ApiAutomationPage from '@/pages/ApiAutomationPage';
 import UserManagementPage from '@/pages/UserManagementPage';
 import BugTrackerPage from '@/pages/BugTrackerPage';
 import FeatureTogglesPage from '@/pages/FeatureTogglesPage';
@@ -64,6 +65,9 @@ function AppRoutes() {
         {/* /chat is rendered persistently inside Layout to preserve running flows */}
         <Route path="/chat" element={null} />
         <Route path="/generated-tests" element={<FeatureRoute feature="generated-tests" name="Generated Test Cases"><GeneratedTestCasesPage /></FeatureRoute>} />
+        <Route path="/automation" element={<FeatureRoute feature="api-automation" name="API Automation"><ApiAutomationPage /></FeatureRoute>} />
+        {/* Backward-compat: the earlier example path collided with the /api proxy prefix. */}
+        <Route path="/api-automation" element={<Navigate to="/automation" replace />} />
         <Route path="/reports" element={<FeatureRoute feature="reports" name="Reports"><ReportsPage /></FeatureRoute>} />
         <Route path="/bug-tracker" element={<FeatureRoute feature="bug-tracker" name="Bug Tracker"><BugTrackerPage /></FeatureRoute>} />
         <Route path="/ada-compliance" element={<FeatureRoute feature="ada-compliance" name="ADA Compliance"><AdaCompliancePage /></FeatureRoute>} />

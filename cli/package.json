@@ -1,0 +1,11 @@
+{
+  "name": "@intelliqe/api-cli",
+  "version": "1.0.0",
+  "description": "Command-line interface for IntelliQE API Automation — import, analyze, run and inspect API test runs over the public REST API.",
+  "type": "module",
+  "bin": { "intelliqe-api": "./intelliqe-api.mjs" },
+  "files": ["intelliqe-api.mjs", "README.md"],
+  "engines": { "node": ">=18" },
+  "license": "UNLICENSED",
+  "private": true
+}

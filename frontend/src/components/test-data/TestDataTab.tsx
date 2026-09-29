@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Database, FileText, ArrowRightLeft, ShieldCheck, Loader2, HardDrive, Globe, Cpu } from 'lucide-react';
+import { Database, FileText, ArrowRightLeft, ShieldCheck, HardDrive, Globe, Cpu } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import { getTestData } from '../../services/api';
 import type { TestDataset, TestFieldData, TestDataMapping, DataValidationExpectation } from '../../types';
 
@@ -40,7 +41,7 @@ export default function TestDataTab({ runId }: TestDataTabProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16 text-gray-400">
-        <Loader2 className="w-5 h-5 animate-spin mr-2" />
+        <Spinner className="w-5 h-5 animate-spin mr-2" />
         Loading test data...
       </div>
     );

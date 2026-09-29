@@ -56,7 +56,10 @@ export interface SharePointDocDetails {
   /** Extracted plain text (via document-parser.service) */
   text: string;
   pageCount?: number;
+  /** Content was lost or degraded during extraction — treat the text with care. */
   warning?: string;
+  /** What was read, for confirmation — informational, not a problem. */
+  notice?: string;
   webUrl?: string;
 }
 
@@ -193,6 +196,7 @@ export async function getDocument(creds: SharePointCreds, itemId: string): Promi
     text: parsed.text,
     pageCount: parsed.pageCount,
     warning: parsed.warning,
+    notice: parsed.notice,
     webUrl: meta.webUrl,
   };
 }

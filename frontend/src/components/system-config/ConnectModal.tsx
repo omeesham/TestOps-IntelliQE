@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { X, Plug, Loader2, Eye, EyeOff, Send, CheckCircle, AlertCircle } from 'lucide-react';
+import { X, Plug, Eye, EyeOff, Send, CheckCircle, AlertCircle } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import type { CatalogItem } from './integrationCatalog';
 import { normalizeError } from '@/utils/apiError';
 
@@ -111,7 +112,7 @@ export default function ConnectModal({ integration, saving, error, onSave, onClo
               disabled={testing || saving}
               className="flex items-center gap-2 px-4 py-2 border border-[#7C3AED] text-[#7C3AED] rounded-lg text-sm font-medium hover:bg-[#F5F3FF] transition-all disabled:opacity-50"
             >
-              {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              {testing ? <Spinner className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
               {testing ? 'Testing…' : testLabel}
             </button>
           )}
@@ -120,7 +121,7 @@ export default function ConnectModal({ integration, saving, error, onSave, onClo
             disabled={saving}
             className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white rounded-lg text-sm font-medium hover:from-[#6D28D9] hover:to-[#4F46E5] shadow-md shadow-purple-500/20 transition-all disabled:opacity-50"
           >
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plug className="w-4 h-4" />}
+            {saving ? <Spinner className="w-4 h-4 animate-spin" /> : <Plug className="w-4 h-4" />}
             {saving ? 'Connecting...' : 'Connect'}
           </button>
         </div>

@@ -32,20 +32,29 @@ npm run report           # open last HTML report
 playwright.config.ts        # Playwright config (testDir ./tests)
 package.json  tsconfig.json  .env.example
 src/
-├── pages/                  # page objects
+├── pages/                  # page objects (UI tests)
 │   ├── base.page.ts        # BasePage every page object extends
 │   ├── <module>/           # e.g. auth/login.page.ts
 │   └── components/         # shared mixins/components
+├── api/                    # service objects (API tests)
+│   ├── base.api.ts         # BaseApi every service object extends
+│   └── <module>/           # e.g. users/users.api.ts
 ├── fixtures/               # pages.fixture.ts (test/expect), matchers.ts
 ├── utils/                  # env.ts (config), test-data.ts (loader)
 ├── data/                   # JSON fixtures (non-sensitive)
 └── types/                  # shared TypeScript types
 tests/
-└── <module>/<name>.spec.ts # specs drive scenarios through page objects
+├── <module>/<name>.spec.ts # UI specs drive scenarios through page objects
+└── api/<name>.spec.ts      # API specs drive requests through service objects
 ```
 
 Specs talk to **page objects**, never to raw selectors. When the UI changes,
 fix the page object under `src/pages/`, not the tests.
+
+API specs follow the same pattern with **service objects**: they call a method
+on a class under `src/api/` and assert on the response — they never build a URL,
+set a header or serialise a payload. When an endpoint moves or its auth scheme
+changes, fix the service object under `src/api/`, not the tests.
 
 ## Configuration
 
