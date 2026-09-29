@@ -25,7 +25,7 @@ export default function RunsView({ run, openRunId, onOpenRun, onShowReport }: Pr
   if (openRunId) return <RunDetail runId={openRunId} onBack={() => onOpenRun(null)} />;
   return (
     <div className="h-full overflow-y-auto">
-      <div className="px-6 py-5 space-y-4">
+      <div className="px-6 py-4 space-y-3">
         {run.started && <LiveRun run={run} onShowReport={onShowReport} />}
         <History onOpen={onOpenRun} refreshKey={run.phase === 'report' ? run.testRunId : ''} />
       </div>
@@ -165,7 +165,7 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="px-6 py-5 space-y-3">
+      <div className="px-6 py-4 space-y-3">
         <div className="flex items-center gap-2">
           <button type="button" onClick={onBack} className={SECONDARY_BTN}><ChevronLeft className="w-3.5 h-3.5" />All runs</button>
           {detail && (

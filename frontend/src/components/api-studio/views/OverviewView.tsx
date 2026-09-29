@@ -40,7 +40,7 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="px-6 py-5 space-y-4">
+      <div className="px-6 py-4 space-y-3">
         {/* Workspace state — the next step */}
         <div className={`${CARD} p-4 flex items-center gap-4 flex-wrap`}>
           <div className="flex items-center gap-3">
