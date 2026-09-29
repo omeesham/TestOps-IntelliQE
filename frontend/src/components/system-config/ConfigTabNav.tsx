@@ -1,6 +1,6 @@
 import {
   Settings, AppWindow, FileText, Database,
-  GitBranch, Bell, BrainCircuit, Volume2, Blocks,
+  GitBranch, Bell, BrainCircuit, Volume2,
 } from 'lucide-react';
 
 export type TabKey =
@@ -11,42 +11,34 @@ export type TabKey =
   | 'git-repos'
   | 'notifications'
   | 'llm-config'
-  | 'voice'
-  | 'api-integrations'
-  | 'api-developer';
+  | 'voice';
 
 interface Tab {
   key: TabKey;
   label: string;
   icon: React.ElementType;
-  /** When true, the tab is only shown to admins. */
-  adminOnly?: boolean;
 }
 
 const TABS: Tab[] = [
-  { key: 'general',          label: 'General Settings',       icon: Settings  },
-  { key: 'application',      label: 'Application Setup',      icon: AppWindow },
-  { key: 'requirements',     label: 'Requirement Sources',    icon: FileText  },
-  { key: 'storage',          label: 'Storage',                icon: Database  },
-  { key: 'git-repos',        label: 'Code Repositories',      icon: GitBranch },
-  { key: 'notifications',    label: 'Notifications',          icon: Bell      },
-  { key: 'llm-config',       label: 'LLM Configuration',      icon: BrainCircuit },
-  { key: 'voice',            label: 'Voice Assistant',        icon: Volume2   },
-  { key: 'api-integrations', label: 'API Integrations',       icon: Blocks    },
+  { key: 'general',       label: 'General Settings',       icon: Settings  },
+  { key: 'application',   label: 'Application Setup',      icon: AppWindow },
+  { key: 'requirements',  label: 'Requirement Sources',    icon: FileText  },
+  { key: 'storage',       label: 'Storage',                icon: Database  },
+  { key: 'git-repos',     label: 'Code Repositories',      icon: GitBranch },
+  { key: 'notifications', label: 'Notifications',          icon: Bell      },
+  { key: 'llm-config',    label: 'LLM Configuration',      icon: BrainCircuit },
+  { key: 'voice',         label: 'Voice Assistant',        icon: Volume2   },
 ];
 
 interface Props {
   activeTab: TabKey;
   onTabChange: (tab: TabKey) => void;
-  /** Admins additionally see admin-only tabs (e.g. Developer & API access). */
-  isAdmin?: boolean;
 }
 
-export default function ConfigTabNav({ activeTab, onTabChange, isAdmin = false }: Props) {
-  const visible = TABS.filter((t) => !t.adminOnly || isAdmin);
+export default function ConfigTabNav({ activeTab, onTabChange }: Props) {
   return (
     <nav className="w-full flex-shrink-0 space-y-0.5">
-      {visible.map((tab) => {
+      {TABS.map((tab) => {
         const isActive = tab.key === activeTab;
         return (
           <button

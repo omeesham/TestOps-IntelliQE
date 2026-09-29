@@ -47,6 +47,8 @@ import allureRoutes from './routes/allure.routes.js';
 import tenantSettingsRoutes from './routes/tenant-settings.routes.js';
 import llmConfigRoutes from './routes/llm-config.routes.js';
 import publicApiRoutes from './routes/public/public-api.routes.js';
+import apiAutomationRoutes from './routes/api-automation.routes.js';
+import apiAutomationPublicRoutes from './routes/public/api-automation-public.routes.js';
 import clientLogsRoutes from './routes/client-logs.routes.js';
 import bugsRoutes from './routes/bugs.routes.js';
 import adaRoutes from './routes/ada.routes.js';
@@ -56,6 +58,7 @@ import agentPerformanceRoutes from './routes/agent-performance.routes.js';
 import ssoRoutes from './routes/sso.routes.js';
 import { initDb } from './db.js';
 import pool from './db.js';
+import { startApiScheduler } from './services/api-scheduler.service.js';
 import { decryptField } from './utils/crypto.js';
 import { signToken } from './utils/jwt.js';
 import { authMiddleware } from './middleware/auth.middleware.js';
@@ -349,6 +352,9 @@ app.use('/api/artifacts', authMiddleware, artifactsRoutes);
 app.use('/api/users', authMiddleware, userManagementRoutes);
 app.use('/api/feature-toggles', authMiddleware, featureTogglesRoutes);
 app.use('/api/agent-performance', authMiddleware, agentPerformanceRoutes);
+// API Automation workspace — intake (12 methods), pattern intelligence,
+// environments, dashboard/history and the headless run.
+app.use('/api/api-automation', authMiddleware, apiAutomationRoutes);
 app.use('/api/allure', allureRoutes);
 
 /* ─────────────────────────────────────────────────────────────
@@ -358,6 +364,9 @@ app.use('/api/allure', allureRoutes);
    - Audit middleware automatically logs every call.
    ───────────────────────────────────────────────────────────── */
 app.use('/api/v1/public', authMiddleware, auditMutations, publicApiRoutes);
+// RESTful test-information access for CI and the `intelliqe-api` CLI —
+// projects / plans / builds / sessions, headless runs, imports, analysis.
+app.use('/api/v1/public/api-automation', authMiddleware, auditMutations, apiAutomationPublicRoutes);
 
 /* ─────────────────────────────────────────────────────────────
    404 + global error handler — standard JSON shape everywhere.
@@ -371,6 +380,9 @@ setEventCallback((runId, event) => broadcastSSE(runId, event));
 initDb()
   .then(() => {
     startAdaScheduler();
+    // Opt-in recurring API runs: the poller only invokes the existing headless
+    // pipeline on a clock — it needs the DB, so it starts only after init.
+    startApiScheduler();
     app.listen(PORT, () => {
       logger.info(`JBS IntelliQE API listening`, { port: PORT, env: NODE_ENV });
     });

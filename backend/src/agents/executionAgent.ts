@@ -11,6 +11,8 @@ import {
   A11Y_RESULTS_DIRNAME, writeA11yFixture, rewritePlaywrightImports, fixtureImportPathFor,
   collectA11yResults, summariseA11y, type A11ySummary,
 } from '../services/a11y-fixture.service.js';
+import { isApiRun } from './apiHealingAgent.js';
+import { runTuning } from '../utils/playwright-tuning.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -30,7 +32,11 @@ function sanitizeFileName(raw: string): string {
  */
 function pageImportsOf(code: string): string[] {
   const out: string[] = [];
-  const re = /import\s+[^'"]*from\s+['"]([^'"]*\/pages\/[^'"]*?\.page)['"]/g;
+  // Both halves of the POM: browser page objects (`…/pages/x.page`) and API
+  // service objects (`…/api/x.api`, plus the shared `…/api/base.api`). Missing
+  // either one is the same failure — an import that cannot resolve aborts
+  // COLLECTION and zeroes the whole run — so both must be detected here.
+  const re = /import\s+[^'"]*from\s+['"]([^'"]*(?:\/pages\/[^'"]*?\.page|\/api\/[^'"]*?\.api))['"]/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(code || '')) !== null) out.push(m[1]!);
   return out;
@@ -45,10 +51,10 @@ function pageImportsOf(code: string): string[] {
 function missingPomStub(testCaseId: string, missing: string[]): string {
   const list = missing.map((m) => m.split('/').pop()).join(', ');
   return `import { test, expect } from '@playwright/test';\n\n` +
-    `test(${JSON.stringify(`${testCaseId} — page object missing`)}, async () => {\n` +
-    `  // The generated spec imported a page object that was not produced: ${list}.\n` +
+    `test(${JSON.stringify(`${testCaseId} — page/service object missing`)}, async () => {\n` +
+    `  // The generated spec imported a page or service object that was not produced: ${list}.\n` +
     `  // This is a generation/heal POM desync — regenerate scripts for this case.\n` +
-    `  expect(false, ${JSON.stringify(`Missing page object(s): ${list}. Regenerate this test's scripts.`)}).toBe(true);\n` +
+    `  expect(false, ${JSON.stringify(`Missing page/service object(s): ${list}. Regenerate this test's scripts.`)}).toBe(true);\n` +
     `});\n`;
 }
 
@@ -217,6 +223,13 @@ async function runPlaywrightInMemory(
   }
 
   const configPath = path.join(workspace, 'playwright.config.cjs');
+  // API suites are I/O-bound and browser suites are CPU-bound, so they get
+  // different worker counts, timeouts and artefacts. See utils/playwright-tuning.
+  const apiMode = isApiRun(scripts);
+  const tuning = runTuning(apiMode, scripts.length);
+  if (apiMode) {
+    console.log(`[executionAgent] API run — ${scripts.length} specs across ${tuning.workers} workers, ${tuning.testTimeoutMs / 1000}s per test`);
+  }
   const baseUrlLine = targetUrl ? `    baseURL: ${JSON.stringify(targetUrl)},\n` : '';
   // Persist a full Playwright HTML report when a destination is given, so it can
   // be served (and linked from notifications). `open:'never'` keeps CI headless.
@@ -235,15 +248,24 @@ async function runPlaywrightInMemory(
   const configSrc = `const { defineConfig } = require('@playwright/test');
 module.exports = defineConfig({
   testDir: './tests',
+  // Per-run artifact directory. Playwright is spawned with cwd = BACKEND_ROOT,
+  // so without this every concurrent run defaults to the SAME
+  // <backend>/test-results — and Playwright empties that directory when a run
+  // starts. A second run beginning mid-flight therefore deletes the first
+  // run's in-progress trace/screenshot files, which surfaces as a spurious
+  // "ENOENT: … .playwright-artifacts-N/traces/….network" failure on a test
+  // that actually passed. Keep artifacts inside this run's own workspace.
+  outputDir: ${JSON.stringify(path.join(workspace, 'test-results'))},
   fullyParallel: true,
-  retries: 0,
-  timeout: 90_000,
+${tuning.workersLine}  retries: 0,
+  timeout: ${tuning.testTimeoutMs},
   // Real apps (especially SPAs) render asynchronously and can be
   // slow over the network from a container. The default 5s expect timeout is too
   // short and surfaces as "element not found" on the very first assertion. Give
   // visibility/action/navigation generous ceilings so genuinely-correct selectors
-  // aren't failed purely for being slow to appear.
-  expect: { timeout: 20_000 },
+  // aren't failed purely for being slow to appear. An API run needs none of that
+  // slack — a request either answers or it doesn't.
+  expect: { timeout: ${tuning.expectTimeoutMs} },
   reporter: [
     ['line'],
     ['json', { outputFile: './pw-summary.json' }],
@@ -251,11 +273,8 @@ ${htmlReporterLine}${allureReporterLine}  ],
   use: {
 ${baseUrlLine}    actionTimeout: 20_000,
     navigationTimeout: 45_000,
-    trace: 'retain-on-failure',
-    screenshot: 'only-on-failure',
-  },
-  projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
-});
+${tuning.traceLine}${tuning.screenshotLine}  },
+${tuning.projectsLine}});
 `;
   await fs.writeFile(configPath, configSrc, 'utf-8');
 
@@ -279,7 +298,9 @@ ${baseUrlLine}    actionTimeout: 20_000,
       const result = await execFileAsync(
         isWindows ? 'npx.cmd' : 'npx',
         ['playwright', 'test', '--config', configPath],
-        { cwd: BACKEND_ROOT, env, timeout: 600_000, maxBuffer: 50 * 1024 * 1024, shell: isWindows },
+        // The ceiling scales with the suite: a flat 10 minutes silently killed
+        // large runs mid-flight and reported them as "could not be executed".
+        { cwd: BACKEND_ROOT, env, timeout: tuning.processTimeoutMs, maxBuffer: 50 * 1024 * 1024, shell: isWindows },
       );
       stdout = result.stdout;
       stderr = result.stderr;

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ToggleRight, Save, RotateCcw, ShieldCheck, Layers } from 'lucide-react';
-import Spinner from '@/components/feedback/Spinner';
+import { ToggleRight, Save, RotateCcw, ShieldCheck, Loader2, Layers } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useFeatureToggles, type FeatureMap } from '@/contexts/FeatureToggleContext';
 import { updateFeatureToggles } from '@/services/api';
@@ -155,7 +154,7 @@ export default function FeatureTogglesPage() {
             disabled={!dirty || saving}
             className="btn-3d inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-[#7C3AED] to-[#6366F1] px-4 py-2 text-sm font-medium text-white shadow-sm hover:opacity-95 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {saving ? <Spinner className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             {saving ? 'Saving…' : 'Save changes'}
           </button>
         </div>

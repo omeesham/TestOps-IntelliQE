@@ -9,6 +9,8 @@ import {
   A11Y_RESULTS_DIRNAME, writeA11yFixture, rewritePlaywrightImports, fixtureImportPathFor,
   collectA11yResults, summariseA11y, type A11ySummary,
 } from './a11y-fixture.service.js';
+import { isApiRun } from '../agents/apiHealingAgent.js';
+import { runTuning } from '../utils/playwright-tuning.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -321,12 +323,19 @@ export async function runPlaywrightForRun(
   // and any spec-level imports from backend/node_modules. ESM would not
   // honor NODE_PATH and would force absolute file:// URLs everywhere.
   const configPath = path.join(workspace, 'playwright.config.cjs');
+  const apiMode = isApiRun(rows.map((r: any) => ({ code: String(r.code || '') })));
+  const tuning = runTuning(apiMode, rows.length);
   const configSrc = `const { defineConfig } = require('@playwright/test');
 module.exports = defineConfig({
   testDir: './tests',
+  // Per-run artifact directory — Playwright runs with cwd = BACKEND_ROOT, so
+  // the default <backend>/test-results is SHARED by every concurrent run and
+  // is emptied at each run's start, deleting another run's in-flight traces.
+  outputDir: ${JSON.stringify(path.join(workspace, 'test-results'))},
   fullyParallel: true,
-  retries: 0,
-  timeout: 60_000,
+${tuning.workersLine}  retries: 0,
+  timeout: ${tuning.testTimeoutMs},
+  expect: { timeout: ${tuning.expectTimeoutMs} },
   reporter: [
     ['line'],
     ['json', { outputFile: './pw-summary.json' }],
@@ -337,11 +346,8 @@ module.exports = defineConfig({
     ['allure-playwright', { resultsDir: ${JSON.stringify(resultsDir)}, outputFolder: ${JSON.stringify(resultsDir)}, detail: true, suiteTitle: false }],
   ],
   use: {
-    trace: 'retain-on-failure',
-    screenshot: 'only-on-failure',
-  },
-  projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
-});
+${tuning.traceLine}${tuning.screenshotLine}  },
+${tuning.projectsLine}});
 `;
   await fs.writeFile(configPath, configSrc, 'utf-8');
 
@@ -369,7 +375,7 @@ module.exports = defineConfig({
     const result = await execFileAsync(
       isWindows ? 'npx.cmd' : 'npx',
       ['playwright', 'test', '--config', configPath],
-      { cwd: BACKEND_ROOT, env, timeout: 600_000, maxBuffer: 50 * 1024 * 1024, shell: isWindows },
+      { cwd: BACKEND_ROOT, env, timeout: tuning.processTimeoutMs, maxBuffer: 50 * 1024 * 1024, shell: isWindows },
     );
     stdout = result.stdout;
     stderr = result.stderr;

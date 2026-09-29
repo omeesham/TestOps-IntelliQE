@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import { Send, CheckCircle, AlertCircle } from 'lucide-react';
-import Spinner from '@/components/feedback/Spinner';
+import { Send, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 import { getNotifications, prefillFromConfig } from './integrationCatalog';
 import IntegrationCard from './IntegrationCard';
 import ConnectModal from './ConnectModal';
@@ -186,7 +185,7 @@ export default function NotificationsSection({ configs, onRefresh }: Props) {
                     } disabled:opacity-50`}
                   >
                     {testStatus[item.id] === 'sending' ? (
-                      <><Spinner className="w-3 h-3 animate-spin" /> Sending...</>
+                      <><Loader2 className="w-3 h-3 animate-spin" /> Sending...</>
                     ) : testStatus[item.id] === 'sent' ? (
                       <><CheckCircle className="w-3 h-3" /> Test Sent!</>
                     ) : testStatus[item.id] === 'failed' ? (

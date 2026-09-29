@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-import { CheckCircle } from 'lucide-react';
-import Spinner from '@/components/feedback/Spinner';
+import { CheckCircle, Loader2 } from 'lucide-react';
 import { connectIntegration, getConfigurations } from '@/services/api';
 import { useToast } from '@/components/feedback/ToastProvider';
 
@@ -160,7 +159,7 @@ export default function GeneralSettingsSection({ configs }: Props) {
           disabled={saving}
           className="px-6 py-2.5 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white rounded-lg text-sm font-medium hover:from-[#6D28D9] hover:to-[#4F46E5] shadow-md shadow-purple-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
         >
-          {saving && <Spinner className="w-4 h-4 animate-spin" />}
+          {saving && <Loader2 className="w-4 h-4 animate-spin" />}
           {saving ? 'Saving...' : 'Save Settings'}
         </button>
       </div>

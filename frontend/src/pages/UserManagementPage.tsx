@@ -2,9 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import {
-  Plus, X, Eye, EyeOff, Trash2, UserCheck, UserX, Users, Shield, Search,
+  Plus, X, Loader2, Eye, EyeOff, Trash2, UserCheck, UserX, Users, Shield, Search,
 } from 'lucide-react';
-import Spinner from '@/components/feedback/Spinner';
 import {
   listTenantUsers, listTenants, createTenantUser, updateTenantUser, deleteTenantUser, setTenantUserStatus,
 } from '@/services/api';
@@ -256,7 +255,7 @@ function UserManagementContent() {
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-x-auto">
         {loading ? (
           <div className="flex items-center justify-center py-16 text-gray-400">
-            <Spinner className="w-5 h-5 animate-spin mr-2" /> Loading users...
+            <Loader2 className="w-5 h-5 animate-spin mr-2" /> Loading users...
           </div>
         ) : (
           <table className="w-full text-sm">
@@ -499,7 +498,7 @@ function UserManagementContent() {
                 disabled={saving}
                 className="btn-3d flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:from-[#6D28D9] hover:to-[#4F46E5] disabled:from-[#C4B5FD] disabled:to-[#C7D2FE] text-white rounded-xl text-sm font-semibold transition-all shadow-lg shadow-purple-500/25"
               >
-                {saving && <Spinner className="w-4 h-4 animate-spin" />}
+                {saving && <Loader2 className="w-4 h-4 animate-spin" />}
                 {editingUser ? 'Save Changes' : 'Create User'}
               </button>
             </div>
