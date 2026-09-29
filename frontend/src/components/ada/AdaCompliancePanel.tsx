@@ -1,34 +1,34 @@
 /**
- * ADA Compliance / website audit panel.
+ * ADA Compliance / website audit report.
  *
- * Three screens in one component:
- *   1. form      — the user types a URL (plus optional sign-in), that's all
- *   2. scanning  — a live log of the crawl: every page navigated, links found,
- *                  checks run, problems as they are discovered; can be stopped
- *   3. report    — the issue explorer: a summary pane (issues, pages, severity
- *                  breakdown, needs-review), a grouped issue list, and a detail
- *                  pane for the selected issue — plus the workflow log, the
- *                  page list, and HTML / CSV download. A stopped scan gets the
- *                  same report for the pages it managed to audit.
+ * One audit, shown as a page:
+ *   running   a live view of the crawl: every page navigated, links found,
+ *             checks run, problems as they are discovered; can be stopped
+ *   finished  the report: header with the health score, then tabs for the
+ *             summary (charts), all issues (grouped list with a detail pane),
+ *             UX testing, pages, coverage and the workflow log, plus HTML / CSV
+ *             download. A stopped audit gets the same report for the pages it
+ *             managed to audit.
  *
- * Used inside the Chat wizard (ChatPage) and on the standalone
- * /ada-compliance page. `onBrownfield` hands the crawled site to the existing
- * explore-mode pipeline so requirements and test cases are rebuilt from it.
+ * Audits are started from the New audit drawer on the /ada-compliance page.
+ * `onBrownfield` hands the crawled site to the existing explore-mode pipeline
+ * so requirements and test cases are rebuilt from it.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  startAdaScan, getAdaScan, getAdaFindings, getAdaPages, cancelAdaScan, getAdaTrend, type AdaTrendPoint,
+  getAdaScan, getAdaFindings, getAdaPages, cancelAdaScan, getAdaTrend, type AdaTrendPoint,
   type AdaCategory, type AdaFinding, type AdaPage, type AdaProgress, type AdaProgressEvent,
   type AdaScanRecord, type AdaSeverity, type AdaSummary, type AdaRemediation, type AdaSiteInventory, type AdaCoverage,
 } from '@/services/api';
 import {
   Globe, Lock, Unlock, Loader2, CheckCircle2, AlertTriangle, XCircle, Link2Off,
   ShieldCheck, FileSearch, Compass, ChevronDown, ChevronRight, Download, ExternalLink, Search,
-  Square, RotateCcw, Sparkles, ListChecks, Map as MapIcon, Bot, Info, Eye, Copy, FileText, Table2,
-  MousePointerClick, Wrench, Timer,
+  Square, Plus, Sparkles, ListChecks, Map as MapIcon, Bot, Info, Eye, Copy, FileText, Table2,
+  MousePointerClick, Wrench, Timer, LayoutDashboard, CalendarDays, User,
 } from 'lucide-react';
 import UniversalAccess from '@/components/icons/UniversalAccess';
-import { UxSetup, UxReport } from '@/components/ada/UxTesting';
+import { UxReport } from '@/components/ada/UxTesting';
+import SummaryTab, { type IssueSeed } from '@/components/ada/SummaryTab';
 
 const EFFORT_STYLE: Record<AdaRemediation['effort'], string> = {
   quick: 'bg-emerald-50 text-emerald-700 border-emerald-200',
@@ -41,20 +41,17 @@ function remediationOf(f: AdaFinding | null | undefined): AdaRemediation | undef
   return r && typeof r === 'object' && Array.isArray((r as AdaRemediation).steps) ? (r as AdaRemediation) : undefined;
 }
 
-type Screen = 'form' | 'scanning' | 'results';
-type Tab = 'issues' | 'ux' | 'log' | 'coverage' | 'pages';
+type Tab = 'summary' | 'issues' | 'ux' | 'log' | 'coverage' | 'pages';
 
 export interface BrownfieldHandoff { url: string; siteName?: string; username?: string; password?: string }
 
 interface Props {
-  /** Open an existing scan straight into results (standalone page). */
-  initialScanId?: string;
+  /** The audit to show. Remount (key) the panel to switch audits. */
+  scanId: string;
   /** Called when the user asks to rebuild requirements & test cases from the crawl. */
   onBrownfield?: (ctx: BrownfieldHandoff) => void;
-  /** Called when the user clicks "New audit" from results (standalone page resets its list). */
-  onReset?: () => void;
-  /** Compact layout for the chat column. */
-  embedded?: boolean;
+  /** Opens the New audit drawer. */
+  onNewAudit?: () => void;
 }
 
 const SEVERITIES: AdaSeverity[] = ['critical', 'serious', 'moderate', 'minor'];
@@ -95,7 +92,7 @@ const inputCls = 'w-full px-3.5 py-2.5 bg-white border border-gray-200 rounded-l
 function describePages(s: AdaSummary): string {
   const n = (x: number) => x.toLocaleString();
   const found = Math.max(s.pagesDiscovered || 0, s.pagesCrawled);
-  if (found <= s.pagesCrawled) return `${n(s.pagesCrawled)} page${s.pagesCrawled === 1 ? '' : 's'} audited — every page found`;
+  if (found <= s.pagesCrawled) return `${n(s.pagesCrawled)} page${s.pagesCrawled === 1 ? '' : 's'} audited, every page found`;
   const fromSitemap = s.coverage?.bySource.sitemap.found ?? 0;
   const extra = found - fromSitemap;
   const how = fromSitemap > 0
@@ -119,11 +116,6 @@ function fmtDuration(ms: number): string {
   const s = Math.round(ms / 1000);
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 }
-/** Message from an axios/network error without reaching for `any`. */
-function errorMessage(err: unknown, fallback: string): string {
-  const e = err as { response?: { status?: number; data?: { error?: string } }; message?: string } | undefined;
-  return e?.response?.data?.error || e?.message || fallback;
-}
 function errorStatus(err: unknown): number | undefined {
   return (err as { response?: { status?: number } } | undefined)?.response?.status;
 }
@@ -139,46 +131,29 @@ function safeName(s: string): string {
   return (s || 'site').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'site';
 }
 
-export default function AdaCompliancePanel({ initialScanId, onBrownfield, onReset, embedded }: Props) {
-  const [screen, setScreen] = useState<Screen>(initialScanId ? 'results' : 'form');
+const card = 'bg-white border border-gray-100 rounded-2xl shadow-sm';
 
-  // ── form ──
-  const [url, setUrl] = useState('');
-  const [needsLogin, setNeedsLogin] = useState(false);
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [quickSample, setQuickSample] = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [checkExternal, setCheckExternal] = useState(true);
-  // UX testing: devices are seeded with the server's recommended set by UxSetup.
-  const [uxEnabled, setUxEnabled] = useState(true);
-  const [uxDevices, setUxDevices] = useState<string[]>([]);
-  const [standardId, setStandardId] = useState('');
-  const [formError, setFormError] = useState('');
-  /** Id of the audit that is already running for this account (from a 409), so the form can stop or open it. */
-  const [blockingScanId, setBlockingScanId] = useState<string | null>(null);
-  const [stoppingBlocking, setStoppingBlocking] = useState(false);
-  const [starting, setStarting] = useState(false);
-
-  // ── scan ──
-  const [scanId, setScanId] = useState<string | null>(initialScanId || null);
+export default function AdaCompliancePanel({ scanId, onBrownfield, onNewAudit }: Props) {
   const [scan, setScan] = useState<AdaScanRecord | null>(null);
   const [progress, setProgress] = useState<AdaProgress | null>(null);
   const [events, setEvents] = useState<AdaProgressEvent[]>([]);
+  const [missing, setMissing] = useState(false);
   const lastSeq = useRef(0);
   const logRef = useRef<HTMLDivElement>(null);
   const [cancelling, setCancelling] = useState(false);
 
   // ── report ──
-  const [tab, setTab] = useState<Tab>('issues');
+  const [tab, setTab] = useState<Tab>('summary');
+  const [issueSeed, setIssueSeed] = useState<IssueSeed>({});
   const [findings, setFindings] = useState<AdaFinding[]>([]);
-  const [findingsFor, setFindingsFor] = useState<string>('');
+  const [findingsLoaded, setFindingsLoaded] = useState(false);
 
+  const status = progress?.status || scan?.status || null;
+  const running = status === 'running' || status === 'queued';
   const summary: AdaSummary | null = progress?.summary || scan?.result || null;
 
-  /* ── polling ── */
+  /* ── polling: follows the audit while it runs, stops once it has finished ── */
   useEffect(() => {
-    if (!scanId || screen === 'form') return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const tick = async () => {
@@ -193,310 +168,183 @@ export default function AdaCompliancePanel({ initialScanId, onBrownfield, onRese
             setEvents((prev) => [...prev, ...res.progress!.events].slice(-1500));
             lastSeq.current = res.progress.lastSeq;
           }
-          if (res.progress.status !== 'running') { setScreen('results'); return; }
-        } else if (res.scan.status !== 'running') {
-          setScreen('results');
+          if (res.progress.status !== 'running') return;
+        } else if (res.scan.status !== 'running' && res.scan.status !== 'queued') {
           return;
         }
       } catch (err: unknown) {
-        if (errorStatus(err) === 404) { setFormError('This audit no longer exists.'); setScreen('form'); return; }
+        if (errorStatus(err) === 404) { setMissing(true); return; }
       }
       timer = setTimeout(tick, 1500);
     };
     tick();
     return () => { stopped = true; if (timer) clearTimeout(timer); };
-  }, [scanId, screen]);
+  }, [scanId]);
 
   /* ── load every finding once the report is open ── */
+  const hasSummary = !!summary;
   useEffect(() => {
-    if (screen !== 'results' || !scanId || !summary || findingsFor === scanId) return;
+    if (running || !hasSummary || findingsLoaded) return;
     let alive = true;
     getAdaFindings(scanId, { notCategory: 'visual', limit: 2000 })
       .then((r) => { if (alive) setFindings(r.findings); })
       .catch(() => { if (alive) setFindings([]); })
-      .finally(() => { if (alive) setFindingsFor(scanId); });
+      .finally(() => { if (alive) setFindingsLoaded(true); });
     return () => { alive = false; };
-  }, [screen, scanId, summary, findingsFor]);
+  }, [running, scanId, hasSummary, findingsLoaded]);
 
   useEffect(() => {
-    if (screen === 'scanning' && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [events, screen]);
-
-  const start = async () => {
-    setFormError(''); setBlockingScanId(null);
-    if (!url.trim()) { setFormError('Enter the website address to audit.'); return; }
-    setStarting(true);
-    try {
-      const res = await startAdaScan({
-        url: url.trim(),
-        username: needsLogin && username ? username : undefined,
-        password: needsLogin && password ? password : undefined,
-        maxPages: quickSample ? 15 : undefined,
-        checkExternalLinks: checkExternal,
-        ux: uxEnabled,
-        devices: uxEnabled && uxDevices.length ? uxDevices : undefined,
-        designStandardId: uxEnabled && standardId ? standardId : undefined,
-      });
-      lastSeq.current = 0;
-      setEvents([]); setProgress(null); setScan(null); setFindings([]); setFindingsFor('');
-      setScanId(res.scanId);
-      setTab('issues');
-      setScreen('scanning');
-    } catch (err: unknown) {
-      setFormError(errorMessage(err, 'Could not start the audit.'));
-      const other = (err as { response?: { data?: { scanId?: string } } } | undefined)?.response?.data?.scanId;
-      if (errorStatus(err) === 409 && other) setBlockingScanId(other);
-    } finally {
-      setStarting(false);
-    }
-  };
-
-  /** Stop the audit that is blocking a new one, then retry automatically. */
-  const stopBlockingAndStart = async () => {
-    if (!blockingScanId) return;
-    setStoppingBlocking(true);
-    try {
-      await cancelAdaScan(blockingScanId);
-      // The engine needs a moment to finish the current page and persist the partial report.
-      for (let i = 0; i < 20; i++) {
-        await new Promise((r) => setTimeout(r, 1500));
-        const p = await getAdaScan(blockingScanId).catch(() => null);
-        if (p && p.scan.status !== 'running') break;
-      }
-      setBlockingScanId(null); setFormError('');
-      await start();
-    } catch (err: unknown) {
-      setFormError(errorMessage(err, 'Could not stop the running audit.'));
-    } finally {
-      setStoppingBlocking(false);
-    }
-  };
-
-  /** Open the audit that is already running instead of starting another. */
-  const openBlocking = () => {
-    if (!blockingScanId) return;
-    lastSeq.current = 0;
-    setEvents([]); setProgress(null); setScan(null); setFindings([]); setFindingsFor('');
-    setScanId(blockingScanId); setBlockingScanId(null); setFormError('');
-    setTab('issues');
-    setScreen('scanning');
-  };
+    if (running && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [events, running]);
 
   const cancel = async () => {
-    if (!scanId) return;
     setCancelling(true);
     try { await cancelAdaScan(scanId); } catch { /* the poll will surface the state */ }
   };
 
-  const reset = () => {
-    setScanId(null); setScan(null); setProgress(null); setEvents([]); lastSeq.current = 0;
-    setFindings([]); setFindingsFor(''); setCancelling(false); setScreen('form'); onReset?.();
-  };
-
   const brownfield = () => {
-    const target = summary?.targetUrl || scan?.target_url || url;
-    onBrownfield?.({ url: target, siteName: summary?.siteName, username: needsLogin ? username : undefined, password: needsLogin ? password : undefined });
+    const target = summary?.targetUrl || scan?.target_url;
+    if (target) onBrownfield?.({ url: target, siteName: summary?.siteName });
   };
 
-  /* ═════════════════════════════ FORM ═════════════════════════════ */
-  if (screen === 'form') {
+  const openIssues = (seed: IssueSeed) => { setIssueSeed(seed); setTab('issues'); };
+
+  if (missing) {
     return (
-      <div className={`${embedded ? 'max-w-lg ml-11' : 'max-w-2xl'} bg-white border border-gray-100 rounded-xl p-5 shadow-sm space-y-4`}>
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center">
-            <UniversalAccess className="w-4 h-4 text-white" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-gray-800">Website audit</p>
-            <p className="text-[11px] text-gray-400">Accessibility (WCAG 2.2 AA) · broken links · best practices · health score</p>
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1.5">Website address</label>
-          <div className="relative">
-            <Globe className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') start(); }}
-              placeholder="www.example.com"
-              className={inputCls + ' pl-9'}
-              autoFocus
-            />
-          </div>
-          <p className="text-[11px] text-gray-400 mt-1.5">
-            That's all that's needed. IntelliQE opens the site in a browser, follows every menu and link, and checks each page it reaches. You can stop at any time and keep the report for the pages done so far.
-          </p>
-        </div>
-
-        <label className="flex items-center gap-2.5 text-xs text-gray-600 cursor-pointer select-none">
-          <input type="checkbox" checked={needsLogin} onChange={(e) => setNeedsLogin(e.target.checked)} className="w-4 h-4 rounded border-gray-300 text-violet-600 focus:ring-violet-500" />
-          {needsLogin ? <Lock className="w-3.5 h-3.5 text-violet-500" /> : <Unlock className="w-3.5 h-3.5 text-gray-400" />}
-          The site needs a sign-in to see everything
-        </label>
-        {needsLogin && (
-          <div className="grid grid-cols-2 gap-2 pl-6">
-            <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Username or email" className={inputCls} autoComplete="off" />
-            <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" type="password" className={inputCls} autoComplete="new-password" />
-            <p className="col-span-2 text-[11px] text-gray-400">Used once, for this audit only. If the first page is a sign-in form, IntelliQE signs in and audits the pages behind it; otherwise it audits the public pages.</p>
-          </div>
-        )}
-
-        <UxSetup enabled={uxEnabled} onEnabled={setUxEnabled} devices={uxDevices} onDevices={setUxDevices} standardId={standardId} onStandardId={setStandardId} />
-
-        <button onClick={() => setShowAdvanced((v) => !v)} className="text-[11px] text-violet-500 hover:text-violet-700 flex items-center gap-1">
-          {showAdvanced ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />} Scan options
-        </button>
-        {showAdvanced && (
-          <div className="space-y-2 pl-1">
-            <div className="grid grid-cols-2 gap-2">
-              <button type="button" onClick={() => setQuickSample(false)} className={`text-left rounded-lg border px-3 py-2 transition-colors ${!quickSample ? 'border-violet-400 bg-violet-50/60' : 'border-gray-200 hover:border-gray-300'}`}>
-                <p className="text-xs font-semibold text-gray-800">Whole website <span className="text-[10px] font-normal text-violet-600">recommended</span></p>
-                <p className="text-[11px] text-gray-500 mt-0.5">IntelliQE finds every page itself from the menus, links and sitemap. The page count shows live while it scans.</p>
-              </button>
-              <button type="button" onClick={() => setQuickSample(true)} className={`text-left rounded-lg border px-3 py-2 transition-colors ${quickSample ? 'border-violet-400 bg-violet-50/60' : 'border-gray-200 hover:border-gray-300'}`}>
-                <p className="text-xs font-semibold text-gray-800">Quick sample</p>
-                <p className="text-[11px] text-gray-500 mt-0.5">First 15 pages only, for a fast first impression (~3 min).</p>
-              </button>
-            </div>
-            <label className="flex items-center gap-2 text-[11px] text-gray-600 cursor-pointer">
-              <input type="checkbox" checked={checkExternal} onChange={(e) => setCheckExternal(e.target.checked)} className="w-4 h-4 rounded border-gray-300 text-violet-600" />
-              Also check links to other websites
-            </label>
-            <p className="text-[11px] text-gray-400">You can stop at any time — the report always covers the pages audited so far.</p>
-          </div>
-        )}
-
-        {formError && (
-          <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2 flex flex-wrap items-center gap-2">
-            <span className="flex-1 min-w-[12rem]">{formError}</span>
-            {blockingScanId && (
-              <span className="flex items-center gap-2">
-                <button type="button" onClick={openBlocking} disabled={stoppingBlocking} className="px-2.5 py-1 rounded-md border border-red-200 bg-white text-red-700 hover:bg-red-100 disabled:opacity-50">View progress</button>
-                <button type="button" onClick={stopBlockingAndStart} disabled={stoppingBlocking} className="px-2.5 py-1 rounded-md bg-red-600 text-white hover:bg-red-500 disabled:opacity-50 flex items-center gap-1.5" title="Stop the running audit (its partial report is kept) and start this one">
-                  {stoppingBlocking ? <Loader2 className="w-3 h-3 animate-spin" /> : <Square className="w-3 h-3 fill-current" />} {stoppingBlocking ? 'Stopping…' : 'Stop it & start this audit'}
-                </button>
-              </span>
-            )}
-          </div>
-        )}
-
-        <button
-          onClick={start}
-          disabled={starting || !url.trim()}
-          className="w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2"
-        >
-          {starting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-          {starting ? 'Starting…' : 'Audit this website'}
-        </button>
+      <div className={`${card} p-10 text-center`}>
+        <XCircle className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+        <p className="text-sm text-gray-700">This audit no longer exists.</p>
       </div>
     );
   }
 
-  /* ═════════════════════════════ SCANNING ═════════════════════════════ */
-  if (screen === 'scanning') {
+  if (!scan) {
+    return <div className={`${card} p-6 text-sm text-gray-500 flex items-center gap-2`}><Loader2 className="w-4 h-4 animate-spin text-violet-500" /> Loading audit</div>;
+  }
+
+  /* ═════════════════════════════ RUNNING ═════════════════════════════ */
+  if (running) {
     const c = progress?.counters;
     // Progress is measured against pages found so far; the total grows as new links are discovered.
     const target = c ? Math.min(c.maxPages, Math.max(c.discovered || 0, c.pages, 1)) : 1;
     const pct = c ? Math.min(100, Math.round((c.pages / target) * 100)) : 0;
     const linkPhase = !!c && c.linksFound > 0 && c.linksChecked > 0;
     return (
-      <div className={`${embedded ? 'max-w-2xl ml-11' : 'max-w-4xl'} bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden`}>
-        <div className="px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-violet-50/60 to-indigo-50/40">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-xs text-gray-500 flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin text-violet-500" /> {linkPhase ? 'Checking links' : 'Auditing pages'}</p>
-              <p className="text-sm font-semibold text-gray-800 truncate">{scan?.target_url || url}</p>
-              <p className="text-[11px] text-gray-500 mt-0.5 truncate">
-                {c?.currentUrl ? <>Now on <span className="font-mono text-gray-700">{shortUrl(c.currentUrl)}</span></> : 'Opening the site…'}
-              </p>
+      <div className="space-y-4">
+        <div className={`${card} overflow-hidden`}>
+          <div className="px-6 py-5 bg-gradient-to-r from-violet-50/80 via-indigo-50/50 to-cyan-50/40">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center flex-shrink-0 shadow-md shadow-purple-500/20 animate-pulseGlow">
+                  <Loader2 className="w-5 h-5 text-white animate-spin" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-violet-700">{linkPhase ? 'Checking links' : 'Auditing pages'}</p>
+                  <h2 className="text-lg font-semibold text-[#1E1B4B] truncate">{scan.target_url}</h2>
+                  <p className="text-xs text-gray-500 mt-0.5 truncate">
+                    {c?.currentUrl ? <>Now on <span className="font-mono text-gray-700">{shortUrl(c.currentUrl)}</span></> : 'Opening the site'}
+                    {progress ? ` · ${fmtDuration(progress.elapsedMs)} elapsed` : ''}
+                  </p>
+                </div>
+              </div>
+              <button onClick={cancel} disabled={cancelling} className="flex-shrink-0 text-sm text-gray-700 hover:text-red-600 border border-gray-200 hover:border-red-200 bg-white rounded-lg px-3.5 py-2 flex items-center gap-2 disabled:opacity-50" title="Stop now and keep the report for the pages audited so far">
+                <Square className="w-3 h-3 fill-current" /> {cancelling ? 'Stopping' : 'Stop and report'}
+              </button>
             </div>
-            <button onClick={cancel} disabled={cancelling} className="flex-shrink-0 text-xs text-gray-600 hover:text-red-600 border border-gray-200 hover:border-red-200 bg-white rounded-lg px-2.5 py-1.5 flex items-center gap-1.5 transition-colors disabled:opacity-50" title="Stop now and keep the report for the pages audited so far">
-              <Square className="w-3 h-3 fill-current" /> {cancelling ? 'Stopping…' : 'Stop & report'}
-            </button>
+            <div className="mt-4 h-2 bg-white rounded-full overflow-hidden border border-violet-100">
+              <div className="h-full bg-gradient-to-r from-violet-500 via-indigo-500 to-cyan-500 transition-all duration-700" style={{ width: `${linkPhase ? 100 : pct}%` }} />
+            </div>
+            {progress?.inventory && <InventoryLine inv={progress.inventory} className="mt-3" />}
           </div>
-          <div className="mt-3 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-            <div className="h-full bg-gradient-to-r from-violet-500 to-indigo-500 transition-all duration-700" style={{ width: `${linkPhase ? 100 : pct}%` }} />
-          </div>
-          {progress?.inventory && <InventoryLine inv={progress.inventory} className="mt-3" />}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
-            <Stat label="Pages audited" value={c ? c.pages : '—'} sub={c ? `of ${Math.max(c.discovered || 0, c.pages).toLocaleString()} found` : undefined} title="Audited = opened in the browser with every check finished. Found = start page + sitemap pages in scope + pages linked from audited pages." />
-            <Stat label="Links found" value={c?.linksFound ?? '—'} sub={c && c.linksFound ? `${(c.linksInternal || 0).toLocaleString()} internal · ${(c.linksExternal || 0).toLocaleString()} external` : undefined} title="Unique links seen on the pages audited so far." />
-            <Stat label="Links checked" value={c?.linksChecked ?? '—'} />
-            <Stat label="Issues so far" value={c?.issues ?? '—'} tone={c?.issues ? 'warn' : undefined} />
+          <div className="grid grid-cols-2 lg:grid-cols-4 divide-x divide-y lg:divide-y-0 divide-gray-100 border-t border-gray-100">
+            <LiveStat label="Pages audited" value={c ? c.pages.toLocaleString() : '—'} sub={c ? `of ${Math.max(c.discovered || 0, c.pages).toLocaleString()} found` : undefined} title="Audited = opened in the browser with every check finished. Found = start page + sitemap pages in scope + pages linked from audited pages." />
+            <LiveStat label="Links found" value={c ? c.linksFound.toLocaleString() : '—'} sub={c && c.linksFound ? `${(c.linksInternal || 0).toLocaleString()} internal · ${(c.linksExternal || 0).toLocaleString()} external` : undefined} title="Unique links seen on the pages audited so far." />
+            <LiveStat label="Links checked" value={c ? c.linksChecked.toLocaleString() : '—'} />
+            <LiveStat label="Issues so far" value={c ? c.issues.toLocaleString() : '—'} warn={!!c?.issues} />
           </div>
         </div>
-        <div ref={logRef} className="h-72 overflow-y-auto px-4 py-3 space-y-1 bg-gray-50/50 font-mono text-[11px]">
-          {events.length === 0 && <p className="text-gray-400">Starting the browser…</p>}
-          {events.map((e) => <LogLine key={e.seq} e={e} />)}
+        <div className={`${card} overflow-hidden`}>
+          <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
+            <ListChecks className="w-4 h-4 text-violet-500" />
+            <h3 className="text-sm font-semibold text-[#1E1B4B]">Live activity</h3>
+          </div>
+          <div ref={logRef} className="h-[22rem] overflow-y-auto px-5 py-3 space-y-1 bg-gray-50/50 font-mono text-xs">
+            {events.length === 0 && <p className="text-gray-400">Starting the browser</p>}
+            {events.map((e) => <LogLine key={e.seq} e={e} />)}
+          </div>
         </div>
-        <p className="px-5 py-2 text-[11px] text-gray-400 border-t border-gray-100">
-          {progress ? `${fmtDuration(progress.elapsedMs)} elapsed` : ''} · Every page is opened in a real browser and checked for accessibility, broken links and best practices. Stop at any point — the report covers whatever has been audited.
-        </p>
       </div>
     );
   }
 
   /* ═════════════════════════════ REPORT ═════════════════════════════ */
   if (!summary) {
+    const failed = status === 'failed';
     return (
-      <div className={`${embedded ? 'max-w-2xl ml-11' : 'max-w-4xl'} bg-white border border-gray-100 rounded-xl p-5 shadow-sm`}>
-        {scan?.status === 'failed' ? (
-          <>
-            <p className="text-sm font-semibold text-red-700 flex items-center gap-2"><XCircle className="w-4 h-4" /> The audit could not be completed</p>
-            <p className="text-xs text-gray-600 mt-1">{scan.error || progress?.error || 'Unknown error'}</p>
-          </>
-        ) : (
-          <p className="text-sm text-gray-500 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading report…</p>
-        )}
-        <button onClick={reset} className="mt-3 text-xs text-violet-600 hover:text-violet-800 flex items-center gap-1"><RotateCcw className="w-3 h-3" /> Start another audit</button>
+      <div className={`${card} p-6`}>
+        <p className={`text-sm font-semibold flex items-center gap-2 ${failed ? 'text-red-700' : 'text-gray-700'}`}><XCircle className="w-4 h-4" /> {failed ? 'The audit could not be completed' : 'This audit has no report'}</p>
+        <p className="text-sm text-gray-600 mt-1">{scan.target_url}</p>
+        {(scan.error || progress?.error) && <p className="text-xs text-gray-500 mt-2">{scan.error || progress?.error}</p>}
+        {onNewAudit && <button onClick={onNewAudit} className="mt-4 text-sm px-3.5 py-2 bg-white border border-gray-200 hover:border-violet-300 text-gray-700 rounded-lg flex items-center gap-2"><Plus className="w-4 h-4" /> New audit</button>}
       </div>
     );
   }
 
-  const partial = scan?.status === 'cancelled' || progress?.status === 'cancelled';
-  const logEvents = events.length ? events : (scan?.log || []);
-  const findingsLoading = findingsFor !== scanId;
+  const partial = status === 'cancelled';
+  const logEvents = events.length ? events : (scan.log || []);
+  const tabs = ([
+    ['summary', 'Summary', LayoutDashboard, null],
+    ['issues', 'All issues', UniversalAccess, findingsLoaded ? findings.filter((f) => f.category !== 'review').reduce((a, f) => a + f.occurrences, 0) : null],
+    ...(summary.categories.ux ? [['ux', 'UX testing', MousePointerClick, summary.categories.ux.issues] as [Tab, string, React.ElementType, number | null]] : []),
+    ['pages', 'Pages', Compass, summary.pagesCrawled],
+    ['coverage', 'Coverage', MapIcon, null],
+    ['log', 'Workflow log', ListChecks, null],
+  ] as [Tab, string, React.ElementType, number | null][]);
 
   return (
-    <div className={`${embedded ? 'max-w-3xl ml-11' : 'max-w-6xl'} space-y-3`}>
+    <div className="space-y-4">
       <ReportHeader
         scanId={scanId}
+        scan={scan}
         summary={summary}
         partial={partial}
         findings={findings}
-        onReset={reset}
+        onNewAudit={onNewAudit}
         onBrownfield={onBrownfield ? brownfield : undefined}
       />
-      <div className="bg-white border border-gray-100 rounded-xl shadow-sm">
-        <div className="flex gap-1 px-2 pt-2 border-b border-gray-100 overflow-x-auto">
-          {([
-            ['issues', 'Issue summary', UniversalAccess],
-            ...(summary.categories.ux ? [['ux', 'UX testing', MousePointerClick] as [Tab, string, React.ElementType]] : []),
-            ['log', 'Workflow log', ListChecks],
-            ['coverage', 'Coverage', MapIcon],
-            ['pages', 'Pages', Compass],
-          ] as [Tab, string, React.ElementType][]).map(([key, label, Icon]) => (
+      <div className={card}>
+        <div className="flex gap-1 px-3 border-b border-gray-100 overflow-x-auto" role="tablist">
+          {tabs.map(([key, label, Icon, count]) => (
             <button
               key={key}
+              role="tab"
+              aria-selected={tab === key}
               onClick={() => setTab(key)}
-              className={`px-3 py-2 text-xs font-medium rounded-t-lg border-b-2 -mb-px whitespace-nowrap flex items-center gap-1.5 transition-colors ${tab === key ? 'border-violet-500 text-violet-700 bg-violet-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+              className={`px-3.5 py-3 text-sm font-medium border-b-2 -mb-px whitespace-nowrap flex items-center gap-2 !rounded-none ${tab === key ? 'border-violet-600 text-violet-700' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
             >
-              <Icon className="w-3.5 h-3.5" /> {label}
-              {key === 'pages' && <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-gray-100 text-gray-500">{summary.pagesCrawled}</span>}
-              {key === 'ux' && summary.categories.ux && <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-gray-100 text-gray-500">{summary.categories.ux.issues.toLocaleString()}</span>}
+              <Icon className="w-4 h-4" /> {label}
+              {count !== null && <span className={`px-1.5 py-0.5 rounded-full text-[11px] tabular-nums ${tab === key ? 'bg-violet-100 text-violet-700' : 'bg-gray-100 text-gray-500'}`}>{count.toLocaleString()}</span>}
             </button>
           ))}
         </div>
-        {tab === 'issues' && (findingsLoading
-          ? <p className="p-5 text-xs text-gray-400 flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading issues…</p>
-          : <IssueExplorer findings={findings} summary={summary} embedded={!!embedded} />)}
+        {(tab === 'summary' || tab === 'issues') && !findingsLoaded && <p className="p-6 text-sm text-gray-400 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading issues</p>}
+        {tab === 'summary' && findingsLoaded && <SummaryTab findings={findings} summary={summary} onOpenIssues={openIssues} onOpenUx={() => setTab('ux')} />}
+        {tab === 'issues' && findingsLoaded && <IssueExplorer key={JSON.stringify(issueSeed)} findings={findings} summary={summary} seed={issueSeed} />}
         {tab === 'log' && <WorkflowLog events={logEvents} summary={summary} partial={partial} />}
-        {tab === 'ux' && scanId && <UxReport scanId={scanId} summary={summary} />}
+        {tab === 'ux' && <UxReport scanId={scanId} summary={summary} />}
         {tab === 'coverage' && <CoverageView summary={summary} />}
-        {tab === 'pages' && scanId && <PagesTable scanId={scanId} />}
+        {tab === 'pages' && <PagesTable scanId={scanId} />}
       </div>
+    </div>
+  );
+}
+
+function LiveStat({ label, value, sub, warn, title }: { label: string; value: string; sub?: string; warn?: boolean; title?: string }) {
+  return (
+    <div className="px-6 py-4 min-w-0" title={title}>
+      <p className="text-xs text-gray-500">{label}</p>
+      <p className={`text-2xl font-bold tabular-nums leading-tight mt-0.5 ${warn ? 'text-amber-600' : 'text-[#1E1B4B]'}`}>{value}</p>
+      {sub && <p className="text-xs text-gray-400 truncate">{sub}</p>}
     </div>
   );
 }
@@ -588,97 +436,104 @@ function SevChip({ s, count, active, onClick }: { s: AdaSeverity; count: number;
 
 /* ───────────────────────────── report header ───────────────────────────── */
 
-function ReportHeader({ scanId, summary, partial, findings, onReset, onBrownfield }: {
-  scanId: string | null; summary: AdaSummary; partial: boolean; findings: AdaFinding[]; onReset: () => void; onBrownfield?: () => void;
+function ReportHeader({ scanId, scan, summary, partial, findings, onNewAudit, onBrownfield }: {
+  scanId: string; scan: AdaScanRecord; summary: AdaSummary; partial: boolean; findings: AdaFinding[]; onNewAudit?: () => void; onBrownfield?: () => void;
 }) {
   const [menu, setMenu] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const onDoc = (e: MouseEvent) => { if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(false); };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [menu]);
   const a = summary.categories.accessibility;
   const l = summary.categories.links;
+  const b = summary.categories.bestPractice;
+  const ux = summary.categories.ux;
   const brokenTotal = l.broken + l.serverErrors + l.timeouts;
   const dl = async (kind: 'html' | 'csv' | 'pages') => {
     setMenu(false);
     const base = `website-audit-${safeName(summary.siteName)}-${summary.finishedAt.slice(0, 10)}`;
     if (kind === 'csv') { downloadBlob(buildCsv(findings), `${base}-issues.csv`, 'text/csv'); return; }
     // The page list is stored per page in the database; fetch it so the download names every page visited.
-    const pages = scanId ? await getAdaPages(scanId).catch(() => [] as AdaPage[]) : [];
+    const pages = await getAdaPages(scanId).catch(() => [] as AdaPage[]);
     const trend = kind === 'html' ? await getAdaTrend(summary.targetUrl).then((r) => r.points).catch(() => [] as AdaTrendPoint[]) : [];
     if (kind === 'html') downloadBlob(buildHtmlReport(summary, partial, findings, pages, trend, scanId), `${base}.html`, 'text/html');
     else downloadBlob(buildPagesCsv(pages, summary.coverage), `${base}-pages.csv`, 'text/csv');
   };
   return (
-    <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-4">
-      <div className="flex flex-wrap items-center gap-4">
-        <ScoreRing score={summary.overall.score ?? 0} grade={summary.overall.grade ?? 'F'} />
-        <div className="flex-1 min-w-[220px]">
-          <div className="flex items-center gap-2 flex-wrap">
-            <p className="text-[11px] uppercase tracking-wide text-gray-400">Website audit report</p>
+    <div className={`${card} overflow-hidden`}>
+      <div className="p-5 flex flex-wrap items-start gap-5 bg-gradient-to-r from-violet-50/70 via-white to-white">
+        <ScoreRing score={summary.overall.score ?? 0} grade={summary.overall.grade ?? 'F'} size={104} />
+        <div className="flex-1 min-w-[260px]">
+          <h2 className="text-xl font-bold text-[#1E1B4B] leading-tight">{summary.siteName || summary.targetUrl}</h2>
+          <a href={summary.targetUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-violet-600 hover:underline inline-flex items-center gap-1 break-all">{summary.targetUrl} <ExternalLink className="w-3.5 h-3.5 flex-shrink-0" /></a>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-2 text-xs text-gray-600">
+            {scan.created_by && <span className="inline-flex items-center gap-1.5"><User className="w-3.5 h-3.5 text-gray-400" /> {scan.created_by === 'schedule' ? 'Scheduled run' : scan.created_by}</span>}
+            <span className="inline-flex items-center gap-1.5"><CalendarDays className="w-3.5 h-3.5 text-gray-400" /> {new Date(summary.finishedAt).toLocaleString()}</span>
+            <span className="inline-flex items-center gap-1.5"><Timer className="w-3.5 h-3.5 text-gray-400" /> {fmtDuration(summary.durationMs)}</span>
+            <span className="px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200 text-[11px] font-semibold">WCAG 2.2 AA</span>
             {partial
-              ? <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-semibold">STOPPED EARLY — PARTIAL</span>
-              : <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold">COMPLETE</span>}
-            <span className="px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200 text-[10px] font-semibold">WCAG 2.2 AA</span>
+              ? <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[11px] font-semibold">Stopped early, partial</span>
+              : <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-semibold">Complete</span>}
           </div>
-          <p className="text-base font-semibold text-gray-800 leading-tight mt-0.5">{summary.siteName || summary.targetUrl}</p>
-          <a href={summary.targetUrl} target="_blank" rel="noopener noreferrer" className="text-[11px] text-violet-600 hover:underline inline-flex items-center gap-1 break-all">{summary.targetUrl} <ExternalLink className="w-3 h-3" /></a>
-          {summary.inventory && summary.inventory.sitemapUrls > 0 && <InventoryLine inv={summary.inventory} className="mt-2" />}
-          <p className="text-xs text-gray-500 mt-1">
-            {describePages(summary)} · {describeLinks(summary)} · {a.violations} accessibility violation{a.violations === 1 ? '' : 's'} · {l.measured === false ? 'broken links not assessed' : `${brokenTotal} broken link${brokenTotal === 1 ? '' : 's'}`} · {summary.categories.bestPractice.failingRules.length} best-practice checks failing · {fmtDuration(summary.durationMs)}
-          </p>
-          <TrendStrip scanId={scanId} summary={summary} />
           {summary.loginAttempted && (
-            <p className="text-[11px] text-gray-500 mt-1 flex items-center gap-1">
-              {summary.loginSucceeded ? <Lock className="w-3 h-3 text-emerald-500" /> : <Unlock className="w-3 h-3 text-amber-500" />}
-              {summary.loginSucceeded ? 'Signed in — audited the authenticated site.' : 'Sign-in did not succeed — public pages only.'}
+            <p className="text-xs text-gray-500 mt-1.5 flex items-center gap-1.5">
+              {summary.loginSucceeded ? <Lock className="w-3.5 h-3.5 text-emerald-500" /> : <Unlock className="w-3.5 h-3.5 text-amber-500" />}
+              {summary.loginSucceeded ? 'Signed in. The authenticated site was audited.' : 'Sign-in did not succeed. Public pages only.'}
             </p>
           )}
         </div>
-        <div className={`grid gap-2 ${summary.categories.ux ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'}`}>
-          <MiniScore label="Accessibility" cat={summary.categories.accessibility} Icon={UniversalAccess} />
-          <MiniScore label="Links" cat={summary.categories.links} Icon={Link2Off} basis={l.measured === false ? undefined : `${l.checked.toLocaleString()} checked · ${brokenTotal} broken`} />
-          <MiniScore label="Practices" cat={summary.categories.bestPractice} Icon={ShieldCheck} />
-          {summary.categories.ux && <MiniScore label="UX" cat={summary.categories.ux} Icon={MousePointerClick} basis={`${summary.categories.ux.devices.length} device${summary.categories.ux.devices.length === 1 ? '' : 's'}${summary.categories.ux.standard ? '' : ' · layout only'}`} />}
-        </div>
-      </div>
-      <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-gray-100 relative">
-        <div className="relative">
-          <button onClick={() => setMenu((v) => !v)} className="text-xs px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg flex items-center gap-1.5 transition-colors">
-            <Download className="w-3.5 h-3.5" /> Download report <ChevronDown className="w-3 h-3" />
-          </button>
-          {menu && (
-            <div className="absolute z-10 mt-1 w-56 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
-              <button onClick={() => dl('html')} className="w-full text-left px-3 py-2 text-xs hover:bg-violet-50 flex items-center gap-2"><FileText className="w-3.5 h-3.5 text-violet-500" /> Full report (HTML)</button>
-              <button onClick={() => dl('csv')} className="w-full text-left px-3 py-2 text-xs hover:bg-violet-50 flex items-center gap-2"><Table2 className="w-3.5 h-3.5 text-emerald-600" /> All issues (CSV / Excel)</button>
-              <button onClick={() => dl('pages')} className="w-full text-left px-3 py-2 text-xs hover:bg-violet-50 flex items-center gap-2"><Compass className="w-3.5 h-3.5 text-indigo-500" /> Pages visited &amp; not visited (CSV)</button>
-            </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative" ref={menuRef}>
+            <button onClick={() => setMenu((v) => !v)} aria-haspopup="menu" aria-expanded={menu} className="text-sm px-3.5 py-2 bg-white border border-gray-200 hover:border-violet-300 text-gray-700 rounded-lg flex items-center gap-2">
+              <Download className="w-4 h-4" /> Export <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+            {menu && (
+              <div role="menu" className="absolute right-0 z-20 mt-1 w-64 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden py-1">
+                <button role="menuitem" onClick={() => dl('html')} className="w-full text-left px-3.5 py-2 text-sm text-gray-700 hover:bg-violet-50 flex items-center gap-2 !rounded-none"><FileText className="w-4 h-4 text-violet-500" /> Full report (HTML)</button>
+                <button role="menuitem" onClick={() => dl('csv')} className="w-full text-left px-3.5 py-2 text-sm text-gray-700 hover:bg-violet-50 flex items-center gap-2 !rounded-none"><Table2 className="w-4 h-4 text-emerald-600" /> All issues (CSV)</button>
+                <button role="menuitem" onClick={() => dl('pages')} className="w-full text-left px-3.5 py-2 text-sm text-gray-700 hover:bg-violet-50 flex items-center gap-2 !rounded-none"><Compass className="w-4 h-4 text-indigo-500" /> Pages visited and not visited (CSV)</button>
+              </div>
+            )}
+          </div>
+          {onNewAudit && <button onClick={onNewAudit} className="text-sm px-3.5 py-2 bg-white border border-gray-200 hover:border-violet-300 text-gray-700 rounded-lg flex items-center gap-2"><Plus className="w-4 h-4" /> New audit</button>}
+          {onBrownfield && (
+            <button onClick={onBrownfield} className="text-sm px-3.5 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-lg flex items-center gap-2 shadow-md shadow-purple-500/20" title="Rebuild requirements and generate test cases from this site">
+              <Bot className="w-4 h-4" /> Generate test cases
+            </button>
           )}
         </div>
-        {onBrownfield && (
-          <button onClick={onBrownfield} className="text-xs px-3 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-lg flex items-center gap-1.5 transition-all">
-            <Bot className="w-3.5 h-3.5" /> Rebuild requirements &amp; generate test cases from this site
-          </button>
-        )}
-        <button onClick={onReset} className="text-xs px-3 py-2 text-gray-500 hover:text-gray-800 flex items-center gap-1.5 ml-auto"><RotateCcw className="w-3.5 h-3.5" /> New audit</button>
+      </div>
+      <div className={`grid grid-cols-2 ${ux ? 'lg:grid-cols-4' : 'lg:grid-cols-3'} divide-x divide-y lg:divide-y-0 divide-gray-100 border-t border-gray-100`}>
+        <MiniScore label="Accessibility" cat={a} Icon={UniversalAccess} basis={`${a.violations.toLocaleString()} violation${a.violations === 1 ? '' : 's'}`} />
+        <MiniScore label="Links" cat={l} Icon={Link2Off} basis={l.measured === false ? undefined : `${l.checked.toLocaleString()} checked · ${brokenTotal.toLocaleString()} broken`} />
+        <MiniScore label="Best practices" cat={b} Icon={ShieldCheck} basis={`${b.rulesPassed} of ${b.rulesEvaluated} checks passing`} />
+        {ux && <MiniScore label="UX" cat={ux} Icon={MousePointerClick} basis={`${ux.devices.length} device${ux.devices.length === 1 ? '' : 's'}${ux.standard ? '' : ' · layout only'}`} />}
+      </div>
+      <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/40">
+        {summary.inventory && summary.inventory.sitemapUrls > 0 && <InventoryLine inv={summary.inventory} className="mb-1.5" />}
+        <p className="text-xs text-gray-500">{describePages(summary)} · {describeLinks(summary)}</p>
+        <TrendStrip scanId={scanId} summary={summary} />
       </div>
     </div>
   );
 }
 
 function MiniScore({ label, cat, Icon, basis }: { label: string; cat: { score: number | null; grade: string | null; label?: string }; Icon: React.ElementType; basis?: string }) {
-  if (cat.score === null || cat.grade === null) {
-    return (
-      <div className="bg-gray-50 border border-dashed border-gray-200 rounded-lg px-3 py-2 text-center min-w-[84px]" title="Nothing in this category was checked, so it is not scored and not counted in the overall health score.">
-        <Icon className="w-4 h-4 mx-auto text-gray-300" />
-        <p className="text-lg font-bold leading-tight text-gray-300">—</p>
-        <p className="text-[10px] text-gray-400">{label}</p>
-        <p className="text-[10px] text-gray-400">{cat.label || 'Not checked'}</p>
-      </div>
-    );
-  }
+  const measured = cat.score !== null && cat.grade !== null;
   return (
-    <div className="text-center bg-gray-50/70 border border-gray-100 rounded-lg px-3 py-2 min-w-[84px]">
-      <Icon className="w-4 h-4 text-gray-400 mx-auto" />
-      <p className={`text-lg font-bold leading-tight ${GRADE_COLOR[cat.grade]}`}>{cat.score}</p>
-      {basis && <p className="text-[10px] text-gray-400 leading-tight">{basis}</p>}
-      <p className="text-[10px] text-gray-500">{label}</p>
+    <div className="px-5 py-4 flex items-center gap-3 min-w-0" title={measured ? undefined : 'Nothing in this category was checked, so it is not scored and not counted in the overall health score.'}>
+      <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${measured ? 'bg-violet-50 text-violet-600' : 'bg-gray-100 text-gray-300'}`}><Icon className="w-4 h-4" /></div>
+      <div className="min-w-0">
+        <p className="text-xs text-gray-500">{label}</p>
+        <p className={`text-2xl font-bold leading-tight tabular-nums ${measured ? GRADE_COLOR[cat.grade!] : 'text-gray-300'}`}>
+          {measured ? cat.score : '—'}
+          {measured && <span className="ml-1.5 text-xs font-semibold text-gray-400">Grade {cat.grade}</span>}
+        </p>
+        <p className="text-xs text-gray-400 truncate">{measured ? basis : (cat.label || 'Not checked')}</p>
+      </div>
     </div>
   );
 }
@@ -700,10 +555,10 @@ interface IssueGroup {
 
 const SEV_ORDER: Record<AdaSeverity, number> = { critical: 0, serious: 1, moderate: 2, minor: 3 };
 
-function IssueExplorer({ findings, summary, embedded }: { findings: AdaFinding[]; summary: AdaSummary; embedded: boolean }) {
-  const [sev, setSev] = useState<AdaSeverity | ''>('');
-  const [cat, setCat] = useState<AdaCategory | 'all'>('all');
-  const [q, setQ] = useState('');
+function IssueExplorer({ findings, summary, seed }: { findings: AdaFinding[]; summary: AdaSummary; seed: IssueSeed }) {
+  const [sev, setSev] = useState<AdaSeverity | ''>(seed.severity || '');
+  const [cat, setCat] = useState<AdaCategory | 'all'>(seed.category || 'all');
+  const [q, setQ] = useState(seed.query || '');
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<AdaFinding | null>(null);
 
@@ -747,7 +602,7 @@ function IssueExplorer({ findings, summary, embedded }: { findings: AdaFinding[]
   const toggle = (key: string) => setOpen((prev) => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
 
   const summaryPane = (
-    <div className={`${embedded ? 'grid grid-cols-2 gap-3' : 'space-y-4'}`}>
+    <div className="space-y-4">
       <div>
         <p className="text-4xl font-bold text-gray-800 leading-none">{totals.issues}</p>
         <p className="text-xs text-gray-600 mt-1">Issues in {totals.pages} page{totals.pages === 1 ? '' : 's'} and {totals.components} component{totals.components === 1 ? '' : 's'}</p>
@@ -770,7 +625,7 @@ function IssueExplorer({ findings, summary, embedded }: { findings: AdaFinding[]
           ))}
         </div>
       </div>
-      <div className={`rounded-lg border px-3 py-2 ${totals.review > 0 ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-100'} ${embedded ? 'col-span-2' : ''}`}>
+      <div className={`rounded-lg border px-3 py-2 ${totals.review > 0 ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-100'}`}>
         <p className="text-xs text-gray-700 flex items-center gap-1.5"><Eye className={`w-3.5 h-3.5 ${totals.review > 0 ? 'text-amber-500' : 'text-gray-400'}`} /> {totals.review} issue{totals.review === 1 ? '' : 's'} need review</p>
         <p className="text-[10px] text-gray-500 mt-0.5">Checks the scanner could not settle by itself — a person has to confirm.</p>
         {totals.review > 0 && <button onClick={() => { setCat('review'); setSev(''); }} className={`text-[11px] font-medium mt-1 ${cat === 'review' ? 'text-violet-700' : 'text-amber-700 hover:underline'}`}>Review all →</button>}
@@ -787,7 +642,7 @@ function IssueExplorer({ findings, summary, embedded }: { findings: AdaFinding[]
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter issues" className={inputCls + ' !py-1.5 pl-8 text-xs'} />
         </div>
       </div>
-      <div className={`${embedded ? 'max-h-[420px]' : 'max-h-[560px]'} overflow-y-auto divide-y divide-gray-100`}>
+      <div className="max-h-[620px] overflow-y-auto divide-y divide-gray-100">
         {groups.length === 0 && (
           <p className="px-4 py-6 text-xs text-emerald-700 flex items-center gap-2"><CheckCircle2 className="w-4 h-4" /> Nothing matches — {findings.length === 0 ? 'no issues were found.' : 'try clearing a filter.'}</p>
         )}
@@ -831,15 +686,6 @@ function IssueExplorer({ findings, summary, embedded }: { findings: AdaFinding[]
 
   const detailPane = <IssueDetail finding={selected} />;
 
-  if (embedded) {
-    return (
-      <div className="p-4 space-y-3">
-        {summaryPane}
-        <div className="border border-gray-100 rounded-lg overflow-hidden">{listPane}</div>
-        <div className="border border-gray-100 rounded-lg">{detailPane}</div>
-      </div>
-    );
-  }
   // Three panes side by side on wide screens; the detail pane drops below the
   // list on laptops so the issue list is never squeezed to a sliver.
   return (

@@ -35,7 +35,8 @@ import {
 import UniversalAccess from '@/components/icons/UniversalAccess';
 import { initTTS, speak, speakAsync, waitForSpeech, waitForVoices, stopSpeaking, isTTSEnabled, toggleTTS } from '@/utils/tts';
 import { useToast } from '@/components/feedback/ToastProvider';
-import AdaCompliancePanel, { type BrownfieldHandoff } from '@/components/ada/AdaCompliancePanel';
+import type { BrownfieldHandoff } from '@/components/ada/AdaCompliancePanel';
+import { useNavigate } from 'react-router-dom';
 
 /* ═══════════════════════════════════════════════════════════════
    TYPES
@@ -57,7 +58,6 @@ type Step =
   | 'paste-text'
   | 'explore-form'
   | 'api-form'
-  | 'ada'
   | 'column-select'
   | 'generating'
   | 'results'
@@ -259,6 +259,7 @@ function gitRepoLabel(url?: string): string {
 export default function ChatPage() {
   const { user } = useAuth();
   const toast = useToast();
+  const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   /* --- state --- */
@@ -477,7 +478,8 @@ export default function ChatPage() {
       if (!saved) return;
       const s = JSON.parse(saved);
       if (s.messages?.length)       setMessages(s.messages);
-      if (s.step)                   setStep(s.step);
+      // 'ada' was a chat step before the website audit moved to its own page.
+      if (s.step && s.step !== 'ada') setStep(s.step);
       if (s.category)               setCategory(s.category);
       if (s.source)                 setSource(s.source);
       if (s.pendingRequirements)    setPendingRequirements(s.pendingRequirements);
@@ -590,14 +592,16 @@ export default function ChatPage() {
       push('tessa', `${c.title} is coming soon.`);
       return;
     }
+    if (c.id === 'ada') {
+      // The website audit has its own page; open it with the New audit form ready.
+      navigate('/ada-compliance?new=1');
+      return;
+    }
     push('user', c.title);
     setCategory(c.id);
     setSubCategory(c.title);
 
-    if (c.id === 'ada') {
-      // The panel carries its own prompt, so no Tessa line here.
-      setStep('ada');
-    } else if (c.id === 'api') {
+    if (c.id === 'api') {
       push('tessa', 'Please provide your API details below.');
       setStep('api-form');
     } else {
@@ -2409,11 +2413,6 @@ export default function ChatPage() {
       );
     }
 
-    /* ── ADA COMPLIANCE — website audit: a URL in, a scored health report out ── */
-    if (step === 'ada') {
-      return <AdaCompliancePanel embedded onBrownfield={handleAdaBrownfield} />;
-    }
-
     /* ── COLUMN SELECT — pick columns before generation ── */
     if (step === 'column-select') {
       return (
@@ -3239,8 +3238,7 @@ export default function ChatPage() {
             >
               {voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
             </button>
-            {/* Hidden during the website audit: the report has its own "New audit" control. */}
-            {step !== 'welcome' && step !== 'ada' && (
+            {step !== 'welcome' && (
               <button
                 onClick={requestReset}
                 title="New chat"
@@ -3321,7 +3319,7 @@ export default function ChatPage() {
           </div>
 
           {/* Breadcrumb Trail */}
-          {(category || subCategory || source) && !['ada', 'results', 'saved', 'script-generating', 'script-review', 'executing', 'execution-results', 'healing', 'report', 'publish'].includes(step) && (
+          {(category || subCategory || source) && !['results', 'saved', 'script-generating', 'script-review', 'executing', 'execution-results', 'healing', 'report', 'publish'].includes(step) && (
             <div className="flex-shrink-0 px-6 py-2 border-t border-gray-100 bg-white/60 backdrop-blur-sm">
               <div className="max-w-2xl mx-auto flex items-center gap-1.5 text-[11px] text-gray-400">
                 {category && <span className="px-2 py-0.5 bg-violet-50 text-violet-600 rounded-full">{CATEGORIES.find(c => c.id === category)?.title}</span>}
@@ -3334,10 +3332,8 @@ export default function ChatPage() {
 
         {/* Right: Pipeline Progress Sidebar. Hidden on the welcome screen —
             nothing is running yet, so an empty six-stage panel is just noise;
-            it appears as soon as the user starts a flow. Also hidden during
-            the website audit (ADA), which runs its own crawl with its own live
-            log and does not use the six AI pipeline stages. */}
-        {step !== 'welcome' && step !== 'ada' && renderPipelineSidebar()}
+            it appears as soon as the user starts a flow. */}
+        {step !== 'welcome' && renderPipelineSidebar()}
       </div>
     </div>
   );

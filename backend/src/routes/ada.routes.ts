@@ -114,7 +114,35 @@ router.get('/scans', async (req: Request, res: Response) => {
         ORDER BY created_at DESC LIMIT 50`,
       [req.user!.tenantId],
     );
-    res.json({ scans: rows });
+    // Issue counts by severity for the list's severity chips. Same basis as the
+    // report's issue summary: occurrences, without review items and UX findings.
+    const severity = new Map<string, Record<string, number>>();
+    try {
+      const counts = await pool.query(
+        `SELECT f.scan_id, f.severity, SUM(f.occurrences) AS occ
+           FROM ada_findings f
+          WHERE f.tenant_id = $1 AND f.category NOT IN ('review', 'visual')
+            AND f.scan_id IN (SELECT TOP 50 id FROM ada_scans WHERE tenant_id = $1 ORDER BY created_at DESC)
+          GROUP BY f.scan_id, f.severity`,
+        [req.user!.tenantId],
+      );
+      for (const c of counts.rows) {
+        const key = String(c.scan_id).toLowerCase();
+        const entry = severity.get(key) || { critical: 0, serious: 0, moderate: 0, minor: 0 };
+        if (SEVERITIES.includes(c.severity)) entry[c.severity] = Number(c.occ) || 0;
+        severity.set(key, entry);
+      }
+    } catch (err: any) {
+      console.warn('[ada] severity counts unavailable for the audit list:', err.message);
+    }
+    const finished = (s: string) => s === 'completed' || s === 'cancelled';
+    res.json({
+      scans: rows.map((r: any) => ({
+        ...r,
+        // null = not known (audit still running or failed), so the list never shows a made-up zero.
+        severity: finished(r.status) ? (severity.get(String(r.id).toLowerCase()) || { critical: 0, serious: 0, moderate: 0, minor: 0 }) : null,
+      })),
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to list audits' });
   }
