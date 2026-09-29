@@ -31,8 +31,8 @@ const HIDDEN_PATHS: string[] = ['/agent-performance', '/feature-toggles'];
 
 const navItems: NavItem[] = [
   { name: 'Chat',                  path: '/chat',                 icon: Home,            roles: ALL },
-  { name: 'Generated Test Cases',  path: '/generated-tests',      icon: ClipboardList,   roles: ALL },
   { name: 'API Automation',        path: '/automation',           icon: Plug,            roles: ALL },
+  { name: 'Generated Test Cases',  path: '/generated-tests',      icon: ClipboardList,   roles: ALL },
   { name: 'Reports',               path: '/reports',              icon: BarChart3,       roles: ALL },
   { name: 'Bug Tracker',           path: '/bug-tracker',          icon: Bug,             roles: ALL },
   { name: 'ADA Compliance',        path: '/ada-compliance',       icon: UniversalAccess, roles: ALL },
