@@ -587,28 +587,32 @@ export default function ChatPage() {
   }, []);
 
   // Web Application Automation page: start the wizard on arrival.
-  const webFlowChecked = useRef(false);
+  const savedFlowPending = useRef<boolean | null>(null);
+  const webFlowStarting = useRef(false);
   useEffect(() => {
+    // On mount a saved flow is about to be restored; leave the step to it.
+    if (savedFlowPending.current === null) {
+      try {
+        const savedStep = JSON.parse(sessionStorage.getItem(SESSION_KEY) || '{}').step;
+        savedFlowPending.current = !!savedStep && savedStep !== 'welcome' && savedStep !== 'ada';
+      } catch { savedFlowPending.current = false; }
+    }
+    if (step !== 'welcome') {
+      savedFlowPending.current = false;
+      webFlowStarting.current = false;
+    }
     if (!onWebPage) return;
 
     // Arrived from the ADA Compliance page with a site to rebuild requirements for.
     const handoff = sessionStorage.getItem('intelliqe_ada_brownfield');
     if (handoff) {
       sessionStorage.removeItem('intelliqe_ada_brownfield');
+      webFlowStarting.current = true;
       try { handleAdaBrownfield(JSON.parse(handoff)); return; } catch { /* fall through to the normal start */ }
     }
 
-    // On mount a saved flow is about to be restored; leave the step to it.
-    const firstCheck = !webFlowChecked.current;
-    webFlowChecked.current = true;
-    if (firstCheck) {
-      try {
-        const savedStep = JSON.parse(sessionStorage.getItem(SESSION_KEY) || '{}').step;
-        if (savedStep && savedStep !== 'welcome' && savedStep !== 'ada') return;
-      } catch { /* ignore parse errors */ }
-    }
-
-    if (step !== 'welcome') return;
+    if (step !== 'welcome' || savedFlowPending.current || webFlowStarting.current) return;
+    webFlowStarting.current = true;
     setCategory('application');
     setSubCategory(CATEGORIES.find((c) => c.id === 'application')?.title || null);
     push('tessa', 'How would you like to provide your requirements?');
