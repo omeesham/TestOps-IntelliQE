@@ -145,6 +145,33 @@ export async function startScan(tenantId: string, createdBy: string, options: Sc
   return scanId;
 }
 
+/** True while this process holds the scan: running, or finished within the last hour. Ids compare case-insensitively. */
+export function isLiveScan(scanId: string): boolean {
+  const id = scanId.toLowerCase();
+  for (const key of live.keys()) if (key.toLowerCase() === id) return true;
+  return false;
+}
+
+/** Message stored on an audit whose process ended without reporting a result. */
+export const INTERRUPTED_MESSAGE = 'This audit was interrupted before it finished, so it has no report. Start it again.';
+
+/**
+ * Close audits the database still shows as running although no process is
+ * running them, which is what a server restart mid-audit leaves behind.
+ * Returns the ids that were closed.
+ */
+export async function closeInterruptedScans(tenantId: string): Promise<string[]> {
+  const { rows } = await pool.query(`SELECT id FROM ada_scans WHERE tenant_id = $1 AND status IN ('running', 'queued')`, [tenantId]);
+  const dead = rows.map((r: any) => String(r.id)).filter((id: string) => !isLiveScan(id));
+  for (const id of dead) {
+    await pool.query(
+      `UPDATE ada_scans SET status = 'failed', error = $2, finished_at = now() WHERE id = $1 AND status IN ('running', 'queued')`,
+      [id, INTERRUPTED_MESSAGE],
+    );
+  }
+  return dead;
+}
+
 export function cancelScan(tenantId: string, scanId: string): boolean {
   const s = live.get(scanId);
   if (!s || s.tenantId !== tenantId || s.status !== 'running') return false;

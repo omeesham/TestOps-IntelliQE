@@ -28,6 +28,7 @@ import path from 'path';
 import { existsSync } from 'fs';
 import {
   startScan, getProgress, cancelScan, tenantHasRunningScan, DEFAULT_OPTIONS, evidenceDirFor, removeEvidence,
+  isLiveScan, closeInterruptedScans, INTERRUPTED_MESSAGE,
 } from '../services/ada/ada-scan.service.js';
 import { DEVICE_PROFILES, RECOMMENDED_DEVICE_IDS, PRIMARY_DEVICE_ID } from '../services/ada/ada-devices.js';
 import { listStandards, loadStandard, createStandard, deleteStandard } from '../services/ada/ada-standard.service.js';
@@ -107,6 +108,8 @@ router.post('/scans', async (req: Request, res: Response) => {
 
 router.get('/scans', async (req: Request, res: Response) => {
   try {
+    // An audit cut off by a server restart must not sit in the list as running forever.
+    await closeInterruptedScans(req.user!.tenantId).catch((err) => console.warn('[ada] could not close interrupted audits:', err.message));
     const { rows } = await pool.query(
       `SELECT id, target_url, site_name, status, overall_score, pages_crawled, links_checked, findings_count,
               created_by, started_at, finished_at, created_at, error
@@ -407,9 +410,9 @@ router.get('/scans/:id', async (req: Request, res: Response) => {
     const progress = getProgress(tenantId, id, after);
     // A scan that was running when the server restarted has no live state and
     // never got a terminal status — report it honestly rather than spinning forever.
-    if (!progress && scan.status === 'running') {
+    if (!progress && (scan.status === 'running' || scan.status === 'queued') && !isLiveScan(id)) {
       scan.status = 'failed';
-      scan.error = 'The server restarted while this audit was running. Start it again.';
+      scan.error = INTERRUPTED_MESSAGE;
       await pool.query(`UPDATE ada_scans SET status = 'failed', error = $2, finished_at = now() WHERE id = $1`, [id, scan.error]).catch(() => { /* best effort */ });
     }
     res.json({ scan, progress });
@@ -480,12 +483,24 @@ router.get('/scans/:id/pages', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/scans/:id/cancel', (req: Request, res: Response) => {
-  const id = String(req.params.id);
-  if (!UUID_RE.test(id)) { res.status(400).json({ error: 'Invalid scan id' }); return; }
-  const ok = cancelScan(req.user!.tenantId, id);
-  if (!ok) { res.status(404).json({ error: 'No running audit with that id' }); return; }
-  res.json({ cancelled: true });
+router.post('/scans/:id/cancel', async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) { res.status(400).json({ error: 'Invalid scan id' }); return; }
+    if (cancelScan(req.user!.tenantId, id)) { res.json({ cancelled: true }); return; }
+    if (isLiveScan(id)) { res.status(404).json({ error: 'No running audit with that id' }); return; }
+    // Nothing is running it in this process. If the database still says running,
+    // the audit was interrupted: close it so Stop always ends the audit.
+    const closed = await pool.query(
+      `UPDATE ada_scans SET status = 'failed', error = $3, finished_at = now()
+        WHERE id = $1 AND tenant_id = $2 AND status IN ('running', 'queued')`,
+      [id, req.user!.tenantId, INTERRUPTED_MESSAGE],
+    );
+    if (!closed.rowCount) { res.status(404).json({ error: 'No running audit with that id' }); return; }
+    res.json({ cancelled: true, interrupted: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to stop the audit' });
+  }
 });
 
 router.delete('/scans/:id', async (req: Request, res: Response) => {
