@@ -29,7 +29,7 @@ type ScanRow = AdaScanRecord & { severity?: Record<AdaSeverity, number> | null }
 type StatusFilter = 'all' | AdaScanRecord['status'];
 
 const card = 'bg-white border border-gray-100 rounded-2xl shadow-sm';
-const th = 'px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-400';
+const th = 'px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-400';
 const STATUS_LABEL: Record<AdaScanRecord['status'], string> = { queued: 'Queued', running: 'Running', completed: 'Complete', failed: 'Failed', cancelled: 'Stopped early' };
 const STATUS_STYLE: Record<AdaScanRecord['status'], string> = {
   queued: 'bg-gray-50 text-gray-600 border-gray-200',
@@ -156,7 +156,14 @@ function SchedulesTable({ rows, onChanged, onOpenScan, onAdd, onError }: {
   }
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+      <table className="w-full min-w-[720px] table-fixed text-sm">
+        <colgroup>
+          <col />
+          <col className="w-[210px]" />
+          <col className="w-[150px]" />
+          <col className="w-[76px]" />
+          <col className="w-[176px]" />
+        </colgroup>
         <thead>
           <tr className="border-b border-gray-100 bg-gray-50/60">
             <th className={th}>Website</th>
@@ -169,31 +176,31 @@ function SchedulesTable({ rows, onChanged, onOpenScan, onAdd, onError }: {
         <tbody>
           {rows.map((s) => (
             <tr key={s.id} className="border-b border-gray-50 last:border-0 hover:bg-violet-50/30">
-              <td className="px-5 py-4">
-                <p className="font-medium text-[#1E1B4B] truncate max-w-[340px]" title={s.target_url}>{s.target_url}</p>
+              <td className="px-4 py-4">
+                <p className="font-medium text-[#1E1B4B] truncate" title={s.target_url}>{s.target_url}</p>
                 <p className="text-xs text-gray-400 mt-0.5 flex flex-wrap items-center gap-x-3">
                   {s.created_by && <span className="inline-flex items-center gap-1"><User className="w-3 h-3" /> {s.created_by}</span>}
                   <span>{s.options.checkExternalLinks === false ? 'Internal links only' : 'Checks external links'}</span>
                   {s.options.username && <span className="inline-flex items-center gap-1"><Lock className="w-3 h-3" /> Signs in as {s.options.username}</span>}
                 </p>
               </td>
-              <td className="px-5 py-4 whitespace-nowrap">
+              <td className="px-4 py-4">
                 <span className={`inline-flex px-2 py-0.5 rounded-full border text-[11px] font-semibold ${s.enabled ? 'bg-violet-50 text-violet-700 border-violet-200' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>{s.enabled ? 'Recurring' : 'Paused'}</span>
                 <p className="text-sm text-gray-700 mt-1">{describeSlot(s)}</p>
                 {s.enabled && s.next_run_at && <p className="text-xs text-gray-400">Next: {new Date(s.next_run_at).toLocaleString()}</p>}
-                {s.last_error && <p className="text-xs text-amber-600 max-w-[240px] truncate" title={s.last_error}>Retrying: {s.last_error}</p>}
+                 {s.last_error && <p className="text-xs text-amber-600 truncate" title={s.last_error}>Retrying: {s.last_error}</p>}
               </td>
-              <td className="px-5 py-4 whitespace-nowrap">
+              <td className="px-4 py-4">
                 {s.last_scan_id
-                  ? <button onClick={() => onOpenScan(s.last_scan_id!)} className="text-sm text-violet-700 hover:underline">{s.last_run_at ? new Date(s.last_run_at).toLocaleString() : 'Open report'}</button>
+                  ? <button onClick={() => onOpenScan(s.last_scan_id!)} className="text-sm text-violet-700 hover:underline text-left">{s.last_run_at ? new Date(s.last_run_at).toLocaleString() : 'Open report'}</button>
                   : <span className="text-sm text-gray-400">Not run yet</span>}
               </td>
-              <td className="px-5 py-4">
+              <td className="px-4 py-4">
                 <button onClick={() => toggle(s)} disabled={busy === s.id} role="switch" aria-checked={s.enabled} aria-label={`Schedule for ${s.target_url}`} className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-50 ${s.enabled ? 'bg-violet-600' : 'bg-gray-300'}`} title={s.enabled ? 'Pause' : 'Resume'}>
                   <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${s.enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
                 </button>
               </td>
-              <td className="px-5 py-4 text-right whitespace-nowrap">
+              <td className="px-4 py-4 text-right">
                 <button onClick={() => runNow(s)} disabled={busy === s.id} className="inline-flex items-center gap-1.5 text-xs text-gray-700 hover:text-violet-700 border border-gray-200 hover:border-violet-300 bg-white rounded-lg px-3 py-1.5 mr-2 disabled:opacity-50">
                   <Play className="w-3 h-3" /> Run now
                 </button>
@@ -352,7 +359,7 @@ export default function AdaCompliancePage() {
             <p className="text-xs text-gray-400 truncate">Latest audit of each site</p>
           </div>
         </div>
-        <Kpi icon={AlertTriangle} label="Open issues" value={kpi.issues == null ? '—' : kpi.issues.toLocaleString()} sub={kpi.issues == null ? 'Latest audit of each site' : `${kpi.critical.toLocaleString()} critical · latest audit of each site`} tone="bg-amber-50 text-amber-600" />
+        <Kpi icon={AlertTriangle} label="Open issues" value={kpi.issues == null ? '—' : kpi.issues.toLocaleString()} sub={kpi.issues == null ? 'Latest audit of each site' : `${kpi.critical.toLocaleString()} critical`} tone="bg-amber-50 text-amber-600" />
         <Kpi icon={CalendarClock} label="Scheduled audits" value={schedules === null ? '—' : activeSchedules} sub={schedules && schedules.length > activeSchedules ? `${schedules.length - activeSchedules} paused` : 'Active'} tone="bg-cyan-50 text-cyan-600" />
       </div>
 
@@ -393,11 +400,17 @@ export default function AdaCompliancePage() {
           <EmptyState icon={Search} title="No audits match" text="Try a different search or status." />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[720px] table-fixed text-sm">
+              <colgroup>
+                <col />
+                <col className="w-[168px]" />
+                <col className="w-[236px]" />
+                <col className="w-[76px]" />
+                <col className="w-[110px]" />
+              </colgroup>
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50/60">
                   <th className={th}>Report</th>
-                  <th className={th}>Type</th>
                   <th className={th}>Summary</th>
                   <th className={th}>Severity</th>
                   <th className={`${th} text-center`}>Health</th>
@@ -415,28 +428,25 @@ export default function AdaCompliancePage() {
                       onClick={openable ? () => openScan(s.id) : undefined}
                       className={`border-b border-gray-50 last:border-0 ${openable ? 'cursor-pointer hover:bg-violet-50/40' : ''}`}
                     >
-                      <td className="px-5 py-4 max-w-[340px]">
+                      <td className="px-4 py-4">
+                        <span className={`inline-flex items-center px-2 py-0.5 mb-1 rounded-full border text-[11px] font-semibold ${STATUS_STYLE[s.status]}`}>
+                          {active && <Loader2 className="w-3 h-3 animate-spin mr-1" />}{STATUS_LABEL[s.status]}
+                        </span>
                         {openable
                           ? <button onClick={(e) => { e.stopPropagation(); openScan(s.id); }} className="font-semibold text-[#1E1B4B] hover:text-violet-700 text-left truncate max-w-full block" style={{ transform: 'none' }}>{s.site_name || s.target_url}</button>
                           : <p className="font-semibold text-[#1E1B4B] truncate">{s.site_name || s.target_url}</p>}
                         {s.site_name && <p className="text-xs text-gray-400 truncate" title={s.target_url}>{s.target_url}</p>}
                         <p className="text-xs text-gray-400 mt-0.5" title={new Date(s.created_at).toLocaleString()}>
-                          {scheduled ? 'Scheduled run' : s.created_by ? `by ${s.created_by}` : ''}{s.created_by ? ', ' : ''}{timeAgo(s.created_at)}
+                          {scheduled ? 'Scheduled run' : s.created_by ? `On demand by ${s.created_by}` : ''}{s.created_by ? ', ' : ''}{timeAgo(s.created_at)}
                         </p>
                       </td>
-                      <td className="px-5 py-4 whitespace-nowrap">
-                        <span className={`inline-flex px-2 py-0.5 rounded-full border text-[11px] font-semibold ${STATUS_STYLE[s.status]}`}>
-                          {active && <Loader2 className="w-3 h-3 animate-spin mr-1 self-center" />}{STATUS_LABEL[s.status]}
-                        </span>
-                        <p className="text-xs text-gray-500 mt-1">{scheduled ? 'Scheduled' : 'On demand'} · WCAG 2.2 AA</p>
-                      </td>
-                      <td className="px-5 py-4 whitespace-nowrap">
+                      <td className="px-4 py-4">
                         {s.status === 'failed' ? (
-                          <p className="text-xs text-red-600 max-w-[240px] truncate flex items-center gap-1" title={s.error || undefined}><XCircle className="w-3.5 h-3.5 flex-shrink-0" /> {s.error || 'The audit could not be completed'}</p>
+                          <p className="text-xs text-red-600 line-clamp-3" title={s.error || undefined}><XCircle className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />{s.error || 'The audit could not be completed'}</p>
                         ) : active ? (
                           <>
                             <p className="text-sm text-gray-700">{s.pages_crawled ? `${s.pages_crawled.toLocaleString()} pages so far` : 'In progress'}</p>
-                            <div className="w-32 h-1.5 mt-1.5 bg-violet-100 rounded-full overflow-hidden"><div className="h-full w-1/2 rounded-full bg-gradient-to-r from-violet-400 via-indigo-500 to-violet-400 animate-shimmer" /></div>
+                            <div className="w-full max-w-32 h-1.5 mt-1.5 bg-violet-100 rounded-full overflow-hidden"><div className="h-full w-1/2 rounded-full bg-gradient-to-r from-violet-400 via-indigo-500 to-violet-400 animate-shimmer" /></div>
                           </>
                         ) : (
                           <>
@@ -445,12 +455,12 @@ export default function AdaCompliancePage() {
                           </>
                         )}
                       </td>
-                      <td className="px-5 py-4">{s.severity && isFinished(s) ? <SeverityChips counts={s.severity} /> : <span className="text-gray-300">—</span>}</td>
-                      <td className="px-5 py-4"><div className="flex justify-center"><HealthRing score={isFinished(s) ? s.overall_score : null} /></div></td>
-                      <td className="px-5 py-4 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                      <td className="px-4 py-4">{s.severity && isFinished(s) ? <SeverityChips counts={s.severity} /> : <span className="text-gray-300">—</span>}</td>
+                      <td className="px-2 py-4"><div className="flex justify-center"><HealthRing score={isFinished(s) ? s.overall_score : null} /></div></td>
+                      <td className="px-4 py-4 text-right" onClick={(e) => e.stopPropagation()}>
                         {active ? (
                           <button onClick={() => stop(s.id)} disabled={stopping === s.id} className="inline-flex items-center gap-1.5 text-xs text-gray-700 hover:text-red-600 border border-gray-200 hover:border-red-200 bg-white rounded-lg px-3 py-1.5 disabled:opacity-50" title="Stop now and keep the report for the pages audited so far">
-                            <Square className="w-3 h-3 fill-current" /> {stopping === s.id ? 'Stopping' : 'Stop and report'}
+                            <Square className="w-3 h-3 fill-current" /> {stopping === s.id ? 'Stopping' : 'Stop'}
                           </button>
                         ) : (
                           <button onClick={() => remove(s)} className="p-1.5 text-gray-300 hover:text-red-500" title="Delete audit" aria-label={`Delete the audit of ${s.site_name || s.target_url}`}><Trash2 className="w-4 h-4" /></button>

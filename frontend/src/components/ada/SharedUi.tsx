@@ -28,7 +28,7 @@ export function HealthRing({ score, size = 44, stroke = 5, label, bare }: { scor
 
 export function SeverityChips({ counts }: { counts: Record<AdaSeverity, number> }) {
   return (
-    <div className="flex flex-wrap 2xl:flex-nowrap gap-1 min-w-[190px]">
+    <div className="flex flex-wrap gap-1">
       {SEVERITIES.map((s) => (
         <span key={s} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-medium whitespace-nowrap ${counts[s] > 0 ? SEV_STYLE[s] : 'bg-white text-gray-400 border-gray-200'}`}>
           <span className="tabular-nums">{counts[s].toLocaleString()}</span> {SEV_LABEL[s]}
