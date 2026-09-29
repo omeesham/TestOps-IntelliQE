@@ -593,8 +593,8 @@ export default function ChatPage() {
       return;
     }
     if (c.id === 'ada') {
-      // The website audit has its own page; open it with the New audit form ready.
-      navigate('/ada-compliance?new=1');
+      // The website audit has its own page; audits are started there from New audit.
+      navigate('/ada-compliance');
       return;
     }
     push('user', c.title);

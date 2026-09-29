@@ -3,7 +3,6 @@
  *
  *   /ada-compliance                  overview: key numbers, audit reports, scheduled audits
  *   /ada-compliance?scan=<id>        one audit: live progress while it runs, then the report
- *   /ada-compliance?new=1            overview with the New audit drawer open (used by Chat)
  *
  * Audits are started from the New audit drawer; nothing here runs in the chat.
  */
@@ -230,14 +229,6 @@ export default function AdaCompliancePage() {
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [stopping, setStopping] = useState<string | null>(null);
-
-  // Chat's ADA Compliance tile lands here with ?new=1.
-  const wantsNew = params.get('new') === '1';
-  useEffect(() => {
-    if (!wantsNew) return;
-    setAuditDrawer(true);
-    setParams((p) => { const n = new URLSearchParams(p); n.delete('new'); return n; }, { replace: true });
-  }, [wantsNew, setParams]);
 
   const [reloadTick, setReloadTick] = useState(0);
   const reload = useCallback(() => setReloadTick((n) => n + 1), []);
