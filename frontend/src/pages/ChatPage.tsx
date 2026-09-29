@@ -95,7 +95,7 @@ interface AgentStep {
 // `comingSoon` dims the card and makes it inert.
 const CATEGORIES: { id: Category; title: string; icon: React.ElementType; desc: string; comingSoon?: boolean }[] = [
   { id: 'application', title: 'Web Application Automation', icon: Monitor, desc: 'Validate functional workflows, E2E testing and cross-browser behavior.' },
-  { id: 'api',         title: 'API Automation',     icon: Plug,        desc: 'Test REST services, endpoints, and system integrations.', comingSoon: true },
+  { id: 'api',         title: 'API Automation',     icon: Plug,        desc: 'Test REST services, endpoints, and system integrations.' },
   { id: 'ada',         title: 'ADA Compliance',     icon: UniversalAccess, desc: 'Enter a URL. Audit accessibility (WCAG), broken links, best practices and site health.' },
 ];
 
@@ -595,6 +595,11 @@ export default function ChatPage() {
     if (c.id === 'ada') {
       // The website audit has its own page; audits are started there from New audit.
       navigate('/ada-compliance');
+      return;
+    }
+    if (c.id === 'api') {
+      // API Automation has its own page.
+      navigate('/automation');
       return;
     }
     push('user', c.title);

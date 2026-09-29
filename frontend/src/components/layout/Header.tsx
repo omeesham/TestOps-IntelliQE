@@ -11,6 +11,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/generated-tests': 'Generated Test Cases',
   '/ada-compliance': 'ADA Compliance',
   '/bug-tracker': 'Bug Tracker',
+  '/automation': 'API Automation',
 };
 
 export default function Header() {
