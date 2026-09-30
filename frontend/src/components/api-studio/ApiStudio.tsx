@@ -138,7 +138,7 @@ export default function ApiStudio() {
             <div className="h-full flex flex-col">
               <EmptyState icon={FileCheck2} title="No scenarios designed yet" hint={sel ? `${sel} endpoints are selected — design scenarios and they land here for review before anything is automated.` : 'Select endpoints in the catalogue, then design scenarios. Every scenario stops here for review before anything is automated.'} />
               <div className="flex justify-center -mt-10 pb-10">
-                {sel ? <button type="button" onClick={design} className={PRIMARY_BTN}>Testcase generation for {sel}</button> : <button type="button" onClick={() => setView('endpoints')} className={PRIMARY_BTN}>Open the catalogue<ArrowRight className="w-3.5 h-3.5" /></button>}
+                {sel ? <button type="button" onClick={design} className={PRIMARY_BTN}>Generate Test Cases for {sel}</button> : <button type="button" onClick={() => setView('endpoints')} className={PRIMARY_BTN}>View Endpoints<ArrowRight className="w-3.5 h-3.5" /></button>}
               </div>
             </div>
           ) : run.phase === 'generating' && run.scenarios.length === 0 ? (

@@ -148,8 +148,8 @@ export default function EndpointsView({ catalog, running, onDesign, onImport }: 
               )}
             </div>
             <button type="button" onClick={onImport} className={SECONDARY_BTN} title="Import more APIs"><Plus className="w-3.5 h-3.5" /><span className="hidden @[1000px]:inline">Import</span></button>
-            <button type="button" onClick={onDesign} disabled={running || selectedCount === 0} title={`Testcase generation for ${selectedCount} selected endpoint${selectedCount === 1 ? '' : 's'}`} className={`${PRIMARY_BTN} whitespace-nowrap`}>
-              {running ? 'Generating…' : <>Testcase generation ({selectedCount})</>}
+            <button type="button" onClick={onDesign} disabled={running || selectedCount === 0} title={`Generate test cases for ${selectedCount} selected endpoint${selectedCount === 1 ? '' : 's'}`} className={`${PRIMARY_BTN} whitespace-nowrap`}>
+              {running ? 'Generating…' : <>Generate Test Cases ({selectedCount})</>}
             </button>
           </div>
         </div>
