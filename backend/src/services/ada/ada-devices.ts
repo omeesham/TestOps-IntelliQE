@@ -36,12 +36,12 @@ const IPAD_UA = 'Mozilla/5.0 (iPad; CPU OS 18_5 like Mac OS X) AppleWebKit/605.1
 const androidUa = (model: string) => `Mozilla/5.0 (Linux; Android 15; ${model}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36`;
 
 /** The desktop profile the main audit pass uses. Always part of a UX run. */
-export const PRIMARY_DEVICE_ID = 'desktop-1366';
+export const PRIMARY_DEVICE_ID = 'desktop-1920';
 
 export const DEVICE_PROFILES: DeviceProfile[] = [
   // ── desktop ──
-  { id: 'desktop-1366', label: 'Desktop 1366 × 900', kind: 'desktop', viewport: { width: 1366, height: 900 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false, recommended: true },
-  { id: 'desktop-1920', label: 'Desktop 1920 × 1080', kind: 'desktop', viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false },
+  { id: 'desktop-1920', label: 'Desktop 1920 × 1080', kind: 'desktop', viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false, recommended: true },
+  { id: 'desktop-1366', label: 'Desktop 1366 × 900', kind: 'desktop', viewport: { width: 1366, height: 900 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false },
   { id: 'laptop-1280', label: 'Laptop 1280 × 720', kind: 'desktop', viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false },
   // ── phones (one per distinct width is recommended) ──
   { id: 'galaxy-s25', label: 'Samsung Galaxy S25', vendor: 'Samsung', kind: 'mobile', viewport: { width: 360, height: 780 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, userAgent: androidUa('SM-S931B'), recommended: true },

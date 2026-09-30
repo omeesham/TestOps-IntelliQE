@@ -20,7 +20,7 @@ import { tryLogin } from '../../agents/exploreAgent.js';
 import { runAccessibilityCheck, runBestPracticeCheck } from './ada-checks.js';
 import { checkLinks, shouldCheckLink, BROWSER_UA, type CollectedLink } from './ada-links.js';
 import { buildSummary } from './ada-score.js';
-import { resolveDevices, type DeviceProfile } from './ada-devices.js';
+import { resolveDevices, DEVICE_PROFILES, PRIMARY_DEVICE_ID, type DeviceProfile } from './ada-devices.js';
 import { runVisualCheck, type EvidenceBudget } from './ada-visual.js';
 import type { CrawlCoverage, Finding, LinkResult, PageResult, PageSource, ProgressEvent, ScanOptions, ScanSummary, UxRun } from './ada-types.js';
 
@@ -205,7 +205,8 @@ export async function runScan(options: ScanOptions, emit: Emit, control: EngineC
     browser = await chromium.launch({ headless: true });
     const ctx = await browser.newContext({
       ignoreHTTPSErrors: true,
-      viewport: { width: 1366, height: 900 },
+      // The main audit pass runs on the primary desktop profile — the one the device picker marks "always".
+      viewport: DEVICE_PROFILES.find((d) => d.id === PRIMARY_DEVICE_ID)!.viewport,
       userAgent: BROWSER_UA,
       locale: 'en-US',
     });
