@@ -7,29 +7,15 @@
  * "Design scenarios", which starts the run for the selected endpoints.
  */
 import { useMemo, useState } from 'react';
-import { Search, Trash2, Pencil, Layers, Plus, Download, ChevronDown, ChevronRight, Globe, ShieldCheck, Gauge, ShieldAlert, ScrollText, Target, Wrench, GitCompare, Table2, Clock, Wand2, GitPullRequestArrow, Radio, BadgeCheck, Bug } from 'lucide-react';
-import { useToast } from '@/components/feedback/ToastProvider';
+import { Search, Trash2, Pencil, Layers, Plus, Download, ChevronDown, ChevronRight, Globe } from 'lucide-react';
 import { MethodBadge, StatusCode, EmptyState } from '../primitives';
 import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, CARD, BRAND_CHIP, MUTED_CHIP, STRIP, THEAD, IMPORT_METHOD_LABELS, pathOf, hostOf } from '../format';
 import EndpointEditor from '../EndpointEditor';
-import ContractCheck from '../ContractCheck';
-import LoadTest from '../LoadTest';
-import SecurityScan from '../SecurityScan';
-import OwaspCompliance from '../OwaspCompliance';
-import FuzzTest from '../FuzzTest';
-import GovernanceCheck from '../GovernanceCheck';
-import Coverage from '../Coverage';
-import BaselineDiff from '../BaselineDiff';
-import DataDriven from '../DataDriven';
-import RunAutomation from '../RunAutomation';
-import NlAuthor from '../NlAuthor';
-import ContractDrift from '../ContractDrift';
-import AsyncProbe from '../AsyncProbe';
 import { toConnectorManifest, toOpenApi, toMockServer, toPactContract, downloadText } from '../generators';
 import InsightsPanel from './InsightsPanel';
 import StrategyBar from './StrategyBar';
 import type { Catalog } from '../hooks/useCatalog';
-import type { CatalogEndpoint, Scenario, StrategyLayerId } from '../types';
+import type { CatalogEndpoint } from '../types';
 
 /**
  * The right-hand "Intelligence & strategy" panels are hidden for API automation
@@ -54,32 +40,15 @@ interface Props {
   running: boolean;
   onDesign: () => void;
   onImport: () => void;
-  /** The current run's designed scenarios — read-only, for coverage. */
-  scenarios?: Scenario[];
 }
 
-export default function EndpointsView({ catalog, running, onDesign, onImport, scenarios = [] }: Props) {
+export default function EndpointsView({ catalog, running, onDesign, onImport }: Props) {
   const { endpoints, selected, profile } = catalog;
-  const toast = useToast();
   const [q, setQ] = useState('');
   const [methodFilter, setMethodFilter] = useState('all');
   const [resourceFocus, setResourceFocus] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [editing, setEditing] = useState<CatalogEndpoint | null>(null);
-  const [contractOpen, setContractOpen] = useState(false);
-  const [loadOpen, setLoadOpen] = useState(false);
-  const [securityOpen, setSecurityOpen] = useState(false);
-  const [owaspOpen, setOwaspOpen] = useState(false);
-  const [fuzzOpen, setFuzzOpen] = useState(false);
-  const [governanceOpen, setGovernanceOpen] = useState(false);
-  const [coverageOpen, setCoverageOpen] = useState(false);
-  const [baselineOpen, setBaselineOpen] = useState(false);
-  const [dataDrivenOpen, setDataDrivenOpen] = useState(false);
-  const [automationOpen, setAutomationOpen] = useState(false);
-  const [nlOpen, setNlOpen] = useState(false);
-  const [driftOpen, setDriftOpen] = useState(false);
-  const [asyncOpen, setAsyncOpen] = useState(false);
-  const [toolsOpen, setToolsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
 
   const methods = useMemo(() => [...new Set(endpoints.map((e) => e.method))].sort(), [endpoints]);
@@ -157,41 +126,6 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
             {selectedCount > 0 && (
               <button type="button" onClick={() => catalog.removeEndpoints([...selected])} disabled={running} className={SECONDARY_BTN} title="Remove the selected endpoints from the catalogue"><Trash2 className="w-3.5 h-3.5" /><span className="hidden @[1000px]:inline">Remove</span></button>
             )}
-            <div className="relative">
-              <button type="button" onClick={() => setToolsOpen((o) => !o)} className={SECONDARY_BTN} title="Quality tools — validate, scan, load-test, lint, coverage"><Wrench className="w-3.5 h-3.5" /><span className="hidden @[1000px]:inline">Tools</span><ChevronDown className="w-3 h-3" /></button>
-              {toolsOpen && (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setToolsOpen(false)} />
-                  <div className="absolute right-0 mt-1 z-50 w-60 bg-white border border-[#E4E0F5] rounded-lg py-1">
-                    {([
-                      { icon: Wand2, label: 'Author in plain English', desc: 'Describe tests → a run strategy', open: () => setNlOpen(true) },
-                      { icon: ShieldCheck, label: 'Contract validation', desc: 'Live-check status, JSON & schema', open: () => setContractOpen(true) },
-                      { icon: GitPullRequestArrow, label: 'Contract drift', desc: 'Adopt live changes into the catalogue', open: () => setDriftOpen(true) },
-                      { icon: ShieldAlert, label: 'Security scan', desc: 'Broken auth, injection, headers, CORS', open: () => setSecurityOpen(true) },
-                      { icon: BadgeCheck, label: 'OWASP API Top-10', desc: 'Compliance posture across the 2023 categories', open: () => setOwaspOpen(true) },
-                      { icon: Bug, label: 'Fuzz / property test', desc: 'Boundary & malformed inputs → crashes, leaks', open: () => setFuzzOpen(true) },
-                      { icon: Gauge, label: 'Load test', desc: 'Latency, throughput, status mix', open: () => setLoadOpen(true) },
-                      { icon: ScrollText, label: 'Governance lint', desc: 'API design smells', open: () => setGovernanceOpen(true) },
-                      { icon: Target, label: 'Test coverage', desc: 'Which endpoints are tested', open: () => setCoverageOpen(true) },
-                      { icon: GitCompare, label: 'Regression baselines', desc: 'Snapshot responses & diff for drift', open: () => setBaselineOpen(true) },
-                      { icon: Table2, label: 'Data-driven testing', desc: 'Run one endpoint over a data table', open: () => setDataDrivenOpen(true) },
-                      { icon: Radio, label: 'Async & streaming', desc: 'Test WebSocket and SSE endpoints', open: () => setAsyncOpen(true) },
-                      { icon: Clock, label: 'Schedules & webhooks', desc: 'Recurring runs and Slack/Teams alerts', open: () => setAutomationOpen(true) },
-                    ]).map((t) => (
-                      <button key={t.label} type="button" onClick={() => { setToolsOpen(false); t.open(); }} className="w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-[#F5F3FF] transition-colors">
-                        <t.icon className="w-4 h-4 text-[#7C3AED] flex-shrink-0 mt-0.5" />
-                        <span className="min-w-0">
-                          <span className="block text-[12px] font-medium text-gray-800">{t.label}</span>
-                          <span className="block text-[10.5px] text-gray-400">{t.desc}</span>
-                        </span>
-                      </button>
-                    ))}
-                    <div className="mx-2 my-1 border-t border-gray-100" />
-                    <p className="px-3 py-1 text-[10px] text-gray-400">Runs on {selectedCount > 0 ? `${selectedCount} selected` : 'all'} endpoint{selectedCount === 1 ? '' : 's'}</p>
-                  </div>
-                </>
-              )}
-            </div>
             <div className="relative">
               <button type="button" onClick={() => setExportOpen((o) => !o)} className={SECONDARY_BTN} title="Export the catalogue as a portable artifact"><Download className="w-3.5 h-3.5" /><span className="hidden @[1000px]:inline">Export</span><ChevronDown className="w-3 h-3" /></button>
               {exportOpen && (
@@ -285,90 +219,6 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
         />
       )}
 
-      {contractOpen && (
-        <ContractCheck
-          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
-          onClose={() => setContractOpen(false)}
-        />
-      )}
-      {securityOpen && (
-        <SecurityScan
-          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
-          onClose={() => setSecurityOpen(false)}
-        />
-      )}
-      {owaspOpen && (
-        <OwaspCompliance
-          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
-          onClose={() => setOwaspOpen(false)}
-        />
-      )}
-      {fuzzOpen && (
-        <FuzzTest
-          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
-          onClose={() => setFuzzOpen(false)}
-        />
-      )}
-      {loadOpen && (
-        <LoadTest
-          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
-          onClose={() => setLoadOpen(false)}
-        />
-      )}
-      {governanceOpen && (
-        <GovernanceCheck
-          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
-          onClose={() => setGovernanceOpen(false)}
-        />
-      )}
-      {coverageOpen && (
-        <Coverage
-          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
-          scenarios={scenarios}
-          onClose={() => setCoverageOpen(false)}
-        />
-      )}
-      {baselineOpen && (
-        <BaselineDiff
-          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
-          onClose={() => setBaselineOpen(false)}
-        />
-      )}
-      {dataDrivenOpen && (
-        <DataDriven
-          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
-          onClose={() => setDataDrivenOpen(false)}
-        />
-      )}
-      {automationOpen && (
-        <RunAutomation
-          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
-          onClose={() => setAutomationOpen(false)}
-        />
-      )}
-      {nlOpen && (
-        <NlAuthor
-          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
-          onApply={(brief) => {
-            catalog.setStrategy({ coverage: brief.coverage, layers: brief.layers as StrategyLayerId[], requirements: brief.requirements });
-            toast.success('Strategy updated', `${brief.coverage} coverage · ${brief.layers.length} layer${brief.layers.length === 1 ? '' : 's'} · brief applied`);
-          }}
-          onClose={() => setNlOpen(false)}
-        />
-      )}
-      {driftOpen && (
-        <ContractDrift
-          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
-          onAdopt={(id, patch) => { catalog.updateEndpoint(id, patch); toast.success('Catalogue updated', 'Adopted the live contract for this endpoint.'); }}
-          onClose={() => setDriftOpen(false)}
-        />
-      )}
-      {asyncOpen && (
-        <AsyncProbe
-          initialUrl={(selectedCount > 0 ? endpoints.find((e) => selected.has(e.id)) : endpoints[0])?.url || ''}
-          onClose={() => setAsyncOpen(false)}
-        />
-      )}
     </div>
   );
 }
