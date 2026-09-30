@@ -164,7 +164,12 @@ export default function ApiStudio() {
 }
 
 /** The Import dialog frame — native modal chrome (overlay + floating sheet),
-    Escape to close, focus moved in on open. The body scrolls; ImportView fills it. */
+    Escape to close, focus moved in on open.
+
+    The sheet has a FIXED height and never scrolls: ImportView lays itself out as
+    a method rail on the left and the chosen method's form on the right, so the
+    whole hub is visible at once — picking a method swaps the right pane instead
+    of appending a form somewhere below the fold. */
 function ImportModal({ onClose, children }: { onClose: () => void; children: ReactNode }) {
   const panelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -176,7 +181,7 @@ function ImportModal({ onClose, children }: { onClose: () => void; children: Rea
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 sm:p-6 overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-hidden">
       <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
       <div
         ref={panelRef}
@@ -184,7 +189,7 @@ function ImportModal({ onClose, children }: { onClose: () => void; children: Rea
         aria-modal="true"
         aria-label="Import API"
         tabIndex={-1}
-        className="relative w-full max-w-[920px] my-4 bg-white rounded-2xl shadow-2xl max-h-[90vh] flex flex-col min-h-0 outline-none"
+        className="relative w-full max-w-[1080px] h-[min(640px,calc(100vh-32px))] bg-white rounded-2xl shadow-2xl flex flex-col min-h-0 overflow-hidden outline-none"
       >
         <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-gray-100 flex-shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -195,7 +200,7 @@ function ImportModal({ onClose, children }: { onClose: () => void; children: Rea
           </div>
           <button type="button" onClick={onClose} aria-label="Close" className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 flex-shrink-0"><X className="w-4 h-4" /></button>
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="flex-1 min-h-0 overflow-hidden">
           {children}
         </div>
       </div>

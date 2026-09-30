@@ -15,7 +15,7 @@ import {
 } from '@/services/api';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { IMPORT_METHODS, BULK_ACCEPT, type ImportMethodDef, type ImportInput } from '../importMethods';
-import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, LABEL, CARD, CARD_HOVER, MUTED_CHIP, CHIP_3D, TILE, TILE_ACTIVE, THEAD } from '../format';
+import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, LABEL, CARD, MUTED_CHIP, CHIP_3D, TILE, TILE_ACTIVE, THEAD } from '../format';
 import { KeyValueRows } from '../EndpointEditor';
 import EndpointEditor from '../EndpointEditor';
 import type { Catalog } from '../hooks/useCatalog';
@@ -80,85 +80,97 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
   };
   const onDrop = (e: DragEvent) => { e.preventDefault(); setDragging(false); bulk(Array.from(e.dataTransfer.files || [])); };
 
-  return (
-    <div className="h-full overflow-y-auto">
-      <div className="max-w-[1180px] mx-auto px-6 py-5 space-y-5">
-        {/* Bulk zone */}
-        <div
-          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={onDrop}
-          className={`${CARD} relative overflow-hidden px-6 py-7 text-center transition-all ${dragging ? 'border-[#A5B4FC] bg-[#F5F3FF] scale-[1.01]' : ''}`}
-        >
-          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#7C3AED] to-[#6366F1]" />
-          <div className={`mx-auto w-14 h-14 rounded-2xl flex items-center justify-center ${TILE_ACTIVE}`}>
-            {busy === 'bulk' ? <Spinner className="w-5 h-5 text-white animate-spin" /> : <UploadCloud className="w-5 h-5 text-white" />}
-          </div>
-          <h2 className="mt-3 text-[15px] font-semibold text-gray-900">Bulk upload — any API document</h2>
-          <div className="mt-4 flex items-center justify-center gap-2">
-            <button type="button" onClick={() => fileRef.current?.click()} disabled={!!busy} className={PRIMARY_BTN}>
-              <UploadCloud className="w-3.5 h-3.5" />Choose files
-            </button>
-            <span className="text-[11px] text-gray-400">or drag them here</span>
-          </div>
-          <input ref={fileRef} type="file" multiple accept={BULK_ACCEPT} className="hidden" onChange={(e) => { bulk(Array.from(e.target.files || [])); e.target.value = ''; }} />
-          {/* What's accepted, as scannable chips rather than a paragraph. */}
-          <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5">
-            {ACCEPTED.map((f) => (
-              <span key={f} className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[10.5px] font-medium ${MUTED_CHIP} ${CHIP_3D}`}>{f}</span>
-            ))}
-          </div>
-        </div>
+  /* The rail row — one look for the bulk entry and the twelve methods. */
+  const railRow = (isActive: boolean) =>
+    `w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left transition-colors ${isActive ? 'bg-[#F5F3FF] text-[#4C1D95]' : 'text-gray-700 hover:bg-gray-50'}`;
 
-        {/* Outcome / error */}
+  return (
+    /* Two panes, fixed to the sheet's height. Nothing here scrolls: the rail
+       fits its thirteen rows, and every form on the right is sized to the pane. */
+    <div className="h-full flex min-h-0">
+      {/* Left: what to import */}
+      <aside className="w-[236px] flex-shrink-0 border-r border-gray-100 px-3 py-3 flex flex-col overflow-hidden">
+        <button type="button" onClick={() => { setActive(null); setError(''); }} className={railRow(active === null)}>
+          <span className={`w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 ${active === null ? TILE_ACTIVE : TILE}`}>
+            <UploadCloud className={`w-3.5 h-3.5 ${active === null ? 'text-white' : 'text-[#7C3AED]'}`} />
+          </span>
+          <span className="min-w-0">
+            <span className="block text-[12px] font-semibold leading-tight">Bulk upload</span>
+            <span className="block text-[10.5px] text-gray-400 leading-tight mt-0.5">Any API document</span>
+          </span>
+        </button>
+
+        <h3 className="mt-2.5 mb-1 px-2.5 text-[10.5px] font-semibold text-gray-500 uppercase tracking-wide">Import by method</h3>
+        <div className="flex flex-col gap-px">
+          {IMPORT_METHODS.map((m) => {
+            const Icon = m.icon;
+            const isActive = active?.id === m.id;
+            return (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => { if (m.id === 'manual') { setManualOpen(true); return; } setActive(m); setError(''); }}
+                className={railRow(isActive)}
+              >
+                <span className={`w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 transition-all ${isActive ? TILE_ACTIVE : TILE}`}>
+                  <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-white' : 'text-[#7C3AED]'}`} />
+                </span>
+                <span className="text-[12px] font-medium leading-tight truncate">{m.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </aside>
+
+      {/* Right: the chosen intake, its result, or the bulk drop zone */}
+      <section className="flex-1 min-w-0 min-h-0 flex flex-col gap-3 p-4">
         {error && (
-          <div className="flex items-start gap-2 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg">
+          <div className="flex items-start gap-2 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg flex-shrink-0">
             <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0 mt-px" />
             <p className="text-[12px] text-red-700 min-w-0">{error}</p>
             <button type="button" onClick={() => setError('')} className="ml-auto text-red-400 hover:text-red-600"><X className="w-3.5 h-3.5" /></button>
           </div>
         )}
-        {outcome && <OutcomePanel outcome={outcome} onOpenCatalogue={onOpenCatalogue} onDismiss={() => setOutcome(null)} />}
 
-        {/* Method grid */}
-        <div>
-          <div className="flex items-baseline gap-2 mb-2.5">
-            <h3 className="text-[12px] font-semibold text-gray-700 uppercase tracking-wide">Import by method</h3>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
-            {IMPORT_METHODS.map((m) => {
-              const Icon = m.icon;
-              const isActive = active?.id === m.id;
-              return (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => { if (m.id === 'manual') { setManualOpen(true); return; } setActive(isActive ? null : m); setError(''); }}
-                  className={`${CARD_HOVER} text-left p-3.5 group hover:border-[#DDD6FE] ${isActive ? 'border-[#A5B4FC] ring-2 ring-[#EDE9FE]' : ''}`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${isActive ? TILE_ACTIVE : TILE}`}>
-                      <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-[#7C3AED]'}`} />
-                    </span>
-                    <span className="text-[12.5px] font-semibold text-gray-900 leading-tight">{m.label}</span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Active method form */}
-        {active && active.id !== 'manual' && (
+        {outcome ? (
+          <OutcomePanel outcome={outcome} onOpenCatalogue={onOpenCatalogue} onDismiss={() => setOutcome(null)} />
+        ) : active && active.id !== 'manual' ? (
           <MethodForm
             key={active.id}
             def={active}
             busy={busy === active.id}
-            onClose={() => setActive(null)}
             onRun={(name, fn) => run(active.id, active.id, name, fn)}
           />
+        ) : (
+          <div
+            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={onDrop}
+            onClick={() => { if (!busy) fileRef.current?.click(); }}
+            className={`${CARD} relative overflow-hidden flex-1 min-h-0 flex flex-col items-center justify-center px-6 text-center cursor-pointer transition-colors ${dragging ? 'border-[#A5B4FC] bg-[#F5F3FF]' : 'hover:border-[#DDD6FE]'}`}
+          >
+            <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#7C3AED] to-[#6366F1]" />
+            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${TILE_ACTIVE}`}>
+              {busy === 'bulk' ? <Spinner className="w-5 h-5 text-white animate-spin" /> : <UploadCloud className="w-5 h-5 text-white" />}
+            </div>
+            <h2 className="mt-3 text-[15px] font-semibold text-gray-900">Bulk upload. Any API document</h2>
+            <p className="mt-1 text-[11.5px] text-gray-500">The parser is picked per file. Everything lands in the catalogue.</p>
+            <div className="mt-4 flex items-center justify-center gap-2">
+              <button type="button" onClick={(e) => { e.stopPropagation(); fileRef.current?.click(); }} disabled={!!busy} className={PRIMARY_BTN}>
+                <UploadCloud className="w-3.5 h-3.5" />Choose files
+              </button>
+              <span className="text-[11px] text-gray-400">or drag them here</span>
+            </div>
+            <input ref={fileRef} type="file" multiple accept={BULK_ACCEPT} className="hidden" onClick={(e) => e.stopPropagation()} onChange={(e) => { bulk(Array.from(e.target.files || [])); e.target.value = ''; }} />
+            {/* What's accepted, as scannable chips rather than a paragraph. */}
+            <div className="mt-5 max-w-[600px] flex flex-wrap items-center justify-center gap-1.5">
+              {ACCEPTED.map((f) => (
+                <span key={f} className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[10.5px] font-medium ${MUTED_CHIP} ${CHIP_3D}`}>{f}</span>
+              ))}
+            </div>
+          </div>
         )}
-      </div>
+      </section>
 
       {manualOpen && (
         <EndpointEditor
@@ -180,8 +192,10 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
 function OutcomePanel({ outcome, onOpenCatalogue, onDismiss }: { outcome: Outcome; onOpenCatalogue: () => void; onDismiss: () => void }) {
   const { res, added, duplicates } = outcome;
   const none = (res.endpoints || []).length === 0;
+  const files = res.files || [];
+  const shownFiles = files.slice(0, 8);
   return (
-    <div className={`${CARD} p-4`}>
+    <div className={`${CARD} p-4 flex-1 min-h-0 overflow-hidden`}>
       <div className="flex items-start gap-3">
         <span className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${none ? 'bg-gradient-to-br from-amber-50 to-amber-100 border border-amber-200' : 'bg-gradient-to-br from-emerald-50 to-emerald-100 border border-emerald-200'}`}>
           {none ? <AlertTriangle className="w-4 h-4 text-amber-600" /> : <CheckCircle2 className="w-4 h-4 text-emerald-600" />}
@@ -201,19 +215,22 @@ function OutcomePanel({ outcome, onOpenCatalogue, onDismiss }: { outcome: Outcom
               {res.warnings.length > 6 && <li className="text-[11px] text-gray-400">…and {res.warnings.length - 6} more</li>}
             </ul>
           )}
-          {!!res.files?.length && (
+          {!!files.length && (
             <div className="mt-3 border border-[#E9E5FB] rounded-md overflow-hidden">
               <table className="w-full text-[11px]">
                 <thead className={`text-gray-500 ${THEAD}`}><tr><th className="text-left px-2 py-1 font-medium">File</th><th className="text-left px-2 py-1 font-medium">Parser</th><th className="text-right px-2 py-1 font-medium">Endpoints</th><th className="text-left px-2 py-1 font-medium">Notes</th></tr></thead>
                 <tbody>
-                  {res.files.map((f, i) => (
+                  {shownFiles.map((f, i) => (
                     <tr key={i} className="border-t border-gray-100">
                       <td className="px-2 py-1 font-mono text-gray-700 flex items-center gap-1"><FileText className="w-3 h-3 text-gray-300" />{f.fileName}</td>
                       <td className="px-2 py-1 font-mono text-gray-500">{f.parser || '—'}</td>
                       <td className="px-2 py-1 text-right tabular-nums font-semibold text-gray-800">{f.count}</td>
-                      <td className={`px-2 py-1 ${f.error ? 'text-red-600' : 'text-amber-700'}`}>{f.error || f.warnings?.[0] || ''}</td>
+                      <td className={`px-2 py-1 truncate max-w-[260px] ${f.error ? 'text-red-600' : 'text-amber-700'}`}>{f.error || f.warnings?.[0] || ''}</td>
                     </tr>
                   ))}
+                  {files.length > shownFiles.length && (
+                    <tr className="border-t border-gray-100"><td colSpan={4} className="px-2 py-1 text-gray-400">…and {files.length - shownFiles.length} more files</td></tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -230,7 +247,7 @@ function OutcomePanel({ outcome, onOpenCatalogue, onDismiss }: { outcome: Outcom
 
 /* ── Per-method forms ─────────────────────────────────────────── */
 
-function MethodForm({ def, busy, onClose, onRun }: { def: ImportMethodDef; busy: boolean; onClose: () => void; onRun: (name: string, fn: () => Promise<ApiImportResponse>) => Promise<boolean> }) {
+function MethodForm({ def, busy, onRun }: { def: ImportMethodDef; busy: boolean; onRun: (name: string, fn: () => Promise<ApiImportResponse>) => Promise<boolean> }) {
   const [input, setInput] = useState<ImportInput>(def.inputs[0]!);
   const Icon = def.icon;
   const tabs: { id: ImportInput; label: string }[] = def.inputs.map((i) => ({
@@ -238,8 +255,10 @@ function MethodForm({ def, busy, onClose, onRun }: { def: ImportMethodDef; busy:
     label: i === 'files' ? 'Upload file' : i === 'url' ? 'From URL' : i === 'text' ? 'Paste' : i === 'probe' ? 'Live endpoint' : i === 'graphql' ? 'Introspect' : i === 'mcp' ? 'Connect' : i === 'webhook' ? 'Define' : i === 'connector' ? 'Manifest' : 'Manual',
   }));
   return (
-    <div className={`${CARD} p-4`}>
-      <div className="flex items-center gap-2 mb-3">
+    /* Fills the right pane. The form inside is a flex column too, so its
+       big control (drop zone or textarea) takes whatever height is left. */
+    <div className={`${CARD} p-4 flex-1 min-h-0 flex flex-col`}>
+      <div className="flex items-center gap-2 mb-2 flex-shrink-0">
         <span className={`w-7 h-7 rounded-lg flex items-center justify-center ${TILE}`}><Icon className="w-4 h-4 text-[#7C3AED]" /></span>
         <h3 className="text-[13px] font-semibold text-gray-900">{def.label}</h3>
         {tabs.length > 1 && (
@@ -249,11 +268,10 @@ function MethodForm({ def, busy, onClose, onRun }: { def: ImportMethodDef; busy:
             ))}
           </div>
         )}
-        <button type="button" onClick={onClose} className="ml-auto p-1 rounded text-gray-400 hover:text-[#7C3AED]"><X className="w-4 h-4" /></button>
       </div>
-      {/* The full explanation lives here rather than on the card: it is worth
+      {/* The full explanation lives here rather than on the rail: it is worth
           reading once you have chosen a method, and noise before that. */}
-      <p className="-mt-1 mb-3 text-[11.5px] text-gray-500 leading-relaxed">{def.detail}</p>
+      <p className="mb-3 text-[11.5px] text-gray-500 leading-relaxed flex-shrink-0">{def.detail}</p>
       {input === 'files' && <FilesForm def={def} busy={busy} onRun={onRun} />}
       {input === 'url' && <UrlForm def={def} busy={busy} onRun={onRun} />}
       {input === 'text' && <TextForm def={def} busy={busy} onRun={onRun} />}
@@ -266,6 +284,10 @@ function MethodForm({ def, busy, onClose, onRun }: { def: ImportMethodDef; busy:
 }
 
 type RunFn = (name: string, fn: () => Promise<ApiImportResponse>) => Promise<boolean>;
+
+/** Every form is a flex column filling the method card, so its largest
+    control can grow to the pane instead of pushing the submit row below it. */
+const FORM = 'flex-1 min-h-0 flex flex-col gap-3';
 
 function SubmitBtn({ busy, label, disabled }: { busy: boolean; label: string; disabled?: boolean }) {
   return (
@@ -289,9 +311,10 @@ function FilesForm({ def, busy, onRun }: { def: ImportMethodDef; busy: boolean; 
     if (ok) setFiles([]);
   };
   return (
-    <form onSubmit={submit} className="space-y-3">
-      <div onClick={() => ref.current?.click()} className="border border-dashed border-[#DDD6FE] rounded-lg bg-[#FAFAFE] px-4 py-5 text-center cursor-pointer hover:bg-[#F5F3FF] transition-colors">
-        <p className="text-[12px] text-gray-600">{files.length ? files.map((f) => f.name).join(', ') : 'Click to choose'}{' '}<span className="text-gray-400 font-mono text-[10.5px]">{def.accept}</span></p>
+    <form onSubmit={submit} className={FORM}>
+      <div onClick={() => ref.current?.click()} className="flex-1 min-h-[96px] flex flex-col items-center justify-center border border-dashed border-[#DDD6FE] rounded-lg bg-[#FAFAFE] px-4 py-5 text-center cursor-pointer hover:bg-[#F5F3FF] transition-colors">
+        <span className={`w-10 h-10 rounded-xl flex items-center justify-center mb-2 ${TILE}`}><UploadCloud className="w-4 h-4 text-[#7C3AED]" /></span>
+        <p className="text-[12px] text-gray-600 break-all">{files.length ? files.map((f) => f.name).join(', ') : 'Click to choose'}{' '}<span className="text-gray-400 font-mono text-[10.5px]">{def.accept}</span></p>
         <input ref={ref} type="file" accept={def.accept} multiple={def.id !== 'sdk' && def.id !== 'middleware'} className="hidden" onChange={(e) => { setFiles(Array.from(e.target.files || [])); e.target.value = ''; }} />
       </div>
       <div className="flex justify-end"><SubmitBtn busy={busy} label="Import" disabled={!files.length} /></div>
@@ -311,7 +334,7 @@ function UrlForm({ def, busy, onRun }: { def: ImportMethodDef; busy: boolean; on
     if (ok) setUrl('');
   };
   return (
-    <form onSubmit={submit} className="space-y-3">
+    <form onSubmit={submit} className={FORM}>
       <div>
         <label className={LABEL}>{docs ? 'Documentation page URL' : 'Spec URL'}</label>
         <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={docs ? 'https://developer.acme.com/reference/orders' : 'https://api.acme.com/openapi.json'} spellCheck={false} className={`${INPUT} font-mono`} />
@@ -346,11 +369,11 @@ function TextForm({ def, busy, onRun }: { def: ImportMethodDef; busy: boolean; o
     if (ok) setText('');
   };
   return (
-    <form onSubmit={submit} className="space-y-3">
-      <div className="grid grid-cols-[1fr_220px] gap-3">
-        <div>
+    <form onSubmit={submit} className={FORM}>
+      <div className="flex-1 min-h-0 grid grid-cols-[1fr_220px] gap-3">
+        <div className="flex flex-col min-h-0">
           <label className={LABEL}>{def.id === 'curl' ? 'cURL command(s)' : 'Source'}</label>
-          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={9} spellCheck={false} placeholder={def.placeholder} className={`${INPUT} font-mono text-[11.5px] resize-y`} />
+          <textarea value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} placeholder={def.placeholder} className={`${INPUT} flex-1 min-h-[120px] font-mono text-[11.5px] resize-none`} />
         </div>
         <div>
           <label className={LABEL}>Source name</label>
@@ -398,7 +421,7 @@ function ProbeForm({ busy, onRun }: { busy: boolean; onRun: RunFn }) {
     if (ok) setUrl('');
   };
   return (
-    <form onSubmit={submit} className="space-y-3">
+    <form onSubmit={submit} className={FORM}>
       <div className="flex rounded-lg border border-gray-200 overflow-hidden focus-within:border-[#A5B4FC] focus-within:ring-2 focus-within:ring-[#EDE9FE]">
         <select value={method} onChange={(e) => setMethod(e.target.value)} className="px-2.5 py-2 border-r border-gray-200 text-[12px] font-mono font-bold outline-none text-[#6D28D9] bg-gradient-to-b from-[#F5F3FF] to-[#EDE9FE]">
           {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => <option key={m}>{m}</option>)}
@@ -439,7 +462,7 @@ function ServerForm({ kind, busy, onRun }: { kind: 'graphql' | 'mcp'; busy: bool
     if (ok) setUrl('');
   };
   return (
-    <form onSubmit={submit} className="space-y-3">
+    <form onSubmit={submit} className={FORM}>
       <div>
         <label className={LABEL}>{kind === 'graphql' ? 'GraphQL endpoint' : 'MCP server URL (Streamable HTTP)'}</label>
         <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={kind === 'graphql' ? 'https://api.acme.com/graphql' : 'https://mcp.acme.com/mcp'} spellCheck={false} className={`${INPUT} font-mono`} />
@@ -474,7 +497,7 @@ function WebhookForm({ busy, onRun }: { busy: boolean; onRun: RunFn }) {
     if (ok) setUrl('');
   };
   return (
-    <form onSubmit={submit} className="space-y-3">
+    <form onSubmit={submit} className={FORM}>
       <div className="grid grid-cols-[110px_1fr_170px_120px] gap-2">
         <div><label className={LABEL}>Method</label><select value={method} onChange={(e) => setMethod(e.target.value)} className={INPUT}><option>POST</option><option>PUT</option></select></div>
         <div><label className={LABEL}>Consumer endpoint URL</label><input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://app.acme.com/webhooks/payments" spellCheck={false} className={`${INPUT} font-mono`} /></div>
@@ -485,9 +508,11 @@ function WebhookForm({ busy, onRun }: { busy: boolean; onRun: RunFn }) {
         <label className={LABEL}>Signing secret (HMAC-SHA256)</label>
         <input type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="whsec_…" className={`${INPUT} font-mono`} />
       </div>
-      <div>
+      {/* The one list that can grow: it takes the remaining height and, past
+          a handful of events, scrolls inside itself rather than the dialog. */}
+      <div className="flex-1 min-h-0 flex flex-col">
         <label className={LABEL}>Events</label>
-        <div className="space-y-2">
+        <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1">
           {events.map((ev, i) => (
             <div key={i} className="grid grid-cols-[180px_1fr_auto] gap-2 items-start">
               <input value={ev.name} onChange={(e) => update(i, { name: e.target.value })} placeholder="order.created" spellCheck={false} className={`${INPUT} font-mono`} />
@@ -525,11 +550,11 @@ function ConnectorForm({ busy, onRun }: { busy: boolean; onRun: RunFn }) {
     if (ok) setManifest('');
   };
   return (
-    <form onSubmit={submit} className="space-y-3">
-      <div className="grid grid-cols-[1fr_260px] gap-3">
-        <div>
+    <form onSubmit={submit} className={FORM}>
+      <div className="flex-1 min-h-0 grid grid-cols-[1fr_260px] gap-3">
+        <div className="flex flex-col min-h-0">
           <label className={LABEL}>Manifest (JSON or YAML)</label>
-          <textarea value={manifest} onChange={(e) => setManifest(e.target.value)} rows={12} spellCheck={false} placeholder={CONNECTOR_EXAMPLE} className={`${INPUT} font-mono text-[11.5px] resize-y`} />
+          <textarea value={manifest} onChange={(e) => setManifest(e.target.value)} spellCheck={false} placeholder={CONNECTOR_EXAMPLE} className={`${INPUT} flex-1 min-h-[120px] font-mono text-[11.5px] resize-none`} />
         </div>
         <div className="space-y-2">
           <div><label className={LABEL}>Connector name</label><input value={name} onChange={(e) => setName(e.target.value)} placeholder="Orders API" className={INPUT} /></div>
