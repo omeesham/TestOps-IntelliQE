@@ -18,7 +18,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   getAdaScan, getAdaFindings, getAdaPages, cancelAdaScan, getAdaTrend, type AdaTrendPoint,
   type AdaCategory, type AdaFinding, type AdaPage, type AdaProgress, type AdaProgressEvent,
-  type AdaScanRecord, type AdaSeverity, type AdaSummary, type AdaRemediation, type AdaSiteInventory, type AdaCoverage,
+  type AdaScanRecord, type AdaSeverity, type AdaSummary, type AdaRemediation, type AdaSiteInventory, type AdaCoverage, type AdaCategoryScore,
 } from '@/services/api';
 import {
   Globe, Lock, Loader2, CheckCircle2, AlertTriangle, XCircle, Link2Off,
@@ -1127,134 +1127,253 @@ function buildCsv(findings: AdaFinding[]): string {
   return '﻿' + [head, ...rows].map((r) => r.map(cell).join(',')).join('\r\n');
 }
 
-/** Crawl coverage section of the downloadable report: what was visited, by source, depth and section. */
+/* ───────────────────────────────────────────────────────────────
+   Downloadable HTML report — the executive report that goes to leadership.
+   One masthead, one summary card, one "needs attention" list, then the
+   evidence in collapsed sections. Figures are in ink; severity is a thin bar.
+   ─────────────────────────────────────────────────────────────── */
+
+const n = (x: number) => x.toLocaleString();
+const SEV_HEX: Record<AdaSeverity, string> = { critical: '#dc2626', serious: '#ea580c', moderate: '#d97706', minor: '#9ca3af' };
+const GRADE_WORD: Record<string, string> = { A: 'Excellent', B: 'Good', C: 'Fair', D: 'Poor', F: 'Failing' };
+
+function fmtDate(iso: string): string {
+  const d = new Date(iso);
+  return `${d.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}, ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+}
+function fmtDay(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+}
+const topLink = '<a class="top" href="#top">Top</a>';
+const h2 = (id: string, title: string, count?: string) => `<h2 id="${id}"><span>${esc(title)}${count !== undefined ? ` <em>${esc(count)}</em>` : ''}</span>${topLink}</h2>`;
+const sev = (s: AdaSeverity) => `<span class="dot" style="background:${SEV_HEX[s]}"></span>${s}`;
+
+/** One figure: number in ink, label under it, grade or basis in small gray. */
+function figure(label: string, c: AdaCategoryScore, sub?: string, anchor?: string): string {
+  const tag = anchor ? `a href="#${anchor}"` : 'div';
+  const close = anchor ? 'a' : 'div';
+  if (c.score === null || c.grade === null) return `<${tag} class="fig"><div class="v muted">—</div><div class="l">${esc(label)}</div><div class="s">${esc(c.label || 'Not checked')}</div></${close}>`;
+  return `<${tag} class="fig"><div class="v">${c.score}</div><div class="l">${esc(label)}</div><div class="s">Grade ${c.grade}${sub ? ` · ${esc(sub)}` : ''}</div></${close}>`;
+}
+
+/** Thin stacked severity bar with a dot legend. */
+function severityBar(by: Record<AdaSeverity, number>): string {
+  const total = by.critical + by.serious + by.moderate + by.minor;
+  const seg = (k: AdaSeverity) => total && by[k] ? `<i style="flex:${by[k]};background:${SEV_HEX[k]}"></i>` : '';
+  const leg = (k: AdaSeverity) => `<span>${sev(k)} ${n(by[k])}</span>`;
+  return `<div class="bar">${seg('critical')}${seg('serious')}${seg('moderate')}${seg('minor')}${total ? '' : '<i style="flex:1;background:#e5e7eb"></i>'}</div><div class="legend">${leg('critical')}${leg('serious')}${leg('moderate')}${leg('minor')}</div>`;
+}
+
+/** Crawl coverage section: what was visited, by source, depth and section. */
 function coverageHtml(s: AdaSummary): string {
   const c = s.coverage;
   if (!c) return '';
   const pct = (aud: number, found: number) => found ? `${Math.round((aud / found) * 100)}%` : '—';
-  const row = (label: string, found: number, audited: number, extra = '') => `<tr><td>${label}${extra}</td><td>${found.toLocaleString()}</td><td>${audited.toLocaleString()}</td><td>${pct(audited, found)}</td></tr>`;
+  const row = (label: string, found: number, audited: number, extra = '') => `<tr><td>${label}${extra}</td><td class="num">${n(found)}</td><td class="num">${n(audited)}</td><td class="num">${pct(audited, found)}</td></tr>`;
   const depthLabel = (d: number) => d === 0 ? 'Start page' : d === 1 ? 'Menu, sitemap &amp; home-page links' : `${d} clicks from home`;
-  return `<h2 id="coverage">Crawl coverage — ${c.audited.toLocaleString()} of ${c.found.toLocaleString()} pages audited (${pct(c.audited, c.found)}) <a class="top" href="#top">↑ top</a></h2>
-<p class="muted">Every number is a count of real browser visits and real links collected from those pages; nothing is sampled or estimated. ${esc(stoppedReason(c))}${c.unreachable ? ` ${c.unreachable} page${c.unreachable === 1 ? '' : 's'} could not be loaded (counted as audited, scored 0).` : ''}${c.redirectedOffSite ? ` ${c.redirectedOffSite} redirected off-site.` : ''}${c.skippedNonHtml ? ` ${c.skippedNonHtml} non-HTML URL${c.skippedNonHtml === 1 ? '' : 's'} skipped and checked as links.` : ''}</p>
-<p class="muted">Links: ${c.links.unique.toLocaleString()} unique (${c.links.internal.toLocaleString()} internal · ${c.links.external.toLocaleString()} external) · ${c.links.checked.toLocaleString()} fetched and checked${c.links.skipped ? ` · ${c.links.skipped.toLocaleString()} external skipped` : ''}.</p>
-<div class="ex">
-<div><table><tr><th>Where the pages came from</th><th>Found</th><th>Audited</th><th>Coverage</th></tr>${row(esc(SOURCE_LABEL.start), c.bySource.start.found, c.bySource.start.audited)}${row(esc(SOURCE_LABEL.sitemap), c.bySource.sitemap.found, c.bySource.sitemap.audited)}${row(esc(SOURCE_LABEL.link), c.bySource.link.found, c.bySource.link.audited)}</table></div>
-<div><table><tr><th>Depth</th><th>Found</th><th>Audited</th><th>Coverage</th></tr>${c.byDepth.map((d) => row(depthLabel(d.depth), d.found, d.audited)).join('')}</table></div>
+  const inv = s.inventory;
+  const facts: [string, string][] = [];
+  if (inv && inv.sitemapUrls > 0) {
+    facts.push(['URLs in sitemap', n(inv.sitemapUrls)]);
+    if (inv.auditedLocale) facts.push(['Language versions', `${inv.locales.length} (${inv.locales.map((l) => l.code).join(', ')}) · audited ${inv.auditedLocale}`]);
+    facts.push(['Pages in scope', n(inv.pagesInScope)]);
+    if (inv.templatedPages) facts.push(['Templated articles', `${n(inv.templatedPages)} in ${inv.sections.filter((x) => x.templated).map((x) => x.path).join(', ')}`]);
+  }
+  facts.push(['Links', `${n(c.links.unique)} unique · ${n(c.links.internal)} internal · ${n(c.links.external)} external · ${n(c.links.checked)} checked${c.links.skipped ? ` · ${n(c.links.skipped)} external skipped` : ''}`]);
+  const notes = [stoppedReason(c),
+    c.unreachable ? `${c.unreachable} page${c.unreachable === 1 ? '' : 's'} could not be loaded (counted as audited, scored 0).` : '',
+    c.redirectedOffSite ? `${c.redirectedOffSite} redirected off-site.` : '',
+    c.skippedNonHtml ? `${c.skippedNonHtml} non-HTML URL${c.skippedNonHtml === 1 ? '' : 's'} checked as links.` : ''].filter(Boolean).join(' ');
+  return `<section class="card">${h2('coverage', 'Coverage', `${n(c.audited)} of ${n(c.found)} pages audited · ${pct(c.audited, c.found)}`)}
+<dl class="facts">${facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>
+<p class="note">${esc(notes)}</p>
+<div class="two">
+<table><tr><th>Where the pages came from</th><th class="num">Found</th><th class="num">Audited</th><th class="num">Coverage</th></tr>${row(esc(SOURCE_LABEL.start), c.bySource.start.found, c.bySource.start.audited)}${row(esc(SOURCE_LABEL.sitemap), c.bySource.sitemap.found, c.bySource.sitemap.audited)}${row(esc(SOURCE_LABEL.link), c.bySource.link.found, c.bySource.link.audited)}</table>
+<table><tr><th>Depth</th><th class="num">Found</th><th class="num">Audited</th><th class="num">Coverage</th></tr>${c.byDepth.map((d) => row(depthLabel(d.depth), d.found, d.audited)).join('')}</table>
 </div>
-<table><tr><th>Site section</th><th>Found</th><th>Audited</th><th>Coverage</th></tr>${c.bySection.map((x) => row(`<code>${esc(x.path)}</code>`, x.found, x.audited, x.templated ? ' <span class="muted">templated · sampled first</span>' : '')).join('')}</table>`;
+<table><tr><th>Site section</th><th class="num">Found</th><th class="num">Audited</th><th class="num">Coverage</th></tr>${c.bySection.map((x) => row(`<code>${esc(x.path)}</code>`, x.found, x.audited, x.templated ? ' <span class="muted">templated · sampled first</span>' : '')).join('')}</table></section>`;
 }
 
-/** UX testing section of the downloadable report. */
+/** UX testing section: layout integrity and design adherence, per device. */
 function uxHtml(s: AdaSummary): string {
   const ux = s.categories.ux;
   if (!ux) return '';
-  const v = (n: number | null) => n === null ? '—' : String(n);
-  return `<h2 id="ux">UX testing — score ${v(ux.score)} · ${ux.issues.toLocaleString()} issues · ${ux.needsReview.toLocaleString()} to review <a class="top" href="#top">↑ top</a></h2>
-<p class="muted"><b>Layout integrity ${v(ux.layout.score)}</b> (overlapping or covered controls, cut-off text, sideways scrolling, touch targets) · <b>Design adherence ${v(ux.adherence.score)}</b> ${ux.standard ? `against the design standard "${esc(ux.standard.name)}" (fonts, sizes, colours, radius, spacing)` : '— not scored: no design standard was uploaded, so the site was only checked against itself'}.</p>
-<table><tr><th>Device</th><th>Viewport</th><th>Pages</th><th>Issues</th><th>Layout</th><th>Adherence</th></tr>${ux.devices.map((d) => `<tr><td>${esc(d.label)}</td><td>${esc(d.viewport)}</td><td>${d.pagesChecked}</td><td>${d.issues}</td><td>${v(d.layoutScore)}</td><td>${v(d.adherenceScore)}</td></tr>`).join('')}</table>
-<p class="muted">${esc(ux.emulationNote)}</p>
-<table><tr><th>Finding</th><th>Type</th><th>Severity</th><th>Occurrences</th><th>Pages</th><th>Devices</th></tr>${ux.topRules.map((r) => `<tr><td>${esc(r.title)}</td><td>${r.confidence === 'high' ? esc(r.family) : 'to review'}</td><td><span class="sev ${r.severity}">${r.severity}</span></td><td>${r.occurrences.toLocaleString()}</td><td>${r.pages}</td><td>${esc(r.devices.join(', '))}</td></tr>`).join('')}</table>
-${ux.standard && ux.colors.some((c) => c.inStandard === false) ? `<p class="muted"><b>Most used colours not in the standard:</b> ${ux.colors.filter((c) => c.inStandard === false).slice(0, 10).map((c) => `<code>${esc(c.hex)}</code> (${c.uses.toLocaleString()} uses${c.nearest ? `, nearest ${esc(c.nearest.hex)}` : ''})`).join(' · ')}</p>` : ''}`;
+  const v = (x: number | null) => x === null ? '—' : String(x);
+  const off = ux.standard ? ux.colors.filter((c) => c.inStandard === false).slice(0, 12) : [];
+  return `<section class="card">${h2('ux', 'UX testing', `${n(ux.issues)} issues · ${n(ux.needsReview)} to review`)}
+<div class="figs small">${figure('UX score', ux)}${figure('Layout integrity', ux.layout, 'overlaps, cut-off text, scrolling, touch targets')}${figure('Design adherence', ux.adherence, ux.standard ? `against "${ux.standard.name}"` : undefined)}</div>
+${ux.standard ? '' : '<p class="note">Design adherence is not scored: no design standard was uploaded, so the site was only checked against itself.</p>'}
+<table><tr><th>Device</th><th>Viewport</th><th class="num">Pages</th><th class="num">Issues</th><th class="num">Layout</th><th class="num">Adherence</th></tr>${ux.devices.map((d) => `<tr><td>${esc(d.label)}</td><td class="muted">${esc(d.viewport)}</td><td class="num">${d.pagesChecked}</td><td class="num">${d.issues}</td><td class="num">${v(d.layoutScore)}</td><td class="num">${v(d.adherenceScore)}</td></tr>`).join('')}</table>
+<p class="note">${esc(ux.emulationNote)}</p>
+${ux.topRules.length ? `<table><tr><th>Finding</th><th>Type</th><th>Severity</th><th class="num">Occurrences</th><th class="num">Pages</th><th>Devices</th></tr>${ux.topRules.map((r) => `<tr><td>${esc(r.title)}</td><td class="muted">${r.confidence === 'high' ? esc(r.family) : 'to review'}</td><td class="sv">${sev(r.severity)}</td><td class="num">${n(r.occurrences)}</td><td class="num">${r.pages}</td><td class="muted">${esc(r.devices.join(', '))}</td></tr>`).join('')}</table>` : ''}
+${off.length ? `<h3>Colours in use that are not in the standard</h3><div class="swatches">${off.map((c) => `<span><i style="background:${esc(c.hex)}"></i><code>${esc(c.hex)}</code> ${n(c.uses)} uses${c.nearest ? ` · nearest ${esc(c.nearest.hex)}` : ''}</span>`).join('')}</div>` : ''}</section>`;
 }
 
-/** Trend section of the downloadable report: this audit against the previous ones of the same site. */
+/** Trend section: this audit against the previous ones of the same site. */
 function trendHtml(points: AdaTrendPoint[], scanId: string | null): string {
   const pos = trendPosition(points, scanId);
   if (!pos || points.length < 2) return '';
   const { cur, prev } = pos;
-  const d = (a: number | null, b: number | null) => (a === null || b === null) ? 'n/a' : `${a - b > 0 ? '+' : ''}${a - b}`;
-  const rows = points.slice(-12).map((p) => `<tr${sameId(p.id, cur.id) ? ' style="font-weight:600"' : ''}><td>${esc(new Date(p.finishedAt).toLocaleString())}${p.status === 'cancelled' ? ' <span class="muted">stopped early</span>' : ''}</td><td>${esc(p.createdBy || '')}</td><td>${p.score ?? '—'}</td><td>${p.pagesAudited}</td><td>${p.issues}</td><td>${p.violations ?? '—'}</td><td>${p.brokenLinks ?? '—'}</td><td>${p.bestPracticeFailing ?? '—'}</td></tr>`).join('');
-  return `<h2 id="trend">Trend — ${points.length} audit${points.length === 1 ? '' : 's'} of this site <a class="top" href="#top">↑ top</a></h2>
-${prev ? `<p class="muted">Compared with the previous audit (${esc(new Date(prev.finishedAt).toLocaleString())}): score ${d(cur.score, prev.score)} · issues ${d(cur.issues, prev.issues)} · accessibility violations ${d(cur.violations, prev.violations)} · broken links ${d(cur.brokenLinks, prev.brokenLinks)} · pages audited ${cur.pagesAudited} vs ${prev.pagesAudited}${cur.pagesAudited !== prev.pagesAudited ? ' (page counts differ — issue counts are not like-for-like)' : ''}.</p>` : ''}
-<table><tr><th>Audit</th><th>Run by</th><th>Score</th><th>Pages</th><th>Issues</th><th>Violations</th><th>Broken links</th><th>Practices failing</th></tr>${rows}</table>`;
+  const d = (a: number | null, b: number | null) => (a === null || b === null) ? '—' : `${a - b > 0 ? '+' : ''}${n(a - b)}`;
+  const rows = points.slice(-12).map((p) => `<tr${sameId(p.id, cur.id) ? ' class="cur"' : ''}><td>${esc(fmtDate(p.finishedAt))}${p.status === 'cancelled' ? ' <span class="muted">stopped early</span>' : ''}</td><td class="muted">${esc(p.createdBy || '')}</td><td class="num">${p.score ?? '—'}</td><td class="num">${n(p.pagesAudited)}</td><td class="num">${n(p.issues)}</td><td class="num">${p.violations ?? '—'}</td><td class="num">${p.brokenLinks ?? '—'}</td><td class="num">${p.bestPracticeFailing ?? '—'}</td></tr>`).join('');
+  return `<section class="card">${h2('trend', 'Trend', `${points.length} audits of this site`)}
+${prev ? `<dl class="facts"><div><dt>Since ${esc(fmtDay(prev.finishedAt))}</dt><dd>Score ${d(cur.score, prev.score)} · issues ${d(cur.issues, prev.issues)} · violations ${d(cur.violations, prev.violations)} · broken links ${d(cur.brokenLinks, prev.brokenLinks)}${cur.pagesAudited !== prev.pagesAudited ? ` · ${n(cur.pagesAudited)} vs ${n(prev.pagesAudited)} pages, so counts are not like-for-like` : ''}</dd></div></dl>` : ''}
+<table><tr><th>Audit</th><th>Run by</th><th class="num">Score</th><th class="num">Pages</th><th class="num">Issues</th><th class="num">Violations</th><th class="num">Broken links</th><th class="num">Practices failing</th></tr>${rows}</table></section>`;
 }
 
 function buildHtmlReport(s: AdaSummary, partial: boolean, findings: AdaFinding[], pages: AdaPage[], trend: AdaTrendPoint[] = [], scanId: string | null = null): string {
-  const a = s.categories.accessibility, l = s.categories.links, b = s.categories.bestPractice;
+  const a = s.categories.accessibility, l = s.categories.links, b = s.categories.bestPractice, ux = s.categories.ux;
   const broken = l.broken + l.serverErrors + l.timeouts;
-  const gradeColor: Record<string, string> = { A: '#059669', B: '#16a34a', C: '#d97706', D: '#ea580c', F: '#dc2626' };
-  const score = (c: { score: number | null; grade: string | null; label?: string }, label: string, anchor?: string, basis?: string) =>
-    c.score === null || c.grade === null
-      ? `<div class="score" style="border-style:dashed;background:#f9fafb"><div class="big" style="color:#9ca3af">—</div><div class="lbl">${esc(label)}</div><div class="grade">${esc(c.label || 'Not checked')} · not counted in overall</div></div>`
-      : `<${anchor ? `a href="#${anchor}"` : 'div'} class="score"><div class="big" style="color:${gradeColor[c.grade]}">${c.score}</div><div class="lbl">${esc(label)}</div><div class="grade">Grade ${c.grade}${basis ? ` · ${esc(basis)}` : ''}${anchor ? ' · view' : ''}</div></${anchor ? 'a' : 'div'}>`;
   const issues = findings.filter((f) => f.category !== 'review');
   const totalIssues = issues.reduce((x, f) => x + f.occurrences, 0);
+  const issuePages = new Set(issues.map((f) => f.page_url)).size;
   const bySev: Record<AdaSeverity, number> = { critical: 0, serious: 0, moderate: 0, minor: 0 };
   for (const f of issues) bySev[f.severity] += f.occurrences;
-  const groups = new Map<string, { title: string; category: AdaCategory; severity: AdaSeverity; wcag?: string | null; helpUrl?: string | null; occ: number; pages: Set<string>; rows: AdaFinding[] }>();
+
+  type Group = { title: string; category: AdaCategory; severity: AdaSeverity; wcag?: string | null; helpUrl?: string | null; occ: number; pages: Set<string>; rows: AdaFinding[] };
+  const groups = new Map<string, Group>();
   for (const f of findings) {
     const k = `${f.category}|${f.rule_id}`;
     const g = groups.get(k) || { title: f.title, category: f.category, severity: f.severity, wcag: f.wcag, helpUrl: f.help_url, occ: 0, pages: new Set<string>(), rows: [] };
     g.occ += f.occurrences; g.pages.add(f.page_url); g.rows.push(f); groups.set(k, g);
   }
   const sorted = [...groups.values()].sort((x, y) => SEV_ORDER[x.severity] - SEV_ORDER[y.severity] || y.occ - x.occ);
-  const section = (cat: AdaCategory, heading: string) => {
+
+  /* Trend delta for the headline figure. */
+  const pos = trendPosition(trend, scanId);
+  const prev = pos?.prev || null;
+  const delta = prev && prev.score !== null && s.overall.score !== null ? s.overall.score - prev.score : null;
+  const deltaText = delta === null ? '' : delta === 0 ? `Unchanged since ${fmtDay(prev!.finishedAt)}` : `${delta > 0 ? '+' : ''}${delta} since ${fmtDay(prev!.finishedAt)}`;
+
+  /* What needs attention: the six most important things, across every category. */
+  type Item = { title: string; severity: AdaSeverity; occ: number; pages: number; effort?: string; anchor: string; where: string };
+  const items: Item[] = sorted.filter((g) => g.category !== 'review').map((g) => ({
+    title: g.title, severity: g.severity, occ: g.occ, pages: g.pages.size, effort: remediationOf(g.rows[0])?.effort, anchor: g.category, where: CATEGORY_LABEL[g.category],
+  }));
+  if (ux) for (const r of ux.topRules.filter((r) => r.confidence === 'high')) items.push({ title: r.title, severity: r.severity, occ: r.occurrences, pages: r.pages, anchor: 'ux', where: 'UX' });
+  items.sort((x, y) => SEV_ORDER[x.severity] - SEV_ORDER[y.severity] || y.occ - x.occ);
+  const attention = items.slice(0, 6);
+
+  const scope = [
+    describePages(s),
+    describeLinks(s),
+    ux ? `${ux.devices.length} device${ux.devices.length === 1 ? '' : 's'}` : '',
+    fmtDuration(s.durationMs),
+  ].filter(Boolean).join(' · ');
+
+  const section = (cat: AdaCategory, heading: string, count: string) => {
     const gs = sorted.filter((g) => g.category === cat);
-    const h2 = `<h2 id="${cat}">${esc(heading)} <a class="top" href="#top">↑ top</a></h2>`;
-    if (!gs.length) return `${h2}<p class="muted">None found.</p>`;
-    return h2 + gs.map((g) => {
+    if (!gs.length) return `<section class="card">${h2(cat, heading, count)}<p class="note">None found.</p></section>`;
+    return `<section class="card">${h2(cat, heading, count)}` + gs.map((g) => {
       const r = remediationOf(g.rows[0]);
-      const fix = r ? `<div class="fix"><div class="fixh"><span class="eff ${r.effort}">${esc(EFFORT_LABEL[r.effort])}</span> How to fix</div><p class="prob"><b>Problem:</b> ${esc(r.problem)}${r.impact ? ` <span class="muted">${esc(r.impact)}</span>` : ''}</p><ol>${r.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>${r.example ? `<div class="ex"><div><span class="muted">Before</span><pre class="bad">${esc(r.example.before)}</pre></div><div><span class="muted">After</span><pre class="good">${esc(r.example.after)}</pre></div></div>${r.example.note ? `<p class="muted">${esc(r.example.note)}</p>` : ''}` : ''}${g.helpUrl ? `<p class="muted">Reference: <a href="${esc(g.helpUrl)}">${esc(g.helpUrl)}</a></p>` : ''}</div>` : (g.helpUrl ? `<p class="muted">Reference: <a href="${esc(g.helpUrl)}">${esc(g.helpUrl)}</a></p>` : '');
-      return `
-<details open><summary><span class="sev ${g.severity}">${g.severity}</span> ${esc(g.title)} <b>(${g.occ})</b> <span class="muted">— ${g.pages.size} page${g.pages.size === 1 ? '' : 's'}${g.wcag ? ` · WCAG ${esc(g.wcag)}` : ''}</span></summary>
+      const fix = r ? `<div class="fix"><div class="fixh">How to fix <span class="eff ${r.effort}">${esc(EFFORT_LABEL[r.effort])}</span></div><p><b>Problem.</b> ${esc(r.problem)}${r.impact ? ` <span class="muted">${esc(r.impact)}</span>` : ''}</p><ol>${r.steps.map((st) => `<li>${esc(st)}</li>`).join('')}</ol>${r.example ? `<div class="two"><div><span class="muted">Before</span><pre class="bad">${esc(r.example.before)}</pre></div><div><span class="muted">After</span><pre class="good">${esc(r.example.after)}</pre></div></div>${r.example.note ? `<p class="note">${esc(r.example.note)}</p>` : ''}` : ''}${g.helpUrl ? `<p class="note">Reference: <a href="${esc(g.helpUrl)}">${esc(g.helpUrl)}</a></p>` : ''}</div>` : (g.helpUrl ? `<p class="note">Reference: <a href="${esc(g.helpUrl)}">${esc(g.helpUrl)}</a></p>` : '');
+      const rows = g.rows.slice(0, 200);
+      return `<details${g.severity === 'critical' ? ' open' : ''}><summary><span class="sv">${sev(g.severity)}</span><span class="t">${esc(g.title)}</span><span class="m">${n(g.occ)} on ${g.pages.size} page${g.pages.size === 1 ? '' : 's'}${g.wcag ? ` · WCAG ${esc(g.wcag)}` : ''}</span></summary>
 ${fix}
 <table><tr><th>Page</th><th>${cat === 'links' ? 'Link' : 'Element'}</th><th>Problem on this page</th></tr>
-${g.rows.slice(0, 200).map((f) => { const fr = remediationOf(f); return `<tr><td><a href="${esc(f.page_url)}">${esc(shortUrl(f.page_url))}</a></td><td><code>${esc(cat === 'links' ? String(f.details?.link || f.element || '') : (f.element || ''))}</code></td><td>${esc(fr?.problem || f.description || '')}${fr?.example && cat !== 'links' && fr.example.after !== fr.example.before ? `<br><code class="good">${esc(fr.example.after)}</code>` : ''}${f.occurrences > 1 ? ` <span class="muted">(×${f.occurrences})</span>` : ''}</td></tr>`; }).join('')}
-</table></details>`; }).join('');
+${rows.map((f) => { const fr = remediationOf(f); return `<tr><td><a href="${esc(f.page_url)}">${esc(shortUrl(f.page_url))}</a></td><td><code>${esc(cat === 'links' ? String(f.details?.link || f.element || '') : (f.element || ''))}</code></td><td>${esc(fr?.problem || f.description || '')}${fr?.example && cat !== 'links' && fr.example.after !== fr.example.before ? `<br><code class="good">${esc(fr.example.after)}</code>` : ''}${f.occurrences > 1 ? ` <span class="muted">×${f.occurrences}</span>` : ''}</td></tr>`; }).join('')}
+</table>${g.rows.length > rows.length ? `<p class="note">${n(g.rows.length - rows.length)} more in the CSV export.</p>` : ''}</details>`; }).join('') + '</section>';
   };
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Website audit — ${esc(s.siteName)}</title>
-<style>html{scroll-behavior:smooth}body{font-family:Segoe UI,Arial,sans-serif;color:#1f2937;margin:0;padding:32px;max-width:1100px}h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;margin:28px 0 8px;border-bottom:1px solid #e5e7eb;padding-bottom:4px;scroll-margin-top:64px;display:flex;justify-content:space-between;align-items:baseline}h2 a.top{font-size:11px;font-weight:400;color:#9ca3af;text-decoration:none}h2 a.top:hover{color:#5b21b6}
-.toc{position:sticky;top:0;z-index:2;background:#fff;border-bottom:1px solid #e5e7eb;padding:8px 0;margin:14px 0 6px;display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px}.toc a{color:#5b21b6;text-decoration:none;white-space:nowrap}.toc a:hover{text-decoration:underline}.toc b{color:#1f2937;font-weight:600}a.score{text-decoration:none;color:inherit}a.score:hover{border-color:#a78bfa;background:#f5f3ff}.muted a{color:#5b21b6}
-.muted{color:#6b7280;font-size:12px}.tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;margin-right:6px}.ok{background:#d1fae5;color:#065f46}.part{background:#fef3c7;color:#92400e}.wcag{background:#ede9fe;color:#5b21b6}
-.scores{display:flex;gap:16px;margin:20px 0}.score{flex:1;border:1px solid #e5e7eb;border-radius:10px;padding:14px;text-align:center}.big{font-size:34px;font-weight:700}.lbl{font-size:12px;color:#6b7280}.grade{font-size:11px;color:#9ca3af}
-.summary{display:flex;gap:24px;align-items:flex-start;border:1px solid #e5e7eb;border-radius:10px;padding:16px;margin:16px 0}.summary .n{font-size:40px;font-weight:700;line-height:1}
-table{width:100%;border-collapse:collapse;font-size:12px;margin:6px 0 10px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #f3f4f6;vertical-align:top}th{color:#6b7280;font-weight:600;font-size:11px}code{font-family:Consolas,monospace;font-size:11px;color:#5b21b6;word-break:break-all}
-details{border:1px solid #e5e7eb;border-radius:8px;padding:8px 12px;margin:6px 0}summary{cursor:pointer;font-size:13px}
-.sev{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;margin-right:4px}.critical{background:#fee2e2;color:#b91c1c}.serious{background:#ffedd5;color:#c2410c}.moderate{background:#fef3c7;color:#b45309}.minor{background:#f3f4f6;color:#4b5563}
-.fix{background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;padding:10px 12px;margin:8px 0;font-size:12px}.fixh{font-weight:600;color:#5b21b6;margin-bottom:4px}.fix ol{margin:4px 0 6px 18px;padding:0}.fix li{margin:2px 0}.prob{margin:0 0 4px}
-.eff{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;margin-right:6px;border:1px solid}.quick{background:#ecfdf5;color:#047857;border-color:#a7f3d0}.moderate.eff{background:#fffbeb;color:#b45309;border-color:#fde68a}.involved{background:#fef2f2;color:#b91c1c;border-color:#fecaca}
-.ex{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ex pre,code.good{font-family:Consolas,monospace;font-size:11px;white-space:pre-wrap;word-break:break-all;border-radius:6px;padding:6px 8px;margin:2px 0 0}pre.bad{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}pre.good,code.good{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}code.good{display:inline-block;margin-top:4px;color:#065f46}
-.foot{margin-top:32px;font-size:11px;color:#9ca3af}</style></head><body>
-<h1 id="top">Website audit report — ${esc(s.siteName)}</h1>
-${s.inventory && s.inventory.sitemapUrls > 0 ? `<p class="muted" style="margin:4px 0">Site inventory: ${s.inventory.sitemapUrls.toLocaleString()} URLs in sitemap${s.inventory.auditedLocale ? ` · ${s.inventory.locales.length} language version${s.inventory.locales.length === 1 ? '' : 's'} (${esc(s.inventory.locales.map((l) => l.code).join(', '))})` : ''} · ${s.inventory.pagesInScope.toLocaleString()} unique pages${s.inventory.auditedLocale ? ` in ${esc(s.inventory.auditedLocale)}` : ''}${s.inventory.templatedPages ? ` · ${s.inventory.templatedPages.toLocaleString()} templated articles (${esc(s.inventory.sections.filter((x) => x.templated).map((x) => x.path).join(', '))})` : ''}</p>` : ''}
-<div class="muted" style="margin:6px 0 10px"><span class="tag ${partial ? 'part' : 'ok'}">${partial ? 'STOPPED EARLY — PARTIAL RESULTS' : 'COMPLETE'}</span><span class="tag wcag">WCAG 2.2 AA</span> ${esc(s.targetUrl)} · audited ${esc(new Date(s.finishedAt).toLocaleString())} · ${esc(describePages(s))} · ${esc(describeLinks(s))} · ${esc(fmtDuration(s.durationMs))}</div>
+
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Website audit — ${esc(s.siteName)}</title>
+<style>
+:root{--ink:#111827;--body:#374151;--muted:#6b7280;--faint:#9ca3af;--line:#e5e7eb;--soft:#f3f4f6;--page:#f6f7f9;--accent:#5b21b6}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{font-family:-apple-system,"Segoe UI",Inter,Roboto,Arial,sans-serif;color:var(--body);background:var(--page);margin:0;padding:40px 24px 64px;font-size:13px;line-height:1.5}
+.wrap{max-width:1040px;margin:0 auto}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+.eyebrow{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin:0 0 6px}
+h1{font-size:28px;font-weight:700;color:var(--ink);margin:0 0 6px;letter-spacing:-.01em}
+.meta{font-size:13px;color:var(--muted);margin:0 0 20px;display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid var(--line);color:var(--body);background:#fff}.pill.warn{border-color:#fde68a;background:#fffbeb;color:#92400e}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:22px 24px;margin:0 0 16px;overflow-x:auto}
+.figs{display:flex;align-items:stretch;gap:0}.fig{flex:1;padding:4px 18px;border-left:1px solid var(--line);color:inherit}.fig:first-child{padding-left:0;border-left:0}.fig.lead{flex:1.35}a.fig:hover{text-decoration:none;background:#faf9ff;border-radius:8px}
+.fig .v{font-size:30px;font-weight:700;color:var(--ink);line-height:1.1;letter-spacing:-.02em}.fig.lead .v{font-size:48px}.fig .v.muted{color:var(--faint)}.fig .l{font-size:12px;color:var(--body);margin-top:6px;font-weight:600}.fig .s{font-size:11.5px;color:var(--muted);margin-top:2px}
+.figs.small .fig .v{font-size:24px}
+.row{display:flex;gap:28px;align-items:flex-start;margin-top:22px;padding-top:18px;border-top:1px solid var(--line)}.row>div{flex:1;min-width:0}
+.k{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin:0 0 6px}
+.big{font-size:24px;font-weight:700;color:var(--ink);line-height:1.1}.big small{font-size:12px;font-weight:400;color:var(--muted);margin-left:8px}
+.bar{display:flex;height:6px;border-radius:3px;overflow:hidden;background:var(--soft);margin:10px 0 8px}.bar i{display:block}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:var(--body)}.legend span{white-space:nowrap}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin:0 6px 1px 0;vertical-align:middle}
+.scope{font-size:12.5px;color:var(--muted);margin:18px 0 0;padding-top:14px;border-top:1px solid var(--line)}
+nav.toc{position:sticky;top:0;z-index:2;background:var(--page);padding:10px 0;margin:4px 0 12px;display:flex;flex-wrap:wrap;gap:4px 18px;font-size:12px;border-bottom:1px solid var(--line)}nav.toc a{color:var(--body);white-space:nowrap}nav.toc a:hover{color:var(--accent);text-decoration:none}nav.toc b{color:var(--ink);font-weight:600;margin-left:3px}
+h2{font-size:16px;font-weight:700;color:var(--ink);margin:0 0 14px;display:flex;justify-content:space-between;align-items:baseline;scroll-margin-top:56px}h2 em{font-style:normal;font-weight:400;color:var(--muted);font-size:13px;margin-left:8px}h2 a.top{font-size:11px;font-weight:400;color:var(--faint)}
+h3{font-size:12.5px;font-weight:600;color:var(--ink);margin:18px 0 8px}
+.note{font-size:12px;color:var(--muted);margin:6px 0 10px}.muted{color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:12.5px;margin:4px 0 12px}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--soft);vertical-align:top}th{color:var(--muted);font-weight:600;font-size:11px;letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid var(--line)}td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}tr.cur td{font-weight:600;color:var(--ink)}td.sv,td.ef{white-space:nowrap}td.url{word-break:break-all;min-width:220px}
+table.attn td:first-child{color:var(--ink);font-weight:600}table.attn td:first-child a{color:var(--ink)}
+code{font-family:Consolas,"SF Mono",Menlo,monospace;font-size:11.5px;color:var(--accent);word-break:break-all}
+dl.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px 24px;margin:0 0 12px}dl.facts div{min-width:0}dt{font-size:11px;color:var(--faint);font-weight:600;text-transform:uppercase;letter-spacing:.04em}dd{margin:2px 0 0;color:var(--ink);font-size:13px}
+details{border-top:1px solid var(--line);padding:10px 0 4px}details:last-of-type{padding-bottom:0}summary{cursor:pointer;list-style:none;display:flex;align-items:baseline;gap:12px;padding:4px 0}summary::-webkit-details-marker{display:none}summary::before{content:"";display:inline-block;width:6px;height:6px;border-right:1.5px solid var(--faint);border-bottom:1.5px solid var(--faint);transform:rotate(-45deg);margin-right:2px;flex:none}details[open]>summary::before{transform:rotate(45deg)}
+summary .sv{font-size:11.5px;color:var(--body);width:82px;flex:none;text-transform:capitalize}summary .t{font-weight:600;color:var(--ink);font-size:13.5px}summary .m{margin-left:auto;font-size:12px;color:var(--muted);white-space:nowrap}
+.fix{background:#fafafa;border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:10px 0;font-size:12.5px}.fixh{font-weight:600;color:var(--ink);margin-bottom:6px}.fix p{margin:0 0 6px}.fix ol{margin:4px 0 8px 18px;padding:0}.fix li{margin:2px 0}
+.eff{display:inline-block;padding:1px 7px;border-radius:999px;font-size:10.5px;font-weight:600;margin-left:8px;border:1px solid var(--line);color:var(--muted);vertical-align:1px}.eff.quick{color:#047857;border-color:#a7f3d0}.eff.involved{color:#b91c1c;border-color:#fecaca}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+pre,code.good{font-family:Consolas,"SF Mono",Menlo,monospace;font-size:11.5px;white-space:pre-wrap;word-break:break-all;border-radius:8px;padding:8px 10px;margin:4px 0 0}pre.bad{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}pre.good,code.good{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}code.good{display:inline-block;margin-top:4px}
+.swatches{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:12px;color:var(--body)}.swatches i{display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid var(--line);vertical-align:-2px;margin-right:6px}
+.foot{margin-top:24px;font-size:11.5px;color:var(--faint);display:flex;flex-wrap:wrap;gap:6px 16px}
+@media (max-width:720px){body{padding:20px 14px 48px}.card{overflow-x:auto}.meta a{word-break:break-all}.figs{flex-wrap:wrap}.fig{flex:1 1 45%;border-left:0;padding:8px 0}.fig.lead{flex:1 1 100%}.row,.two{display:block}.row>div+div{margin-top:16px}summary .m{margin-left:0;white-space:normal}summary{flex-wrap:wrap}}
+@media print{body{background:#fff;padding:0;font-size:11.5px}.card{border:0;padding:0 0 12px;break-inside:avoid;page-break-inside:avoid}nav.toc,h2 a.top{display:none}details{break-inside:avoid}a{color:inherit}.fig .v{font-size:26px}.fig.lead .v{font-size:40px}}
+</style></head><body><div class="wrap">
+<p class="eyebrow">IntelliQE · Website audit report</p>
+<h1 id="top">${esc(s.siteName)}</h1>
+<div class="meta"><span class="pill${partial ? ' warn' : ''}">${partial ? 'Partial · stopped early' : 'Complete'}</span><span class="pill">WCAG 2.2 AA</span><a href="${esc(s.targetUrl)}">${esc(s.targetUrl)}</a><span>${esc(fmtDate(s.finishedAt))}</span></div>
+
+<section class="card">
+<div class="figs">
+${figure('Overall health', s.overall, s.overall.grade ? `${GRADE_WORD[s.overall.grade]}${deltaText ? ` · ${deltaText}` : ''}` : undefined).replace('class="fig"', 'class="fig lead"')}
+${figure('Accessibility', a, 'WCAG 2.2 AA', 'accessibility')}
+${figure('Links', l, l.measured === false ? undefined : `${n(broken)} broken of ${n(l.checked)}`, 'links')}
+${figure('Best practices', b, `${b.rulesPassed} of ${b.rulesEvaluated} checks pass`, 'best-practice')}
+${ux ? figure('UX', ux, `${ux.devices.length} device${ux.devices.length === 1 ? '' : 's'}`, 'ux') : ''}
+</div>
+<div class="row">
+<div><p class="k">Issues</p><div class="big">${n(totalIssues)}<small>on ${n(issuePages)} page${issuePages === 1 ? '' : 's'}</small></div>${severityBar(bySev)}</div>
+<div><p class="k">By category</p><table style="margin:0"><tr><td><a href="#accessibility">Accessibility violations</a></td><td class="num">${n(a.violations)}</td></tr><tr><td><a href="#links">Broken links</a></td><td class="num">${l.measured === false ? 'Not checked' : n(broken)}</td></tr><tr><td><a href="#best-practice">Best-practice checks failing</a></td><td class="num">${n(b.failingRules.length)}</td></tr>${ux ? `<tr><td><a href="#ux">UX issues</a></td><td class="num">${n(ux.issues)}</td></tr>` : ''}<tr><td><a href="#review">Needs manual review</a></td><td class="num">${n(a.needsReview)}</td></tr></table></div>
+</div>
+<p class="scope">${esc(scope)}</p>
+</section>
+
+${attention.length ? `<section class="card">${h2('attention', 'What needs attention')}
+<table class="attn"><tr><th>Issue</th><th>Area</th><th>Severity</th><th class="num">Occurrences</th><th class="num">Pages</th><th>Effort</th></tr>
+${attention.map((i) => `<tr><td><a href="#${i.anchor}">${esc(i.title)}</a></td><td class="muted">${esc(i.where)}</td><td class="sv">${sev(i.severity)}</td><td class="num">${n(i.occ)}</td><td class="num">${n(i.pages)}</td><td class="muted ef">${i.effort ? esc(EFFORT_LABEL[i.effort as AdaRemediation['effort']]) : ''}</td></tr>`).join('')}
+</table></section>` : ''}
+
 <nav class="toc">
-<a href="#accessibility">Accessibility violations <b>${a.violations}</b></a>
-<a href="#links">Broken links <b>${l.measured === false ? 'not checked' : broken}</b></a>
-<a href="#best-practice">Best practices failing <b>${b.failingRules.length}</b></a>
-<a href="#review">Needs manual review <b>${a.needsReview}</b></a>
-${s.categories.ux ? `<a href="#ux">UX testing <b>${s.categories.ux.issues.toLocaleString()}</b></a>` : ''}
+<a href="#accessibility">Accessibility<b>${n(a.violations)}</b></a>
+<a href="#links">Broken links<b>${l.measured === false ? '—' : n(broken)}</b></a>
+<a href="#best-practice">Best practices<b>${n(b.failingRules.length)}</b></a>
+<a href="#review">Manual review<b>${n(a.needsReview)}</b></a>
+${ux ? `<a href="#ux">UX testing<b>${n(ux.issues)}</b></a>` : ''}
 ${trend.length > 1 ? '<a href="#trend">Trend</a>' : ''}
 ${s.coverage ? '<a href="#coverage">Coverage</a>' : ''}
-<a href="#pages">Pages audited <b>${(pages.length || s.pagesCrawled).toLocaleString()}</b></a>
-${s.coverage && s.coverage.notAuditedTotal > 0 ? `<a href="#not-audited">Not audited <b>${s.coverage.notAuditedTotal.toLocaleString()}</b></a>` : ''}
+<a href="#pages">Pages<b>${n(pages.length || s.pagesCrawled)}</b></a>
+${s.coverage && s.coverage.notAuditedTotal > 0 ? `<a href="#not-audited">Not audited<b>${n(s.coverage.notAuditedTotal)}</b></a>` : ''}
 ${s.notes.length ? '<a href="#notes">Notes</a>' : ''}
 </nav>
-<div class="scores">${score(s.overall, 'Overall health')}${score(a, 'Accessibility (WCAG 2.2 AA)', 'accessibility')}${score(l, 'Links', 'links', `${l.checked.toLocaleString()} checked · ${broken} broken`)}${score(b, 'Best practices', 'best-practice', `${b.rulesPassed}/${b.rulesEvaluated} checks passing`)}${s.categories.ux ? score(s.categories.ux, 'UX (layout + design)', 'ux', `${s.categories.ux.devices.length} devices`) : ''}</div>
-<div class="summary"><div><div class="n">${totalIssues}</div><div class="muted">Issues in ${new Set(issues.map((f) => f.page_url)).size} pages and ${new Set(findings.filter((f) => f.element).map((f) => f.element)).size} components</div></div>
-<div><div class="muted" style="font-weight:600;margin-bottom:4px">Severity breakdown</div><span class="sev critical">${bySev.critical} critical</span> <span class="sev serious">${bySev.serious} serious</span> <span class="sev moderate">${bySev.moderate} moderate</span> <span class="sev minor">${bySev.minor} minor</span><div class="muted" style="margin-top:8px"><a href="#review">${a.needsReview.toLocaleString()} item${a.needsReview === 1 ? '' : 's'} the scanner could not decide — manual review</a> · <a href="#accessibility">${a.violations} accessibility violation${a.violations === 1 ? '' : 's'}</a> · <a href="#links">${l.measured === false ? 'links not checked' : `${broken} broken link${broken === 1 ? '' : 's'}`}</a> · <a href="#best-practice">${b.failingRules.length} best-practice check${b.failingRules.length === 1 ? '' : 's'} failing</a></div></div></div>
-${section('accessibility', `Accessibility violations (WCAG) — ${a.violations}`)}
+
+${section('accessibility', 'Accessibility violations', `${n(a.violations)} · WCAG 2.2 AA`)}
 ${l.measured === false
-    ? `<h2 id="links">Broken links — not checked <a class="top" href="#top">↑ top</a></h2><p class="muted">No links were checked in this audit${s.linksFound ? ` (${s.linksFound.toLocaleString()} were collected)` : ''}. The Links category is not scored and is not part of the overall health score. Run the audit to completion to check them.</p>`
-    : section('links', `Broken links — ${broken} of ${l.checked} checked${l.blocked ? ` (${l.blocked} could not be verified)` : ''}`)}
-${section('best-practice', `Best-practice issues — ${b.failingRules.length} checks failing`)}
-${section('review', `Needs manual review — ${a.needsReview}`)}
+    ? `<section class="card">${h2('links', 'Broken links', 'not checked')}<p class="note">No links were checked in this audit${s.linksFound ? ` (${n(s.linksFound)} were collected)` : ''}. Links are not scored and not part of the overall health score.</p></section>`
+    : section('links', 'Broken links', `${n(broken)} of ${n(l.checked)} checked${l.blocked ? ` · ${l.blocked} could not be verified` : ''}`)}
+${section('best-practice', 'Best-practice issues', `${n(b.failingRules.length)} checks failing`)}
+${section('review', 'Needs manual review', `${n(a.needsReview)} · not counted as issues`)}
 ${uxHtml(s)}
 ${trendHtml(trend, scanId)}
 ${coverageHtml(s)}
-<h2 id="pages">Pages audited — ${(pages.length || s.pagesCrawled).toLocaleString()} <a class="top" href="#top">↑ top</a></h2>
-<p class="muted">Every page below was opened in a real browser and had every check run. Depth 0 is the start page.</p>
-${pages.length ? `<table><tr><th>Page</th><th>Found via</th><th>Depth</th><th>HTTP</th><th>Load</th><th>Links</th><th>Accessibility</th><th>Best practices</th><th>Issues</th></tr>
-${pages.map((p) => `<tr><td>${esc(p.title || shortUrl(p.url))}<br><a class="muted" href="${esc(p.url)}">${esc(p.url)}</a></td><td>${esc(SOURCE_LABEL[p.source || 'link'])}${p.parent_url ? `<br><span class="muted">from ${esc(shortUrl(p.parent_url))}</span>` : ''}</td><td>${p.depth}</td><td>${p.status_code ?? 'ERR'}</td><td>${(p.load_ms / 1000).toFixed(1)}s</td><td>${p.links_found}</td><td>${p.a11y_score}</td><td>${p.bp_score}</td><td>${p.findings_count}</td></tr>`).join('')}
-</table>` : `<table><tr><th>Page</th><th>Accessibility</th><th>Best practices</th><th>Issues</th></tr>
-${s.worstPages.map((p) => `<tr><td>${esc(p.title || p.url)}<br><span class="muted">${esc(p.url)}</span></td><td>${p.a11yScore}</td><td>${p.bpScore}</td><td>${p.findings}</td></tr>`).join('')}
-</table><p class="muted">The full page list could not be loaded; the ${s.worstPages.length} lowest-scoring pages are shown.</p>`}
-${s.coverage && s.coverage.notAuditedTotal > 0 ? `<h2 id="not-audited">Pages found but not audited — ${s.coverage.notAuditedTotal.toLocaleString()} <a class="top" href="#top">↑ top</a></h2>
-<p class="muted">${esc(stoppedReason(s.coverage))}${s.coverage.notAudited.length < s.coverage.notAuditedTotal ? ` The first ${s.coverage.notAudited.length.toLocaleString()} are listed.` : ''}</p>
-<details><summary>Show the list</summary><table><tr><th>Page</th><th>Found via</th><th>Depth</th></tr>
-${s.coverage.notAudited.map((p) => `<tr><td><a href="${esc(p.url)}">${esc(p.url)}</a></td><td>${esc(SOURCE_LABEL[p.source])}${p.parentUrl ? `<br><span class="muted">from ${esc(shortUrl(p.parentUrl))}</span>` : ''}</td><td>${p.depth}</td></tr>`).join('')}
-</table></details>` : ''}
-${s.notes.length ? `<h2 id="notes">Notes <a class="top" href="#top">↑ top</a></h2><ul class="muted">${s.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
-<div class="foot">Generated by IntelliQE. Accessibility rules by axe-core (Deque). Health score = accessibility 45% · links 30% · best practices 25%.</div>
-</body></html>`;
+<section class="card">${h2('pages', 'Pages audited', n(pages.length || s.pagesCrawled))}
+${pages.length ? `<table><tr><th>Page</th><th>Found via</th><th class="num">Depth</th><th class="num">HTTP</th><th class="num">Load</th><th class="num">Links</th><th class="num">Accessibility</th><th class="num">Best practices</th><th class="num">Issues</th></tr>
+${pages.map((p) => `<tr><td class="url">${esc(p.title || shortUrl(p.url))}<br><a class="muted" href="${esc(p.url)}">${esc(p.url)}</a></td><td class="muted">${esc(SOURCE_LABEL[p.source || 'link'])}${p.parent_url ? `<br>from ${esc(shortUrl(p.parent_url))}` : ''}</td><td class="num">${p.depth}</td><td class="num">${p.status_code ?? 'ERR'}</td><td class="num">${(p.load_ms / 1000).toFixed(1)}s</td><td class="num">${p.links_found}</td><td class="num">${p.a11y_score}</td><td class="num">${p.bp_score}</td><td class="num">${p.findings_count}</td></tr>`).join('')}
+</table>` : `<table><tr><th>Page</th><th class="num">Accessibility</th><th class="num">Best practices</th><th class="num">Issues</th></tr>
+${s.worstPages.map((p) => `<tr><td>${esc(p.title || p.url)}<br><span class="muted">${esc(p.url)}</span></td><td class="num">${p.a11yScore}</td><td class="num">${p.bpScore}</td><td class="num">${p.findings}</td></tr>`).join('')}
+</table><p class="note">The full page list could not be loaded; the ${s.worstPages.length} lowest-scoring pages are shown.</p>`}</section>
+${s.coverage && s.coverage.notAuditedTotal > 0 ? `<section class="card">${h2('not-audited', 'Pages found but not audited', n(s.coverage.notAuditedTotal))}
+<p class="note">${esc(stoppedReason(s.coverage))}${s.coverage.notAudited.length < s.coverage.notAuditedTotal ? ` The first ${n(s.coverage.notAudited.length)} are listed.` : ''}</p>
+<details><summary><span class="t">Show the list</span></summary><table><tr><th>Page</th><th>Found via</th><th class="num">Depth</th></tr>
+${s.coverage.notAudited.map((p) => `<tr><td><a href="${esc(p.url)}">${esc(p.url)}</a></td><td class="muted">${esc(SOURCE_LABEL[p.source])}${p.parentUrl ? `<br>from ${esc(shortUrl(p.parentUrl))}` : ''}</td><td class="num">${p.depth}</td></tr>`).join('')}
+</table></details></section>` : ''}
+${s.notes.length ? `<section class="card">${h2('notes', 'Notes')}<ul class="note" style="margin:0;padding-left:18px">${s.notes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></section>` : ''}
+<div class="foot"><span>Generated by IntelliQE · ${esc(fmtDate(s.finishedAt))}</span><span>Accessibility rules by axe-core (Deque)</span><span>Health score = accessibility 45% · links 30% · best practices 25%</span></div>
+</div></body></html>`;
 }
