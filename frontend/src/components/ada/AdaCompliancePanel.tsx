@@ -22,19 +22,14 @@ import {
 } from '@/services/api';
 import {
   Globe, Lock, Loader2, CheckCircle2, AlertTriangle, XCircle, Link2Off,
-  FileSearch, Compass, ChevronDown, ChevronRight, Download, ExternalLink, Search,
+  FileSearch, Compass, ChevronDown, ChevronLeft, ChevronRight, Download, ExternalLink, Search,
   Square, Plus, Sparkles, ListChecks, Map as MapIcon, Info, Copy, FileText, Table2,
-  MousePointerClick, Wrench, Timer, LayoutDashboard,
+  MousePointerClick, LayoutDashboard,
 } from 'lucide-react';
 import UniversalAccess from '@/components/icons/UniversalAccess';
 import { UxReport } from '@/components/ada/UxTesting';
 import SummaryTab, { type IssueSeed } from '@/components/ada/SummaryTab';
 
-const EFFORT_STYLE: Record<AdaRemediation['effort'], string> = {
-  quick: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  moderate: 'bg-amber-50 text-amber-700 border-amber-200',
-  involved: 'bg-red-50 text-red-700 border-red-200',
-};
 const EFFORT_LABEL: Record<AdaRemediation['effort'], string> = { quick: 'Quick fix', moderate: 'Moderate', involved: 'Involved' };
 function remediationOf(f: AdaFinding | null | undefined): AdaRemediation | undefined {
   const r = f?.details?.remediation;
@@ -61,14 +56,8 @@ const SEV_STYLE: Record<AdaSeverity, string> = {
   moderate: 'bg-amber-100 text-amber-700 border-amber-200',
   minor: 'bg-gray-100 text-gray-600 border-gray-200',
 };
-const SEV_DOT: Record<AdaSeverity, string> = {
-  critical: 'bg-red-500', serious: 'bg-orange-500', moderate: 'bg-amber-400', minor: 'bg-gray-400',
-};
 const CATEGORY_LABEL: Record<AdaCategory, string> = {
   accessibility: 'Accessibility', links: 'Broken link', 'best-practice': 'Best practice', review: 'Needs review', visual: 'UX',
-};
-const GRADE_COLOR: Record<string, string> = {
-  A: 'text-emerald-600', B: 'text-green-600', C: 'text-amber-600', D: 'text-orange-600', F: 'text-red-600',
 };
 
 const EVENT_ICON: Record<AdaProgressEvent['type'], React.ElementType> = {
@@ -402,17 +391,6 @@ function LogLine({ e }: { e: AdaProgressEvent }) {
   );
 }
 
-function SevChip({ s, count, active, onClick }: { s: AdaSeverity; count: number; active?: boolean; onClick?: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full border text-[11px] font-medium transition-all ${active ? 'ring-2 ring-violet-400 ring-offset-1' : ''} ${SEV_STYLE[s]} ${onClick ? 'hover:brightness-95' : ''}`}
-    >
-      <span className={`w-2 h-2 rounded-full ${SEV_DOT[s]}`} /> {count} {s.charAt(0).toUpperCase() + s.slice(1)}
-    </button>
-  );
-}
-
 /* ───────────────────────────── report header ───────────────────────────── */
 
 /**
@@ -540,6 +518,15 @@ function usePreviousAudit(targetUrl: string, scanId: string | null): AdaTrendPoi
 
 /* ───────────────────────────── issue explorer ───────────────────────────── */
 
+/**
+ * All issues, three levels deep and every level paged:
+ *   toolbar   category, severity, search and sort, with the result line
+ *   rules     one row per failing check, ten to a page
+ *   rule      the fix, then its instances ten to a page, each opening in place
+ * Nothing on this tab repeats the header, and nothing is coloured except the
+ * severity badge.
+ */
+
 interface IssueGroup {
   key: string;
   category: AdaCategory;
@@ -554,29 +541,32 @@ interface IssueGroup {
 }
 
 const SEV_ORDER: Record<AdaSeverity, number> = { critical: 0, serious: 1, moderate: 2, minor: 3 };
+const RULES_PER_PAGE = 10;
+const INSTANCES_PER_PAGE = 10;
+type SortKey = 'severity' | 'instances' | 'pages';
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const chipCls = (active: boolean) => `px-2.5 py-1 rounded-full border text-[11px] font-medium transition-colors ${active ? 'bg-violet-600 border-violet-600 text-white' : 'bg-white border-gray-200 text-gray-600 hover:border-violet-300'}`;
 
-function IssueExplorer({ findings, summary, seed }: { findings: AdaFinding[]; summary: AdaSummary; seed: IssueSeed }) {
+function IssueExplorer({ findings, seed }: { findings: AdaFinding[]; summary: AdaSummary; seed: IssueSeed }) {
   const [sev, setSev] = useState<AdaSeverity | ''>(seed.severity || '');
   const [cat, setCat] = useState<AdaCategory | 'all'>(seed.category || 'all');
   const [q, setQ] = useState(seed.query || '');
-  const [open, setOpen] = useState<Set<string>>(new Set());
-  const [selected, setSelected] = useState<AdaFinding | null>(null);
+  const [sort, setSort] = useState<SortKey>('severity');
+  const [ruleKey, setRuleKey] = useState<string | null>(null);
+  // The page number belongs to one filter combination: change a filter and it reads as 1 again.
+  const filterKey = `${cat}|${sev}|${q}|${sort}`;
+  const [paging, setPaging] = useState({ key: filterKey, page: 1 });
+  const page = paging.key === filterKey ? paging.page : 1;
+  const setPage = (p: number) => setPaging({ key: filterKey, page: p });
 
-  // Totals are over the whole report, not the current filter, so the summary
-  // pane always reads the same regardless of what the user is looking at.
+  // Counts for the chips are over the whole report, so a chip always says how many it would show.
   const totals = useMemo(() => {
     const issues = findings.filter((f) => f.category !== 'review');
     const bySeverity: Record<AdaSeverity, number> = { critical: 0, serious: 0, moderate: 0, minor: 0 };
     for (const f of issues) bySeverity[f.severity] += f.occurrences;
     const byCat: Record<AdaCategory, number> = { accessibility: 0, links: 0, 'best-practice': 0, review: 0, visual: 0 };
     for (const f of findings) byCat[f.category] += f.occurrences;
-    return {
-      issues: issues.reduce((a, f) => a + f.occurrences, 0),
-      review: byCat.review,
-      pages: new Set(issues.map((f) => f.page_url)).size,
-      components: new Set(findings.filter((f) => f.element).map((f) => f.element)).size,
-      bySeverity, byCat,
-    };
+    return { issues: issues.reduce((a, f) => a + f.occurrences, 0), bySeverity, byCat };
   }, [findings]);
 
   const groups = useMemo<IssueGroup[]>(() => {
@@ -594,155 +584,236 @@ function IssueExplorer({ findings, summary, seed }: { findings: AdaFinding[]; su
       m.set(key, g);
     }
     for (const g of m.values()) g.pages = new Set(g.rows.map((r) => r.page_url)).size;
-    return [...m.values()].sort((x, y) => SEV_ORDER[x.severity] - SEV_ORDER[y.severity] || y.occurrences - x.occurrences);
-  }, [findings, cat, sev, q]);
+    const list = [...m.values()];
+    if (sort === 'instances') list.sort((x, y) => y.occurrences - x.occurrences);
+    else if (sort === 'pages') list.sort((x, y) => y.pages - x.pages || y.occurrences - x.occurrences);
+    else list.sort((x, y) => SEV_ORDER[x.severity] - SEV_ORDER[y.severity] || y.occurrences - x.occurrences);
+    return list;
+  }, [findings, cat, sev, q, sort]);
 
-  const shown = groups.reduce((a, g) => a + g.occurrences, 0);
-  const shownPages = new Set(groups.flatMap((g) => g.rows.map((r) => r.page_url))).size;
-  const toggle = (key: string) => setOpen((prev) => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
+  const pageCount = Math.max(1, Math.ceil(groups.length / RULES_PER_PAGE));
+  const safePage = Math.min(page, pageCount);
+  const pageGroups = groups.slice((safePage - 1) * RULES_PER_PAGE, safePage * RULES_PER_PAGE);
+  const selected = groups.find((g) => g.key === ruleKey) || null;
+  const instances = groups.reduce((a, g) => a + g.occurrences, 0);
+  const sitePages = new Set(groups.flatMap((g) => g.rows.map((r) => r.page_url))).size;
+  const filtersOn = cat !== 'all' || !!sev || !!q.trim();
+  const n = (x: number) => x.toLocaleString();
 
-  const summaryPane = (
-    <div className="space-y-4">
-      <div>
-        <p className="text-4xl font-bold text-gray-800 leading-none">{totals.issues}</p>
-        <p className="text-xs text-gray-600 mt-1">Issues in {totals.pages} page{totals.pages === 1 ? '' : 's'} and {totals.components} component{totals.components === 1 ? '' : 's'}</p>
-        <div className="flex flex-wrap gap-1.5 mt-2">
-          <span className="px-2 py-0.5 rounded border border-gray-200 text-[10px] text-gray-600 font-medium">WCAG 2.2 AA</span>
-          <span className={`px-2 py-0.5 rounded border border-gray-200 text-[10px] font-medium ${GRADE_COLOR[summary.overall.grade ?? 'F']}`}>Health {summary.overall.score ?? 0}/100</span>
-        </div>
-      </div>
-      <div>
-        <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Severity breakdown</p>
-        <div className="flex flex-wrap gap-1.5">
-          {SEVERITIES.map((s) => <SevChip key={s} s={s} count={totals.bySeverity[s]} active={sev === s} onClick={() => setSev(sev === s ? '' : s)} />)}
-        </div>
-      </div>
-      <div>
-        <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Category</p>
-        <div className="flex flex-wrap gap-1.5">
-          {([['all', 'All issues', totals.issues], ['accessibility', 'Accessibility', totals.byCat.accessibility], ['links', 'Broken links', totals.byCat.links], ['best-practice', 'Best practices', totals.byCat['best-practice']], ['review', 'Needs review', totals.review]] as [AdaCategory | 'all', string, number][]).map(([k, label, n]) => (
-            <button key={k} onClick={() => { setCat(k); if (k === 'review') { setSev(''); setQ(''); } }} title={k === 'review' ? 'Checks a person has to confirm. Not counted as issues.' : undefined} className={`px-2 py-1 rounded-full border text-[11px] font-medium transition-colors ${cat === k ? 'bg-violet-600 border-violet-600 text-white' : 'bg-white border-gray-200 text-gray-600 hover:border-violet-300'}`}>{label} <span className={cat === k ? 'text-violet-100' : 'text-gray-400'}>{n}</span></button>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
+  const categories: [AdaCategory | 'all', string, number][] = [
+    ['all', 'All issues', totals.issues],
+    ['accessibility', 'Accessibility', totals.byCat.accessibility],
+    ['links', 'Broken links', totals.byCat.links],
+    ['best-practice', 'Best practices', totals.byCat['best-practice']],
+    ['review', 'Needs review', totals.byCat.review],
+  ];
 
-  const listPane = (
-    <div className="flex flex-col min-h-0">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-gray-100">
-        <p className="text-xs text-gray-600 whitespace-nowrap">Showing <span className="font-semibold text-gray-800">{shown}</span> {cat === 'review' ? 'items to review' : 'issues'} in {shownPages} page{shownPages === 1 ? '' : 's'}</p>
-        <div className="relative flex-1 min-w-[120px]">
-          <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter issues" className={inputCls + ' !py-1.5 pl-8 text-xs'} />
-        </div>
-      </div>
-      <div className="max-h-[620px] overflow-y-auto divide-y divide-gray-100">
-        {groups.length === 0 && (
-          <p className="px-4 py-6 text-xs text-emerald-700 flex items-center gap-2"><CheckCircle2 className="w-4 h-4" /> Nothing matches — {findings.length === 0 ? 'no issues were found.' : 'try clearing a filter.'}</p>
-        )}
-        {groups.map((g) => {
-          const isOpen = open.has(g.key);
-          return (
-            <div key={g.key}>
-              <button onClick={() => toggle(g.key)} className={`w-full text-left px-3 py-2.5 flex items-center gap-2 hover:bg-gray-50 ${isOpen ? 'bg-violet-50/40' : ''}`}>
-                <span className="flex-1 min-w-0">
-                  <span className="text-xs text-gray-800">{g.title} <span className="font-semibold">({g.occurrences})</span></span>
-                  <span className="block text-[10px] text-gray-400">{CATEGORY_LABEL[g.category]} · {g.pages} page{g.pages === 1 ? '' : 's'}{g.wcag ? ` · WCAG ${g.wcag}` : ''}</span>
-                </span>
-                {remediationOf(g.rows[0]) && <span className={`px-1.5 py-0.5 rounded border text-[10px] flex-shrink-0 hidden sm:inline ${EFFORT_STYLE[remediationOf(g.rows[0])!.effort]}`}>{EFFORT_LABEL[remediationOf(g.rows[0])!.effort]}</span>}
-                <span className={`px-2 py-0.5 rounded border text-[10px] font-medium flex-shrink-0 ${SEV_STYLE[g.severity]}`}>{g.severity.charAt(0).toUpperCase() + g.severity.slice(1)}</span>
-                {isOpen ? <ChevronDown className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />}
-              </button>
-              {isOpen && (
-                <div className="bg-gray-50/70 border-t border-gray-100">
-                  {g.rows.slice(0, 80).map((f) => {
-                    const active = selected?.id === f.id;
-                    return (
-                      <button key={f.id} onClick={() => setSelected(f)} className={`w-full text-left px-4 py-1.5 pl-6 flex items-start gap-2 text-[11px] border-l-2 ${active ? 'border-violet-500 bg-violet-50' : 'border-transparent hover:bg-white'}`}>
-                        <MousePointerClick className={`w-3 h-3 mt-[2px] flex-shrink-0 ${active ? 'text-violet-500' : 'text-gray-300'}`} />
-                        <span className="min-w-0">
-                          <span className="block text-gray-700 truncate">{g.category === 'links' ? String(f.details?.link || f.element || '') : shortUrl(f.page_url)}</span>
-                          <span className="block text-gray-400 font-mono truncate">{g.category === 'links' ? `on ${shortUrl(f.page_url)}` : (f.element || f.description || '')}</span>
-                        </span>
-                        {f.occurrences > 1 && <span className="ml-auto text-gray-400 flex-shrink-0">×{f.occurrences}</span>}
-                      </button>
-                    );
-                  })}
-                  {g.rows.length > 80 && <p className="px-6 py-1.5 text-[11px] text-gray-400">…and {g.rows.length - 80} more instances (all included in the CSV).</p>}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-
-  const detailPane = <IssueDetail finding={selected} />;
-
-  // Three panes side by side on wide screens; the detail pane drops below the
-  // list on laptops so the issue list is never squeezed to a sliver.
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[240px_minmax(0,1fr)_340px] lg:divide-x divide-gray-100">
-      <div className="p-4 border-b lg:border-b-0 border-gray-100">{summaryPane}</div>
-      <div className="min-w-0">{listPane}</div>
-      <div className="min-h-[220px] lg:col-span-2 xl:col-span-1 border-t xl:border-t-0 border-gray-100">{detailPane}</div>
+    <div>
+      {/* Toolbar */}
+      <div className="px-4 py-3 border-b border-gray-100 space-y-2.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {categories.map(([k, label, count]) => (
+            <button key={k} type="button" onClick={() => { setCat(k); if (k === 'review') setSev(''); }} title={k === 'review' ? 'Checks a person has to confirm. Not counted as issues.' : undefined} className={chipCls(cat === k)}>
+              {label} <span className={cat === k ? 'text-violet-100' : 'text-gray-400'}>{n(count)}</span>
+            </button>
+          ))}
+          <span className="mx-1 h-4 w-px bg-gray-200 hidden sm:block" aria-hidden />
+          {SEVERITIES.map((s) => (
+            <button key={s} type="button" onClick={() => setSev(sev === s ? '' : s)} className={chipCls(sev === s)}>
+              {cap(s)} <span className={sev === s ? 'text-violet-100' : 'text-gray-400'}>{n(totals.bySeverity[s])}</span>
+            </button>
+          ))}
+          <div className="ml-auto flex items-center gap-2">
+            <div className="relative w-56">
+              <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search rules, pages, elements" aria-label="Search issues" className={inputCls + ' !py-1.5 pl-8 text-xs'} />
+            </div>
+            <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} aria-label="Sort rules" className="px-2.5 py-1.5 bg-white border border-gray-200 rounded-lg text-xs text-gray-700 outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400">
+              <option value="severity">Sort: Severity</option>
+              <option value="instances">Sort: Instances</option>
+              <option value="pages">Sort: Site pages</option>
+            </select>
+          </div>
+        </div>
+        <p className="text-xs text-gray-500">
+          <span className="font-semibold text-gray-800 tabular-nums">{n(groups.length)}</span> rule{groups.length === 1 ? '' : 's'}
+          {' · '}<span className="font-semibold text-gray-800 tabular-nums">{n(instances)}</span> instance{instances === 1 ? '' : 's'}
+          {' · '}<span className="font-semibold text-gray-800 tabular-nums">{n(sitePages)}</span> site page{sitePages === 1 ? '' : 's'}
+          {filtersOn && <button type="button" onClick={() => { setCat('all'); setSev(''); setQ(''); }} className="ml-3 text-violet-700 hover:underline">Clear filters</button>}
+        </p>
+      </div>
+
+      {/* Rules on the left, the chosen rule on the right */}
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_440px] xl:divide-x divide-gray-100">
+        <div className="min-w-0">
+          {groups.length === 0 ? (
+            <p className="px-4 py-10 text-xs text-gray-500 text-center">{findings.length === 0 ? 'No issues were found on the pages audited.' : 'No issues match these filters.'}</p>
+          ) : (
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-[10.5px] uppercase tracking-wide text-gray-400">
+                  <th className="text-left px-4 py-2 font-medium">Rule</th>
+                  <th className="text-left px-2 py-2 font-medium w-24">Severity</th>
+                  <th className="text-right px-2 py-2 font-medium w-24">Site pages</th>
+                  <th className="text-right px-4 py-2 font-medium w-24">Instances</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 border-t border-gray-100">
+                {pageGroups.map((g) => {
+                  const active = selected?.key === g.key;
+                  return (
+                    <tr key={g.key} onClick={() => setRuleKey(g.key)} className={`cursor-pointer transition-colors ${active ? 'bg-violet-50/60' : 'hover:bg-gray-50'}`}>
+                      <td className="px-4 py-2.5 align-top">
+                        <p className={`leading-snug ${active ? 'text-violet-800 font-medium' : 'text-gray-800'}`}>{g.title}</p>
+                        <p className="text-[10.5px] text-gray-400 mt-0.5">{CATEGORY_LABEL[g.category]}{g.wcag ? ` · WCAG ${g.wcag}` : ''}</p>
+                      </td>
+                      <td className="px-2 py-2.5 align-top"><span className={`inline-block px-2 py-0.5 rounded border text-[10px] font-medium ${SEV_STYLE[g.severity]}`}>{cap(g.severity)}</span></td>
+                      <td className="px-2 py-2.5 align-top text-right tabular-nums text-gray-600">{n(g.pages)}</td>
+                      <td className="px-4 py-2.5 align-top text-right tabular-nums font-semibold text-gray-800">{n(g.occurrences)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+          <Pager page={safePage} pageCount={pageCount} total={groups.length} pageSize={RULES_PER_PAGE} unit="rules" onPage={setPage} />
+        </div>
+        <div className="min-w-0 border-t xl:border-t-0 border-gray-100">
+          {selected
+            ? <RuleDetail key={selected.key} group={selected} />
+            : <p className="px-6 py-10 text-xs text-gray-400 text-center">Select a rule to see how to fix it and where it occurs.</p>}
+        </div>
+      </div>
     </div>
   );
 }
 
-function IssueDetail({ finding }: { finding: AdaFinding | null }) {
-  const [copied, setCopied] = useState(false);
-  const rem = remediationOf(finding);
-  if (!finding) {
-    return (
-      <div className="h-full flex flex-col items-center justify-center text-center p-6 text-gray-400">
-        <MousePointerClick className="w-8 h-8 mb-2 text-gray-300" />
-        <p className="text-xs">Select an issue to view details</p>
-        <p className="text-[10px] mt-1">Expand a rule on the left, then pick an instance.</p>
+/** "1-10 of 47 rules" with previous / next. Hidden when there is nothing to page. */
+function Pager({ page, pageCount, total, pageSize, unit, onPage }: { page: number; pageCount: number; total: number; pageSize: number; unit: string; onPage: (p: number) => void }) {
+  if (total === 0) return null;
+  const from = (page - 1) * pageSize + 1;
+  const to = Math.min(total, page * pageSize);
+  const btn = 'p-1 rounded-md border border-gray-200 text-gray-500 hover:border-violet-300 hover:text-violet-700 disabled:opacity-30 disabled:hover:border-gray-200 disabled:hover:text-gray-500';
+  return (
+    <div className="flex items-center justify-between px-4 py-2 border-t border-gray-100 text-[11px] text-gray-500">
+      <span className="tabular-nums">{from.toLocaleString()}-{to.toLocaleString()} of {total.toLocaleString()} {unit}</span>
+      {pageCount > 1 && (
+        <div className="flex items-center gap-1">
+          <button type="button" onClick={() => onPage(page - 1)} disabled={page <= 1} aria-label="Previous page" className={btn}><ChevronLeft className="w-3.5 h-3.5" /></button>
+          <span className="px-2 tabular-nums text-gray-600">{page} / {pageCount}</span>
+          <button type="button" onClick={() => onPage(page + 1)} disabled={page >= pageCount} aria-label="Next page" className={btn}><ChevronRight className="w-3.5 h-3.5" /></button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One rule: what it is, how to fix it, then every instance ten at a time. */
+function RuleDetail({ group }: { group: IssueGroup }) {
+  const [pq, setPq] = useState('');
+  const [paging, setPaging] = useState({ key: '', page: 1 });
+  const page = paging.key === pq ? paging.page : 1;
+  const setPage = (p: number) => setPaging({ key: pq, page: p });
+  const [inst, setInst] = useState<AdaFinding | null>(null);
+  const [showExample, setShowExample] = useState(false);
+  const rem = remediationOf(group.rows[0]);
+  const isLink = group.category === 'links';
+  const rows = useMemo(() => {
+    const needle = pq.trim().toLowerCase();
+    if (!needle) return group.rows;
+    return group.rows.filter((f) => [f.page_url, f.element, String(f.details?.link || '')].some((s) => (s || '').toLowerCase().includes(needle)));
+  }, [group, pq]);
+  const pageCount = Math.max(1, Math.ceil(rows.length / INSTANCES_PER_PAGE));
+  const safePage = Math.min(page, pageCount);
+  const slice = rows.slice((safePage - 1) * INSTANCES_PER_PAGE, safePage * INSTANCES_PER_PAGE);
+  const n = (x: number) => x.toLocaleString();
+
+  return (
+    <div className="text-xs">
+      <div className="px-4 pt-4 pb-3 border-b border-gray-100">
+        <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
+          <span className={`px-2 py-0.5 rounded border text-[10px] font-medium ${SEV_STYLE[group.severity]}`}>{cap(group.severity)}</span>
+          <span className="px-2 py-0.5 rounded border border-gray-200 text-[10px] text-gray-600">{CATEGORY_LABEL[group.category]}</span>
+          {group.wcag && <span className="px-2 py-0.5 rounded border border-gray-200 text-[10px] text-gray-600">WCAG {group.wcag}</span>}
+          {rem && <span className="px-2 py-0.5 rounded border border-gray-200 text-[10px] text-gray-600">{EFFORT_LABEL[rem.effort]}</span>}
+        </div>
+        <p className="text-sm font-semibold text-gray-900 leading-snug">{group.title}</p>
+        <p className="text-gray-500 mt-1">
+          {n(group.occurrences)} instance{group.occurrences === 1 ? '' : 's'} on {n(group.pages)} site page{group.pages === 1 ? '' : 's'}
+          {group.helpUrl && <> · <a href={group.helpUrl} target="_blank" rel="noopener noreferrer" className="text-violet-700 hover:underline">Rule reference</a></>}
+        </p>
       </div>
-    );
-  }
+
+      {rem ? (
+        <div className="px-4 py-3 border-b border-gray-100 space-y-2">
+          <p className="text-gray-800">{rem.problem}</p>
+          {rem.impact && <p className="text-gray-500">{rem.impact}</p>}
+          <p className="text-[10.5px] uppercase tracking-wide text-gray-400 pt-1">How to fix</p>
+          <ol className="list-decimal pl-4 space-y-0.5 text-gray-700">{rem.steps.map((st, i) => <li key={i}>{st}</li>)}</ol>
+          {rem.example && (
+            <div>
+              <button type="button" onClick={() => setShowExample((v) => !v)} className="text-violet-700 hover:underline">{showExample ? 'Hide example' : 'Show example'}</button>
+              {showExample && (
+                <div className="mt-2 space-y-1.5">
+                  <p className="text-[10px] text-gray-400">Before</p>
+                  <pre className="font-mono text-[10.5px] text-gray-700 bg-gray-50 border border-gray-100 rounded px-2 py-1.5 whitespace-pre-wrap break-all max-h-32 overflow-auto">{rem.example.before}</pre>
+                  <p className="text-[10px] text-gray-400">After</p>
+                  <pre className="font-mono text-[10.5px] text-gray-700 bg-gray-50 border border-gray-100 rounded px-2 py-1.5 whitespace-pre-wrap break-all max-h-32 overflow-auto">{rem.example.after}</pre>
+                  {rem.example.note && <p className="text-[10px] text-gray-500">{rem.example.note}</p>}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ) : group.rows[0]?.description ? (
+        <p className="px-4 py-3 border-b border-gray-100 text-gray-600">{group.rows[0].description}</p>
+      ) : null}
+      {group.category === 'review' && (
+        <p className="px-4 py-2.5 border-b border-gray-100 text-gray-500">The scanner could not decide these automatically. Open each page and confirm.</p>
+      )}
+
+      <div className="px-4 py-2 border-b border-gray-100 flex items-center gap-2">
+        <p className="flex-1 text-[10.5px] uppercase tracking-wide text-gray-400">Instances</p>
+        <div className="relative w-44">
+          <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+          <input value={pq} onChange={(e) => setPq(e.target.value)} placeholder={isLink ? 'Filter by link or page' : 'Filter by page'} aria-label="Filter instances" className={inputCls + ' !py-1 pl-8 text-[11px]'} />
+        </div>
+      </div>
+      <div className="divide-y divide-gray-100">
+        {slice.length === 0 && <p className="px-4 py-6 text-gray-500 text-center">No instances match.</p>}
+        {slice.map((f) => {
+          const active = inst?.id === f.id;
+          const primary = isLink ? String(f.details?.link || f.element || '') : shortUrl(f.page_url);
+          const secondary = isLink ? `on ${shortUrl(f.page_url)}` : (f.element || '');
+          return (
+            <div key={f.id}>
+              <button type="button" onClick={() => setInst(active ? null : f)} className={`w-full text-left px-4 py-2 flex items-start gap-2 transition-colors ${active ? 'bg-violet-50/60' : 'hover:bg-gray-50'}`}>
+                <span className="min-w-0 flex-1">
+                  <span className={`block truncate ${active ? 'text-violet-800 font-medium' : 'text-gray-800'}`} title={primary}>{primary}</span>
+                  {secondary && <span className="block text-[10.5px] text-gray-400 font-mono truncate" title={secondary}>{secondary}</span>}
+                </span>
+                {f.occurrences > 1 && <span className="text-gray-400 tabular-nums flex-shrink-0 mt-px">×{f.occurrences}</span>}
+                {active ? <ChevronDown className="w-3.5 h-3.5 text-gray-400 flex-shrink-0 mt-px" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-300 flex-shrink-0 mt-px" />}
+              </button>
+              {active && <InstanceDetail finding={f} showFailure={!rem} />}
+            </div>
+          );
+        })}
+      </div>
+      <Pager page={safePage} pageCount={pageCount} total={rows.length} pageSize={INSTANCES_PER_PAGE} unit="instances" onPage={setPage} />
+    </div>
+  );
+}
+
+/** Where exactly one instance is: the page, the element or link, the HTML. Opens under its row. */
+function InstanceDetail({ finding, showFailure }: { finding: AdaFinding; showFailure: boolean }) {
+  const [copied, setCopied] = useState(false);
   const d = finding.details || {};
   const isLink = finding.category === 'links';
   const copy = (text: string) => { navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); };
   return (
-    <div className="p-4 space-y-3 text-xs">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className={`px-2 py-0.5 rounded border text-[10px] font-medium ${SEV_STYLE[finding.severity]}`}>{finding.severity}</span>
-        <span className="px-2 py-0.5 rounded border border-gray-200 text-[10px] text-gray-600">{CATEGORY_LABEL[finding.category]}</span>
-        {finding.wcag && <span className="px-2 py-0.5 rounded border border-violet-200 bg-violet-50 text-[10px] text-violet-700">WCAG {finding.wcag}</span>}
-      </div>
-      <p className="text-sm font-semibold text-gray-800 leading-snug">{finding.title}</p>
-      {rem ? (
-        <div className="space-y-3 rounded-lg border border-violet-100 bg-violet-50/40 p-3">
-          <div>
-            <p className="text-[10px] uppercase tracking-wide text-red-500 font-semibold flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Problem</p>
-            <p className="text-gray-800 mt-0.5">{rem.problem}</p>
-            {rem.impact && <p className="text-gray-500 mt-1">{rem.impact}</p>}
-          </div>
-          <div>
-            <p className="text-[10px] uppercase tracking-wide text-emerald-600 font-semibold flex items-center gap-1"><Wrench className="w-3 h-3" /> How to fix <span className={`ml-auto normal-case tracking-normal px-1.5 py-0.5 rounded border font-medium ${EFFORT_STYLE[rem.effort]}`}><Timer className="w-3 h-3 inline mr-0.5" />{EFFORT_LABEL[rem.effort]}</span></p>
-            <ol className="list-decimal pl-4 mt-1 space-y-0.5 text-gray-700">{rem.steps.map((s, i) => <li key={i}>{s}</li>)}</ol>
-          </div>
-          {rem.example && (
-            <div>
-              <p className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Example</p>
-              <p className="text-[10px] text-gray-400 mt-1">Before</p>
-              <pre className="font-mono text-[10.5px] text-red-800 bg-red-50 border border-red-100 rounded px-2 py-1.5 whitespace-pre-wrap break-all max-h-32 overflow-auto">{rem.example.before}</pre>
-              <p className="text-[10px] text-gray-400 mt-1.5">After</p>
-              <pre className="font-mono text-[10.5px] text-emerald-800 bg-emerald-50 border border-emerald-100 rounded px-2 py-1.5 whitespace-pre-wrap break-all max-h-32 overflow-auto">{rem.example.after}</pre>
-              {rem.example.note && <p className="text-[10px] text-gray-500 mt-1">{rem.example.note}</p>}
-            </div>
-          )}
-        </div>
-      ) : finding.description && <p className="text-gray-600">{finding.description}</p>}
-      {finding.category === 'review' && (
-        <p className="text-amber-700 bg-amber-50 border border-amber-100 rounded px-2.5 py-1.5 text-[11px]">The scanner could not decide this one automatically. Open the page and confirm whether it is a real problem.</p>
-      )}
-      {finding.help_url && <a href={finding.help_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-violet-600 hover:underline">Reference: full rule description <ExternalLink className="w-3 h-3" /></a>}
-
+    <div className="px-4 pb-3 pt-1 space-y-2.5 bg-violet-50/30">
       <Field label={isLink ? 'Found on page' : 'Page'}>
         <a href={finding.page_url} target="_blank" rel="noopener noreferrer" className="text-violet-700 hover:underline break-all inline-flex items-center gap-1">{finding.page_url} <ExternalLink className="w-3 h-3 flex-shrink-0" /></a>
       </Field>
@@ -764,16 +835,16 @@ function IssueDetail({ finding }: { finding: AdaFinding | null }) {
         </>
       )}
       {!isLink && finding.element && (
-        <Field label="Element" action={<button onClick={() => copy(finding.element!)} className="text-[10px] text-gray-400 hover:text-violet-600 flex items-center gap-1"><Copy className="w-3 h-3" /> {copied ? 'Copied' : 'Copy selector'}</button>}>
-          <code className="block font-mono text-[11px] text-violet-700 bg-violet-50/60 rounded px-2 py-1 break-all">{finding.element}</code>
+        <Field label="Element" action={<button type="button" onClick={() => copy(finding.element!)} className="text-[10px] text-gray-400 hover:text-violet-600 flex items-center gap-1"><Copy className="w-3 h-3" /> {copied ? 'Copied' : 'Copy selector'}</button>}>
+          <code className="block font-mono text-[11px] text-gray-800 bg-white border border-gray-100 rounded px-2 py-1 break-all">{finding.element}</code>
         </Field>
       )}
       {finding.html_snippet && (
         <Field label="HTML">
-          <pre className="font-mono text-[10.5px] text-gray-700 bg-gray-50 border border-gray-100 rounded px-2 py-1.5 whitespace-pre-wrap break-all max-h-40 overflow-auto">{finding.html_snippet}</pre>
+          <pre className="font-mono text-[10.5px] text-gray-700 bg-white border border-gray-100 rounded px-2 py-1.5 whitespace-pre-wrap break-all max-h-40 overflow-auto">{finding.html_snippet}</pre>
         </Field>
       )}
-      {!rem && typeof d.failureSummary === 'string' && d.failureSummary && (
+      {showFailure && typeof d.failureSummary === 'string' && d.failureSummary && (
         <Field label="What failed">
           <p className="text-gray-700 whitespace-pre-line">{d.failureSummary}</p>
         </Field>
