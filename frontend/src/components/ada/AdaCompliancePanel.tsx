@@ -1313,7 +1313,7 @@ summary .sv{font-size:11.5px;color:var(--body);width:82px;flex:none;text-transfo
 pre,code.good{font-family:Consolas,"SF Mono",Menlo,monospace;font-size:11.5px;white-space:pre-wrap;word-break:break-all;border-radius:8px;padding:8px 10px;margin:4px 0 0}pre.bad{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}pre.good,code.good{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0}code.good{display:inline-block;margin-top:4px}
 .swatches{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:12px;color:var(--body)}.swatches i{display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid var(--line);vertical-align:-2px;margin-right:6px}
 .foot{margin-top:24px;font-size:11.5px;color:var(--faint);display:flex;flex-wrap:wrap;gap:6px 16px}
-@media (max-width:720px){body{padding:20px 14px 48px}.card{overflow-x:auto}.meta a{word-break:break-all}.figs{flex-wrap:wrap}.fig{flex:1 1 45%;border-left:0;padding:8px 0}.fig.lead{flex:1 1 100%}.row,.two{display:block}.row>div+div{margin-top:16px}summary .m{margin-left:0;white-space:normal}summary{flex-wrap:wrap}}
+@media (max-width:720px){body{padding:20px 14px 48px}.card{overflow-x:auto}.meta a{word-break:break-all}.figs{flex-wrap:wrap}.fig{flex:1 1 45%;border-left:0;padding:8px 12px 8px 0}.fig.lead{flex:1 1 100%}.row,.two{display:block}.row>div+div{margin-top:16px}summary .m{margin-left:0;white-space:normal}summary{flex-wrap:wrap}}
 @media print{body{background:#fff;padding:0;font-size:11.5px}.card{border:0;padding:0 0 12px;break-inside:avoid;page-break-inside:avoid}nav.toc,h2 a.top{display:none}details{break-inside:avoid}a{color:inherit}.fig .v{font-size:26px}.fig.lead .v{font-size:40px}}
 </style></head><body><div class="wrap">
 <p class="eyebrow">IntelliQE · Website audit report</p>
