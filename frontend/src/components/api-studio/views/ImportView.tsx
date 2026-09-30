@@ -154,7 +154,6 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
               {busy === 'bulk' ? <Spinner className="w-5 h-5 text-white animate-spin" /> : <UploadCloud className="w-5 h-5 text-white" />}
             </div>
             <h2 className="mt-3 text-[15px] font-semibold text-gray-900">Bulk upload. Any API document</h2>
-            <p className="mt-1 text-[11.5px] text-gray-500">The parser is picked per file. Everything lands in the catalogue.</p>
             <div className="mt-4 flex items-center justify-center gap-2">
               <button type="button" onClick={(e) => { e.stopPropagation(); fileRef.current?.click(); }} disabled={!!busy} className={PRIMARY_BTN}>
                 <UploadCloud className="w-3.5 h-3.5" />Choose files
@@ -258,7 +257,7 @@ function MethodForm({ def, busy, onRun }: { def: ImportMethodDef; busy: boolean;
     /* Fills the right pane. The form inside is a flex column too, so its
        big control (drop zone or textarea) takes whatever height is left. */
     <div className={`${CARD} p-4 flex-1 min-h-0 flex flex-col`}>
-      <div className="flex items-center gap-2 mb-2 flex-shrink-0">
+      <div className="flex items-center gap-2 mb-3 flex-shrink-0">
         <span className={`w-7 h-7 rounded-lg flex items-center justify-center ${TILE}`}><Icon className="w-4 h-4 text-[#7C3AED]" /></span>
         <h3 className="text-[13px] font-semibold text-gray-900">{def.label}</h3>
         {tabs.length > 1 && (
@@ -269,9 +268,6 @@ function MethodForm({ def, busy, onRun }: { def: ImportMethodDef; busy: boolean;
           </div>
         )}
       </div>
-      {/* The full explanation lives here rather than on the rail: it is worth
-          reading once you have chosen a method, and noise before that. */}
-      <p className="mb-3 text-[11.5px] text-gray-500 leading-relaxed flex-shrink-0">{def.detail}</p>
       {input === 'files' && <FilesForm def={def} busy={busy} onRun={onRun} />}
       {input === 'url' && <UrlForm def={def} busy={busy} onRun={onRun} />}
       {input === 'text' && <TextForm def={def} busy={busy} onRun={onRun} />}
@@ -338,7 +334,6 @@ function UrlForm({ def, busy, onRun }: { def: ImportMethodDef; busy: boolean; on
       <div>
         <label className={LABEL}>{docs ? 'Documentation page URL' : 'Spec URL'}</label>
         <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={docs ? 'https://developer.acme.com/reference/orders' : 'https://api.acme.com/openapi.json'} spellCheck={false} className={`${INPUT} font-mono`} />
-        {docs && <p className="text-[10.5px] text-gray-400 mt-1">If the page links to an OpenAPI/Swagger document it is imported directly; otherwise the page text is read by the platform's AI.</p>}
       </div>
       {docs && (
         <div>
@@ -378,7 +373,6 @@ function TextForm({ def, busy, onRun }: { def: ImportMethodDef; busy: boolean; o
         <div>
           <label className={LABEL}>Source name</label>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder={def.id === 'curl' ? 'Orders API' : 'orders-client.ts'} className={INPUT} />
-          {def.ai && <p className="text-[10.5px] text-gray-400 mt-2 leading-relaxed">Read by the platform's AI — every HTTP call it finds becomes an endpoint. Large sources take up to a minute.</p>}
         </div>
       </div>
       <div className="flex justify-end"><SubmitBtn busy={busy} label="Import" disabled={!text.trim()} /></div>
@@ -439,7 +433,7 @@ function ProbeForm({ busy, onRun }: { busy: boolean; onRun: RunFn }) {
       <div className="flex items-center gap-3">
         <label className="flex items-center gap-1.5 text-[11.5px] text-gray-600 cursor-pointer">
           <input type="checkbox" checked={discover} onChange={(e) => setDiscover(e.target.checked)} className="w-3.5 h-3.5 rounded border-gray-300 text-[#7C3AED] focus:ring-[#A5B4FC]" />
-          Look for an OpenAPI document on the same origin and import the whole API
+          Import the whole API if a spec is found on the origin
         </label>
         <div className="ml-auto"><SubmitBtn busy={busy} label="Probe & import" disabled={!url.trim()} /></div>
       </div>
@@ -466,7 +460,6 @@ function ServerForm({ kind, busy, onRun }: { kind: 'graphql' | 'mcp'; busy: bool
       <div>
         <label className={LABEL}>{kind === 'graphql' ? 'GraphQL endpoint' : 'MCP server URL (Streamable HTTP)'}</label>
         <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={kind === 'graphql' ? 'https://api.acme.com/graphql' : 'https://mcp.acme.com/mcp'} spellCheck={false} className={`${INPUT} font-mono`} />
-        <p className="text-[10.5px] text-gray-400 mt-1">{kind === 'graphql' ? 'Runs an introspection query; one operation per Query and Mutation field. Introspection must be enabled on the server.' : 'Performs initialize → tools/list and creates a tools/call request per tool with sample arguments from its input schema.'}</p>
       </div>
       <AuthFields type={authType} value={authValue} headerName={headerName} onType={setAuthType} onValue={setAuthValue} onHeaderName={setHeaderName} />
       <details className="text-[11px]">
@@ -558,7 +551,6 @@ function ConnectorForm({ busy, onRun }: { busy: boolean; onRun: RunFn }) {
         </div>
         <div className="space-y-2">
           <div><label className={LABEL}>Connector name</label><input value={name} onChange={(e) => setName(e.target.value)} placeholder="Orders API" className={INPUT} /></div>
-          <p className="text-[10.5px] text-gray-400 leading-relaxed">Keys: <code className="font-mono">name</code>, <code className="font-mono">baseUrl</code>, <code className="font-mono">auth</code>, <code className="font-mono">headers</code>, <code className="font-mono">variables</code> and an <code className="font-mono">endpoints</code> list with <code className="font-mono">method</code>, <code className="font-mono">path</code>, <code className="font-mono">body</code>, <code className="font-mono">expectedStatus</code>. The same shape the Developer page exports.</p>
           <button type="button" onClick={() => setManifest(CONNECTOR_EXAMPLE)} className={SECONDARY_BTN}>Use the example</button>
         </div>
       </div>
