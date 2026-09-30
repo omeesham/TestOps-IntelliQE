@@ -21,10 +21,10 @@ import {
   type AdaScanRecord, type AdaSeverity, type AdaSummary, type AdaRemediation, type AdaSiteInventory, type AdaCoverage,
 } from '@/services/api';
 import {
-  Globe, Lock, Unlock, Loader2, CheckCircle2, AlertTriangle, XCircle, Link2Off,
-  ShieldCheck, FileSearch, Compass, ChevronDown, ChevronRight, Download, ExternalLink, Search,
-  Square, Plus, Sparkles, ListChecks, Map as MapIcon, Bot, Info, Eye, Copy, FileText, Table2,
-  MousePointerClick, Wrench, Timer, LayoutDashboard, CalendarDays, User,
+  Globe, Lock, Loader2, CheckCircle2, AlertTriangle, XCircle, Link2Off,
+  FileSearch, Compass, ChevronDown, ChevronRight, Download, ExternalLink, Search,
+  Square, Plus, Sparkles, ListChecks, Map as MapIcon, Info, Eye, Copy, FileText, Table2,
+  MousePointerClick, Wrench, Timer, LayoutDashboard,
 } from 'lucide-react';
 import UniversalAccess from '@/components/icons/UniversalAccess';
 import { UxReport } from '@/components/ada/UxTesting';
@@ -69,9 +69,6 @@ const CATEGORY_LABEL: Record<AdaCategory, string> = {
 };
 const GRADE_COLOR: Record<string, string> = {
   A: 'text-emerald-600', B: 'text-green-600', C: 'text-amber-600', D: 'text-orange-600', F: 'text-red-600',
-};
-const GRADE_RING: Record<string, string> = {
-  A: '#059669', B: '#16a34a', C: '#d97706', D: '#ea580c', F: '#dc2626',
 };
 
 const EVENT_ICON: Record<AdaProgressEvent['type'], React.ElementType> = {
@@ -405,24 +402,6 @@ function LogLine({ e }: { e: AdaProgressEvent }) {
   );
 }
 
-function ScoreRing({ score, grade, size = 84 }: { score: number; grade: string; size?: number }) {
-  const r = (size - 10) / 2;
-  const circ = 2 * Math.PI * r;
-  const dash = (score / 100) * circ;
-  return (
-    <div className="relative flex-shrink-0" style={{ width: size, height: size }}>
-      <svg width={size} height={size} className="-rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={r} stroke="#E5E7EB" strokeWidth="8" fill="none" />
-        <circle cx={size / 2} cy={size / 2} r={r} stroke={GRADE_RING[grade]} strokeWidth="8" fill="none" strokeLinecap="round" strokeDasharray={`${dash} ${circ - dash}`} />
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <p className={`font-bold leading-none ${GRADE_COLOR[grade]}`} style={{ fontSize: size / 3.2 }}>{score}</p>
-        <p className="text-[10px] text-gray-400 mt-0.5">Health · {grade}</p>
-      </div>
-    </div>
-  );
-}
-
 function SevChip({ s, count, active, onClick }: { s: AdaSeverity; count: number; active?: boolean; onClick?: () => void }) {
   return (
     <button
@@ -436,6 +415,11 @@ function SevChip({ s, count, active, onClick }: { s: AdaSeverity; count: number;
 
 /* ───────────────────────────── report header ───────────────────────────── */
 
+/**
+ * One card. Who and what at the top, one row of figures below, one line of
+ * scope at the bottom. No rings, no coloured numbers: the figures are in ink,
+ * the grade sits beside each one, and anything more lives in the tabs.
+ */
 function ReportHeader({ scanId, scan, summary, partial, findings, onNewAudit, onBrownfield }: {
   scanId: string; scan: AdaScanRecord; summary: AdaSummary; partial: boolean; findings: AdaFinding[]; onNewAudit?: () => void; onBrownfield?: () => void;
 }) {
@@ -447,11 +431,14 @@ function ReportHeader({ scanId, scan, summary, partial, findings, onNewAudit, on
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
   }, [menu]);
+  const prev = usePreviousAudit(summary.targetUrl, scanId);
   const a = summary.categories.accessibility;
   const l = summary.categories.links;
   const b = summary.categories.bestPractice;
   const ux = summary.categories.ux;
+  const n = (x: number) => x.toLocaleString();
   const brokenTotal = l.broken + l.serverErrors + l.timeouts;
+  const pagesFound = Math.max(summary.pagesDiscovered || 0, summary.pagesCrawled);
   const dl = async (kind: 'html' | 'csv' | 'pages') => {
     setMenu(false);
     const base = `website-audit-${safeName(summary.siteName)}-${summary.finishedAt.slice(0, 10)}`;
@@ -462,28 +449,29 @@ function ReportHeader({ scanId, scan, summary, partial, findings, onNewAudit, on
     if (kind === 'html') downloadBlob(buildHtmlReport(summary, partial, findings, pages, trend, scanId), `${base}.html`, 'text/html');
     else downloadBlob(buildPagesCsv(pages, summary.coverage), `${base}-pages.csv`, 'text/csv');
   };
+
+  const score = summary.overall.score;
+  const healthSub = prev === undefined ? undefined
+    : prev === null ? 'First audit of this site'
+    : score === null || prev.score === null ? `Previous audit ${new Date(prev.finishedAt).toLocaleDateString()}`
+    : `${score - prev.score > 0 ? '+' : ''}${score - prev.score} since ${new Date(prev.finishedAt).toLocaleDateString()}`;
+
+  const meta = [
+    `Audited ${new Date(summary.finishedAt).toLocaleString()}`,
+    fmtDuration(summary.durationMs),
+    scan.created_by ? (scan.created_by === 'schedule' ? 'Scheduled run' : scan.created_by) : null,
+    'WCAG 2.2 AA',
+    partial ? 'Stopped early' : 'Complete',
+    summary.loginAttempted ? (summary.loginSucceeded ? 'Signed in' : 'Public pages only') : null,
+  ].filter(Boolean) as string[];
+
   return (
     <div className={`${card} overflow-hidden`}>
-      <div className="p-5 flex flex-wrap items-start gap-5 bg-gradient-to-r from-violet-50/70 via-white to-white">
-        <ScoreRing score={summary.overall.score ?? 0} grade={summary.overall.grade ?? 'F'} size={104} />
+      <div className="px-6 pt-5 pb-4 flex flex-wrap items-start gap-4">
         <div className="flex-1 min-w-[260px]">
-          <h2 className="text-xl font-bold text-[#1E1B4B] leading-tight">{summary.siteName || summary.targetUrl}</h2>
-          <a href={summary.targetUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-violet-600 hover:underline inline-flex items-center gap-1 break-all">{summary.targetUrl} <ExternalLink className="w-3.5 h-3.5 flex-shrink-0" /></a>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-2 text-xs text-gray-600">
-            {scan.created_by && <span className="inline-flex items-center gap-1.5"><User className="w-3.5 h-3.5 text-gray-400" /> {scan.created_by === 'schedule' ? 'Scheduled run' : scan.created_by}</span>}
-            <span className="inline-flex items-center gap-1.5"><CalendarDays className="w-3.5 h-3.5 text-gray-400" /> {new Date(summary.finishedAt).toLocaleString()}</span>
-            <span className="inline-flex items-center gap-1.5"><Timer className="w-3.5 h-3.5 text-gray-400" /> {fmtDuration(summary.durationMs)}</span>
-            <span className="px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200 text-[11px] font-semibold">WCAG 2.2 AA</span>
-            {partial
-              ? <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[11px] font-semibold">Stopped early, partial</span>
-              : <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-semibold">Complete</span>}
-          </div>
-          {summary.loginAttempted && (
-            <p className="text-xs text-gray-500 mt-1.5 flex items-center gap-1.5">
-              {summary.loginSucceeded ? <Lock className="w-3.5 h-3.5 text-emerald-500" /> : <Unlock className="w-3.5 h-3.5 text-amber-500" />}
-              {summary.loginSucceeded ? 'Signed in. The authenticated site was audited.' : 'Sign-in did not succeed. Public pages only.'}
-            </p>
-          )}
+          <h2 className="text-lg font-semibold text-gray-900 leading-tight">{summary.siteName || summary.targetUrl}</h2>
+          <a href={summary.targetUrl} target="_blank" rel="noopener noreferrer" className="mt-0.5 text-[13px] text-gray-500 hover:text-violet-700 inline-flex items-center gap-1 break-all">{summary.targetUrl} <ExternalLink className="w-3 h-3 flex-shrink-0" /></a>
+          <p className="mt-2 text-xs text-gray-500">{meta.join('  ·  ')}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative" ref={menuRef}>
@@ -492,50 +480,62 @@ function ReportHeader({ scanId, scan, summary, partial, findings, onNewAudit, on
             </button>
             {menu && (
               <div role="menu" className="absolute right-0 z-20 mt-1 w-64 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden py-1">
-                <button role="menuitem" onClick={() => dl('html')} className="w-full text-left px-3.5 py-2 text-sm text-gray-700 hover:bg-violet-50 flex items-center gap-2 !rounded-none"><FileText className="w-4 h-4 text-violet-500" /> Full report (HTML)</button>
-                <button role="menuitem" onClick={() => dl('csv')} className="w-full text-left px-3.5 py-2 text-sm text-gray-700 hover:bg-violet-50 flex items-center gap-2 !rounded-none"><Table2 className="w-4 h-4 text-emerald-600" /> All issues (CSV)</button>
-                <button role="menuitem" onClick={() => dl('pages')} className="w-full text-left px-3.5 py-2 text-sm text-gray-700 hover:bg-violet-50 flex items-center gap-2 !rounded-none"><Compass className="w-4 h-4 text-indigo-500" /> Pages visited and not visited (CSV)</button>
+                <button role="menuitem" onClick={() => dl('html')} className="w-full text-left px-3.5 py-2 text-sm text-gray-700 hover:bg-violet-50 flex items-center gap-2 !rounded-none"><FileText className="w-4 h-4 text-gray-400" /> Full report (HTML)</button>
+                <button role="menuitem" onClick={() => dl('csv')} className="w-full text-left px-3.5 py-2 text-sm text-gray-700 hover:bg-violet-50 flex items-center gap-2 !rounded-none"><Table2 className="w-4 h-4 text-gray-400" /> All issues (CSV)</button>
+                <button role="menuitem" onClick={() => dl('pages')} className="w-full text-left px-3.5 py-2 text-sm text-gray-700 hover:bg-violet-50 flex items-center gap-2 !rounded-none"><Compass className="w-4 h-4 text-gray-400" /> Pages visited and not visited (CSV)</button>
               </div>
             )}
           </div>
           {onNewAudit && <button onClick={onNewAudit} className="text-sm px-3.5 py-2 bg-white border border-gray-200 hover:border-violet-300 text-gray-700 rounded-lg flex items-center gap-2"><Plus className="w-4 h-4" /> New audit</button>}
           {onBrownfield && (
-            <button onClick={onBrownfield} className="text-sm px-3.5 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-lg flex items-center gap-2 shadow-md shadow-purple-500/20" title="Rebuild requirements and generate test cases from this site">
-              <Bot className="w-4 h-4" /> Generate test cases
+            <button onClick={onBrownfield} className="text-sm px-3.5 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-lg flex items-center gap-2" title="Rebuild requirements and generate test cases from this site">
+              Generate test cases
             </button>
           )}
         </div>
       </div>
-      <div className={`grid grid-cols-2 ${ux ? 'lg:grid-cols-4' : 'lg:grid-cols-3'} divide-x divide-y lg:divide-y-0 divide-gray-100 border-t border-gray-100`}>
-        <MiniScore label="Accessibility" cat={a} Icon={UniversalAccess} basis={`${a.violations.toLocaleString()} violation${a.violations === 1 ? '' : 's'}`} />
-        <MiniScore label="Links" cat={l} Icon={Link2Off} basis={l.measured === false ? undefined : `${l.checked.toLocaleString()} checked · ${brokenTotal.toLocaleString()} broken`} />
-        <MiniScore label="Best practices" cat={b} Icon={ShieldCheck} basis={`${b.rulesPassed} of ${b.rulesEvaluated} checks passing`} />
-        {ux && <MiniScore label="UX" cat={ux} Icon={MousePointerClick} basis={`${ux.devices.length} device${ux.devices.length === 1 ? '' : 's'}${ux.standard ? '' : ' · layout only'}`} />}
+
+      <div className={`grid grid-cols-2 sm:grid-cols-3 ${ux ? 'lg:grid-cols-5' : 'lg:grid-cols-4'} border-t border-gray-100 divide-x divide-gray-100`}>
+        <Figure label="Health" score={score} grade={summary.overall.grade} sub={healthSub} lead />
+        <Figure label="Accessibility" score={a.score} grade={a.grade} sub={`${n(a.violations)} violation${a.violations === 1 ? '' : 's'}`} />
+        <Figure label="Links" score={l.score} grade={l.grade} sub={l.measured === false ? 'Not checked' : `${n(brokenTotal)} broken of ${n(l.checked)}`} />
+        <Figure label="Best practices" score={b.score} grade={b.grade} sub={`${b.rulesPassed} of ${b.rulesEvaluated} checks passing`} />
+        {ux && <Figure label="UX" score={ux.score} grade={ux.grade} sub={`${ux.devices.length} device${ux.devices.length === 1 ? '' : 's'}${ux.standard ? '' : ', layout only'}`} />}
       </div>
-      <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/40">
-        {summary.inventory && summary.inventory.sitemapUrls > 0 && <InventoryLine inv={summary.inventory} className="mb-1.5" />}
-        <p className="text-xs text-gray-500">{describePages(summary)} · {describeLinks(summary)}</p>
-        <TrendStrip scanId={scanId} summary={summary} />
-      </div>
+
+      <p className="px-6 py-2.5 border-t border-gray-100 text-xs text-gray-500">
+        {n(summary.pagesCrawled)} of {n(pagesFound)} pages audited · {describeLinks(summary)}
+      </p>
     </div>
   );
 }
 
-function MiniScore({ label, cat, Icon, basis }: { label: string; cat: { score: number | null; grade: string | null; label?: string }; Icon: React.ElementType; basis?: string }) {
-  const measured = cat.score !== null && cat.grade !== null;
+/** A figure in the header strip: label, the score in ink, the grade beside it, one short basis line. */
+function Figure({ label, score, grade, sub, lead }: { label: string; score: number | null; grade: string | null; sub?: string; lead?: boolean }) {
+  const measured = score !== null && grade !== null;
   return (
-    <div className="px-5 py-4 flex items-center gap-3 min-w-0" title={measured ? undefined : 'Nothing in this category was checked, so it is not scored and not counted in the overall health score.'}>
-      <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${measured ? 'bg-violet-50 text-violet-600' : 'bg-gray-100 text-gray-300'}`}><Icon className="w-4 h-4" /></div>
-      <div className="min-w-0">
-        <p className="text-xs text-gray-500">{label}</p>
-        <p className={`text-2xl font-bold leading-tight tabular-nums ${measured ? GRADE_COLOR[cat.grade!] : 'text-gray-300'}`}>
-          {measured ? cat.score : '—'}
-          {measured && <span className="ml-1.5 text-xs font-semibold text-gray-400">Grade {cat.grade}</span>}
-        </p>
-        <p className="text-xs text-gray-400 truncate">{measured ? basis : (cat.label || 'Not checked')}</p>
-      </div>
+    <div className="px-6 py-4 min-w-0" title={measured ? undefined : 'Nothing in this category was checked, so it is not scored and not counted in the overall health score.'}>
+      <p className="text-xs text-gray-500">{label}</p>
+      <p className={`mt-0.5 leading-none tabular-nums ${measured ? 'text-gray-900' : 'text-gray-300'} ${lead ? 'text-3xl font-semibold' : 'text-2xl font-semibold'}`}>
+        {measured ? score : '—'}
+        {measured && <span className="ml-1.5 text-xs font-medium text-gray-400 align-middle">{grade}</span>}
+      </p>
+      <p className="mt-1.5 text-xs text-gray-400 truncate">{measured ? sub : 'Not checked'}</p>
     </div>
   );
+}
+
+/** The audit before this one on the same site: undefined while loading, null when this is the first. */
+function usePreviousAudit(targetUrl: string, scanId: string | null): AdaTrendPoint | null | undefined {
+  const [prev, setPrev] = useState<AdaTrendPoint | null | undefined>(undefined);
+  useEffect(() => {
+    let alive = true;
+    getAdaTrend(targetUrl)
+      .then((r) => { if (alive) setPrev(trendPosition(r.points, scanId)?.prev ?? null); })
+      .catch(() => { if (alive) setPrev(null); });
+    return () => { alive = false; };
+  }, [targetUrl, scanId]);
+  return prev;
 }
 
 /* ───────────────────────────── issue explorer ───────────────────────────── */
@@ -889,58 +889,6 @@ function trendPosition(points: AdaTrendPoint[], scanId: string | null): { cur: A
   let index = scanId ? points.findIndex((p) => sameId(p.id, scanId)) : -1;
   if (index === -1) index = points.length - 1;
   return { cur: points[index], prev: index > 0 ? points[index - 1] : null, index };
-}
-
-function Delta({ value, lowerIsBetter }: { value: number | null; lowerIsBetter?: boolean }) {
-  if (value === null) return <span className="text-gray-400">n/a</span>;
-  if (value === 0) return <span className="text-gray-500">±0</span>;
-  const good = lowerIsBetter ? value < 0 : value > 0;
-  return <span className={`font-semibold ${good ? 'text-emerald-600' : 'text-red-600'}`}>{value > 0 ? '+' : ''}{value}</span>;
-}
-
-/** Score of the last audits of this site plus the delta against the previous run. */
-function TrendStrip({ scanId, summary }: { scanId: string | null; summary: AdaSummary }) {
-  const [points, setPoints] = useState<AdaTrendPoint[] | null>(null);
-  useEffect(() => {
-    let alive = true;
-    getAdaTrend(summary.targetUrl).then((r) => { if (alive) setPoints(r.points); }).catch(() => { if (alive) setPoints([]); });
-    return () => { alive = false; };
-  }, [summary.targetUrl, scanId]);
-  const pos = points ? trendPosition(points, scanId) : null;
-  if (!points || !pos) return null;
-  const { cur, prev, index } = pos;
-  const shown = points.slice(Math.max(0, index - 11), index + 1);
-  const d = (a: number | null, b: number | null) => a === null || b === null ? null : a - b;
-  return (
-    <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
-      {shown.length > 1 && (
-        <div className="flex items-end gap-[3px] h-7" aria-label="Health score of the last audits of this site, oldest to newest">
-          {shown.map((p) => (
-            <div
-              key={p.id}
-              className={`w-2 rounded-t-[2px] ${sameId(p.id, cur.id) ? 'bg-violet-600' : 'bg-violet-300'}`}
-              style={{ height: `${Math.max(3, Math.round(((p.score ?? 0) / 100) * 28))}px` }}
-              title={`${new Date(p.finishedAt).toLocaleString()} · score ${p.score ?? '—'} · ${p.issues} issues · ${p.pagesAudited} pages${p.status === 'cancelled' ? ' · stopped early' : ''}${p.createdBy === 'schedule' ? ' · scheduled' : ''}`}
-            />
-          ))}
-        </div>
-      )}
-      {prev ? (
-        <span className="text-gray-600">
-          vs previous audit ({new Date(prev.finishedAt).toLocaleDateString()}{prev.createdBy === 'schedule' ? ', scheduled' : ''}):
-          {' '}score <Delta value={d(cur.score, prev.score)} />
-          {' · '}issues <Delta value={d(cur.issues, prev.issues)} lowerIsBetter />
-          {' · '}violations <Delta value={d(cur.violations, prev.violations)} lowerIsBetter />
-          {' · '}broken links <Delta value={d(cur.brokenLinks, prev.brokenLinks)} lowerIsBetter />
-          {cur.uxScore != null && prev.uxScore != null && <>{' · '}UX <Delta value={d(cur.uxScore, prev.uxScore)} /></>}
-          {cur.uxScore != null && prev.uxScore == null && <span className="text-gray-400"> · UX testing is new in this run, so the overall score now includes it</span>}
-          {cur.pagesAudited !== prev.pagesAudited && <span className="text-gray-400"> · {cur.pagesAudited} pages audited vs {prev.pagesAudited} — counts are not like-for-like</span>}
-        </span>
-      ) : (
-        <span className="text-gray-400">First audit of this site. Add a recurring audit on the ADA Compliance page to track the trend.</span>
-      )}
-    </div>
-  );
 }
 
 /* ───────────────────────────── coverage ───────────────────────────── */

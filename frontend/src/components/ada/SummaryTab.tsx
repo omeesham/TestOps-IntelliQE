@@ -8,8 +8,8 @@
  */
 import { useMemo } from 'react';
 import type { AdaCategory, AdaFinding, AdaSeverity, AdaSummary } from '@/services/api';
-import { CheckCircle2, ChevronRight, Eye } from 'lucide-react';
-import { SEVERITIES, SEV_DOT, SEV_HEX, SEV_LABEL, SEV_STYLE } from '@/components/ada/shared';
+import { ChevronRight } from 'lucide-react';
+import { SEVERITIES, SEV_DOT, SEV_LABEL, SEV_STYLE } from '@/components/ada/shared';
 
 export interface IssueSeed { severity?: AdaSeverity; category?: AdaCategory; query?: string }
 
@@ -42,36 +42,12 @@ function Card({ title, total, totalLabel, children }: { title: string; total?: n
   );
 }
 
-/** Severity donut. Segments are drawn as arcs of one circle, largest severity first. */
-function Donut({ counts, total }: { counts: Record<AdaSeverity, number>; total: number }) {
-  const size = 188, stroke = 22;
-  const r = (size - stroke) / 2;
-  const circ = 2 * Math.PI * r;
+/** One thin bar, split by severity, largest first. The list beside it carries the numbers. */
+function SeverityBar({ counts, total }: { counts: Record<AdaSeverity, number>; total: number }) {
   const present = SEVERITIES.filter((s) => counts[s] > 0);
-  const segments = present.map((s, i) => ({
-    s,
-    len: (counts[s] / total) * circ,
-    offset: present.slice(0, i).reduce((a, p) => a + (counts[p] / total) * circ, 0),
-  }));
-  // A 2px gap between segments, only when there is more than one.
-  const gap = segments.length > 1 ? 2 : 0;
   return (
-    <div className="relative flex-shrink-0" style={{ width: size, height: size }} role="img" aria-label={`${total} issues: ${SEVERITIES.map((s) => `${counts[s]} ${s}`).join(', ')}`}>
-      <svg width={size} height={size} className="-rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={r} stroke={total ? '#F3F4F6' : '#D1FAE5'} strokeWidth={stroke} fill="none" />
-        {segments.map((g) => (
-          <circle
-            key={g.s} cx={size / 2} cy={size / 2} r={r} fill="none" stroke={SEV_HEX[g.s]} strokeWidth={stroke}
-            strokeDasharray={`${Math.max(1, g.len - gap)} ${circ - Math.max(1, g.len - gap)}`} strokeDashoffset={-g.offset}
-          >
-            <title>{`${SEV_LABEL[g.s]}: ${counts[g.s].toLocaleString()}`}</title>
-          </circle>
-        ))}
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <p className="text-3xl font-bold text-[#1E1B4B] tabular-nums leading-none">{total.toLocaleString()}</p>
-        <p className="text-xs text-gray-500 mt-1">{total === 1 ? 'Issue' : 'Issues'}</p>
-      </div>
+    <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden flex" role="img" aria-label={`${total} issues: ${SEVERITIES.map((s) => `${counts[s]} ${s}`).join(', ')}`}>
+      {present.map((s) => <span key={s} className={`h-full ${SEV_DOT[s]}`} style={{ width: `${(counts[s] / total) * 100}%` }} title={`${SEV_LABEL[s]}: ${counts[s].toLocaleString()}`} />)}
     </div>
   );
 }
@@ -144,10 +120,10 @@ export default function SummaryTab({ findings, summary, onOpenIssues, onOpenUx }
 
   return (
     <div className="p-5 grid grid-cols-1 xl:grid-cols-2 gap-4 bg-gray-50/40 rounded-b-2xl">
-      <Card title="Issue summary">
-        <div className="flex flex-wrap items-center gap-8 mt-4">
-          <Donut counts={data.bySeverity} total={data.total} />
-          <div className="flex-1 min-w-[200px] divide-y divide-gray-100">
+      <Card title="Issues" total={data.total}>
+        {data.total > 0 && <SeverityBar counts={data.bySeverity} total={data.total} />}
+        <div className="mt-2">
+          <div className="divide-y divide-gray-100">
             {SEVERITIES.map((s) => (
               <button key={s} type="button" onClick={() => onOpenIssues({ severity: s })} disabled={!data.bySeverity[s]} className="w-full flex items-center gap-2.5 py-2.5 text-left hover:bg-violet-50/50 disabled:hover:bg-transparent px-2 -mx-2 rounded-lg" style={{ transform: 'none' }}>
                 <span className={`w-2.5 h-2.5 rounded-full ${SEV_DOT[s]}`} />
@@ -157,14 +133,12 @@ export default function SummaryTab({ findings, summary, onOpenIssues, onOpenUx }
             ))}
           </div>
         </div>
-        {data.total === 0 && <p className="mt-4 text-sm text-emerald-700 flex items-center gap-2"><CheckCircle2 className="w-4 h-4" /> No issues were found on the pages audited.</p>}
-        <div className={`mt-4 rounded-lg border px-3.5 py-2.5 flex items-center gap-3 ${data.byCat.review > 0 ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-100'}`}>
-          <Eye className={`w-4 h-4 flex-shrink-0 ${data.byCat.review > 0 ? 'text-amber-500' : 'text-gray-400'}`} />
-          <p className="flex-1 text-sm text-gray-700">
-            <span className="font-semibold tabular-nums">{data.byCat.review.toLocaleString()}</span> need{data.byCat.review === 1 ? 's' : ''} review
-            <span className="block text-xs text-gray-500">Checks a person has to confirm. Not counted as issues.</span>
+        {data.total === 0 && <p className="mt-4 text-sm text-gray-600">No issues were found on the pages audited.</p>}
+        <div className="mt-3 pt-3 border-t border-gray-100 flex items-center gap-3">
+          <p className="flex-1 text-sm text-gray-600">
+            <span className="font-semibold text-gray-800 tabular-nums">{data.byCat.review.toLocaleString()}</span> need{data.byCat.review === 1 ? 's' : ''} review, not counted above
           </p>
-          {data.byCat.review > 0 && <button type="button" onClick={() => onOpenIssues({ category: 'review' })} className="text-xs font-medium text-amber-800 bg-white border border-amber-200 hover:bg-amber-100 rounded-lg px-3 py-1.5">Review</button>}
+          {data.byCat.review > 0 && <button type="button" onClick={() => onOpenIssues({ category: 'review' })} className="text-xs font-medium text-violet-700 hover:underline">Review</button>}
         </div>
       </Card>
 
