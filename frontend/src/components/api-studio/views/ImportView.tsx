@@ -201,7 +201,7 @@ function OutcomePanel({ outcome, onOpenCatalogue, onDismiss }: { outcome: Outcom
         </span>
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-semibold text-gray-900">
-            {none ? 'No endpoints found' : `${added} endpoint${added === 1 ? '' : 's'} added to the catalogue`}
+            {none ? 'No endpoints found' : `${added} endpoint${added === 1 ? '' : 's'} added`}
             {duplicates > 0 && <span className="font-normal text-gray-500"> · {duplicates} already present</span>}
           </p>
           {res.notice && <p className="mt-2 text-[11.5px] text-[#4C1D95] bg-[#F5F3FF] border border-[#DDD6FE] rounded-md px-2.5 py-1.5">{res.notice}</p>}
@@ -236,7 +236,7 @@ function OutcomePanel({ outcome, onOpenCatalogue, onDismiss }: { outcome: Outcom
           )}
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
-          {!none && <button type="button" onClick={onOpenCatalogue} className={PRIMARY_BTN}>Review catalogue<ArrowRight className="w-3.5 h-3.5" /></button>}
+          {!none && <button type="button" onClick={onOpenCatalogue} className={PRIMARY_BTN}>View Endpoints<ArrowRight className="w-3.5 h-3.5" /></button>}
           <button type="button" onClick={onDismiss} className="p-1.5 rounded-md text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]"><X className="w-4 h-4" /></button>
         </div>
       </div>
