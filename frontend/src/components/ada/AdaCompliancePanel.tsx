@@ -23,7 +23,7 @@ import {
 import {
   Globe, Lock, Loader2, CheckCircle2, AlertTriangle, XCircle, Link2Off,
   FileSearch, Compass, ChevronDown, ChevronRight, Download, ExternalLink, Search,
-  Square, Plus, Sparkles, ListChecks, Map as MapIcon, Info, Eye, Copy, FileText, Table2,
+  Square, Plus, Sparkles, ListChecks, Map as MapIcon, Info, Copy, FileText, Table2,
   MousePointerClick, Wrench, Timer, LayoutDashboard,
 } from 'lucide-react';
 import UniversalAccess from '@/components/icons/UniversalAccess';
@@ -310,7 +310,7 @@ export default function AdaCompliancePanel({ scanId, onBrownfield, onNewAudit }:
         onBrownfield={onBrownfield ? brownfield : undefined}
       />
       <div className={card}>
-        <div className="flex gap-1 px-3 border-b border-gray-100 overflow-x-auto" role="tablist">
+        <div className="flex flex-wrap gap-1 px-3 border-b border-gray-100" role="tablist">
           {tabs.map(([key, label, Icon, count]) => (
             <button
               key={key}
@@ -620,15 +620,10 @@ function IssueExplorer({ findings, summary, seed }: { findings: AdaFinding[]; su
       <div>
         <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Category</p>
         <div className="flex flex-wrap gap-1.5">
-          {([['all', 'All issues', totals.issues], ['accessibility', 'Accessibility', totals.byCat.accessibility], ['links', 'Broken links', totals.byCat.links], ['best-practice', 'Best practices', totals.byCat['best-practice']]] as [AdaCategory | 'all', string, number][]).map(([k, label, n]) => (
-            <button key={k} onClick={() => setCat(k)} className={`px-2 py-1 rounded-full border text-[11px] font-medium transition-colors ${cat === k ? 'bg-violet-600 border-violet-600 text-white' : 'bg-white border-gray-200 text-gray-600 hover:border-violet-300'}`}>{label} <span className={cat === k ? 'text-violet-100' : 'text-gray-400'}>{n}</span></button>
+          {([['all', 'All issues', totals.issues], ['accessibility', 'Accessibility', totals.byCat.accessibility], ['links', 'Broken links', totals.byCat.links], ['best-practice', 'Best practices', totals.byCat['best-practice']], ['review', 'Needs review', totals.review]] as [AdaCategory | 'all', string, number][]).map(([k, label, n]) => (
+            <button key={k} onClick={() => { setCat(k); if (k === 'review') { setSev(''); setQ(''); } }} title={k === 'review' ? 'Checks a person has to confirm. Not counted as issues.' : undefined} className={`px-2 py-1 rounded-full border text-[11px] font-medium transition-colors ${cat === k ? 'bg-violet-600 border-violet-600 text-white' : 'bg-white border-gray-200 text-gray-600 hover:border-violet-300'}`}>{label} <span className={cat === k ? 'text-violet-100' : 'text-gray-400'}>{n}</span></button>
           ))}
         </div>
-      </div>
-      <div className={`rounded-lg border px-3 py-2 ${totals.review > 0 ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-100'}`}>
-        <p className="text-xs text-gray-700 flex items-center gap-1.5"><Eye className={`w-3.5 h-3.5 ${totals.review > 0 ? 'text-amber-500' : 'text-gray-400'}`} /> {totals.review} issue{totals.review === 1 ? '' : 's'} need review</p>
-        <p className="text-[10px] text-gray-500 mt-0.5">Checks the scanner could not settle by itself — a person has to confirm.</p>
-        {totals.review > 0 && <button onClick={() => { setCat('review'); setSev(''); }} className={`text-[11px] font-medium mt-1 ${cat === 'review' ? 'text-violet-700' : 'text-amber-700 hover:underline'}`}>Review all →</button>}
       </div>
     </div>
   );
