@@ -291,20 +291,13 @@ export default function AdaCompliancePage() {
   /* ═════════════════════════════ OVERVIEW ═════════════════════════════ */
   return (
     <div className="space-y-5 animate-fadeIn">
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#1E1B4B] via-[#4C1D95] to-[#4F46E5] px-6 py-6 shadow-lg shadow-purple-900/20">
-        <div className="absolute -top-16 -right-10 w-64 h-64 rounded-full bg-violet-400/20 blur-3xl" aria-hidden />
-        <div className="absolute -bottom-24 left-1/3 w-72 h-72 rounded-full bg-cyan-400/10 blur-3xl" aria-hidden />
-        <div className="relative flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-4 min-w-0">
-            <div className="w-12 h-12 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center flex-shrink-0"><UniversalAccess className="w-6 h-6 text-white" /></div>
-            <div className="min-w-0">
-              <h2 className="text-xl font-bold text-white">Website audits</h2>
-            </div>
-          </div>
-          <button onClick={() => setAuditDrawer(true)} className="px-4 py-2.5 bg-white text-violet-700 hover:bg-violet-50 text-sm font-semibold rounded-lg flex items-center gap-2 shadow-md">
-            <Plus className="w-4 h-4" /> New Order
-          </button>
-        </div>
+      {/* Same flat white strip as the API Automation overview: icon tile, title, one action. */}
+      <div className={`${card} px-4 py-3 flex items-center gap-3`}>
+        <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#7C3AED] to-[#6366F1] flex items-center justify-center flex-shrink-0"><UniversalAccess className="w-4 h-4 text-white" /></span>
+        <h2 className="text-[15px] font-semibold text-gray-900">Website audits</h2>
+        <button onClick={() => setAuditDrawer(true)} className={`ml-auto ${primaryBtn}`}>
+          <Plus className="w-4 h-4" /> New Order
+        </button>
       </div>
 
       {error && <p className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-xl px-4 py-3" role="alert">{error}</p>}
