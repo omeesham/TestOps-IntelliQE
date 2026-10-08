@@ -338,7 +338,7 @@ ${tuning.workersLine}  retries: 0,
     ['allure-playwright', { resultsDir: ${JSON.stringify(resultsDir)}, outputFolder: ${JSON.stringify(resultsDir)}, detail: true, suiteTitle: false }],
   ],
   use: {
-${tuning.traceLine}${tuning.screenshotLine}  },
+${tuning.traceLine}${tuning.screenshotLine}${tuning.useExtraLine}  },
 ${tuning.projectsLine}});
 `;
   await fs.writeFile(configPath, configSrc, 'utf-8');

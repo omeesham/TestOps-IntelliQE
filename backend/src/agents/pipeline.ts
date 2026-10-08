@@ -131,6 +131,7 @@ export async function runGenerationOnly(
     maxTestCases?: number; appContext?: AppContext; llm?: LlmConfig | null; tenantId?: string;
     apiSpec?: ApiSpec | null; apiSpecs?: ApiSpec[] | null;
     apiProfile?: Record<string, any> | null; apiLayers?: string[] | null;
+    apiEnvironment?: any;
     onProgress?: TestOpsState['onProgress'];
   },
 ): Promise<TestOpsState> {
@@ -150,6 +151,7 @@ export async function runGenerationOnly(
     state.apiSpec = options.apiSpec || multi?.[0] || null;
     state.apiProfile = options.apiProfile || null;
     state.apiLayers = options.apiLayers && options.apiLayers.length ? options.apiLayers : null;
+    state.apiEnvironment = options.apiEnvironment || null;
     state.onProgress = options.onProgress || null;
     state = await timed(tenantId, 'generator', () => apiGeneratorAgent(state),
       (s) => ({ testCases: s.testCases.length }));

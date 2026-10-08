@@ -17,8 +17,9 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/feedback/ToastProvider';
 import {
   designApiScenarios, getApiJob, executePipeline, healPipeline, saveTestCases, exportTestCases, publishToGit, getConfigurations,
-  resolveApiEnvironment, notifyApiRun, type ApiSpecPayload, type ApiJob,
+  renderApiRun, notifyApiRun, type ApiSpecPayload, type ApiJob,
 } from '@/services/api';
+import { envRunKey } from './useApiEnvironments';
 import { formatDuration } from '../format';
 import type {
   Phase, Stage, StageKey, StageStatus, Scenario, Spec, RunRow, LogLine, LogLevel, RunReport, PushState,
@@ -50,13 +51,53 @@ export interface RunInputs {
   environment?: ApiEnvironment | null;
 }
 
-function specFrom(ep: CatalogEndpoint, coverage: Strategy['coverage']): ApiSpecPayload {
+/** One backend test case → the Scenario the UI renders. Shared by the initial
+ *  design and by the deterministic re-resolve, so both produce identical shapes. */
+function toScenario(tc: any, i: number): Scenario {
+  return {
+    id: tc.id || `TC-${String(i + 1).padStart(3, '0')}`,
+    title: tc.title || tc.scenario || 'Scenario',
+    description: tc.description || '',
+    feature: tc.feature || '',
+    type: tc.type || 'api',
+    priority: tc.priority || 'P1',
+    severity: tc.severity || '',
+    tags: Array.isArray(tc.tags) ? tc.tags : [],
+    steps: Array.isArray(tc.steps) ? tc.steps : [],
+    testSteps: Array.isArray(tc.testSteps) ? tc.testSteps : [],
+    expectedResult: tc.expectedResult || '',
+    precondition: tc.precondition || '',
+    api: tc.api,
+    raw: tc,
+  };
+}
+
+/** Backend automation scripts → the Spec the UI holds and later executes. */
+function toSpecs(scripts: any[]): Spec[] {
+  return (Array.isArray(scripts) ? scripts : []).map((s: any) => ({
+    testCaseId: s.testCaseId, fileName: s.fileName || `${s.testCaseId}.spec.ts`, code: s.code || '', path: s.path,
+  }));
+}
+
+/** The conventional environment variable a credential resolves from when the
+ *  endpoint's auth value is left blank — so auth still comes from the active
+ *  environment (and retargets on a switch) rather than being dropped. */
+const AUTH_PLACEHOLDER: Record<string, string> = { bearer: '{{token}}', apikey: '{{apiKey}}', basic: '{{basicAuth}}' };
+
+function specFrom(ep: CatalogEndpoint, coverage: Strategy['coverage'], hasEnv = false): ApiSpecPayload {
   const m = (ep.method || 'GET').toUpperCase();
+  const authType = ep.auth?.type || 'none';
+  // Keep an explicit value; otherwise, when a run has an environment, fall back to
+  // the conventional {{var}} so the environment supplies the credential at render
+  // time (with no environment we leave it blank, exactly as before).
+  const authValue = authType !== 'none'
+    ? (ep.auth?.value || (hasEnv ? AUTH_PLACEHOLDER[authType] : undefined) || undefined)
+    : undefined;
   return {
     method: m,
     url: ep.url,
     headers: (ep.headers || []).filter((h) => h.key?.trim()),
-    auth: { type: ep.auth?.type || 'none', value: ep.auth?.type && ep.auth.type !== 'none' ? ep.auth.value : undefined, headerName: ep.auth?.headerName },
+    auth: { type: authType, value: authValue, headerName: ep.auth?.headerName },
     body: ['POST', 'PUT', 'PATCH', 'DELETE'].includes(m) && ep.body?.trim() ? ep.body : undefined,
     expectedStatus: ep.expectedStatus || 200,
     expectedResponse: ep.expectedResponse || '',
@@ -83,6 +124,16 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
   /** The endpoints this run was designed for — frozen once design starts. */
   const [runEndpoints, setRunEndpoints] = useState<CatalogEndpoint[]>([]);
   const [runLabel, setRunLabel] = useState('');
+  /** Which environment this run was designed against — so the shell can tell
+   *  when the active environment has since changed, and re-resolve against it. */
+  const [runEnvName, setRunEnvName] = useState('');
+  const [runEnvKey, setRunEnvKey] = useState('');
+  const [runEnv, setRunEnv] = useState<ApiEnvironment | null>(null);
+  /** The TEMPLATED designed cases, kept so the run can be re-rendered against
+   *  another environment deterministically (no model call). */
+  const [runCases, setRunCases] = useState<any[]>([]);
+  /** True while a live environment switch is re-resolving the run's data. */
+  const [reresolving, setReresolving] = useState(false);
   const [logs, setLogs] = useState<LogLine[]>([]);
   const logIdRef = useRef(0);
   const runIdRef = useRef(0);
@@ -107,8 +158,11 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
   const started = phase !== 'idle';
   const finished = (phase === 'report' || phase === 'failed') && scenarios.length > 0;
   const baseUrl = useMemo(() => {
+    // Prefer the run environment's base URL — the endpoints are kept templated,
+    // so their own host is the imported one, not where the run actually points.
+    if (runEnv?.baseUrl) { try { return new URL(runEnv.baseUrl).origin; } catch { /* fall through */ } }
     try { return runEndpoints[0] ? new URL(runEndpoints[0].url).origin : ''; } catch { return ''; }
-  }, [runEndpoints]);
+  }, [runEnv, runEndpoints]);
 
   /* ═══════════════════════════════════════════════════════════════
      Stage 1 — design the scenarios (stops at the review gate)
@@ -141,19 +195,16 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
     setRunLabel(label);
     log('run', `Target: ${label}`);
 
-    /* Environment — resolve {{vars}} and the base URL server-side */
-    let endpoints = inputs.endpoints;
-    if (inputs.environment) {
-      try {
-        const resolved = await resolveApiEnvironment(inputs.environment.id, inputs.endpoints);
-        if (myRun !== runIdRef.current) return;
-        endpoints = inputs.endpoints.map((e, i) => ({ ...e, ...(resolved.endpoints[i] || {}), id: e.id }));
-        log('env', `Resolved against environment "${inputs.environment.name}"${inputs.environment.baseUrl ? ` (${inputs.environment.baseUrl})` : ''}`, 'ok');
-      } catch (err: any) {
-        log('env', `Environment could not be applied: ${err?.response?.data?.error || err?.message}. Running with the endpoints as imported.`, 'warn');
-      }
-    }
+    /* Environment — the endpoints stay TEMPLATED; the server resolves {{vars}} +
+       the base URL against the active environment at render time, so the run can
+       later retarget to another environment with no model call. Record which
+       environment (and which revision) this run is grounded in. */
+    setRunEnvName(inputs.environment ? inputs.environment.name : 'No environment');
+    setRunEnvKey(envRunKey(inputs.environment));
+    setRunEnv(inputs.environment || null);
+    const endpoints = inputs.endpoints;
     setRunEndpoints(endpoints);
+    if (inputs.environment) log('env', `Resolving {{variables}} + base URL against environment "${inputs.environment.name}"${inputs.environment.baseUrl ? ` (${inputs.environment.baseUrl})` : ''}`, 'ok');
     const placeholder = endpoints.filter((e) => /^https?:\/\/api\.example\.com/i.test(e.url));
     if (placeholder.length) log('run', `${placeholder.length} endpoint${placeholder.length === 1 ? '' : 's'} still point at the placeholder host api.example.com — scenarios can be designed, but execution will not reach a real API. Edit the endpoint URL in the catalogue.`, 'warn');
 
@@ -165,11 +216,14 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
       // concurrent pool) and is polled — a 60-endpoint catalogue takes minutes,
       // longer than any single request is allowed to live.
       const { jobId } = await designApiScenarios({
-        apiSpecs: endpoints.map((e) => specFrom(e, inputs.strategy.coverage)),
+        apiSpecs: endpoints.map((e) => specFrom(e, inputs.strategy.coverage, !!inputs.environment)),
         apiLayers: inputs.strategy.layers,
         apiProfile: inputs.profile?.insights?.length ? { insights: inputs.profile.insights } : null,
         // Optional NL-authored brief; undefined keeps the prior behaviour.
         requirements: inputs.strategy.requirements || undefined,
+        // The server resolves {{vars}} + base URL against this environment at
+        // render time; undefined designs the endpoints exactly as sent.
+        environmentId: inputs.environment?.id,
       });
       let res: any = null;
       let lastProgress = '';
@@ -201,29 +255,15 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
       const cases: any[] = Array.isArray(res?.testCases) ? res.testCases : [];
       if (cases.length === 0) throw new Error('The generator returned no scenarios for these endpoints.');
 
-      const mapped: Scenario[] = cases.map((tc, i) => ({
-        id: tc.id || `TC-${String(i + 1).padStart(3, '0')}`,
-        title: tc.title || tc.scenario || 'Scenario',
-        description: tc.description || '',
-        feature: tc.feature || '',
-        type: tc.type || 'api',
-        priority: tc.priority || 'P1',
-        severity: tc.severity || '',
-        tags: Array.isArray(tc.tags) ? tc.tags : [],
-        steps: Array.isArray(tc.steps) ? tc.steps : [],
-        testSteps: Array.isArray(tc.testSteps) ? tc.testSteps : [],
-        expectedResult: tc.expectedResult || '',
-        precondition: tc.precondition || '',
-        api: tc.api,
-        raw: tc,
-      }));
-      const mappedSpecs: Spec[] = (res?.automationScripts || []).map((s: any) => ({
-        testCaseId: s.testCaseId, fileName: s.fileName || `${s.testCaseId}.spec.ts`, code: s.code || '', path: s.path,
-      }));
+      const mapped: Scenario[] = cases.map(toScenario);
+      const mappedSpecs: Spec[] = toSpecs(res?.automationScripts || []);
 
       setScenarios(mapped);
       setSpecs(mappedSpecs);
       setServiceObjects(Array.isArray(res?.pageObjects) ? res.pageObjects : []);
+      // Keep the templated cases so a later environment switch re-resolves the
+      // data deterministically, without another model call.
+      setRunCases(Array.isArray(res?.normalizedCases) ? res.normalizedCases : []);
       setSelected(new Set(mapped.map((m) => m.id)));
 
       const byCategory = mapped.reduce<Record<string, number>>((acc, m) => { acc[m.type] = (acc[m.type] || 0) + 1; return acc; }, {});
@@ -242,6 +282,40 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
       toast.error('Scenario design failed', msg);
     }
   }, [log, setStage, toast]);
+
+  /* ═══════════════════════════════════════════════════════════════
+     Live environment switch — re-resolve the designed run's data
+     against another environment, deterministically (no model call).
+     ═══════════════════════════════════════════════════════════════ */
+  const reresolve = useCallback(async (environment: ApiEnvironment | null) => {
+    // Nothing designed yet, or a run is mid-flight — never retarget under it.
+    if (!runCases.length) return;
+    if (['generating', 'automating', 'executing', 'healing'].includes(phase)) return;
+    setReresolving(true);
+    try {
+      const r = await renderApiRun(runCases, environment?.id);
+      const cases: any[] = Array.isArray(r?.testCases) ? r.testCases : [];
+      if (!cases.length) throw new Error('The re-render returned no cases.');
+      const mapped = cases.map(toScenario);
+      setScenarios(mapped);
+      setSpecs(toSpecs(r?.automationScripts || []));
+      setServiceObjects(Array.isArray(r?.pageObjects) ? r.pageObjects : []);
+      // Ids are stable across a re-render, so keep the user's selection.
+      setSelected((prev) => {
+        const ids = new Set(mapped.map((m) => m.id));
+        const kept = new Set([...prev].filter((id) => ids.has(id)));
+        return kept.size ? kept : ids;
+      });
+      setRunEnv(environment || null);
+      setRunEnvName(environment ? environment.name : 'No environment');
+      setRunEnvKey(envRunKey(environment));
+      log('env', `Re-resolved test data against "${environment?.name || 'No environment'}"${environment?.baseUrl ? ` (${environment.baseUrl})` : ''}`, 'ok');
+    } catch (err: any) {
+      log('env', `Could not re-resolve against the environment: ${err?.response?.data?.error || err?.message}`, 'warn');
+    } finally {
+      setReresolving(false);
+    }
+  }, [runCases, phase, log]);
 
   /** Map backend execution details onto the selected scenarios — honestly. */
   const mapRows = (chosen: Scenario[], details: any[], fallbackError: string | null | undefined): RunRow[] => {
@@ -287,7 +361,7 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
     const chosenSpecs = specs.filter((s) => chosenIds.has(s.testCaseId));
     const chosenCases = chosen.map((c) => c.raw);
     const primary = runEndpoints[0];
-    const api = primary ? { mode: 'api' as const, apiSpec: specFrom(primary, 'standard') } : undefined;
+    const api = primary ? { mode: 'api' as const, apiSpec: specFrom(primary, 'standard', !!runEnv) } : undefined;
     const target = baseUrl ? { targetUrl: baseUrl } : undefined;
 
     setRunError('');
@@ -462,6 +536,7 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
     setRunError(''); setLogs([]);
     setPushState({ status: 'idle' });
     setRunEndpoints([]); setRunLabel('');
+    setRunEnvName(''); setRunEnvKey(''); setRunEnv(null); setRunCases([]); setReresolving(false);
   }, []);
 
   const toggleScenario = useCallback((id: string) => setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; }), []);
@@ -470,8 +545,8 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
 
   return {
     phase, stages, scenarios, specs, serviceObjects, selected, rows, report, testRunId, runError, exporting, pushState,
-    runEndpoints, runLabel, logs, running, started, finished, baseUrl,
-    runScenarios, runSuite, resetRun, handleExport, handlePushToRepo,
+    runEndpoints, runLabel, runEnvName, runEnvKey, runCases, reresolving, logs, running, started, finished, baseUrl,
+    runScenarios, runSuite, reresolve, resetRun, handleExport, handlePushToRepo,
     toggleScenario, selectScenarios, clearScenarios, setRunError, log,
     elapsedMs: () => (startedAtRef.current ? Date.now() - startedAtRef.current : 0),
   };

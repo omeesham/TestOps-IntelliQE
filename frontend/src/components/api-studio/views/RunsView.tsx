@@ -6,11 +6,11 @@
  * visible without opening Allure.
  */
 import { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronDown, ExternalLink, RefreshCw, Activity, AlertTriangle } from 'lucide-react';
+import { ChevronLeft, ChevronDown, ExternalLink, RefreshCw, Activity, AlertTriangle, ListChecks, Gauge, CheckCircle2, XCircle, MinusCircle, Clock } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import { listApiRuns, getApiRun } from '@/services/api';
 import { StatusPill, MethodBadge, CategoryChip, PriorityChip, EmptyState } from '../primitives';
-import { CARD, CARD_HOVER, SECONDARY_BTN, MUTED_CHIP, STRIP, THEAD, relativeTime, formatDuration } from '../format';
+import { CARD, CARD_HOVER, SECONDARY_BTN, MUTED_CHIP, STRIP, THEAD, TILE_ACTIVE, relativeTime, formatDuration } from '../format';
 import type { ApiRun } from '../hooks/useApiRun';
 import type { ApiRunSummary, ApiRunDetail } from '../types';
 
@@ -165,12 +165,16 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-[1200px] mx-auto px-6 py-5 space-y-3">
-        <div className="flex items-center gap-2">
+      <div className="max-w-[1200px] mx-auto px-6 py-5 space-y-4">
+        <div className="flex items-center gap-4 flex-wrap">
           <button type="button" onClick={onBack} className={SECONDARY_BTN}><ChevronLeft className="w-3.5 h-3.5" />All runs</button>
+          <span className={`w-11 h-11 rounded-xl flex items-center justify-center ${TILE_ACTIVE}`}><ListChecks className="w-5 h-5 text-white" /></span>
           {detail && (
             <>
-              <div className="min-w-0"><h2 className="text-[13px] font-semibold text-gray-900 truncate">{detail.title}</h2><p className="text-[11px] text-gray-400 font-mono">{detail.runId} · {detail.createdBy} · {relativeTime(detail.createdAt)}</p></div>
+              <div className="min-w-0">
+                <h2 className="text-[17px] font-bold text-gray-900 leading-tight truncate">{detail.title}</h2>
+                <p className="text-[12.5px] text-gray-500 mt-0.5 font-mono truncate">{detail.runId} · {detail.createdBy} · {relativeTime(detail.createdAt)}</p>
+              </div>
               {detail.reportUrl && <a href={detail.reportUrl} target="_blank" rel="noreferrer" className={`ml-auto ${SECONDARY_BTN}`}><ExternalLink className="w-3.5 h-3.5" />{detail.hasAllure ? 'Allure report' : 'Report'}</a>}
             </>
           )}
@@ -180,12 +184,12 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
         {detail && (
           <>
             {detail.stats && (
-              <div className="grid grid-cols-5 gap-2">
-                <Stat label="Pass rate" value={`${detail.stats.passRate}%`} cls={detail.stats.passRate >= 90 ? 'text-emerald-600' : detail.stats.passRate >= 70 ? 'text-amber-600' : 'text-red-600'} />
-                <Stat label="Passed" value={detail.stats.passed} cls="text-emerald-600" />
-                <Stat label="Failed" value={detail.stats.failed + detail.stats.broken} cls="text-red-600" />
-                <Stat label="Skipped" value={detail.stats.skipped} cls="text-gray-500" />
-                <Stat label="Duration" value={formatDuration(detail.stats.durationMs)} cls="text-gray-800" />
+              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
+                <Stat icon={Gauge} label="Pass rate" value={`${detail.stats.passRate}%`} cls={detail.stats.passRate >= 90 ? 'text-emerald-600' : detail.stats.passRate >= 70 ? 'text-amber-600' : 'text-red-600'} />
+                <Stat icon={CheckCircle2} label="Passed" value={detail.stats.passed} cls="text-emerald-600" />
+                <Stat icon={XCircle} label="Failed" value={detail.stats.failed + detail.stats.broken} cls="text-red-600" />
+                <Stat icon={MinusCircle} label="Skipped" value={detail.stats.skipped} cls="text-gray-500" />
+                <Stat icon={Clock} label="Duration" value={formatDuration(detail.stats.durationMs)} cls="text-gray-800" />
               </div>
             )}
             <div className={`${CARD} overflow-hidden`}>
@@ -216,6 +220,11 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
   );
 }
 
-function Stat({ label, value, cls }: { label: string; value: string | number; cls: string }) {
-  return <div className={`${CARD_HOVER} p-3`}><p className="text-[10.5px] uppercase tracking-wide text-gray-500 font-semibold">{label}</p><p className={`mt-1 text-[20px] font-semibold tabular-nums leading-none ${cls}`}>{value}</p></div>;
+function Stat({ icon: Icon, label, value, cls }: { icon: React.ElementType; label: string; value: string | number; cls: string }) {
+  return (
+    <div className={`${CARD_HOVER} p-4`}>
+      <div className="flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-gray-500"><Icon className="w-3.5 h-3.5 text-[#7C3AED]" />{label}</div>
+      <div className={`mt-3 text-[28px] font-bold tabular-nums leading-none ${cls}`}>{value}</div>
+    </div>
+  );
 }

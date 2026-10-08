@@ -24,6 +24,7 @@ import { runLLM, parseJsonFromResponse, coerceJsonArray, salvageJsonArrayObjects
 import { cleanAuthValue, isPlaceholderSecret } from '../utils/api-auth.js';
 import { analyzeApiSurface, profileContextFor, type ApiProfile, type ApiFlow } from '../services/api-intelligence.service.js';
 import type { ImportedEndpoint } from '../services/api-import.service.js';
+import { resolveApiCase, type ApiEnvironment } from '../services/api-environments.service.js';
 
 let counter = 0;
 function nextId() { return `TC-${String(++counter).padStart(3, '0')}`; }
@@ -305,7 +306,10 @@ function authHeader(spec: ApiSpec): { name: string; value: string } | null {
   const v = cleanAuthValue(a.value);
   if (!v) return null;
   if (a.type === 'bearer') return { name: 'Authorization', value: `Bearer ${v}` };
-  if (a.type === 'basic') return { name: 'Authorization', value: `Basic ${b64(v)}` };
+  // A value still carrying a `{{var}}` is resolved at render time (and base64-encoded
+  // then); encoding it here would corrupt the placeholder. A concrete value is
+  // encoded now, exactly as before.
+  if (a.type === 'basic') return { name: 'Authorization', value: `Basic ${/\{\{/.test(v) ? v : b64(v)}` };
   if (a.type === 'apikey') return { name: a.headerName?.trim() || 'X-API-Key', value: v };
   return null;
 }
@@ -1279,6 +1283,35 @@ export async function apiGeneratorAgent(state: TestOpsState): Promise<TestOpsSta
   }
   progress?.({ phase: 'render', done: specs.length, total: specs.length, flows: flowCount, message: `Rendering ${normalized.length} request specs` });
 
+  // The designed cases stay TEMPLATED (any `{{var}}` the endpoints carried is
+  // preserved). An interactive run passes a resolved environment so variables +
+  // the base URL are applied here, deterministically, right before rendering;
+  // headless/scheduler runs pre-resolve their endpoints upstream and leave
+  // `apiEnvironment` unset, so their rendered output is byte-identical to before.
+  const templatedCases = normalized;
+  const env = (state as any).apiEnvironment as ApiEnvironment | null | undefined;
+  const forRender = env ? templatedCases.map((nc) => resolveApiCase(nc, env)) : templatedCases;
+  const { testCases, automationScripts, pageObjects } = renderApiCases(forRender);
+
+  return {
+    ...state,
+    testCases,
+    automationScripts,
+    pageObjects,
+    // The templated cases are kept on the state so a run can be re-rendered
+    // against a different environment later with no further model call.
+    apiNormalizedCases: templatedCases,
+    apiProfile: { ...(state.apiProfile || {}), ...profile },
+  } as TestOpsState;
+}
+
+/**
+ * Deterministically render a set of (already-resolved) normalized cases into the
+ * test cases, Playwright request specs and service objects. Pure and reusable:
+ * `apiGeneratorAgent` calls it after design, and the `/render` route calls it to
+ * retarget an existing run to another environment without re-running the model.
+ */
+export function renderApiCases(normalized: NormalizedApiCase[]): { testCases: TestCase[]; automationScripts: AutomationScript[]; pageObjects: PageObjectFile[] } {
   // Plan the service objects BEFORE rendering: every spec needs to know which
   // class it drives and which method it calls.
   const { plans, bindings } = planServiceObjects(normalized);
@@ -1348,5 +1381,5 @@ export async function apiGeneratorAgent(state: TestOpsState): Promise<TestOpsSta
     });
   }
 
-  return { ...state, testCases, automationScripts, pageObjects, apiProfile: { ...(state.apiProfile || {}), ...profile } };
+  return { testCases, automationScripts, pageObjects };
 }

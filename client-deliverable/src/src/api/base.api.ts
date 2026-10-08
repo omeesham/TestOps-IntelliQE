@@ -80,3 +80,24 @@ export function getPath(obj: any, path: string): any {
   if (!path) return obj;
   return path.split('.').reduce((o: any, k: string) => (o == null ? undefined : o[k]), obj);
 }
+
+/** Values a multi-step flow carries from one request to the next. */
+export type Vars = Record<string, string>;
+
+/**
+ * Fill `{{name}}` placeholders in a URL, header or body template from the run's
+ * variables — the id a create step returned, a token a login step minted, or a
+ * value the active environment supplies. Unknown names are left in place so a
+ * missing hand-over fails visibly at the endpoint rather than silently sending
+ * an empty value.
+ */
+export function fill(template: string, vars: Vars = {}): string {
+  return template.replace(/\{\{\s*([A-Za-z0-9_.\-]+)\s*\}\}/g, (m, k) => (vars[k] !== undefined ? vars[k] : m));
+}
+
+/** fill() over every header value. */
+export function fillHeaders(headers: Record<string, string>, vars: Vars = {}): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) out[k] = fill(v, vars);
+  return out;
+}

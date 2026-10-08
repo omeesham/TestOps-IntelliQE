@@ -48,6 +48,9 @@ import tenantSettingsRoutes from './routes/tenant-settings.routes.js';
 import llmConfigRoutes from './routes/llm-config.routes.js';
 import publicApiRoutes from './routes/public/public-api.routes.js';
 import apiAutomationRoutes from './routes/api-automation.routes.js';
+import apiMockPublicRoutes from './routes/api-mock-public.routes.js';
+import apiCallbackPublicRoutes from './routes/api-callback-public.routes.js';
+import webToolsRoutes from './routes/web-tools.routes.js';
 import apiAutomationPublicRoutes from './routes/public/api-automation-public.routes.js';
 import clientLogsRoutes from './routes/client-logs.routes.js';
 import bugsRoutes from './routes/bugs.routes.js';
@@ -305,7 +308,22 @@ app.use('/api/agent-performance', authMiddleware, agentPerformanceRoutes);
 // API Automation workspace — intake (12 methods), pattern intelligence,
 // environments, dashboard/history and the headless run.
 app.use('/api/api-automation', authMiddleware, apiAutomationRoutes);
+// Web Lab — opt-in browser tools (accessibility, visual/cross-browser,
+// responsive, performance). Each launches its own short-lived Playwright
+// browser; none touch the generate → execute → heal pipeline.
+app.use('/api/web-tools', authMiddleware, webToolsRoutes);
 app.use('/api/allure', allureRoutes);
+
+// Hosted mock servers — PUBLIC by design (mounted outside authMiddleware and
+// above the /api rate-limiter/guards): a system-under-test reaches a published
+// mock at /mock/:mockId/* with no IntelliQE login. The unguessable mock id is
+// the capability; serving replays a canned response and touches nothing else.
+app.use('/mock', apiMockPublicRoutes);
+
+// Async-callback capture — PUBLIC by design (outside auth, above the /api
+// guards): a third-party service POSTs its webhook to /hook/:token with no
+// IntelliQE login; the unguessable token is the capability. Records only.
+app.use('/hook', apiCallbackPublicRoutes);
 
 /* ─────────────────────────────────────────────────────────────
    Public business-capability API (HIPAA boundary)

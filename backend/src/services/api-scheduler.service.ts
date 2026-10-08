@@ -73,7 +73,7 @@ function rowToSchedule(row: any): ApiSchedule {
 
 export async function listSchedules(tenantId: string): Promise<ApiSchedule[]> {
   const { rows } = await pool.query(
-    `SELECT id, tenant_id, name, endpoints, environment_id, coverage, interval_minutes, execute, heal, enabled,
+    `SELECT id, tenant_id, name, endpoints, environment_id, coverage, interval_minutes, [execute], heal, enabled,
             created_by, next_run_at, last_run_at, last_run_id, last_status, last_summary, created_at, updated_at
        FROM api_schedules WHERE tenant_id = $1 ORDER BY created_at DESC`,
     [tenantId],
@@ -90,7 +90,7 @@ export async function createSchedule(tenantId: string, createdBy: string, input:
   const enabled = input?.enabled === false ? 0 : 1;
   // First run one interval from now (opt-in: nothing fires the instant it's saved).
   const { rows } = await pool.query(
-    `INSERT INTO api_schedules (tenant_id, name, endpoints, environment_id, coverage, interval_minutes, execute, heal, enabled, created_by, next_run_at)
+    `INSERT INTO api_schedules (tenant_id, name, endpoints, environment_id, coverage, interval_minutes, [execute], heal, enabled, created_by, next_run_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, DATEADD(MINUTE, $11, SYSUTCDATETIME())) RETURNING *`,
     [tenantId, name, JSON.stringify(endpoints), input?.environmentId ? String(input.environmentId).slice(0, 80) : null,
      ['essential', 'standard', 'exhaustive'].includes(String(input?.coverage)) ? String(input.coverage) : null,
@@ -114,7 +114,7 @@ export async function updateSchedule(tenantId: string, id: string, input: any): 
   const { rows } = await pool.query(
     `UPDATE api_schedules
         SET name = $1, endpoints = $2, environment_id = $3, coverage = $4, interval_minutes = $5,
-            execute = $6, heal = $7, enabled = $8,
+            [execute] = $6, heal = $7, enabled = $8,
             next_run_at = CASE WHEN $9 = 1 THEN DATEADD(MINUTE, $5, SYSUTCDATETIME()) ELSE next_run_at END,
             updated_at = SYSUTCDATETIME()
       WHERE tenant_id = $10 AND id = $11 RETURNING *`,

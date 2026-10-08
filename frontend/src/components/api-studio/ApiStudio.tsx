@@ -15,10 +15,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   RotateCcw, AlertTriangle, X, ListChecks, ArrowRight, Upload,
-  LayoutDashboard, Layers, FileCheck2, PlayCircle, BarChart3, Server,
+  LayoutDashboard, Layers, FileCheck2, PlayCircle, BarChart3, Server, RefreshCw,
 } from 'lucide-react';
 import { useCatalog } from './hooks/useCatalog';
 import { useApiRun } from './hooks/useApiRun';
+import { useApiEnvironments, envRunKey } from './hooks/useApiEnvironments';
 import StageRail from './StageRail';
 import ScenariosTab from './ScenariosTab';
 import ReportTab from './ReportTab';
@@ -27,6 +28,7 @@ import ImportView from './views/ImportView';
 import EndpointsView from './views/EndpointsView';
 import RunsView from './views/RunsView';
 import EnvironmentsView from './views/EnvironmentsView';
+import EnvironmentPicker from './views/EnvironmentPicker';
 import { EmptyState } from './primitives';
 import { PRIMARY_BTN, SECONDARY_BTN } from './format';
 import PageTabs, { type TabItem } from '@/components/ui/PageTabs';
@@ -38,6 +40,7 @@ const TAB_IDS = new Set<NavView>(['overview', 'endpoints', 'scenarios', 'runs', 
 
 export default function ApiStudio() {
   const catalog = useCatalog();
+  const envStore = useApiEnvironments();
   const [view, setView] = useState<NavView>(() => {
     const stored = sessionStorage.getItem('intelliqe_api_view');
     return stored && TAB_IDS.has(stored as NavView) ? (stored as NavView) : 'overview';
@@ -66,9 +69,22 @@ export default function ApiStudio() {
 
   const openRun = (id: string) => { setOpenRunId(id); setView('runs'); };
 
-  const design = () => run.runScenarios({ endpoints: catalog.selectedEndpoints, strategy: catalog.strategy, profile: catalog.profile });
+  const design = () => run.runScenarios({ endpoints: catalog.selectedEndpoints, strategy: catalog.strategy, profile: catalog.profile, environment: envStore.activeEnvironment });
 
   const sel = catalog.selectedEndpoints.length;
+
+  /* A run is grounded in the environment it was designed against. When the active
+     environment (or its variables) changes after design, re-resolve the run's
+     data against it live — deterministically, no model call — so the scenarios
+     and the executable specs always match the selected environment. */
+  const activeEnvName = envStore.noneSelected ? 'No environment' : (envStore.activeEnvironment?.name || 'No environment');
+  const activeEnvKey = envRunKey(envStore.activeEnvironment);
+  useEffect(() => {
+    if (!run.runCases.length || run.running) return;
+    if (!run.runEnvKey || run.runEnvKey === activeEnvKey) return;
+    void run.reresolve(envStore.activeEnvironment);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeEnvKey, run.runEnvKey, run.runCases.length, run.running]);
 
   const tabs: TabItem[] = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -86,9 +102,12 @@ export default function ApiStudio() {
       <div className="flex-shrink-0 px-6 pt-6 pb-1 relative z-10">
         <div className="flex items-center gap-3">
           <PageTabs tabs={tabs} active={activeTab} onChange={(id) => navigate(id as NavView)} ariaLabel="API Automation sections" className="min-w-0" />
-          {run.started && (
-            <button type="button" onClick={() => { run.resetRun(); catalog.clearCatalog(); setView('endpoints'); }} className={`${SECONDARY_BTN} ml-auto flex-shrink-0`} title="Start a fresh run — clears the imported endpoints and the previous run"><RotateCcw className="w-3.5 h-3.5" /><span className="hidden lg:inline">New run</span></button>
-          )}
+          <div className="ml-auto flex items-center gap-2 flex-shrink-0">
+            <EnvironmentPicker store={envStore} onManage={() => setView('environments')} />
+            {run.started && (
+              <button type="button" onClick={() => { run.resetRun(); catalog.clearCatalog(); setView('endpoints'); }} className={SECONDARY_BTN} title="Start a fresh run — clears the imported endpoints and the previous run"><RotateCcw className="w-3.5 h-3.5" /><span className="hidden lg:inline">New run</span></button>
+            )}
+          </div>
         </div>
 
         {run.started && (
@@ -105,10 +124,17 @@ export default function ApiStudio() {
           </div>
         )}
 
-        {run.phase === 'review' && view === 'scenarios' && (
+        {run.reresolving && (
+          <div className="mt-3 flex items-center gap-2 px-3 py-2 rounded-xl bg-purple-50 border border-purple-100">
+            <RefreshCw className="w-4 h-4 text-[#7C3AED] flex-shrink-0 animate-spin" />
+            <p className="text-sm text-purple-800 min-w-0">Re-resolving test data against <span className="font-semibold">{activeEnvName}</span>…</p>
+          </div>
+        )}
+
+        {run.phase === 'review' && view === 'scenarios' && !run.reresolving && (
           <div className="mt-3 flex items-center gap-2 px-3 py-2 rounded-xl bg-purple-50 border border-purple-100">
             <ListChecks className="w-4 h-4 text-[#7C3AED] flex-shrink-0" />
-            <p className="text-sm text-purple-800 min-w-0"><span className="font-semibold">{run.scenarios.length} scenarios are ready.</span> Select what you want to run and launch the suite. Automation, execution, healing, and reporting</p>
+            <p className="text-sm text-purple-800 min-w-0"><span className="font-semibold">{run.scenarios.length} scenarios are ready.</span> Select what you want to run and launch the suite. Automation, execution, healing, and reporting{run.runEnvName ? <> · resolved against <span className="font-semibold">{run.runEnvName}</span></> : null}</p>
             <button type="button" onClick={() => void run.runSuite()} title="Run the selected scenarios through automation, execution, healing and the report" className={`${PRIMARY_BTN} ml-auto flex-shrink-0 whitespace-nowrap`}>
               Run {run.selected.size} scenario{run.selected.size === 1 ? '' : 's'}
             </button>
@@ -148,7 +174,7 @@ export default function ApiStudio() {
         {view === 'report' && (
           <ReportTab report={run.report} rows={run.rows} scenarios={run.scenarios} onExport={run.handleExport} exporting={run.exporting} canExport={!!run.testRunId} onPushToRepo={run.handlePushToRepo} pushState={run.pushState} canPush={run.specs.length > 0 && run.selected.size > 0} />
         )}
-        {view === 'environments' && <EnvironmentsView />}
+        {view === 'environments' && <EnvironmentsView store={envStore} />}
       </div>
 
       {/* ── Import API — modal ── */}

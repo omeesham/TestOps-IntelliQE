@@ -42,17 +42,15 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
     <div className="h-full overflow-y-auto">
       <div className="max-w-[1280px] mx-auto px-6 py-5 space-y-4">
         {/* Workspace state — the next step */}
-        <div className={`${CARD} p-4 flex items-center gap-4 flex-wrap`}>
-          <div className="flex items-center gap-3">
-            <span className={`w-9 h-9 rounded-xl flex items-center justify-center ${TILE_ACTIVE}`}><Layers className="w-4 h-4 text-white" /></span>
-            <div>
-              <p className="text-[13px] font-semibold text-gray-900">{catalog.endpoints.length > 0 ? `${catalog.endpoints.length} endpoints in the catalogue` : 'Start by importing an API'}</p>
-              <p className="text-[11px] text-gray-500">
-                {catalog.endpoints.length > 0
-                  ? `${catalog.selected.size} selected · ${catalog.profile?.resources.length || 0} resources · ${catalog.profile?.flows.length || 0} flows`
-                  : 'OpenAPI, Postman, cURL, docs page, SDK, GraphQL, MCP, webhook, middleware, connector or a manual request.'}
-              </p>
-            </div>
+        <div className="flex items-center gap-4 flex-wrap">
+          <span className={`w-11 h-11 rounded-xl flex items-center justify-center ${TILE_ACTIVE}`}><Layers className="w-5 h-5 text-white" /></span>
+          <div className="min-w-0">
+            <h2 className="text-[17px] font-bold text-gray-900 leading-tight">{catalog.endpoints.length > 0 ? 'Endpoint catalogue' : 'Start by importing an API'}</h2>
+            <p className="text-[12.5px] text-gray-500 mt-0.5">
+              {catalog.endpoints.length > 0
+                ? `${catalog.endpoints.length} endpoint${catalog.endpoints.length === 1 ? '' : 's'} · ${catalog.selected.size} selected`
+                : 'OpenAPI, Postman, cURL, SDK, GraphQL, MCP and more.'}
+            </p>
           </div>
           <div className="ml-auto flex items-center gap-2">
             <button type="button" onClick={() => onNavigate('import')} className={SECONDARY_BTN}><Upload className="w-3.5 h-3.5" />Import</button>
@@ -64,11 +62,11 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
 
         {/* KPIs */}
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
-          <Kpi icon={Activity} label="API runs" value={k ? k.runs : '—'} sub={k ? `${k.runsLast30d} in 30 days` : ''} loading={loading} />
-          <Kpi icon={Gauge} label="Avg pass rate" value={k?.avgPassRate != null ? `${k.avgPassRate}%` : '—'} sub={k?.lastPassRate != null ? `last run ${k.lastPassRate}%` : 'no executed runs yet'} loading={loading} tone={k?.avgPassRate != null ? (k.avgPassRate >= 90 ? 'good' : k.avgPassRate >= 70 ? 'warn' : 'bad') : 'neutral'} />
+          <Kpi icon={Activity} label="API runs" value={k ? k.runs : '—'} sub={k ? 'Last 30 days' : ''} loading={loading} />
+          <Kpi icon={Gauge} label="Pass rate" value={k?.avgPassRate != null ? `${k.avgPassRate}%` : '—'} sub={k?.lastPassRate != null ? 'Latest run' : 'No runs yet'} loading={loading} tone={k?.avgPassRate != null ? (k.avgPassRate >= 90 ? 'good' : k.avgPassRate >= 70 ? 'warn' : 'bad') : 'neutral'} />
           <Kpi icon={Layers} label="Scenarios" value={k ? k.scenarios : '—'} sub={k ? `${k.endpointsCovered} endpoints covered` : ''} loading={loading} />
-          <Kpi icon={Zap} label="Anomalies" value={data ? data.anomalies.length : '—'} sub={data ? `${data.anomalies.filter((a) => a.kind === 'flaky').length} flaky · ${data.anomalies.filter((a) => a.kind === 'new-failure').length} new` : ''} loading={loading} tone={data?.anomalies.length ? 'warn' : 'neutral'} />
-          <Kpi icon={Upload} label="Imports" value={k ? k.imports : '—'} sub={k?.lastRunAt ? `last run ${relativeTime(k.lastRunAt)}` : data ? Object.keys(data.imports.byMethod).length + ' methods used' : ''} loading={loading} />
+          <Kpi icon={Zap} label="Anomalies" value={data ? data.anomalies.length : '—'} sub={data ? (data.anomalies.length ? `${data.anomalies.filter((a) => a.kind === 'flaky').length} flaky · ${data.anomalies.filter((a) => a.kind === 'new-failure').length} new` : 'All healthy') : ''} loading={loading} tone={data?.anomalies.length ? 'warn' : 'neutral'} />
+          <Kpi icon={Upload} label="Imports" value={k ? k.imports : '—'} sub={k?.lastRunAt ? relativeTime(k.lastRunAt) : data ? `${Object.keys(data.imports.byMethod).length} methods` : ''} loading={loading} />
         </div>
 
         {/* Trend + categories */}
@@ -189,10 +187,10 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
 function Kpi({ icon: Icon, label, value, sub, loading, tone = 'neutral' }: { icon: React.ElementType; label: string; value: string | number; sub?: string; loading: boolean; tone?: 'neutral' | 'good' | 'warn' | 'bad' }) {
   const valueCls = tone === 'good' ? 'text-emerald-600' : tone === 'warn' ? 'text-amber-600' : tone === 'bad' ? 'text-red-600' : 'text-gray-900';
   return (
-    <div className={`${CARD_HOVER} p-3.5`}>
+    <div className={`${CARD_HOVER} p-4`}>
       <div className="flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-gray-500"><Icon className="w-3.5 h-3.5 text-[#7C3AED]" />{label}</div>
-      <div className={`mt-1.5 text-[22px] font-semibold tabular-nums leading-none ${valueCls}`}>{loading && value === '—' ? <Loader size="sm" /> : value}</div>
-      <p className="mt-1.5 text-[10.5px] text-gray-400 truncate">{sub || ' '}</p>
+      <div className={`mt-3 text-[28px] font-bold tabular-nums leading-none ${valueCls}`}>{loading && value === '—' ? <Loader size="sm" /> : value}</div>
+      <p className="mt-2 text-[11px] font-medium text-gray-400 truncate">{sub || ' '}</p>
     </div>
   );
 }

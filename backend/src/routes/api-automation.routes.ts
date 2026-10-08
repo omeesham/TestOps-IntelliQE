@@ -42,7 +42,7 @@ import {
 } from '../services/api-import.service.js';
 import { analyzeApiSurface, enrichProfileWithLlm } from '../services/api-intelligence.service.js';
 import { validateContract } from '../services/api-contract.service.js';
-import { runLoadTest } from '../services/api-loadtest.service.js';
+import { runLoadTest, runLoadProfile } from '../services/api-loadtest.service.js';
 import { runSecurityScan } from '../services/api-security.service.js';
 import { runOwaspCompliance } from '../services/api-owasp.service.js';
 import { runApiFuzz } from '../services/api-fuzz.service.js';
@@ -56,8 +56,18 @@ import { scanDrift } from '../services/api-drift.service.js';
 import { runAsyncProbe } from '../services/api-async.service.js';
 import { listReviews, addReview } from '../services/api-reviews.service.js';
 import {
-  listEnvironments, getEnvironment, createEnvironment, updateEnvironment, deleteEnvironment, applyEnvironment,
+  listCaptureSessions, createCaptureSession, getCaptureSession, ingestCapture,
+  captureToEndpoints, closeCaptureSession, deleteCaptureSession,
+} from '../services/api-capture.service.js';
+import { listMocks, createMock, setMockEnabled, deleteMock } from '../services/api-mock.service.js';
+import { analyzeCoverageGaps } from '../services/api-coverage-gaps.service.js';
+import { runSemanticAssertion } from '../services/api-semantic.service.js';
+import { analyzeFailureClusters } from '../services/api-failure-clusters.service.js';
+import { listListeners, createListener, deleteListener, getEvents } from '../services/api-callback.service.js';
+import {
+  listEnvironments, getEnvironment, createEnvironment, updateEnvironment, deleteEnvironment, applyEnvironment, resolveApiCase,
 } from '../services/api-environments.service.js';
+import { renderApiCases } from '../agents/apiGeneratorAgent.js';
 import { getApiOverview, listApiRuns, getApiRunDetail, recordImport, listImports } from '../services/api-dashboard.service.js';
 import { runHeadlessApiRun } from '../services/api-run.service.js';
 import { startJob, getJob, setJobProgress } from '../services/async-jobs.service.js';
@@ -356,6 +366,23 @@ router.post('/loadtest', async (req: Request, res: Response) => {
   } catch (err) { fail(res, err); }
 });
 
+/* ── Staged load profile + SLA gate (opt-in; ramp-up stages, p95/p99/error-rate thresholds) ── */
+router.post('/loadtest/profile', async (req: Request, res: Response) => {
+  try {
+    const ep = req.body?.endpoint;
+    if (!ep || typeof ep !== 'object' || !/^https?:\/\//i.test(String(ep.url || ''))) {
+      res.status(400).json({ error: 'Send an endpoint with an http(s) URL to load-test.' }); return;
+    }
+    const result = await runLoadProfile({
+      endpoint: ep,
+      stages: Array.isArray(req.body?.stages) ? req.body.stages : [],
+      sla: req.body?.sla && typeof req.body.sla === 'object' ? req.body.sla : undefined,
+      allowWrites: !!req.body?.allowWrites,
+    });
+    res.json(result);
+  } catch (err) { fail(res, err); }
+});
+
 /* ── Async / streaming probe (opt-in; WebSocket + SSE — separate from HTTP pipeline) ── */
 router.post('/async/probe', async (req: Request, res: Response) => {
   try {
@@ -575,6 +602,158 @@ router.post('/runs/:id/reviews', async (req: Request, res: Response) => {
 });
 
 /* ═══════════════════════════════════════════════════════════════
+   Traffic capture (opt-in; records real API calls → catalogue endpoints)
+   A session accumulates recorded requests (HAR drop, the recorder proxy
+   snippet, or any poster). Converting it runs the HAR parser and hands
+   ordinary imported endpoints back — it never touches the pipeline.
+   ═══════════════════════════════════════════════════════════════ */
+
+router.get('/capture/sessions', async (req: Request, res: Response) => {
+  try { res.json({ sessions: await listCaptureSessions(req.user!.tenantId) }); }
+  catch (err) { fail(res, err, 500); }
+});
+
+router.post('/capture/sessions', async (req: Request, res: Response) => {
+  try { res.status(201).json({ session: await createCaptureSession(req.user!.tenantId, req.user!.username, req.body?.name) }); }
+  catch (err) { fail(res, err); }
+});
+
+router.get('/capture/sessions/:id', async (req: Request, res: Response) => {
+  try {
+    const session = await getCaptureSession(req.user!.tenantId, String(req.params.id));
+    if (!session) { res.status(404).json({ error: 'Capture session not found.' }); return; }
+    res.json({ session });
+  } catch (err) { fail(res, err, 500); }
+});
+
+/** Append recorded traffic — HAR doc/entries or a flat request/response list. */
+router.post('/capture/sessions/:id/ingest', async (req: Request, res: Response) => {
+  try {
+    const payload = req.body?.entries ?? req.body?.har ?? req.body;
+    res.json(await ingestCapture(req.user!.tenantId, String(req.params.id), payload));
+  } catch (err) { fail(res, err); }
+});
+
+/** Convert the recorded traffic into catalogue endpoints (feeds the generator). */
+router.post('/capture/sessions/:id/endpoints', async (req: Request, res: Response) => {
+  try {
+    const { endpoints, name, fromEntries } = await captureToEndpoints(req.user!.tenantId, String(req.params.id));
+    if (!endpoints.length) { res.status(400).json({ error: fromEntries ? 'The recorded traffic had no API requests (only static assets?).' : 'Nothing recorded yet — capture some traffic first.' }); return; }
+    await recordImport(req.user!.tenantId, req.user!.username, { method: 'capture', name, format: 'Captured traffic', parser: 'har', endpointCount: endpoints.length, warnings: [] });
+    res.json({ endpoints, count: endpoints.length, parser: 'har', format: 'Captured traffic', profile: analyzeApiSurface(endpoints) });
+  } catch (err) { fail(res, err); }
+});
+
+router.post('/capture/sessions/:id/close', async (req: Request, res: Response) => {
+  try {
+    const ok = await closeCaptureSession(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Capture session not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+
+router.delete('/capture/sessions/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteCaptureSession(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Capture session not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Traffic coverage gaps (opt-in; recorded traffic vs tested catalogue) ──
+   Surfaces endpoints that have real recorded traffic but no test. Reuses the
+   capture sessions + the current catalogue; touches no pipeline. */
+router.post('/coverage/gaps', async (req: Request, res: Response) => {
+  try {
+    const tested = endpointsFromBody(req.body?.endpoints);
+    const sessionId = typeof req.body?.sessionId === 'string' && req.body.sessionId ? req.body.sessionId : undefined;
+    const report = await analyzeCoverageGaps(req.user!.tenantId, tested, sessionId);
+    res.json({ ...report, profile: report.gaps.length ? analyzeApiSurface(report.gaps) : null });
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Semantic / AI-response assertion (opt-in; live-probe + LLM judge) ── */
+router.post('/semantic/assert', async (req: Request, res: Response) => {
+  try {
+    const ep = req.body?.endpoint;
+    const intent = String(req.body?.intent || '').trim();
+    if (!ep || typeof ep !== 'object' || !/^https?:\/\//i.test(String(ep.url || ''))) { res.status(400).json({ error: 'Send an endpoint with an http(s) URL.' }); return; }
+    if (!intent) { res.status(400).json({ error: 'Describe what the response should satisfy (the intent).' }); return; }
+    const llm = await getTenantLlm(req.user!.tenantId);
+    if (!llm) { res.status(400).json({ error: 'Semantic assertions need an LLM — add an Anthropic API key under System Configuration → LLM Configuration.' }); return; }
+    res.json(await runSemanticAssertion(ep, intent, llm));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Failure clustering (opt-in; group a run's failures by root cause) ── */
+router.post('/failures/cluster', async (req: Request, res: Response) => {
+  try {
+    const failures = Array.isArray(req.body?.failures) ? req.body.failures : [];
+    if (!failures.length) { res.status(400).json({ error: 'Send the run failures to cluster.' }); return; }
+    const explain = !!req.body?.explain;
+    const llm = explain ? await getTenantLlm(req.user!.tenantId) : null;
+    res.json(await analyzeFailureClusters(failures, { explain, llm }));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Async callback / webhook capture (opt-in; public /hook/:token records; management here) ── */
+router.get('/callbacks', async (req: Request, res: Response) => {
+  try { res.json({ listeners: await listListeners(req.user!.tenantId) }); }
+  catch (err) { fail(res, err, 500); }
+});
+router.post('/callbacks', async (req: Request, res: Response) => {
+  try { res.status(201).json({ listener: await createListener(req.user!.tenantId, req.user!.username, req.body?.name) }); }
+  catch (err) { fail(res, err); }
+});
+router.delete('/callbacks/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteListener(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Listener not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.get('/callbacks/:token/events', async (req: Request, res: Response) => {
+  try {
+    const events = await getEvents(req.user!.tenantId, String(req.params.token));
+    if (events === null) { res.status(404).json({ error: 'Listener not found.' }); return; }
+    res.json({ events });
+  } catch (err) { fail(res, err); }
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   Hosted mock servers (opt-in; publish endpoints as a live public stub)
+   Management is tenant-authenticated here; the mock itself is served
+   publicly from /mock/:mockId/* (mounted in index.ts, outside auth) so a
+   system-under-test can reach it. The pipeline is never involved.
+   ═══════════════════════════════════════════════════════════════ */
+
+router.get('/mocks', async (req: Request, res: Response) => {
+  try { res.json({ mocks: await listMocks(req.user!.tenantId) }); }
+  catch (err) { fail(res, err, 500); }
+});
+
+router.post('/mocks', async (req: Request, res: Response) => {
+  try { res.status(201).json({ mock: await createMock(req.user!.tenantId, req.user!.username, { name: req.body?.name, endpoints: req.body?.endpoints }) }); }
+  catch (err) { fail(res, err); }
+});
+
+router.post('/mocks/:id/toggle', async (req: Request, res: Response) => {
+  try {
+    const mock = await setMockEnabled(req.user!.tenantId, String(req.params.id), req.body?.enabled !== false);
+    if (!mock) { res.status(404).json({ error: 'Mock not found.' }); return; }
+    res.json({ mock });
+  } catch (err) { fail(res, err); }
+});
+
+router.delete('/mocks/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteMock(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Mock not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+
+/* ═══════════════════════════════════════════════════════════════
    Environments
    ═══════════════════════════════════════════════════════════════ */
 
@@ -666,8 +845,13 @@ router.post('/design', async (req: Request, res: Response) => {
   const rawLayers = req.body?.apiLayers;
   const rawProfile = req.body?.apiProfile;
   const requirements = typeof req.body?.requirements === 'string' ? req.body.requirements.slice(0, 4000) : '';
+  // Optional active environment: the generator resolves {{vars}} + the base URL
+  // against it at render time (secrets revealed server-side). Absent = design the
+  // endpoints exactly as sent (the prior behaviour).
+  const environmentId = typeof req.body?.environmentId === 'string' ? req.body.environmentId : undefined;
   const jobId = startJob(tenantId, async (id) => {
     setJobProgress(id, { phase: 'design', done: 0, total: specs.length, message: 'Starting…' });
+    const env = environmentId ? await getEnvironment(tenantId, environmentId, { reveal: true }) : null;
     const state = await runGenerationOnly(requirements, {
       llm, tenantId,
       apiSpecs: specs,
@@ -675,7 +859,8 @@ router.post('/design', async (req: Request, res: Response) => {
       apiProfile: rawProfile && typeof rawProfile === 'object' && Array.isArray(rawProfile.insights)
         ? { insights: rawProfile.insights.map((i: unknown) => String(i)).slice(0, 8) }
         : null,
-      appContext: { targetUrl: specs[0]!.baseUrl, appName: 'API', environment: undefined, explorePrompt: undefined, roles: undefined },
+      apiEnvironment: env,
+      appContext: { targetUrl: env?.baseUrl || specs[0]!.baseUrl, appName: 'API', environment: undefined, explorePrompt: undefined, roles: undefined },
       onProgress: (p) => setJobProgress(id, p),
     });
     return {
@@ -683,10 +868,40 @@ router.post('/design', async (req: Request, res: Response) => {
       automationScripts: state.automationScripts,
       pageObjects: state.pageObjects || [],
       apiProfile: state.apiProfile || null,
+      // The templated designed cases — the client keeps these to re-render the
+      // run against another environment with no further model call.
+      normalizedCases: state.apiNormalizedCases || [],
+      environment: env ? { id: env.id, name: env.name } : null,
       summary: { totalTestCases: state.testCases.length, totalScripts: state.automationScripts.length },
     };
   });
   res.status(202).json({ jobId, status: 'running', pollUrl: `/api/api-automation/jobs/${jobId}` });
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   Re-render (deterministic — no model call)
+   Retarget an already-designed run to another environment. Takes the
+   templated cases the design job returned + an environment id, resolves
+   {{vars}} + the base URL, and re-renders the specs/service objects.
+   ═══════════════════════════════════════════════════════════════ */
+
+router.post('/render', async (req: Request, res: Response) => {
+  try {
+    const tenantId = req.user!.tenantId;
+    const cases = Array.isArray(req.body?.cases) ? req.body.cases.slice(0, 2000) : [];
+    if (!cases.length) { res.status(400).json({ error: 'Send the run\'s designed cases to re-render.' }); return; }
+    const environmentId = typeof req.body?.environmentId === 'string' ? req.body.environmentId : undefined;
+    const env = environmentId ? await getEnvironment(tenantId, environmentId, { reveal: true }) : null;
+    if (environmentId && !env) { res.status(404).json({ error: 'Environment not found.' }); return; }
+    const resolved = (cases as any[]).map((nc) => resolveApiCase(nc, env));
+    const { testCases, automationScripts, pageObjects } = renderApiCases(resolved);
+    res.json({
+      testCases,
+      automationScripts,
+      pageObjects,
+      environment: env ? { id: env.id, name: env.name } : null,
+    });
+  } catch (err) { fail(res, err, 400); }
 });
 
 /* ═══════════════════════════════════════════════════════════════

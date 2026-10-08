@@ -754,12 +754,16 @@ export async function initDb(): Promise<void> {
         tenant_id   UNIQUEIDENTIFIER NOT NULL,
         name        NVARCHAR(120) NOT NULL,
         base_url    NVARCHAR(1000),
+        color       NVARCHAR(20),
         variables   NVARCHAR(MAX) NOT NULL DEFAULT '[]',
         is_default  BIT NOT NULL DEFAULT 0,
         created_by  NVARCHAR(100),
         created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
         updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
       )`);
+    // Environment colour (Postman-style visual tag) — additive for DBs created
+    // before the column existed; existing rows keep NULL (no colour).
+    await addColumn('api_environments', 'color', 'NVARCHAR(20)');
     // Import history: every intake (file, URL, cURL, GraphQL, MCP…) with what
     // it produced — the dashboard's "sources" panel and the REST /imports feed.
     await createTable('api_import_sources', `
@@ -783,7 +787,7 @@ export async function initDb(): Promise<void> {
       CREATE TABLE ${SCHEMA}.api_response_baselines (
         id            UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
         tenant_id     UNIQUEIDENTIFIER NOT NULL,
-        sig           NVARCHAR(4100) NOT NULL,
+        sig           NVARCHAR(MAX) NOT NULL,
         method        NVARCHAR(10) NOT NULL,
         url           NVARCHAR(4000) NOT NULL,
         title         NVARCHAR(300),
@@ -808,7 +812,7 @@ export async function initDb(): Promise<void> {
         environment_id   NVARCHAR(80),
         coverage         NVARCHAR(20),
         interval_minutes INT NOT NULL DEFAULT 1440,
-        execute          BIT NOT NULL DEFAULT 1,
+        [execute]        BIT NOT NULL DEFAULT 1,
         heal             BIT NOT NULL DEFAULT 1,
         enabled          BIT NOT NULL DEFAULT 1,
         created_by       NVARCHAR(100),
@@ -854,8 +858,112 @@ export async function initDb(): Promise<void> {
         created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
       )`);
 
+    // Traffic capture: live-recorded API calls (from a HAR drop, the recorder
+    // proxy snippet, or any tool posting request/response JSON) accumulated into
+    // a session, later converted to catalogue endpoints via the HAR parser.
+    // Opt-in and standalone — the generation/execute/heal pipeline never reads
+    // it; converting a session just produces ordinary imported endpoints.
+    await createTable('api_capture_sessions', `
+      CREATE TABLE ${SCHEMA}.api_capture_sessions (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id    UNIQUEIDENTIFIER NOT NULL,
+        name         NVARCHAR(200) NOT NULL,
+        status       NVARCHAR(20) NOT NULL DEFAULT 'recording',
+        entry_count  INT NOT NULL DEFAULT 0,
+        created_by   NVARCHAR(100),
+        created_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_capture_entries', `
+      CREATE TABLE ${SCHEMA}.api_capture_entries (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id    UNIQUEIDENTIFIER NOT NULL,
+        session_id   UNIQUEIDENTIFIER NOT NULL,
+        method       NVARCHAR(10),
+        url          NVARCHAR(4000),
+        status       INT,
+        mime         NVARCHAR(200),
+        req_headers  NVARCHAR(MAX),
+        req_body     NVARCHAR(MAX),
+        res_body     NVARCHAR(MAX),
+        created_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+
+    // Hosted mock servers: a published set of endpoints served back as a live
+    // stub at a public, unguessable URL (/mock/:mockId/*) so a system-under-test
+    // can run against it when the real dependency is unavailable. Opt-in and
+    // standalone — serving a mock reads only this table; the pipeline is never
+    // involved. `mock_id` is the unguessable public token; deleting the row
+    // revokes the URL.
+    await createTable('api_mocks', `
+      CREATE TABLE ${SCHEMA}.api_mocks (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id    UNIQUEIDENTIFIER NOT NULL,
+        mock_id      NVARCHAR(64) NOT NULL,
+        name         NVARCHAR(200) NOT NULL,
+        endpoints    NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        enabled      BIT NOT NULL DEFAULT 1,
+        hit_count    INT NOT NULL DEFAULT 0,
+        created_by   NVARCHAR(100),
+        created_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+
+    // Async callback / webhook capture: a disposable public URL (/hook/:token)
+    // that records inbound requests so a test can assert the API's async
+    // callback arrived with the expected payload. Opt-in and standalone — the
+    // pipeline is never involved; deleting the listener revokes the URL.
+    await createTable('api_callback_listeners', `
+      CREATE TABLE ${SCHEMA}.api_callback_listeners (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        token       NVARCHAR(64) NOT NULL,
+        name        NVARCHAR(200) NOT NULL,
+        created_by  NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_callback_events', `
+      CREATE TABLE ${SCHEMA}.api_callback_events (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        token       NVARCHAR(64) NOT NULL,
+        method      NVARCHAR(10),
+        path        NVARCHAR(2000),
+        query       NVARCHAR(2000),
+        headers     NVARCHAR(MAX),
+        body        NVARCHAR(MAX),
+        received_at DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+
+    // Web Lab visual-regression baselines: a stored screenshot (PNG, base64) of
+    // a URL at a given engine+viewport that a later capture diffs against. Opt-in
+    // and standalone — the generation/execute/heal pipeline never reads it. One
+    // baseline per signature (engine|viewport|url); re-capturing overwrites.
+    await createTable('web_visual_baselines', `
+      CREATE TABLE ${SCHEMA}.web_visual_baselines (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id    UNIQUEIDENTIFIER NOT NULL,
+        sig          NVARCHAR(100) NOT NULL,
+        url          NVARCHAR(4000) NOT NULL,
+        engine       NVARCHAR(20) NOT NULL,
+        viewport     NVARCHAR(40) NOT NULL,
+        width        INT,
+        height       INT,
+        png          NVARCHAR(MAX) NOT NULL,
+        captured_by  NVARCHAR(100),
+        captured_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+
     // ─── 11. Indexes ───
     await createIndex('idx_api_environments_tenant', 'api_environments', '(tenant_id)');
+    await createIndex('idx_web_visual_baselines_tenant', 'web_visual_baselines', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_callback_listeners_tenant', 'api_callback_listeners', '(tenant_id, created_at DESC)');
+    await createIndex('idx_api_callback_listeners_token', 'api_callback_listeners', '(token)');
+    await createIndex('idx_api_callback_events_token', 'api_callback_events', '(token, received_at DESC)');
+    await createIndex('idx_api_capture_sessions_tenant', 'api_capture_sessions', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_capture_entries_session', 'api_capture_entries', '(tenant_id, session_id, created_at)');
+    await createIndex('idx_api_mocks_tenant', 'api_mocks', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_mocks_mockid', 'api_mocks', '(mock_id)');
     await createIndex('idx_api_import_sources_tenant', 'api_import_sources', '(tenant_id, created_at DESC)');
     await createIndex('idx_api_response_baselines_tenant', 'api_response_baselines', '(tenant_id)');
     await createIndex('idx_api_schedules_due', 'api_schedules', '(enabled, next_run_at)');

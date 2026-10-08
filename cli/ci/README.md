@@ -67,6 +67,9 @@ steps:
 
 ## GitLab CI
 
+A ready-to-copy config (merge-request + default-branch + nightly, with the JUnit
+report wired in) is in [`gitlab-ci.example.yml`](./gitlab-ci.example.yml). The core job:
+
 ```yaml
 api-tests:
   image: node:20
@@ -80,6 +83,23 @@ api-tests:
     when: always
     reports:
       junit: intelliqe-junit.xml
+```
+
+## Jenkins
+
+A ready-to-copy declarative pipeline is in [`Jenkinsfile.example`](./Jenkinsfile.example).
+It binds `intelliqe-url` / `intelliqe-token` credentials, runs the suite, publishes the
+JUnit report, and fails the build on exit code `3`. The core stage:
+
+```groovy
+withCredentials([
+  string(credentialsId: 'intelliqe-url',   variable: 'INTELLIQE_URL'),
+  string(credentialsId: 'intelliqe-token', variable: 'INTELLIQE_TOKEN'),
+]) {
+  sh 'npm i -g @intelliqe/api-cli'
+  sh 'intelliqe-api run --url "$SPEC_URL" --coverage standard --wait --junit intelliqe-junit.xml --min-pass-rate 95'
+}
+// post { always { junit 'intelliqe-junit.xml' } }
 ```
 
 ## Plain curl (no CLI)

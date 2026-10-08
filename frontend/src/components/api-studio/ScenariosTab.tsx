@@ -7,11 +7,11 @@
  * from automation, execution and the report alike.
  */
 import { Fragment, useMemo, useState } from 'react';
-import { ChevronRight, ListChecks, Search, Check } from 'lucide-react';
+import { ChevronRight, ListChecks, Search, Check, Send } from 'lucide-react';
 import {
   MethodBadge, CategoryChip, PriorityChip, StatusCode, CodeBlock, EmptyState,
 } from './primitives';
-import { prettyJson, categoryMeta, STRIP, THEAD, INSET, RAISED } from './format';
+import { prettyJson, categoryMeta, STRIP, THEAD, INSET, RAISED, TILE_ACTIVE, BRAND_CHIP, MUTED_CHIP } from './format';
 import type { Scenario } from './types';
 
 interface Props {
@@ -67,57 +67,62 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
 
   return (
     <div className="h-full flex flex-col min-h-0">
-      {/* Toolbar */}
-      <div className={`relative z-10 flex items-center gap-2 px-3 h-10 min-w-0 overflow-hidden border-b border-gray-100 flex-shrink-0 ${STRIP}`}>
-        <label className="flex items-center gap-1.5 text-[11px] text-gray-600 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={allVisibleSelected}
-            disabled={!editable}
-            onChange={() => (allVisibleSelected ? onClearAll() : onSelectAll(visible.map((s) => s.id)))}
-            className="w-3.5 h-3.5 rounded border-gray-300 text-[#7C3AED] focus:ring-[#A5B4FC] focus:ring-offset-0 disabled:opacity-40"
-          />
-          <span className="font-medium">
-            {selected.size} of {scenarios.length} selected
-          </span>
-        </label>
-
-        <div className="relative ml-2">
-          <Search className="w-3 h-3 text-gray-300 absolute left-2 top-1/2 -translate-y-1/2" />
-          <input
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter scenarios…"
-            className={`w-52 pl-6 pr-2 py-1 bg-[#FCFBFF] border border-[#E4E0F5] rounded text-[11px] text-gray-700 placeholder-gray-300 outline-none focus:bg-white focus:border-[#A5B4FC] focus:ring-2 focus:ring-[#EDE9FE] transition-all ${INSET}`}
-          />
+      {/* Header + toolbar */}
+      <div className="flex items-center gap-4 flex-wrap px-4 py-3 border-b border-gray-100 flex-shrink-0">
+        <span className={`w-11 h-11 rounded-xl flex items-center justify-center ${TILE_ACTIVE}`}><ListChecks className="w-5 h-5 text-white" /></span>
+        <div className="min-w-0">
+          <h2 className="text-[17px] font-bold text-gray-900 leading-tight">Scenarios</h2>
+          <p className="text-[12.5px] text-gray-500 mt-0.5">Review each before it runs · {selected.size} of {scenarios.length} selected</p>
         </div>
-
-        <div className="flex items-center gap-1 ml-auto flex-shrink-0">
-          <button
-            type="button"
-            onClick={() => setCategory('all')}
-            className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${
-              category === 'all' ? 'bg-[#7C3AED] text-white' : 'text-gray-500 hover:bg-gray-100'
-            }`}
-          >
-            All {scenarios.length}
-          </button>
-          {categories.map((c) => {
-            const n = scenarios.filter((s) => (s.type || 'other').toLowerCase() === c.id).length;
-            return (
-              <button
-                key={c.id}
-                type="button"
-                onClick={() => setCategory(c.id)}
-                className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${
-                  category === c.id ? 'bg-[#7C3AED] text-white' : 'text-gray-500 hover:bg-gray-100'
-                }`}
-              >
-                {c.label} {n}
-              </button>
-            );
-          })}
+        <div className="ml-auto flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-[11px] text-gray-600 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={allVisibleSelected}
+              disabled={!editable}
+              onChange={() => (allVisibleSelected ? onClearAll() : onSelectAll(visible.map((s) => s.id)))}
+              className="w-3.5 h-3.5 rounded border-gray-300 text-[#7C3AED] focus:ring-[#A5B4FC] focus:ring-offset-0 disabled:opacity-40"
+            />
+            <span className="font-medium">Select all</span>
+          </label>
+          <div className="relative">
+            <Search className="w-3 h-3 text-gray-300 absolute left-2 top-1/2 -translate-y-1/2" />
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter scenarios…"
+              className={`w-52 pl-6 pr-2 py-1.5 bg-[#FCFBFF] border border-[#E4E0F5] rounded-md text-[11px] text-gray-700 placeholder-gray-300 outline-none focus:bg-white focus:border-[#A5B4FC] focus:ring-2 focus:ring-[#EDE9FE] transition-all ${INSET}`}
+            />
+          </div>
         </div>
+      </div>
+
+      {/* Category filters */}
+      <div className={`flex items-center gap-1.5 flex-wrap px-4 py-2 border-b border-gray-100 flex-shrink-0 ${STRIP}`}>
+        <button
+          type="button"
+          onClick={() => setCategory('all')}
+          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-medium transition-colors ${
+            category === 'all' ? 'bg-[#7C3AED] text-white border-transparent' : BRAND_CHIP
+          }`}
+        >
+          All<span className={category === 'all' ? 'text-white/70' : 'text-gray-400'}>{scenarios.length}</span>
+        </button>
+        {categories.map((c) => {
+          const n = scenarios.filter((s) => (s.type || 'other').toLowerCase() === c.id).length;
+          return (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => setCategory(c.id)}
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-medium transition-colors ${
+                category === c.id ? 'bg-[#7C3AED] text-white border-transparent' : MUTED_CHIP
+              }`}
+            >
+              {c.label}<span className={category === c.id ? 'text-white/70' : 'text-gray-400'}>{n}</span>
+            </button>
+          );
+        })}
       </div>
 
       {/* Table */}
@@ -192,7 +197,7 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
                         <div className="grid grid-cols-1 @[680px]:grid-cols-2 gap-4">
                           {/* What gets sent */}
                           <div className="space-y-2 min-w-0">
-                            <SectionLabel>Request</SectionLabel>
+                            <SectionLabel icon={Send}>Request</SectionLabel>
                             <div className={`bg-white border border-[#E9E5FB] rounded-lg overflow-hidden ${RAISED}`}>
                               <div className="flex items-center gap-1.5 px-2.5 py-2">
                                 <MethodBadge method={s.api?.method || ''} />
@@ -213,7 +218,7 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
                               repeating it underneath was pure noise — those steps
                               become a checklist and keep the wording on hover. */}
                           <div className="space-y-2 min-w-0">
-                            <SectionLabel>
+                            <SectionLabel icon={ListChecks}>
                               Steps
                               <span className="ml-1.5 font-normal normal-case tracking-normal text-gray-400">
                                 {actionSteps.length} action{actionSteps.length === 1 ? '' : 's'} · {checkSteps.length} check{checkSteps.length === 1 ? '' : 's'}
@@ -308,7 +313,12 @@ function Highlight({ text }: { text: string }) {
   );
 }
 
-/** The small grey heading above each half of the detail panel. */
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">{children}</p>;
+/** The card sub-header above each half of the detail panel. */
+function SectionLabel({ icon: Icon, children }: { icon: React.ElementType; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 mb-2">
+      <Icon className="w-4 h-4 text-[#7C3AED]" />
+      <h3 className="text-[12.5px] font-semibold text-gray-900">{children}</h3>
+    </div>
+  );
 }

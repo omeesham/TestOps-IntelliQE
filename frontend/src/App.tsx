@@ -12,6 +12,7 @@ import ReportsPage from '@/pages/ReportsPage';
 import SystemConfigurationPage from '@/pages/SystemConfigurationPage';
 import GeneratedTestCasesPage from '@/pages/GeneratedTestCasesPage';
 import ApiAutomationPage from '@/pages/ApiAutomationPage';
+import WebLabPage from '@/pages/WebLabPage';
 import UserManagementPage from '@/pages/UserManagementPage';
 import BugTrackerPage from '@/pages/BugTrackerPage';
 import FeatureTogglesPage from '@/pages/FeatureTogglesPage';
@@ -62,6 +63,8 @@ function AppRoutes() {
         <Route path="/chat" element={null} />
         <Route path="/generated-tests" element={<FeatureRoute feature="generated-tests" name="Generated Test Cases"><GeneratedTestCasesPage /></FeatureRoute>} />
         <Route path="/automation" element={<FeatureRoute feature="api-automation" name="API Automation"><ApiAutomationPage /></FeatureRoute>} />
+        {/* Web Lab — opt-in browser quality tools; always available (no feature gate). */}
+        <Route path="/web-lab" element={<WebLabPage />} />
         {/* Backward-compat: the earlier example path collided with the /api proxy prefix. */}
         <Route path="/api-automation" element={<Navigate to="/automation" replace />} />
         <Route path="/reports" element={<FeatureRoute feature="reports" name="Reports"><ReportsPage /></FeatureRoute>} />

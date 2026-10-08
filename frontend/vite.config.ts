@@ -26,6 +26,9 @@ export default defineConfig({
       // backend listens on 127.0.0.1, which surfaces as an intermittent
       // ECONNREFUSED on /api. 127.0.0.1 matches the backend and avoids it.
       '/api': 'http://127.0.0.1:3001',
+      // Hosted mock servers are served publicly from the backend at /mock/* —
+      // proxy it too so a copied mock URL works against the dev frontend origin.
+      '/mock': 'http://127.0.0.1:3001',
     },
   },
 })

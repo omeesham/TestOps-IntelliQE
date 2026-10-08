@@ -1,0 +1,58 @@
+// Example Jenkins declarative pipeline — copy to a Jenkinsfile in the repo you
+// want to gate. It runs the IntelliQE API suite (import → design → execute →
+// heal → report) and fails the build on a regression or quality-gate breach.
+//
+// Prerequisites:
+//   • A Node.js 20 tool configured in Jenkins (Manage Jenkins → Tools), or use
+//     an agent/image that already has Node 20.
+//   • Two credentials (Manage Jenkins → Credentials):
+//       - intelliqe-url    (Secret text)  e.g. https://intelliqe.your-company.com
+//       - intelliqe-token  (Secret text)  a token from `intelliqe-api login`
+//
+// Exit codes: 0 ok · 1 usage · 2 API error · 3 quality gate failed (fails build).
+
+pipeline {
+  agent any
+
+  tools { nodejs 'node20' }   // name of the NodeJS installation in Jenkins Tools
+
+  parameters {
+    string(name: 'SPEC_URL', defaultValue: 'https://api.acme.com/openapi.json', description: 'OpenAPI/Postman URL (or swap --url for endpoints.json --env …)')
+    string(name: 'ENVIRONMENT', defaultValue: 'Staging', description: 'IntelliQE environment name')
+    string(name: 'COVERAGE', defaultValue: 'standard', description: 'essential | standard | exhaustive')
+  }
+
+  triggers { cron('H 2 * * *') }   // nightly — remove if you only want push/PR builds
+
+  stages {
+    stage('API tests') {
+      steps {
+        withCredentials([
+          string(credentialsId: 'intelliqe-url',   variable: 'INTELLIQE_URL'),
+          string(credentialsId: 'intelliqe-token', variable: 'INTELLIQE_TOKEN'),
+        ]) {
+          sh 'npm i -g @intelliqe/api-cli'
+          sh """
+            intelliqe-api run \
+              --url "${params.SPEC_URL}" \
+              --env "${params.ENVIRONMENT}" \
+              --coverage "${params.COVERAGE}" \
+              --layers smoke,contract,negative,auth,flow \
+              --title "CI — ${env.BRANCH_NAME ?: 'build'} #${env.BUILD_NUMBER}" \
+              --wait \
+              --junit intelliqe-junit.xml \
+              --min-pass-rate 95 \
+              --max-failures 2
+          """
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      junit testResults: 'intelliqe-junit.xml', allowEmptyResults: true
+      archiveArtifacts artifacts: 'intelliqe-junit.xml', allowEmptyArchive: true
+    }
+  }
+}

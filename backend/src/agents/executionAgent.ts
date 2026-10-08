@@ -264,7 +264,7 @@ ${htmlReporterLine}${allureReporterLine}  ],
   use: {
 ${baseUrlLine}    actionTimeout: 20_000,
     navigationTimeout: 45_000,
-${tuning.traceLine}${tuning.screenshotLine}  },
+${tuning.traceLine}${tuning.screenshotLine}${tuning.useExtraLine}  },
 ${tuning.projectsLine}});
 `;
   await fs.writeFile(configPath, configSrc, 'utf-8');

@@ -243,4 +243,5 @@ export const IMPORT_METHOD_LABELS: Record<string, string> = {
   middleware: 'Middleware',
   manual: 'Manual',
   file: 'File',
+  capture: 'Captured traffic',
 };

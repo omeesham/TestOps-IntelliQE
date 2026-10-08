@@ -20,7 +20,7 @@ export type ApiStyle = 'rest' | 'graphql' | 'soap' | 'jsonrpc' | 'webhook' | 'mc
 /** The twelve ways an API can enter the workspace. */
 export type ImportMethod =
   | 'openapi' | 'postman' | 'endpoint' | 'curl' | 'docs-url' | 'connector'
-  | 'sdk' | 'webhook' | 'graphql' | 'mcp' | 'middleware' | 'manual' | 'file';
+  | 'sdk' | 'webhook' | 'graphql' | 'mcp' | 'middleware' | 'manual' | 'file' | 'capture';
 
 export interface HeaderPair { key: string; value: string }
 
@@ -117,6 +117,8 @@ export interface ApiEnvironment {
   id: string;
   name: string;
   baseUrl: string;
+  /** Optional Postman-style colour tag (`#rrggbb`) shown wherever the env appears. */
+  color?: string;
   variables: EnvVariable[];
   isDefault: boolean;
   createdBy?: string;

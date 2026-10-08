@@ -7,7 +7,7 @@
  * Every path ends in the same place — endpoints in the catalogue, profiled.
  */
 import { useCallback, useRef, useState, type DragEvent } from 'react';
-import { UploadCloud, CheckCircle2, AlertTriangle, ArrowRight, FileText, X, Plus, Trash2 } from 'lucide-react';
+import { UploadCloud, CheckCircle2, AlertTriangle, ArrowRight, FileText, X, Plus, Trash2, Layers } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import {
   importApiFiles, importApiText, importApiUrl, importApiEndpoint, importApiCurl, importApiGraphql, importApiMcp,
@@ -82,20 +82,28 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-[1180px] mx-auto px-6 py-5 space-y-5">
+      <div className="max-w-[1180px] mx-auto px-6 py-5 space-y-4">
+        {/* Header */}
+        <div className="flex items-center gap-4 flex-wrap">
+          <span className={`w-11 h-11 rounded-xl flex items-center justify-center ${TILE_ACTIVE}`}><UploadCloud className="w-5 h-5 text-white" /></span>
+          <div className="min-w-0">
+            <h2 className="text-[17px] font-bold text-gray-900 leading-tight">Import an API</h2>
+            <p className="text-[12.5px] text-gray-500 mt-0.5">Drop any document or pick a method — every path ends in endpoints in the catalogue.</p>
+          </div>
+        </div>
+
         {/* Bulk zone */}
         <div
           onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
           onDragLeave={() => setDragging(false)}
           onDrop={onDrop}
-          className={`${CARD} relative overflow-hidden px-6 py-7 text-center transition-all ${dragging ? 'border-[#A5B4FC] bg-[#F5F3FF] scale-[1.01] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_24px_48px_-16px_rgba(76,29,149,0.55)]' : ''}`}
+          className={`${CARD} px-6 py-6 text-center transition-all ${dragging ? 'border-[#A5B4FC] bg-[#F5F3FF]' : ''}`}
         >
-          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#7C3AED] to-[#6366F1] shadow-[0_2px_6px_rgba(124,58,237,0.45)]" />
-          <div className={`mx-auto w-14 h-14 rounded-2xl flex items-center justify-center ${TILE_ACTIVE} shadow-[inset_0_1px_0_rgba(255,255,255,0.4),0_4px_0_0_#4338CA,0_14px_28px_-8px_rgba(124,58,237,0.65)]`}>
+          <div className={`mx-auto w-11 h-11 rounded-xl flex items-center justify-center ${TILE_ACTIVE}`}>
             {busy === 'bulk' ? <Spinner className="w-5 h-5 text-white animate-spin" /> : <UploadCloud className="w-5 h-5 text-white" />}
           </div>
-          <h2 className="mt-3 text-[15px] font-semibold text-gray-900">Bulk upload — any API document</h2>
-          <div className="mt-4 flex items-center justify-center gap-2">
+          <h3 className="mt-3 text-[13px] font-semibold text-gray-900">Bulk upload — any API document</h3>
+          <div className="mt-3 flex items-center justify-center gap-2">
             <button type="button" onClick={() => fileRef.current?.click()} disabled={!!busy} className={PRIMARY_BTN}>
               <UploadCloud className="w-3.5 h-3.5" />Choose files
             </button>
@@ -122,10 +130,11 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
 
         {/* Method grid */}
         <div>
-          <div className="flex items-baseline gap-2 mb-2.5">
-            <h3 className="text-[12px] font-semibold text-gray-700 uppercase tracking-wide">Import by method</h3>
+          <div className="flex items-center gap-2 mb-2">
+            <Layers className="w-4 h-4 text-[#7C3AED]" />
+            <h3 className="text-[12.5px] font-semibold text-gray-900">Import by method</h3>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
             {IMPORT_METHODS.map((m) => {
               const Icon = m.icon;
               const isActive = active?.id === m.id;
@@ -134,14 +143,15 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
                   key={m.id}
                   type="button"
                   onClick={() => { if (m.id === 'manual') { setManualOpen(true); return; } setActive(isActive ? null : m); setError(''); }}
-                  className={`${CARD_HOVER} text-left p-3.5 group hover:border-[#DDD6FE] active:translate-y-0 ${isActive ? 'border-[#A5B4FC] ring-2 ring-[#EDE9FE] -translate-y-0.5' : ''}`}
+                  className={`${CARD_HOVER} text-left p-4 group ${isActive ? 'border-[#A5B4FC] ring-2 ring-[#EDE9FE]' : ''}`}
                 >
                   <div className="flex items-center gap-2">
                     <span className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${isActive ? TILE_ACTIVE : TILE}`}>
                       <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-[#7C3AED]'}`} />
                     </span>
-                    <span className="text-[12.5px] font-semibold text-gray-900 leading-tight">{m.label}</span>
+                    <span className="text-[13px] font-semibold text-gray-900 leading-tight">{m.label}</span>
                   </div>
+                  <p className="mt-2 text-[12px] text-gray-500 leading-snug">{m.desc}</p>
                 </button>
               );
             })}
@@ -183,7 +193,7 @@ function OutcomePanel({ outcome, onOpenCatalogue, onDismiss }: { outcome: Outcom
   return (
     <div className={`${CARD} p-4`}>
       <div className="flex items-start gap-3">
-        <span className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_2px_5px_-2px_rgba(30,27,75,0.25)] ${none ? 'bg-gradient-to-br from-amber-50 to-amber-100 border border-amber-200' : 'bg-gradient-to-br from-emerald-50 to-emerald-100 border border-emerald-200'}`}>
+        <span className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${none ? 'bg-amber-50 border border-amber-200' : 'bg-emerald-50 border border-emerald-200'}`}>
           {none ? <AlertTriangle className="w-4 h-4 text-amber-600" /> : <CheckCircle2 className="w-4 h-4 text-emerald-600" />}
         </span>
         <div className="min-w-0 flex-1">
@@ -202,7 +212,7 @@ function OutcomePanel({ outcome, onOpenCatalogue, onDismiss }: { outcome: Outcom
             </ul>
           )}
           {!!res.files?.length && (
-            <div className="mt-3 border border-[#E9E5FB] rounded-md overflow-hidden shadow-[inset_0_1px_3px_rgba(30,27,75,0.06)]">
+            <div className="mt-3 border border-gray-100 rounded-md overflow-hidden">
               <table className="w-full text-[11px]">
                 <thead className={`text-gray-500 ${THEAD}`}><tr><th className="text-left px-2 py-1 font-medium">File</th><th className="text-left px-2 py-1 font-medium">Parser</th><th className="text-right px-2 py-1 font-medium">Endpoints</th><th className="text-left px-2 py-1 font-medium">Notes</th></tr></thead>
                 <tbody>
@@ -243,9 +253,9 @@ function MethodForm({ def, busy, onClose, onRun }: { def: ImportMethodDef; busy:
         <span className={`w-7 h-7 rounded-lg flex items-center justify-center ${TILE}`}><Icon className="w-4 h-4 text-[#7C3AED]" /></span>
         <h3 className="text-[13px] font-semibold text-gray-900">{def.label}</h3>
         {tabs.length > 1 && (
-          <div className="ml-3 flex gap-0.5 bg-[#EEEBFA] rounded-md p-0.5 shadow-[inset_0_1px_3px_rgba(30,27,75,0.12)]">
+          <div className="ml-3 flex gap-0.5 bg-gray-50 border border-gray-200 rounded-md p-0.5">
             {tabs.map((t) => (
-              <button key={t.id} type="button" onClick={() => setInput(t.id)} className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${input === t.id ? 'bg-white text-[#6D28D9] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_1px_2px_rgba(30,27,75,0.15)]' : 'text-gray-500 hover:text-gray-700'}`}>{t.label}</button>
+              <button key={t.id} type="button" onClick={() => setInput(t.id)} className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${input === t.id ? 'bg-white text-[#6D28D9] shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>{t.label}</button>
             ))}
           </div>
         )}
@@ -290,7 +300,7 @@ function FilesForm({ def, busy, onRun }: { def: ImportMethodDef; busy: boolean; 
   };
   return (
     <form onSubmit={submit} className="space-y-3">
-      <div onClick={() => ref.current?.click()} className="border border-dashed border-[#DDD6FE] rounded-lg bg-[#FAFAFE] px-4 py-5 text-center cursor-pointer hover:bg-[#F5F3FF] transition-colors shadow-[inset_0_2px_6px_rgba(30,27,75,0.06)]">
+      <div onClick={() => ref.current?.click()} className="border border-dashed border-[#DDD6FE] rounded-lg bg-[#FAFAFE] px-4 py-5 text-center cursor-pointer hover:bg-[#F5F3FF] transition-colors">
         <p className="text-[12px] text-gray-600">{files.length ? files.map((f) => f.name).join(', ') : 'Click to choose'}{' '}<span className="text-gray-400 font-mono text-[10.5px]">{def.accept}</span></p>
         <input ref={ref} type="file" accept={def.accept} multiple={def.id !== 'sdk' && def.id !== 'middleware'} className="hidden" onChange={(e) => { setFiles(Array.from(e.target.files || [])); e.target.value = ''; }} />
       </div>

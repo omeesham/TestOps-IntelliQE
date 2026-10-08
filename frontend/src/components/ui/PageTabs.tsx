@@ -47,7 +47,7 @@ export default function PageTabs({ tabs, active, onChange, ariaLabel = 'Sections
     <div
       role="tablist"
       aria-label={ariaLabel}
-      className={`flex gap-1 bg-white rounded-2xl border border-gray-100 shadow-sm px-2 pt-2 overflow-x-auto scrollbar-hide ${className}`}
+      className={`inline-flex gap-1 bg-white rounded-xl border border-gray-100 shadow-sm p-1.5 overflow-x-auto scrollbar-hide ${className}`}
     >
       {tabs.map((t, i) => {
         const isActive = t.id === active;
@@ -63,16 +63,16 @@ export default function PageTabs({ tabs, active, onChange, ariaLabel = 'Sections
             tabIndex={isActive ? 0 : -1}
             onClick={() => onChange(t.id)}
             onKeyDown={(e) => onKeyDown(e, i)}
-            className={`inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 rounded-t-lg px-4 py-2.5 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#7C3AED]/40 ${
+            className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3.5 py-2 text-[13px] font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#7C3AED]/40 ${
               isActive
-                ? 'border-[#7C3AED] text-[#7C3AED] bg-purple-50'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white shadow-sm'
+                : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50'
             }`}
           >
             {Icon && <Icon className="w-4 h-4 flex-shrink-0" />}
             {t.label}
             {t.count !== undefined && (
-              <span className={`ml-0.5 px-1.5 py-0.5 rounded-full text-[11px] font-semibold tabular-nums ${isActive ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-500'}`}>
+              <span className={`ml-0.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-md text-[11px] font-bold tabular-nums ${isActive ? 'bg-white/25 text-white' : 'bg-purple-50 text-[#7C3AED]'}`}>
                 {t.count}
               </span>
             )}

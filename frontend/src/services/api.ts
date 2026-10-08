@@ -444,8 +444,19 @@ export async function importApiSource(method: 'sdk' | 'middleware', input: { tex
  * Design scenarios as a background job — one model call per endpoint means a
  * big catalogue outlives any single HTTP request. Returns the jobId to poll.
  */
-export async function designApiScenarios(input: { apiSpecs: ApiSpecPayload[]; apiLayers?: string[]; apiProfile?: { insights?: string[] } | null; requirements?: string }): Promise<{ jobId: string; pollUrl: string }> {
+export async function designApiScenarios(input: { apiSpecs: ApiSpecPayload[]; apiLayers?: string[]; apiProfile?: { insights?: string[] } | null; requirements?: string; environmentId?: string }): Promise<{ jobId: string; pollUrl: string }> {
   const { data } = await api.post('/api-automation/design', input, { timeout: 60_000 });
+  return data;
+}
+
+/**
+ * Re-render an already-designed run against another environment — deterministic,
+ * no model call. Takes the templated cases the design job returned and returns
+ * fresh test cases + specs + service objects resolved against `environmentId`
+ * (omit it for "no environment").
+ */
+export async function renderApiRun(cases: any[], environmentId?: string): Promise<{ testCases: any[]; automationScripts: any[]; pageObjects: any[]; environment: { id: string; name: string } | null }> {
+  const { data } = await api.post('/api-automation/render', { cases, environmentId }, { timeout: 60_000 });
   return data;
 }
 
@@ -526,6 +537,27 @@ export interface LoadTestResult {
 }
 export async function runApiLoadTest(input: { endpoint: any; totalRequests?: number; concurrency?: number; allowWrites?: boolean }): Promise<LoadTestResult> {
   const { data } = await api.post('/api-automation/loadtest', input, { timeout: 180_000 });
+  return data;
+}
+
+/* ── Staged load profile + SLA gate (opt-in, standalone) ── */
+export interface LoadStageInput { durationSec: number; concurrency: number }
+export interface SlaThresholds { p95Ms?: number; p99Ms?: number; maxErrorRatePct?: number; minThroughputRps?: number }
+export interface LoadStageResult {
+  index: number; concurrency: number; durationMs: number; completed: number; failed: number; non2xx: number;
+  throughputRps: number; latency: LoadTestResult['latency'];
+}
+export interface SlaCheck { name: string; limit: number; actual: number; unit: string; pass: boolean }
+export interface LoadProfileResult {
+  url: string; method: string;
+  stages: LoadStageResult[];
+  totals: { completed: number; failed: number; non2xx: number; durationMs: number; throughputRps: number; errorRatePct: number; latency: LoadTestResult['latency'] };
+  statusCounts: Record<string, number>;
+  errors: { message: string; count: number }[];
+  sla: { pass: boolean; checks: SlaCheck[] } | null;
+}
+export async function runApiLoadProfile(input: { endpoint: any; stages: LoadStageInput[]; sla?: SlaThresholds; allowWrites?: boolean }): Promise<LoadProfileResult> {
+  const { data } = await api.post('/api-automation/loadtest/profile', input, { timeout: 180_000 });
   return data;
 }
 
@@ -741,11 +773,11 @@ export async function listApiEnvironments(): Promise<{ environments: any[] }> {
   const { data } = await api.get('/api-automation/environments');
   return data;
 }
-export async function createApiEnvironment(input: { name: string; baseUrl?: string; variables?: any[]; isDefault?: boolean }): Promise<{ environment: any }> {
+export async function createApiEnvironment(input: { name: string; baseUrl?: string; color?: string; variables?: any[]; isDefault?: boolean }): Promise<{ environment: any }> {
   const { data } = await api.post('/api-automation/environments', input);
   return data;
 }
-export async function updateApiEnvironment(id: string, input: { name?: string; baseUrl?: string; variables?: any[]; isDefault?: boolean }): Promise<{ environment: any }> {
+export async function updateApiEnvironment(id: string, input: { name?: string; baseUrl?: string; color?: string; variables?: any[]; isDefault?: boolean }): Promise<{ environment: any }> {
   const { data } = await api.put(`/api-automation/environments/${encodeURIComponent(id)}`, input);
   return data;
 }
@@ -774,6 +806,208 @@ export async function getApiRun(id: string): Promise<any> {
 }
 export async function listApiImports(limit = 50): Promise<{ items: any[] }> {
   const { data } = await api.get('/api-automation/imports', { params: { limit } });
+  return data;
+}
+
+/* ── Traffic capture: record real API calls → catalogue endpoints ── */
+export interface CaptureSession {
+  id: string;
+  name: string;
+  status: 'recording' | 'closed';
+  entryCount: number;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  sample?: { method: string; url: string; status?: number; mime?: string; at: string }[];
+}
+export interface CaptureIngestResult { accepted: number; skipped: number; entryCount: number; capped: boolean }
+
+export async function listCaptureSessions(): Promise<{ sessions: CaptureSession[] }> {
+  const { data } = await api.get('/api-automation/capture/sessions');
+  return data;
+}
+export async function createCaptureSession(name?: string): Promise<{ session: CaptureSession }> {
+  const { data } = await api.post('/api-automation/capture/sessions', { name });
+  return data;
+}
+export async function getCaptureSession(id: string): Promise<{ session: CaptureSession }> {
+  const { data } = await api.get(`/api-automation/capture/sessions/${encodeURIComponent(id)}`);
+  return data;
+}
+export async function ingestCaptureEntries(id: string, entries: unknown): Promise<CaptureIngestResult> {
+  const { data } = await api.post(`/api-automation/capture/sessions/${encodeURIComponent(id)}/ingest`, { entries }, { timeout: 60_000 });
+  return data;
+}
+export async function captureToEndpoints(id: string): Promise<ApiImportResponse> {
+  const { data } = await api.post(`/api-automation/capture/sessions/${encodeURIComponent(id)}/endpoints`, {}, { timeout: 60_000 });
+  return data;
+}
+export async function closeCaptureSession(id: string): Promise<{ ok: boolean }> {
+  const { data } = await api.post(`/api-automation/capture/sessions/${encodeURIComponent(id)}/close`, {});
+  return data;
+}
+export async function deleteCaptureSession(id: string): Promise<{ ok: boolean }> {
+  const { data } = await api.delete(`/api-automation/capture/sessions/${encodeURIComponent(id)}`);
+  return data;
+}
+
+/* ── Hosted mock servers: publish endpoints as a live public stub ── */
+export interface MockServer {
+  id: string;
+  mockId: string;
+  name: string;
+  enabled: boolean;
+  hitCount: number;
+  routeCount: number;
+  routes: { method: string; path: string; status: number }[];
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export async function listMockServers(): Promise<{ mocks: MockServer[] }> {
+  const { data } = await api.get('/api-automation/mocks');
+  return data;
+}
+export async function createMockServer(name: string, endpoints: any[]): Promise<{ mock: MockServer }> {
+  const { data } = await api.post('/api-automation/mocks', { name, endpoints });
+  return data;
+}
+export async function toggleMockServer(id: string, enabled: boolean): Promise<{ mock: MockServer }> {
+  const { data } = await api.post(`/api-automation/mocks/${encodeURIComponent(id)}/toggle`, { enabled });
+  return data;
+}
+export async function deleteMockServer(id: string): Promise<{ ok: boolean }> {
+  const { data } = await api.delete(`/api-automation/mocks/${encodeURIComponent(id)}`);
+  return data;
+}
+
+/* ── Traffic coverage gaps: recorded traffic vs tested catalogue ── */
+export interface CoverageGapsReport {
+  summary: { observed: number; tested: number; covered: number; gaps: number; coveragePct: number };
+  gaps: any[];
+  coveredSignatures: string[];
+  gapSignatures: string[];
+  fromSessions: { id: string; name: string; entryCount: number }[];
+  profile: any | null;
+}
+export async function analyzeCoverageGaps(endpoints: any[], sessionId?: string): Promise<CoverageGapsReport> {
+  const { data } = await api.post('/api-automation/coverage/gaps', { endpoints, sessionId }, { timeout: 120_000 });
+  return data;
+}
+
+/* ── Semantic / AI-response assertion ── */
+export interface SemanticAssertResult {
+  intent: string; passed: boolean; confidence: 'high' | 'medium' | 'low'; rationale: string;
+  observed: { ok: boolean; status?: number; elapsedMs: number; bodyPreview: string; error?: string };
+}
+export async function runSemanticAssertion(endpoint: any, intent: string): Promise<SemanticAssertResult> {
+  const { data } = await api.post('/api-automation/semantic/assert', { endpoint, intent }, { timeout: 60_000 });
+  return data;
+}
+
+/* ── Failure clustering ── */
+export interface FailureCluster { signature: string; label: string; category: string; count: number; members: string[]; sample: { title?: string; method?: string; url?: string; error?: string; status?: number }; suggestedFix?: string }
+export interface FailureClusterReport { summary: { failures: number; clusters: number }; clusters: FailureCluster[] }
+export async function clusterApiFailures(failures: any[], explain = false): Promise<FailureClusterReport> {
+  const { data } = await api.post('/api-automation/failures/cluster', { failures, explain }, { timeout: 60_000 });
+  return data;
+}
+
+/* ── Async callback / webhook capture ── */
+export interface CallbackListener { id: string; token: string; name: string; eventCount: number; createdBy: string; createdAt: string }
+export interface CallbackEvent { id: string; method: string; path: string; query: string; headers: Record<string, string>; body: string; receivedAt: string }
+export async function listCallbackListeners(): Promise<{ listeners: CallbackListener[] }> {
+  const { data } = await api.get('/api-automation/callbacks');
+  return data;
+}
+export async function createCallbackListener(name?: string): Promise<{ listener: CallbackListener }> {
+  const { data } = await api.post('/api-automation/callbacks', { name });
+  return data;
+}
+export async function deleteCallbackListener(id: string): Promise<{ ok: boolean }> {
+  const { data } = await api.delete(`/api-automation/callbacks/${encodeURIComponent(id)}`);
+  return data;
+}
+export async function getCallbackEvents(token: string): Promise<{ events: CallbackEvent[] }> {
+  const { data } = await api.get(`/api-automation/callbacks/${encodeURIComponent(token)}/events`);
+  return data;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Web Lab — opt-in browser tools (accessibility, visual/cross-browser,
+   responsive, performance). Each launches a headless browser server-side.
+   ───────────────────────────────────────────────────────────── */
+const WEB_TOOL_TIMEOUT = 120_000;
+
+export type WebEngine = 'chromium' | 'firefox' | 'webkit';
+
+// Accessibility
+export interface A11yViolation { id: string; impact: string; help: string; description: string; helpUrl: string; wcagTags: string[]; nodeCount: number; sampleNodes: { html: string; target: string }[] }
+export interface A11yReport {
+  url: string; engine: WebEngine; engineLabel: string; standard: string; standardLabel: string;
+  summary: { violations: number; byImpact: Record<string, number>; passes: number; incomplete: number; score: number };
+  violations: A11yViolation[]; scannedAt: string;
+}
+export async function runWebAccessibility(input: { url: string; engine?: WebEngine; standard?: string }): Promise<A11yReport> {
+  const { data } = await api.post('/web-tools/accessibility', input, { timeout: WEB_TOOL_TIMEOUT });
+  return data;
+}
+
+// Visual + cross-browser
+export interface VisualCaptureCell { engine: WebEngine; engineLabel: string; viewport: string; ok: boolean; pngBase64?: string; width?: number; height?: number; error?: string; unavailable?: boolean }
+export interface VisualCaptureReport { url: string; cells: VisualCaptureCell[]; capturedAt: string }
+export interface VisualBaseline { id: string; sig: string; url: string; engine: WebEngine; viewport: string; width: number; height: number; capturedBy: string; capturedAt: string; updatedAt: string }
+export interface VisualCompareResult {
+  url: string; engine: WebEngine; viewport: string; hasBaseline: boolean; matched: boolean; reason?: string;
+  diffPixels: number; totalPixels: number; diffRatio: number; width: number; height: number;
+  baselinePng?: string; currentPng?: string; diffPng?: string; comparedAt: string;
+}
+export async function webVisualViewports(): Promise<{ viewports: { name: string; width: number; height: number }[] }> {
+  const { data } = await api.get('/web-tools/visual/viewports');
+  return data;
+}
+export async function webVisualCapture(input: { url: string; engines?: WebEngine[]; viewports?: string[]; fullPage?: boolean }): Promise<VisualCaptureReport> {
+  const { data } = await api.post('/web-tools/visual/capture', input, { timeout: WEB_TOOL_TIMEOUT });
+  return data;
+}
+export async function listWebVisualBaselines(): Promise<{ baselines: VisualBaseline[] }> {
+  const { data } = await api.get('/web-tools/visual/baselines');
+  return data;
+}
+export async function captureWebVisualBaseline(input: { url: string; engine?: WebEngine; viewport?: string; fullPage?: boolean }): Promise<{ baseline: VisualBaseline }> {
+  const { data } = await api.post('/web-tools/visual/baseline', input, { timeout: WEB_TOOL_TIMEOUT });
+  return data;
+}
+export async function compareWebVisual(input: { url: string; engine?: WebEngine; viewport?: string; fullPage?: boolean; threshold?: number }): Promise<VisualCompareResult> {
+  const { data } = await api.post('/web-tools/visual/compare', input, { timeout: WEB_TOOL_TIMEOUT });
+  return data;
+}
+export async function deleteWebVisualBaseline(id: string): Promise<{ ok: boolean }> {
+  const { data } = await api.delete(`/web-tools/visual/baselines/${encodeURIComponent(id)}`);
+  return data;
+}
+
+// Responsive / device
+export interface DeviceCell { device: string; ok: boolean; width?: number; height?: number; isMobile?: boolean; deviceScaleFactor?: number; pngBase64?: string; error?: string }
+export interface DeviceReport { url: string; cells: DeviceCell[]; capturedAt: string }
+export async function listWebDevices(): Promise<{ devices: string[] }> {
+  const { data } = await api.get('/web-tools/responsive/devices');
+  return data;
+}
+export async function captureWebDevices(input: { url: string; devices?: string[]; fullPage?: boolean }): Promise<DeviceReport> {
+  const { data } = await api.post('/web-tools/responsive/capture', input, { timeout: WEB_TOOL_TIMEOUT });
+  return data;
+}
+
+// Performance
+export interface PerfMetric { key: string; label: string; value: number | null; unit: string; rating: string }
+export interface PerfReport {
+  url: string; engine: WebEngine; engineLabel: string; metrics: PerfMetric[];
+  resources: { total: number; transferBytes: number; byType: { type: string; count: number; bytes: number }[] };
+  overall: string; measuredAt: string;
+}
+export async function captureWebPerformance(input: { url: string; engine?: WebEngine }): Promise<PerfReport> {
+  const { data } = await api.post('/web-tools/performance', input, { timeout: WEB_TOOL_TIMEOUT });
   return data;
 }
 

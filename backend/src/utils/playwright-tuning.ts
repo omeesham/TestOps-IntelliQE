@@ -32,6 +32,8 @@ export interface RunTuning {
   /** `use` entries for artefacts. */
   traceLine: string;
   screenshotLine: string;
+  /** Extra `use` entries (video / geolocation / locale / timezone) — '' by default. */
+  useExtraLine: string;
   /** The projects array body. */
   projectsLine: string;
   /** Ceiling for the whole `playwright test` process. */
@@ -40,18 +42,56 @@ export interface RunTuning {
 }
 
 const MAX_PROCESS_MS = 45 * 60_000;
+const VALID_ENGINES = ['chromium', 'firefox', 'webkit'];
+
+/**
+ * Optional browser-run environment matrix — opt-in and fully backward-compatible.
+ * Unset env ⇒ byte-identical to the historical config (Chromium only, no video,
+ * no geo). Set these to run every web suite across more engines / with video /
+ * emulating a location — the same "everything is env-tunable" model the API path
+ * already uses. (Firefox/WebKit must be installed on the runner:
+ * `npx playwright install firefox webkit`.)
+ *   WEB_TEST_BROWSERS   e.g. "chromium,firefox,webkit"   (default "chromium")
+ *   WEB_TEST_VIDEO      off | on | retain-on-failure      (default off)
+ *   WEB_TEST_GEOLOCATION  "lat,lon" e.g. "51.5074,-0.1278"
+ *   WEB_TEST_LOCALE     e.g. "en-GB"
+ *   WEB_TEST_TIMEZONE   e.g. "Europe/London"
+ */
+function browserMatrix(): { projectsLine: string; useExtraLine: string } {
+  const engines = (process.env.WEB_TEST_BROWSERS || 'chromium')
+    .split(',').map((s) => s.trim().toLowerCase()).filter((s) => VALID_ENGINES.includes(s));
+  const picked = engines.length ? [...new Set(engines)] : ['chromium'];
+  const projectsLine = picked.length === 1 && picked[0] === 'chromium'
+    ? "  projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],\n"
+    : `  projects: [\n${picked.map((b) => `    { name: ${JSON.stringify(b)}, use: { browserName: ${JSON.stringify(b)} } },`).join('\n')}\n  ],\n`;
+
+  let extra = '';
+  const video = String(process.env.WEB_TEST_VIDEO || 'off').toLowerCase();
+  if (['on', 'retain-on-failure'].includes(video)) extra += `    video: ${JSON.stringify(video)},\n`;
+  const geo = String(process.env.WEB_TEST_GEOLOCATION || '').split(',').map((s) => parseFloat(s.trim()));
+  if (geo.length === 2 && Number.isFinite(geo[0]) && Number.isFinite(geo[1])) {
+    extra += `    geolocation: { latitude: ${geo[0]}, longitude: ${geo[1]} },\n    permissions: ['geolocation'],\n`;
+  }
+  if (process.env.WEB_TEST_LOCALE) extra += `    locale: ${JSON.stringify(process.env.WEB_TEST_LOCALE)},\n`;
+  if (process.env.WEB_TEST_TIMEZONE) extra += `    timezoneId: ${JSON.stringify(process.env.WEB_TEST_TIMEZONE)},\n`;
+  return { projectsLine, useExtraLine: extra };
+}
 
 export function runTuning(apiMode: boolean, specCount: number): RunTuning {
   if (!apiMode) {
     // Browser runs keep every existing default; only the process ceiling grows
-    // with the suite so a large-but-healthy run is never killed mid-flight.
+    // with the suite so a large-but-healthy run is never killed mid-flight. The
+    // browser matrix (engines / video / geo) is opt-in via env — unset ⇒ today's
+    // behaviour exactly.
+    const { projectsLine, useExtraLine } = browserMatrix();
     return {
       workersLine: '',
       testTimeoutMs: 90_000,
       expectTimeoutMs: 20_000,
       traceLine: "    trace: 'retain-on-failure',\n",
       screenshotLine: "    screenshot: 'only-on-failure',\n",
-      projectsLine: "  projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],\n",
+      useExtraLine,
+      projectsLine,
       processTimeoutMs: Math.min(MAX_PROCESS_MS, Math.max(600_000, specCount * 25_000)),
       workers: null,
     };
@@ -78,6 +118,8 @@ export function runTuning(apiMode: boolean, specCount: number): RunTuning {
     // The screenshot is genuinely dead weight: there is no page to capture.
     traceLine: `    trace: ${JSON.stringify(process.env.API_TEST_TRACE || 'retain-on-failure')},\n`,
     screenshotLine: "    screenshot: 'off',\n",
+    // API runs never emulate a browser environment.
+    useExtraLine: '',
     // A project with no browserName never resolves a browser binary, so an API
     // suite runs (and stays fast) even where browsers are not installed.
     projectsLine: "  projects: [{ name: 'api' }],\n",

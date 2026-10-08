@@ -7,13 +7,14 @@
  * "Design scenarios", which starts the run for the selected endpoints.
  */
 import { useMemo, useState } from 'react';
-import { Search, Trash2, Pencil, Layers, Plus, Download, ChevronDown, ChevronRight, Globe, ShieldCheck, Gauge, ShieldAlert, ScrollText, Target, Wrench, GitCompare, Table2, Clock, Wand2, GitPullRequestArrow, Radio, BadgeCheck, Bug } from 'lucide-react';
+import { Search, Trash2, Pencil, Layers, Plus, Download, ChevronDown, ChevronRight, Globe, ShieldCheck, Gauge, ShieldAlert, ScrollText, Target, Wrench, GitCompare, Table2, Clock, Wand2, GitPullRequestArrow, Radio, BadgeCheck, Bug, Antenna, Activity, ServerCog, Radar, Sparkles, Webhook } from 'lucide-react';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { MethodBadge, StatusCode, EmptyState } from '../primitives';
 import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, CARD, BRAND_CHIP, MUTED_CHIP, STRIP, THEAD, IMPORT_METHOD_LABELS, pathOf, hostOf } from '../format';
 import EndpointEditor from '../EndpointEditor';
 import ContractCheck from '../ContractCheck';
 import LoadTest from '../LoadTest';
+import LoadProfile from '../LoadProfile';
 import SecurityScan from '../SecurityScan';
 import OwaspCompliance from '../OwaspCompliance';
 import FuzzTest from '../FuzzTest';
@@ -25,6 +26,11 @@ import RunAutomation from '../RunAutomation';
 import NlAuthor from '../NlAuthor';
 import ContractDrift from '../ContractDrift';
 import AsyncProbe from '../AsyncProbe';
+import TrafficCapture from '../TrafficCapture';
+import MockServer from '../MockServer';
+import CoverageGaps from '../CoverageGaps';
+import SemanticAssert from '../SemanticAssert';
+import CallbackVerify from '../CallbackVerify';
 import { toConnectorManifest, toOpenApi, toMockServer, toPactContract, downloadText } from '../generators';
 import InsightsPanel from './InsightsPanel';
 import StrategyBar from './StrategyBar';
@@ -68,6 +74,7 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
   const [editing, setEditing] = useState<CatalogEndpoint | null>(null);
   const [contractOpen, setContractOpen] = useState(false);
   const [loadOpen, setLoadOpen] = useState(false);
+  const [loadProfileOpen, setLoadProfileOpen] = useState(false);
   const [securityOpen, setSecurityOpen] = useState(false);
   const [owaspOpen, setOwaspOpen] = useState(false);
   const [fuzzOpen, setFuzzOpen] = useState(false);
@@ -79,6 +86,11 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
   const [nlOpen, setNlOpen] = useState(false);
   const [driftOpen, setDriftOpen] = useState(false);
   const [asyncOpen, setAsyncOpen] = useState(false);
+  const [captureOpen, setCaptureOpen] = useState(false);
+  const [mockOpen, setMockOpen] = useState(false);
+  const [gapsOpen, setGapsOpen] = useState(false);
+  const [semanticOpen, setSemanticOpen] = useState(false);
+  const [callbackOpen, setCallbackOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
 
@@ -122,7 +134,11 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
     return (
       <div className="h-full flex flex-col">
         <EmptyState icon={Layers} title="The catalogue is empty" />
-        <div className="flex justify-center -mt-10 pb-10"><button type="button" onClick={onImport} className={PRIMARY_BTN}><Plus className="w-3.5 h-3.5" />Import APIs</button></div>
+        <div className="flex justify-center items-center gap-2 -mt-10 pb-10">
+          <button type="button" onClick={onImport} className={PRIMARY_BTN}><Plus className="w-3.5 h-3.5" />Import APIs</button>
+          <button type="button" onClick={() => setCaptureOpen(true)} className={SECONDARY_BTN} title="Record real API traffic and turn it into endpoints"><Antenna className="w-3.5 h-3.5" />Capture traffic</button>
+        </div>
+        {captureOpen && <TrafficCapture catalog={catalog} onClose={() => setCaptureOpen(false)} />}
       </div>
     );
   }
@@ -164,6 +180,10 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
                   <div className="fixed inset-0 z-40" onClick={() => setToolsOpen(false)} />
                   <div className="absolute right-0 mt-1 z-50 w-60 bg-white border border-[#E4E0F5] rounded-lg py-1 shadow-[0_14px_32px_-12px_rgba(76,29,149,0.5)]">
                     {([
+                      { icon: Antenna, label: 'Traffic capture', desc: 'Record real API calls → endpoints', open: () => setCaptureOpen(true) },
+                      { icon: Radar, label: 'Traffic coverage gaps', desc: 'Untested endpoints from real traffic', open: () => setGapsOpen(true) },
+                      { icon: Sparkles, label: 'Semantic assertion', desc: 'Judge AI responses by intent', open: () => setSemanticOpen(true) },
+                      { icon: Webhook, label: 'Callback verification', desc: 'Capture & assert async webhooks', open: () => setCallbackOpen(true) },
                       { icon: Wand2, label: 'Author in plain English', desc: 'Describe tests → a run strategy', open: () => setNlOpen(true) },
                       { icon: ShieldCheck, label: 'Contract validation', desc: 'Live-check status, JSON & schema', open: () => setContractOpen(true) },
                       { icon: GitPullRequestArrow, label: 'Contract drift', desc: 'Adopt live changes into the catalogue', open: () => setDriftOpen(true) },
@@ -171,11 +191,13 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
                       { icon: BadgeCheck, label: 'OWASP API Top-10', desc: 'Compliance posture across the 2023 categories', open: () => setOwaspOpen(true) },
                       { icon: Bug, label: 'Fuzz / property test', desc: 'Boundary & malformed inputs → crashes, leaks', open: () => setFuzzOpen(true) },
                       { icon: Gauge, label: 'Load test', desc: 'Latency, throughput, status mix', open: () => setLoadOpen(true) },
+                      { icon: Activity, label: 'Load profile & SLA', desc: 'Ramp-up stages, p95/error gate', open: () => setLoadProfileOpen(true) },
                       { icon: ScrollText, label: 'Governance lint', desc: 'API design smells', open: () => setGovernanceOpen(true) },
                       { icon: Target, label: 'Test coverage', desc: 'Which endpoints are tested', open: () => setCoverageOpen(true) },
                       { icon: GitCompare, label: 'Regression baselines', desc: 'Snapshot responses & diff for drift', open: () => setBaselineOpen(true) },
                       { icon: Table2, label: 'Data-driven testing', desc: 'Run one endpoint over a data table', open: () => setDataDrivenOpen(true) },
                       { icon: Radio, label: 'Async & streaming', desc: 'Test WebSocket and SSE endpoints', open: () => setAsyncOpen(true) },
+                      { icon: ServerCog, label: 'Hosted mock server', desc: 'Publish endpoints as a live stub URL', open: () => setMockOpen(true) },
                       { icon: Clock, label: 'Schedules & webhooks', desc: 'Recurring runs and Slack/Teams alerts', open: () => setAutomationOpen(true) },
                     ]).map((t) => (
                       <button key={t.label} type="button" onClick={() => { setToolsOpen(false); t.open(); }} className="w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-[#F5F3FF] transition-colors">
@@ -262,7 +284,7 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
           {SHOW_INSIGHTS_PANEL && <InsightsPanel profile={profile} analyzing={catalog.analyzing} error={catalog.analysisError} endpoints={endpoints} onDeepAnalyze={() => void catalog.analyze(true)} onFocusResource={setResourceFocus} />}
           {SHOW_IMPORTS && catalog.imports.length > 0 && (
             <div className={`${CARD} p-3.5`}>
-              <h3 className="text-[11px] font-semibold text-gray-700 uppercase tracking-wide mb-2">Imports this session</h3>
+              <div className="flex items-center gap-2 mb-2"><Download className="w-4 h-4 text-[#7C3AED]" /><h3 className="text-[12.5px] font-semibold text-gray-900">Imports this session</h3></div>
               <ul className="space-y-1">
                 {catalog.imports.slice(0, 8).map((im) => (
                   <li key={im.id} className="flex items-center gap-2 text-[11px]">
@@ -313,6 +335,12 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
         <LoadTest
           endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
           onClose={() => setLoadOpen(false)}
+        />
+      )}
+      {loadProfileOpen && (
+        <LoadProfile
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setLoadProfileOpen(false)}
         />
       )}
       {governanceOpen && (
@@ -368,6 +396,30 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
           initialUrl={(selectedCount > 0 ? endpoints.find((e) => selected.has(e.id)) : endpoints[0])?.url || ''}
           onClose={() => setAsyncOpen(false)}
         />
+      )}
+      {captureOpen && (
+        <TrafficCapture
+          catalog={catalog}
+          onClose={() => setCaptureOpen(false)}
+        />
+      )}
+      {mockOpen && (
+        <MockServer
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setMockOpen(false)}
+        />
+      )}
+      {gapsOpen && (
+        <CoverageGaps catalog={catalog} onClose={() => setGapsOpen(false)} />
+      )}
+      {semanticOpen && (
+        <SemanticAssert
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setSemanticOpen(false)}
+        />
+      )}
+      {callbackOpen && (
+        <CallbackVerify onClose={() => setCallbackOpen(false)} />
       )}
     </div>
   );

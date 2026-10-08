@@ -399,6 +399,19 @@ export interface TestOpsState {
    */
   apiLayers?: string[] | null;
   /**
+   * API Automation — a resolved environment (secrets revealed) the generator
+   * applies to the designed cases at render time. Set only by the interactive
+   * design job; headless/scheduler runs pre-resolve upstream and leave it unset.
+   * Loosely typed to avoid a state ↔ api-environments.service import cycle.
+   */
+  apiEnvironment?: any;
+  /**
+   * API Automation — the TEMPLATED designed cases (before environment
+   * resolution), returned so a run can be re-rendered against another
+   * environment with no further model call. Loosely typed (NormalizedApiCase[]).
+   */
+  apiNormalizedCases?: any[];
+  /**
    * API Automation — optional progress sink for long generations (one model
    * call per endpoint). Not serialised; set by the async design job.
    */
