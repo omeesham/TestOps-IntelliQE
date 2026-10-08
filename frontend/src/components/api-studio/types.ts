@@ -14,7 +14,9 @@
    Catalogue — the endpoints the workspace knows about
    ═══════════════════════════════════════════════════════════════ */
 
-export type AuthType = 'none' | 'bearer' | 'basic' | 'apikey';
+export type AuthType = 'none' | 'bearer' | 'basic' | 'apikey' | 'oauth2';
+export interface OAuth2Config { grant?: string; tokenUrl?: string; clientId?: string; clientSecret?: string; scope?: string; audience?: string; username?: string; password?: string; refreshToken?: string; clientAuthBasic?: boolean }
+export interface EndpointFormField { key: string; value?: string; type?: 'text' | 'file'; filename?: string; contentType?: string; dataBase64?: string }
 export type ApiStyle = 'rest' | 'graphql' | 'soap' | 'jsonrpc' | 'webhook' | 'mcp';
 
 /** The twelve ways an API can enter the workspace. */
@@ -34,8 +36,13 @@ export interface CatalogEndpoint {
   method: string;
   url: string;
   headers: HeaderPair[];
-  auth: { type: AuthType; value?: string; headerName?: string };
+  auth: { type: AuthType; value?: string; headerName?: string; oauth2?: OAuth2Config };
   body?: string;
+  /** Rich body (omitted ⇒ raw/json — unchanged). */
+  bodyMode?: 'raw' | 'json' | 'form-data' | 'urlencoded' | 'binary';
+  formFields?: EndpointFormField[];
+  bodyBase64?: string;
+  bodyContentType?: string;
   expectedStatus?: number;
   expectedResponse?: string;
   description?: string;

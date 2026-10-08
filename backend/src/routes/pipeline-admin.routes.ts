@@ -89,12 +89,21 @@ router.post('/test-ai-connection', async (req: Request, res: Response) => {
       const os = await import('os');
       const path = await import('path');
 
-      // Build candidate paths: user-specified, bare command, and common npm global locations
+      // Build candidate paths: user-specified, bare command, and common install
+      // locations. WinGet (`winget install Anthropic.ClaudeCode`) is the common
+      // Windows install today; its claude.exe lives under a stable package folder
+      // (and a Links shim), neither of which is on a headless service's PATH — so
+      // the bare `claude` candidate misses it. Probe those explicitly.
       const npmGlobalBin = path.join(os.homedir(), 'AppData', 'Roaming', 'npm', 'claude.cmd');
+      const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+      const wingetBin = path.join(localAppData, 'Microsoft', 'WinGet', 'Packages', 'Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe', 'claude.exe');
+      const wingetLinkBin = path.join(localAppData, 'Microsoft', 'WinGet', 'Links', 'claude.exe');
       const candidates = [
         cliPath,                         // user-specified path
         'claude',                        // bare command (if in PATH)
         npmGlobalBin,                    // Windows npm global default
+        wingetBin,                       // WinGet native install
+        wingetLinkBin,                   // WinGet shim
       ].filter(Boolean) as string[];
 
       let detected = false;

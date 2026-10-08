@@ -15,7 +15,13 @@ import pool from '../db.js';
 import { decryptStored } from '../utils/crypto.js';
 
 export interface TenantLlm {
-  provider: 'anthropic';
+  /**
+   * 'anthropic' (default) or an opt-in override provider configured by the admin
+   * ('openai', 'openai-compatible', 'azure-openai', 'gemini'). A non-anthropic
+   * value routes generation through provider-runner.ts; absent/anthropic keeps
+   * the unchanged Anthropic path.
+   */
+  provider: string;
   /** 'api_key' (x-api-key, API credits) or 'claude_code' (OAuth/subscription). */
   authMethod: 'api_key' | 'claude_code';
   apiKey?: string;
@@ -42,6 +48,32 @@ const DEFAULT_BASE_URL = 'https://api.anthropic.com';
  * "configure an LLM" message rather than silently failing.
  */
 export async function getTenantLlm(tenantId: string): Promise<TenantLlm | null> {
+  // 0) Multi-LLM provider override (opt-in). When the admin has configured a
+  //    non-Anthropic provider under integration_id 'llm-provider', it wins — the
+  //    pipeline then runs through provider-runner.ts. When no such row exists
+  //    (the default), this is skipped and resolution falls through to the
+  //    unchanged Anthropic paths below.
+  try {
+    const { rows } = await pool.query(
+      `SELECT config_data FROM client_configurations
+        WHERE tenant_id = $1 AND integration_id = 'llm-provider' AND status = 'connected'`,
+      [tenantId],
+    );
+    if (rows.length > 0) {
+      const cfg = rows[0].config_data || {};
+      const provider = String(cfg.provider || '').toLowerCase();
+      if (provider && provider !== 'anthropic') {
+        const rawKey = cfg.apiKey;
+        const apiKey = rawKey && typeof rawKey === 'string' ? decryptStored(rawKey) : undefined;
+        const model = (cfg.model && String(cfg.model)) || 'gpt-4o-mini';
+        const baseUrl = cfg.baseUrl && String(cfg.baseUrl) ? String(cfg.baseUrl) : DEFAULT_BASE_URL;
+        return { provider, authMethod: 'api_key', apiKey: apiKey || undefined, model, baseUrl };
+      }
+    }
+  } catch (err) {
+    console.warn('[llm.service] llm-provider lookup failed:', (err as Error).message);
+  }
+
   // 1) Centralized LLM config (preferred — includes the model the admin picked).
   try {
     const { rows } = await pool.query(

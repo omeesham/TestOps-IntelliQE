@@ -13,9 +13,18 @@ import { execSync, spawn } from 'child_process';
 import { homedir, tmpdir } from 'os';
 import { join } from 'path';
 import type { LlmConfig } from './state.js';
+import { runViaProvider, isNonAnthropicProvider, normalizeProvider } from './provider-runner.js';
 export type { LlmConfig };
 
 const IS_WINDOWS = process.platform === 'win32';
+
+/**
+ * One image for a vision prompt: base64 payload + its media type. Only honoured
+ * on the Anthropic Messages API path (see runLLM); the CLI and non-Anthropic
+ * providers reject it with a clear error so a caller never silently loses the
+ * image.
+ */
+export interface LlmImage { data: string; mediaType: string }
 
 /**
  * A resolved CLI target. `useShell` matters more than it looks: with
@@ -41,6 +50,15 @@ function findClaudeCli(): ResolvedCli | null {
     // to this exe, so targeting it directly buys us a shell-free spawn.
     candidates.push({ cmd: join(homedir(), 'AppData', 'Roaming', 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'), useShell: false });
     candidates.push({ cmd: join(homedir(), '.local', 'bin', 'claude.exe'), useShell: false });
+    // WinGet install (`winget install Anthropic.ClaudeCode`) — now the common
+    // way to get Claude Code on Windows. It drops claude.exe under a package
+    // folder whose name is a stable package-id+source hash (NOT version-keyed),
+    // plus a shim under WinGet\Links. Neither is on a headless service's PATH by
+    // default, so the bare `claude` candidate below misses it — probe both paths
+    // explicitly, keyed off LOCALAPPDATA (falling back to the standard location).
+    const localAppData = process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local');
+    candidates.push({ cmd: join(localAppData, 'Microsoft', 'WinGet', 'Packages', 'Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe', 'claude.exe'), useShell: false });
+    candidates.push({ cmd: join(localAppData, 'Microsoft', 'WinGet', 'Links', 'claude.exe'), useShell: false });
   }
   candidates.push({ cmd: 'claude', useShell: IS_WINDOWS });
   candidates.push({ cmd: join(homedir(), 'AppData', 'Roaming', 'npm', 'claude.cmd'), useShell: true });
@@ -210,24 +228,48 @@ export function llmForStage(llm: LlmConfig | undefined | null, stage: AgentStage
  */
 export async function runLLM(
   prompt: string,
-  options?: { maxTokens?: number; system?: string; llm?: LlmConfig },
+  options?: { maxTokens?: number; system?: string; llm?: LlmConfig; images?: LlmImage[] },
 ): Promise<string> {
   const llm = options?.llm;
+  const maxTokens = options?.maxTokens ?? 4096;
+  const images = options?.images && options.images.length ? options.images : undefined;
+
+  // Vision is only wired on the Anthropic Messages API path below. A caller
+  // that passes images on a provider/CLI path gets a clear error rather than a
+  // silent text-only answer — the multimodal tool surfaces it.
+  if (images && isNonAnthropicProvider(llm?.provider)) {
+    throw new Error('Image analysis needs an Anthropic model. Switch the API-automation LLM provider back to Anthropic, or remove the images.');
+  }
+
+  // Multi-LLM provider override (opt-in). When the admin has configured a
+  // non-Anthropic provider, route through provider-runner.ts. With nothing
+  // configured `llm.provider` is undefined and this branch never runs — the
+  // Anthropic path below is byte-identical to before.
+  if (isNonAnthropicProvider(llm?.provider)) {
+    return runViaProvider(prompt, {
+      provider: normalizeProvider(llm!.provider),
+      apiKey: llm!.apiKey,
+      baseUrl: llm!.baseUrl,
+      model: llm!.model || 'gpt-4o-mini',
+      maxTokens,
+      system: options?.system,
+    });
+  }
+
   const method = llm?.authMethod || 'api_key';
   const model = llm?.model || DEFAULT_API_MODEL;
   const baseUrl = llm?.baseUrl || 'https://api.anthropic.com';
-  const maxTokens = options?.maxTokens ?? 4096;
 
   // ONE recovery attempt on a transient CONNECTION error (socket dropped before
   // returning anything). NOT a content retry — it only fires when the call
   // produced no output, so it never wastes tokens nor re-runs a succeeded agent.
   const callApi = async (opts: MessagesApiOpts): Promise<string> => {
     try {
-      return await runViaMessagesApi(prompt, opts);
+      return await runViaMessagesApi(prompt, { ...opts, images });
     } catch (err) {
       if (isTransientNetworkError(err)) {
         console.warn(`[claude-runner] connection dropped (${(err as Error).message}); reconnecting once`);
-        return await runViaMessagesApi(prompt, opts);
+        return await runViaMessagesApi(prompt, { ...opts, images });
       }
       throw err;
     }
@@ -240,6 +282,7 @@ export async function runLLM(
   if (method === 'claude_code') {
     const mode = llm?.claudeCodeMode || 'api';
     if (mode === 'cli') {
+      if (images) throw new Error('Image analysis needs the Anthropic Messages API. Switch Claude Code to API mode in System Configuration → LLM Configuration, or remove the images.');
       if (!isClaudeCliAvailable()) {
         throw new Error(
           'Claude Code is set to CLI mode, but the `claude` CLI is not available on this server. ' +
@@ -255,7 +298,7 @@ export async function runLLM(
     if (llm?.oauthToken) {
       return callApi({ authMethod: 'claude_code', oauthToken: llm.oauthToken, model, baseUrl, maxTokens, system: options?.system, effort: llm?.effort, extendedThinking: llm?.extendedThinking });
     }
-    if (isClaudeCliAvailable()) {
+    if (isClaudeCliAvailable() && !images) {
       return runClaudePrompt(prompt, { maxTokens, model, oauthToken: llm?.oauthToken });
     }
     throw new Error(
@@ -268,7 +311,7 @@ export async function runLLM(
   if (llm?.apiKey) {
     return callApi({ authMethod: 'api_key', apiKey: llm.apiKey, model, baseUrl, maxTokens, system: options?.system, effort: llm?.effort, extendedThinking: llm?.extendedThinking });
   }
-  if (isClaudeCliAvailable()) {
+  if (isClaudeCliAvailable() && !images) {
     // Local-dev fallback — CLI must be logged in.
     return runClaudePrompt(prompt, { maxTokens, model: llm?.model });
   }
@@ -289,6 +332,8 @@ interface MessagesApiOpts {
   effort?: string;
   /** Extended/"ultra" thinking — gated per model in supportsAdaptiveThinking(). */
   extendedThinking?: boolean;
+  /** Vision input — base64 images sent as content blocks alongside the prompt. */
+  images?: LlmImage[];
 }
 
 /**
@@ -385,6 +430,15 @@ async function runViaMessagesApi(
     // them so a per-agent Haiku/Sonnet-4.5 model never 400s the request.
     const effort = buildEffort(opts.effort, opts.model);
     const useThinking = opts.extendedThinking && supportsAdaptiveThinking(opts.model);
+    // Vision: when images are supplied, the user turn becomes a content-block
+    // array (image blocks first, then the text prompt) instead of a bare string.
+    // With no images this is byte-identical to the original string form.
+    const userContent: unknown = opts.images && opts.images.length
+      ? [
+          ...opts.images.slice(0, 8).map((im) => ({ type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.data } })),
+          { type: 'text', text: prompt },
+        ]
+      : prompt;
     const res = await fetch(url, {
       method: 'POST',
       headers,
@@ -395,7 +449,7 @@ async function runViaMessagesApi(
         ...(effort ? { output_config: { effort } } : {}),
         ...(useThinking ? { thinking: { type: 'adaptive', display: 'summarized' } } : {}),
         ...(effectiveSystem ? { system: effectiveSystem } : {}),
-        messages: [{ role: 'user', content: prompt }],
+        messages: [{ role: 'user', content: userContent }],
       }),
       signal: controller.signal,
     });

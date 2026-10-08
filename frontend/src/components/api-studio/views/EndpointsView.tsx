@@ -7,7 +7,7 @@
  * "Design scenarios", which starts the run for the selected endpoints.
  */
 import { useMemo, useState } from 'react';
-import { Search, Trash2, Pencil, Layers, Plus, Download, ChevronDown, ChevronRight, Globe, ShieldCheck, Gauge, ShieldAlert, ScrollText, Target, Wrench, GitCompare, Table2, Clock, Wand2, GitPullRequestArrow, Radio, BadgeCheck, Bug, Antenna, Activity, ServerCog, Radar, Sparkles, Webhook } from 'lucide-react';
+import { Search, Trash2, Pencil, Layers, Plus, Download, ChevronDown, ChevronRight, Globe, ShieldCheck, Gauge, ShieldAlert, ScrollText, Target, Wrench, GitCompare, Table2, Clock, Wand2, GitPullRequestArrow, Radio, BadgeCheck, Bug, Antenna, Activity, ServerCog, Radar, Sparkles, Webhook, Workflow, MessageSquare, Bot, Database, Cpu, Server, Network, Globe2, MessagesSquare, Chrome, Boxes, Handshake, Zap, KeyRound, Rss, Spline, Microscope, Cloud, Lock, GitMerge, ClipboardCheck, FolderGit2, BrainCircuit, FileText, ListFilter, GitCompareArrows, HeartPulse, Image as ImageIcon, Combine, GitBranchPlus, Rocket, ListChecks, MonitorSmartphone } from 'lucide-react';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { MethodBadge, StatusCode, EmptyState } from '../primitives';
 import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, CARD, BRAND_CHIP, MUTED_CHIP, STRIP, THEAD, IMPORT_METHOD_LABELS, pathOf, hostOf } from '../format';
@@ -31,6 +31,44 @@ import MockServer from '../MockServer';
 import CoverageGaps from '../CoverageGaps';
 import SemanticAssert from '../SemanticAssert';
 import CallbackVerify from '../CallbackVerify';
+import FlowBuilder from '../FlowBuilder';
+import ChatToTest from '../ChatToTest';
+import AutoMaintenance from '../AutoMaintenance';
+import SyntheticData from '../SyntheticData';
+import LlmProviders from '../LlmProviders';
+import McpServer from '../McpServer';
+import EventGrpc from '../EventGrpc';
+import GeoLoad from '../GeoLoad';
+import Collaboration from '../Collaboration';
+import ExtensionRecorder from '../ExtensionRecorder';
+import VirtualService from '../VirtualService';
+import PactBroker from '../PactBroker';
+import ChaosTest from '../ChaosTest';
+import OAuthSecrets from '../OAuthSecrets';
+import DbValidate from '../DbValidate';
+import AsyncApiContract from '../AsyncApiContract';
+import TraceCorrelation from '../TraceCorrelation';
+import TestIntel from '../TestIntel';
+import CloudLoad from '../CloudLoad';
+import AccessControl from '../AccessControl';
+import RemediationPr from '../RemediationPr';
+import CompliancePacks from '../CompliancePacks';
+import GitSync from '../GitSync';
+// ─── Atto coworker lifecycle tools (all additive, opt-in) ───
+import AiCoworker from '../AiCoworker';
+import StoryGen from '../StoryGen';
+import Multimodal from '../Multimodal';
+import SuiteOptimizer from '../SuiteOptimizer';
+import ImpactAnalysis from '../ImpactAnalysis';
+import SemanticHeal from '../SemanticHeal';
+import BugReport from '../BugReport';
+import Monitoring from '../Monitoring';
+// ─── Execution/CI batch (all additive, opt-in) ───
+import HybridTest from '../HybridTest';
+import ReleaseGate from '../ReleaseGate';
+import CiPipeline from '../CiPipeline';
+import ExecQueue from '../ExecQueue';
+import CloudLab from '../CloudLab';
 import { toConnectorManifest, toOpenApi, toMockServer, toPactContract, downloadText } from '../generators';
 import InsightsPanel from './InsightsPanel';
 import StrategyBar from './StrategyBar';
@@ -91,8 +129,47 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
   const [gapsOpen, setGapsOpen] = useState(false);
   const [semanticOpen, setSemanticOpen] = useState(false);
   const [callbackOpen, setCallbackOpen] = useState(false);
+  const [flowOpen, setFlowOpen] = useState(false);
+  const [chatTestOpen, setChatTestOpen] = useState(false);
+  const [maintenanceOpen, setMaintenanceOpen] = useState(false);
+  const [synthOpen, setSynthOpen] = useState(false);
+  const [providersOpen, setProvidersOpen] = useState(false);
+  const [mcpOpen, setMcpOpen] = useState(false);
+  const [eventsOpen, setEventsOpen] = useState(false);
+  const [geoOpen, setGeoOpen] = useState(false);
+  const [collabOpen, setCollabOpen] = useState(false);
+  const [extensionOpen, setExtensionOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  // Enterprise batch (Tier 1–3) — each opens one additive, opt-in modal.
+  const [virtualOpen, setVirtualOpen] = useState(false);
+  const [pactOpen, setPactOpen] = useState(false);
+  const [chaosOpen, setChaosOpen] = useState(false);
+  const [oauthOpen, setOauthOpen] = useState(false);
+  const [dbValidateOpen, setDbValidateOpen] = useState(false);
+  const [asyncApiOpen, setAsyncApiOpen] = useState(false);
+  const [traceOpen, setTraceOpen] = useState(false);
+  const [testIntelOpen, setTestIntelOpen] = useState(false);
+  const [cloudLoadOpen, setCloudLoadOpen] = useState(false);
+  const [accessOpen, setAccessOpen] = useState(false);
+  const [remediationOpen, setRemediationOpen] = useState(false);
+  const [complianceOpen, setComplianceOpen] = useState(false);
+  const [gitSyncOpen, setGitSyncOpen] = useState(false);
+  // Atto coworker lifecycle tools.
+  const [coworkerOpen, setCoworkerOpen] = useState(false);
+  const [storyOpen, setStoryOpen] = useState(false);
+  const [multimodalOpen, setMultimodalOpen] = useState(false);
+  const [optimizerOpen, setOptimizerOpen] = useState(false);
+  const [impactOpen, setImpactOpen] = useState(false);
+  const [healOpen, setHealOpen] = useState(false);
+  const [bugReportOpen, setBugReportOpen] = useState(false);
+  const [monitorOpen, setMonitorOpen] = useState(false);
+  // Execution/CI batch.
+  const [hybridOpen, setHybridOpen] = useState(false);
+  const [releaseGateOpen, setReleaseGateOpen] = useState(false);
+  const [ciOpen, setCiOpen] = useState(false);
+  const [execQueueOpen, setExecQueueOpen] = useState(false);
+  const [cloudLabOpen, setCloudLabOpen] = useState(false);
 
   const methods = useMemo(() => [...new Set(endpoints.map((e) => e.method))].sort(), [endpoints]);
 
@@ -180,11 +257,29 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
                   <div className="fixed inset-0 z-40" onClick={() => setToolsOpen(false)} />
                   <div className="absolute right-0 mt-1 z-50 w-60 bg-white border border-[#E4E0F5] rounded-lg py-1 shadow-[0_14px_32px_-12px_rgba(76,29,149,0.5)]">
                     {([
+                      { icon: BrainCircuit, label: 'AI coworker (Atto)', desc: 'Chat + autonomy across the lifecycle', open: () => setCoworkerOpen(true) },
+                      { icon: FileText, label: 'Story-driven generation', desc: 'Jira story / PRD → a test plan', open: () => setStoryOpen(true) },
+                      { icon: ImageIcon, label: 'Multimodal inputs', desc: 'Screenshot / Figma / recording → a plan', open: () => setMultimodalOpen(true) },
+                      { icon: ListFilter, label: 'Suite optimizer', desc: 'Risk priority + redundancy pruning', open: () => setOptimizerOpen(true) },
+                      { icon: GitCompareArrows, label: 'Change impact', desc: 'History- & flow-aware test selection', open: () => setImpactOpen(true) },
+                      { icon: HeartPulse, label: 'Semantic self-healing', desc: 'Intent-aware fixes for failing tests', open: () => setHealOpen(true) },
+                      { icon: Bug, label: 'Bug report', desc: 'Tracker-ready report from a failure', open: () => setBugReportOpen(true) },
+                      { icon: Activity, label: 'Monitoring', desc: 'Always-on health / drift / coverage watcher', open: () => setMonitorOpen(true) },
                       { icon: Antenna, label: 'Traffic capture', desc: 'Record real API calls → endpoints', open: () => setCaptureOpen(true) },
                       { icon: Radar, label: 'Traffic coverage gaps', desc: 'Untested endpoints from real traffic', open: () => setGapsOpen(true) },
                       { icon: Sparkles, label: 'Semantic assertion', desc: 'Judge AI responses by intent', open: () => setSemanticOpen(true) },
                       { icon: Webhook, label: 'Callback verification', desc: 'Capture & assert async webhooks', open: () => setCallbackOpen(true) },
                       { icon: Wand2, label: 'Author in plain English', desc: 'Describe tests → a run strategy', open: () => setNlOpen(true) },
+                      { icon: Workflow, label: 'Flow builder', desc: 'Assemble a multi-step journey', open: () => setFlowOpen(true) },
+                      { icon: MessageSquare, label: 'Chat-to-test', desc: 'Refine a test in plain English', open: () => setChatTestOpen(true) },
+                      { icon: Bot, label: 'Autonomous maintenance', desc: 'Drift + gaps → a changeset', open: () => setMaintenanceOpen(true) },
+                      { icon: Database, label: 'Synthetic data factory', desc: 'Realistic, seeded test data', open: () => setSynthOpen(true) },
+                      { icon: Network, label: 'Events & gRPC', desc: 'Kafka topics and gRPC services', open: () => setEventsOpen(true) },
+                      { icon: Globe2, label: 'Geo / distributed load', desc: 'Multi-region load + SLA gate', open: () => setGeoOpen(true) },
+                      { icon: MessagesSquare, label: 'Collaboration', desc: 'Comments & version history', open: () => setCollabOpen(true) },
+                      { icon: Chrome, label: 'Browser recorder', desc: 'Record traffic from DevTools', open: () => setExtensionOpen(true) },
+                      { icon: Cpu, label: 'LLM providers', desc: 'OpenAI, Azure, Gemini or compatible', open: () => setProvidersOpen(true) },
+                      { icon: Server, label: 'MCP server', desc: 'Expose IntelliQE tools to AI agents', open: () => setMcpOpen(true) },
                       { icon: ShieldCheck, label: 'Contract validation', desc: 'Live-check status, JSON & schema', open: () => setContractOpen(true) },
                       { icon: GitPullRequestArrow, label: 'Contract drift', desc: 'Adopt live changes into the catalogue', open: () => setDriftOpen(true) },
                       { icon: ShieldAlert, label: 'Security scan', desc: 'Broken auth, injection, headers, CORS', open: () => setSecurityOpen(true) },
@@ -199,6 +294,24 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
                       { icon: Radio, label: 'Async & streaming', desc: 'Test WebSocket and SSE endpoints', open: () => setAsyncOpen(true) },
                       { icon: ServerCog, label: 'Hosted mock server', desc: 'Publish endpoints as a live stub URL', open: () => setMockOpen(true) },
                       { icon: Clock, label: 'Schedules & webhooks', desc: 'Recurring runs and Slack/Teams alerts', open: () => setAutomationOpen(true) },
+                      { icon: Boxes, label: 'Service virtualization', desc: 'Stateful, fault-injecting virtual deps', open: () => setVirtualOpen(true) },
+                      { icon: Handshake, label: 'Pact broker', desc: 'Consumer-driven contracts & verification', open: () => setPactOpen(true) },
+                      { icon: Zap, label: 'Chaos / resilience', desc: 'Fault injection → graceful-degradation grade', open: () => setChaosOpen(true) },
+                      { icon: Spline, label: 'Trace correlation', desc: 'Assert spans in Jaeger / Zipkin / Tempo', open: () => setTraceOpen(true) },
+                      { icon: Rss, label: 'AsyncAPI contracts', desc: 'Event channels & message validation', open: () => setAsyncApiOpen(true) },
+                      { icon: Microscope, label: 'Test intelligence', desc: 'Flaky detection, quarantine, change impact', open: () => setTestIntelOpen(true) },
+                      { icon: Cloud, label: 'Distributed cloud load', desc: 'Fan out to remote agents + SLA gate', open: () => setCloudLoadOpen(true) },
+                      { icon: Database, label: 'Database validation', desc: 'Read-only SELECT assertions', open: () => setDbValidateOpen(true) },
+                      { icon: ClipboardCheck, label: 'Compliance packs', desc: 'PCI · HIPAA · GDPR · PSD2 posture', open: () => setComplianceOpen(true) },
+                      { icon: KeyRound, label: 'OAuth & secrets', desc: 'OAuth2 tokens · Vault/AWS/Azure/GCP secrets', open: () => setOauthOpen(true) },
+                      { icon: Lock, label: 'Access control', desc: 'RBAC · SSO (OIDC) · SCIM provisioning', open: () => setAccessOpen(true) },
+                      { icon: GitMerge, label: 'Remediation PR', desc: 'Open a GitHub/GitLab PR with a changeset', open: () => setRemediationOpen(true) },
+                      { icon: FolderGit2, label: 'Git-synced tests', desc: 'Push / pull the catalogue as test-as-code', open: () => setGitSyncOpen(true) },
+                      { icon: Combine, label: 'API + UI hybrid test', desc: 'Seed via API → verify in UI → cleanup', open: () => setHybridOpen(true) },
+                      { icon: GitBranchPlus, label: 'Release gate', desc: 'Score a run → go / no-go to deploy', open: () => setReleaseGateOpen(true) },
+                      { icon: Rocket, label: 'CI / GitHub Action', desc: 'Trigger & gate runs from your pipeline', open: () => setCiOpen(true) },
+                      { icon: ListChecks, label: 'Parallel run queue', desc: 'Queue runs across concurrency slots', open: () => setExecQueueOpen(true) },
+                      { icon: MonitorSmartphone, label: 'Cloud browser lab', desc: 'Run UI checks on hosted browsers · matrix', open: () => setCloudLabOpen(true) },
                     ]).map((t) => (
                       <button key={t.label} type="button" onClick={() => { setToolsOpen(false); t.open(); }} className="w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-[#F5F3FF] transition-colors">
                         <t.icon className="w-4 h-4 text-[#7C3AED] flex-shrink-0 mt-0.5" />
@@ -420,6 +533,191 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
       )}
       {callbackOpen && (
         <CallbackVerify onClose={() => setCallbackOpen(false)} />
+      )}
+      {flowOpen && (
+        <FlowBuilder catalog={catalog} onClose={() => setFlowOpen(false)} />
+      )}
+      {chatTestOpen && (
+        <ChatToTest
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setChatTestOpen(false)}
+        />
+      )}
+      {maintenanceOpen && (
+        <AutoMaintenance catalog={catalog} onClose={() => setMaintenanceOpen(false)} />
+      )}
+      {synthOpen && (
+        <SyntheticData
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setSynthOpen(false)}
+        />
+      )}
+      {eventsOpen && (
+        <EventGrpc onClose={() => setEventsOpen(false)} />
+      )}
+      {geoOpen && (
+        <GeoLoad
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setGeoOpen(false)}
+        />
+      )}
+      {collabOpen && (
+        <Collaboration
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setCollabOpen(false)}
+        />
+      )}
+      {extensionOpen && (
+        <ExtensionRecorder onClose={() => setExtensionOpen(false)} />
+      )}
+      {providersOpen && (
+        <LlmProviders onClose={() => setProvidersOpen(false)} />
+      )}
+      {mcpOpen && (
+        <McpServer onClose={() => setMcpOpen(false)} />
+      )}
+
+      {/* ── Enterprise batch (Tier 1–3) ── */}
+      {virtualOpen && (
+        <VirtualService onClose={() => setVirtualOpen(false)} />
+      )}
+      {pactOpen && (
+        <PactBroker onClose={() => setPactOpen(false)} />
+      )}
+      {chaosOpen && (
+        <ChaosTest
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setChaosOpen(false)}
+        />
+      )}
+      {traceOpen && (
+        <TraceCorrelation
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setTraceOpen(false)}
+        />
+      )}
+      {asyncApiOpen && (
+        <AsyncApiContract onClose={() => setAsyncApiOpen(false)} />
+      )}
+      {testIntelOpen && (
+        <TestIntel
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setTestIntelOpen(false)}
+        />
+      )}
+      {cloudLoadOpen && (
+        <CloudLoad
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setCloudLoadOpen(false)}
+        />
+      )}
+      {dbValidateOpen && (
+        <DbValidate onClose={() => setDbValidateOpen(false)} />
+      )}
+      {complianceOpen && (
+        <CompliancePacks
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setComplianceOpen(false)}
+        />
+      )}
+      {oauthOpen && (
+        <OAuthSecrets onClose={() => setOauthOpen(false)} />
+      )}
+      {accessOpen && (
+        <AccessControl onClose={() => setAccessOpen(false)} />
+      )}
+      {remediationOpen && (
+        <RemediationPr onClose={() => setRemediationOpen(false)} />
+      )}
+      {gitSyncOpen && (
+        <GitSync
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setGitSyncOpen(false)}
+        />
+      )}
+
+      {/* ── Atto coworker lifecycle tools ── */}
+      {coworkerOpen && (
+        <AiCoworker
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setCoworkerOpen(false)}
+        />
+      )}
+      {storyOpen && (
+        <StoryGen
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onApply={(brief) => {
+            catalog.setStrategy({ coverage: brief.coverage, layers: brief.layers as StrategyLayerId[], requirements: brief.requirements });
+            toast.success('Strategy updated', `${brief.coverage} coverage · ${brief.layers.length} layer${brief.layers.length === 1 ? '' : 's'} · story applied`);
+          }}
+          onClose={() => setStoryOpen(false)}
+        />
+      )}
+      {multimodalOpen && (
+        <Multimodal
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onApply={(brief) => {
+            catalog.setStrategy({ coverage: brief.coverage, layers: brief.layers as StrategyLayerId[], requirements: brief.requirements });
+            toast.success('Strategy updated', `${brief.coverage} coverage · ${brief.layers.length} layer${brief.layers.length === 1 ? '' : 's'} · artifacts applied`);
+          }}
+          onClose={() => setMultimodalOpen(false)}
+        />
+      )}
+      {optimizerOpen && (
+        <SuiteOptimizer
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setOptimizerOpen(false)}
+        />
+      )}
+      {impactOpen && (
+        <ImpactAnalysis
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setImpactOpen(false)}
+        />
+      )}
+      {healOpen && (
+        <SemanticHeal
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setHealOpen(false)}
+        />
+      )}
+      {bugReportOpen && (
+        <BugReport
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setBugReportOpen(false)}
+        />
+      )}
+      {monitorOpen && (
+        <Monitoring
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setMonitorOpen(false)}
+        />
+      )}
+
+      {/* ── Execution/CI batch ── */}
+      {hybridOpen && (
+        <HybridTest
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setHybridOpen(false)}
+        />
+      )}
+      {releaseGateOpen && (
+        <ReleaseGate onClose={() => setReleaseGateOpen(false)} />
+      )}
+      {ciOpen && (
+        <CiPipeline
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setCiOpen(false)}
+        />
+      )}
+      {execQueueOpen && (
+        <ExecQueue
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setExecQueueOpen(false)}
+        />
+      )}
+      {cloudLabOpen && (
+        <CloudLab onClose={() => setCloudLabOpen(false)} />
       )}
     </div>
   );

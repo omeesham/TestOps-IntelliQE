@@ -50,6 +50,12 @@ import publicApiRoutes from './routes/public/public-api.routes.js';
 import apiAutomationRoutes from './routes/api-automation.routes.js';
 import apiMockPublicRoutes from './routes/api-mock-public.routes.js';
 import apiCallbackPublicRoutes from './routes/api-callback-public.routes.js';
+import apiMcpPublicRoutes from './routes/api-mcp-public.routes.js';
+import apiVirtualPublicRoutes from './routes/api-virtual-public.routes.js';
+import apiScimPublicRoutes from './routes/api-scim-public.routes.js';
+import apiSsoPublicRoutes from './routes/api-sso-public.routes.js';
+import apiAgentPublicRoutes from './routes/api-agent-public.routes.js';
+import apiCiPublicRoutes from './routes/api-ci-public.routes.js';
 import webToolsRoutes from './routes/web-tools.routes.js';
 import apiAutomationPublicRoutes from './routes/public/api-automation-public.routes.js';
 import clientLogsRoutes from './routes/client-logs.routes.js';
@@ -59,8 +65,10 @@ import agentPerformanceRoutes from './routes/agent-performance.routes.js';
 import { initDb } from './db.js';
 import pool from './db.js';
 import { startApiScheduler } from './services/api-scheduler.service.js';
+import { startApiMonitor } from './services/api-monitor.service.js';
 import { decryptField } from './utils/crypto.js';
 import { signToken } from './utils/jwt.js';
+import { getSecuritySettings, getUserMfaSecret, verifyTotp, validatePassword } from './services/api-access.service.js';
 import { authMiddleware } from './middleware/auth.middleware.js';
 import { requestContext } from './middleware/request-context.middleware.js';
 import { auditMutations } from './middleware/audit.middleware.js';
@@ -200,6 +208,25 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     }
 
     const row = rows[0];
+
+    // ── Opt-in identity hardening (guarded) — inert unless the tenant enabled SSO
+    //    enforcement or the user enrolled MFA; otherwise the path below is unchanged. ──
+    try {
+      const sec = await getSecuritySettings(row.tenant_id);
+      if (sec.ssoEnforced) {
+        res.status(403).json({ success: false, error: 'SSO is enforced for this organization. Please sign in via SSO.' });
+        return;
+      }
+    } catch { /* settings unavailable ⇒ no enforcement */ }
+    const mfaSecret = await getUserMfaSecret(row.id);   // null on any error ⇒ no MFA gate
+    if (mfaSecret) {
+      const code = String((req.body as any)?.mfaCode || '').trim();
+      if (!code || !verifyTotp(mfaSecret, code)) {
+        res.status(200).json({ success: false, mfaRequired: true, error: code ? 'Invalid authentication code.' : 'Enter your authentication code.' });
+        return;
+      }
+    }
+
     const token = signToken({
       sub: row.username,
       uid: row.id,
@@ -259,6 +286,12 @@ app.post('/api/auth/signup', authLimiter, async (req, res) => {
       const jbs = await pool.query(`SELECT id FROM tenants WHERE slug = 'jbs'`);
       tenantId = jbs.rows[0].id;
     }
+
+    // Opt-in password policy (guarded — default policy accepts everything).
+    try {
+      const policyErr = validatePassword((await getSecuritySettings(tenantId)).passwordPolicy, password);
+      if (policyErr) { res.status(400).json({ success: false, error: policyErr }); return; }
+    } catch { /* no policy ⇒ no extra rules */ }
 
     const passwordHash = await bcrypt.hash(password, 10);
     await pool.query(
@@ -325,6 +358,35 @@ app.use('/mock', apiMockPublicRoutes);
 // IntelliQE login; the unguessable token is the capability. Records only.
 app.use('/hook', apiCallbackPublicRoutes);
 
+// MCP server — PUBLIC by design (outside auth): an MCP client (Claude Code,
+// Cursor, …) reaches IntelliQE's API tools at /mcp/:token. The per-tenant token
+// is the capability and resolves to the tenant; the pipeline is never involved.
+app.use('/mcp', apiMcpPublicRoutes);
+
+// Stateful service virtualization — PUBLIC by design (outside auth): a
+// system-under-test calls a virtual dependency at /vs/:token with no IntelliQE
+// login. The unguessable token is the capability; it replays templated,
+// stateful, fault-injectable responses and touches nothing else.
+app.use('/vs', apiVirtualPublicRoutes);
+
+// SCIM 2.0 user provisioning — PUBLIC by design (outside auth): an IdP manages
+// users with its own SCIM bearer token (minted per tenant in Access Control).
+// Inert until a tenant mints a token; never affects /api/auth/login.
+app.use('/scim/v2', apiScimPublicRoutes);
+
+// SSO (OIDC + SAML) login — mounted ALONGSIDE the untouched /api/auth/login
+// (outside authMiddleware). Inert unless a tenant enables SSO; issues the same app token.
+app.use('/api/auth/sso', apiSsoPublicRoutes);
+
+// AI-coworker event webhook — PUBLIC by design (outside auth): a GitHub/Jira
+// webhook POSTs to /agent-event/:token. Inert until a tenant mints a token.
+app.use('/agent-event', apiAgentPublicRoutes);
+
+// First-party CI trigger — PUBLIC by design (outside auth): a GitHub Action (or
+// any CI) starts and polls a headless run at /api/ci/:token/runs with only its
+// per-tenant CI token. Inert until a tenant mints a token in the CI panel.
+app.use('/api/ci', apiCiPublicRoutes);
+
 /* ─────────────────────────────────────────────────────────────
    Public business-capability API (HIPAA boundary)
    - User JWT today; swap to tenant-scoped API token via a different
@@ -350,6 +412,9 @@ initDb()
     // Opt-in recurring API runs: the poller only invokes the existing headless
     // pipeline on a clock — it needs the DB, so it starts only after init.
     startApiScheduler();
+    // Opt-in always-on monitoring: a read-only health/drift/coverage watcher that
+    // only raises alerts; it never runs the pipeline or mutates the catalogue.
+    startApiMonitor();
     app.listen(PORT, () => {
       logger.info(`JBS IntelliQE API listening`, { port: PORT, env: NODE_ENV });
     });

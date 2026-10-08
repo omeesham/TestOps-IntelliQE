@@ -268,6 +268,13 @@ export interface AppContext {
  */
 export interface LlmConfig {
   /**
+   * LLM provider. Absent or 'anthropic' → the default Anthropic path (unchanged).
+   * Any other value ('openai', 'openai-compatible', 'azure-openai', 'gemini')
+   * routes the call through provider-runner.ts instead — an opt-in, admin-chosen
+   * override. With nothing configured this is undefined and nothing changes.
+   */
+  provider?: string;
+  /**
    * How the tenant authenticates to Anthropic:
    *   - 'api_key'     → standard API key (x-api-key), consumes API credits.
    *   - 'claude_code' → Claude Code OAuth token (from `claude setup-token`),

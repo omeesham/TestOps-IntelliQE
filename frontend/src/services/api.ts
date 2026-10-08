@@ -1011,6 +1011,396 @@ export async function captureWebPerformance(input: { url: string; engine?: WebEn
   return data;
 }
 
+/* ═════════════════════════════════════════════════════════════
+   Market-gap feature set (all opt-in; none touch the generate→execute→heal core)
+   ═════════════════════════════════════════════════════════════ */
+
+/* ── 1. Visual flow / journey builder ── */
+export interface FlowExtract { name: string; from: 'body' | 'header' | 'status'; path?: string }
+export interface FlowCheck { kind: 'status' | 'jsonPathExists' | 'jsonPathEquals' | 'bodyContains' | 'responseTimeUnderMs'; equals?: number | string; oneOf?: number[]; path?: string; value?: unknown; text?: string; ms?: number }
+export interface ApiOAuth2Config { grant?: string; tokenUrl?: string; clientId?: string; clientSecret?: string; scope?: string; audience?: string; username?: string; password?: string; refreshToken?: string; clientAuthBasic?: boolean }
+export interface ApiHttpAuth { type: string; value?: string; headerName?: string; oauth2?: ApiOAuth2Config }
+export interface ApiFormField { key: string; value?: string; type?: 'text' | 'file'; filename?: string; contentType?: string; dataBase64?: string }
+export type FlowStepType = 'request' | 'if' | 'loop' | 'wait' | 'group';
+export type FlowConditionOp = 'eq' | 'ne' | 'exists' | 'notExists' | 'contains' | 'gt' | 'lt';
+export interface FlowCondition { var: string; op: FlowConditionOp; value?: string }
+export interface FlowLoop { mode: 'times' | 'while'; times?: number; while?: FlowCondition; maxIterations?: number }
+export interface FlowStep {
+  id?: string;
+  name?: string;
+  type?: FlowStepType;
+  method?: string;
+  url?: string;
+  headers?: { key: string; value: string }[];
+  auth?: ApiHttpAuth;
+  body?: string;
+  bodyMode?: 'raw' | 'json' | 'form-data' | 'urlencoded' | 'binary';
+  formFields?: ApiFormField[];
+  bodyBase64?: string;
+  bodyContentType?: string;
+  extract?: FlowExtract[];
+  checks?: FlowCheck[];
+  condition?: FlowCondition;
+  then?: FlowStep[];
+  else?: FlowStep[];
+  loop?: FlowLoop;
+  steps?: FlowStep[];
+  waitMs?: number;
+  groupId?: string;
+}
+export interface SavedApiFlow { id: string; name: string; steps: FlowStep[]; variables: Record<string, string>; createdBy: string; createdAt: string; updatedAt: string }
+export interface FlowStepResult { index: number; name: string; method: string; url: string; ok: boolean; status?: number; elapsedMs: number; error?: string; extracted: Record<string, string>; checks: { kind: string; label: string; pass: boolean; detail?: string }[]; bodyPreview: string }
+export interface FlowRunResult { passed: boolean; steps: FlowStepResult[]; variables: Record<string, string>; durationMs: number; stepsRun: number; stepsTotal: number }
+export async function listApiFlows(): Promise<{ flows: SavedApiFlow[] }> { const { data } = await api.get('/api-automation/flows'); return data; }
+export async function saveApiFlow(input: { id?: string; name: string; steps: FlowStep[]; variables?: Record<string, string> }): Promise<{ flow: SavedApiFlow }> { const { data } = await api.post('/api-automation/flows', input); return data; }
+export async function deleteApiFlow(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/flows/${encodeURIComponent(id)}`); return data; }
+export async function runApiFlow(input: { steps: FlowStep[]; variables?: Record<string, string>; allowWrites?: boolean }): Promise<FlowRunResult> { const { data } = await api.post('/api-automation/flows/run', input, { timeout: 180_000 }); return data; }
+
+/* ── 2. Conversational chat-to-test ── */
+export interface ChatTestDraft { title: string; method: string; url: string; headers: { key: string; value: string }[]; body?: string; checks: FlowCheck[] }
+export interface ChatMessage { role: 'user' | 'assistant'; content: string }
+export interface ChatTestResult { reply: string; draft: ChatTestDraft; snippet: string }
+export async function chatRefineApiTest(input: { endpoint: { method: string; url: string; headers?: { key: string; value: string }[]; body?: string }; current?: ChatTestDraft; history?: ChatMessage[]; instruction: string }): Promise<ChatTestResult> {
+  const { data } = await api.post('/api-automation/chat-test/refine', input, { timeout: 90_000 });
+  return data;
+}
+
+/* ── 3. Autonomous test maintenance ── */
+export interface MaintenanceProposal { id: string; kind: 'adopt-status' | 'adopt-response' | 'add-endpoint'; severity: 'high' | 'medium' | 'low'; title: string; method: string; url: string; rationale: string; endpointId?: string; patch?: { expectedStatus?: number; expectedResponse?: string }; addEndpoint?: any; signature?: string }
+export interface MaintenancePlan { summary: { proposals: number; adoptStatus: number; adoptResponse: number; addEndpoint: number; drifted: number; gaps: number }; proposals: MaintenanceProposal[]; narrative?: string }
+export async function planApiMaintenance(endpoints: any[], opts: { sessionId?: string; explain?: boolean } = {}): Promise<MaintenancePlan> {
+  const { data } = await api.post('/api-automation/maintenance/plan', { endpoints, ...opts }, { timeout: 180_000 });
+  return data;
+}
+
+/* ── 4. Synthetic test-data factory ── */
+export interface SynthField { name: string; type: string; options?: string[]; min?: number; max?: number; pii?: boolean }
+export interface SynthDataResult { rows: Record<string, unknown>[]; columns: string[]; fields: SynthField[]; seed: number; csv: string; notes: string[] }
+export async function generateSyntheticData(input: { fields?: SynthField[]; sampleBody?: string; endpoint?: { method: string; url: string; description?: string }; count?: number; seed?: number; locale?: string; piiMask?: boolean; edgeCases?: boolean }): Promise<SynthDataResult> {
+  const { data } = await api.post('/api-automation/synth-data/generate', input, { timeout: 90_000 });
+  return data;
+}
+
+/* ── 5. Multi-LLM provider choice ── */
+export interface ApiLlmProviderConfig { enabled: boolean; provider: string; model: string; baseUrl: string; keyMasked: string; hasKey: boolean }
+export async function getLlmProviderConfig(): Promise<ApiLlmProviderConfig> { const { data } = await api.get('/api-automation/providers/config'); return data; }
+export async function saveLlmProviderConfig(input: { enabled?: boolean; provider?: string; model?: string; baseUrl?: string; apiKey?: string }): Promise<ApiLlmProviderConfig> { const { data } = await api.put('/api-automation/providers/config', input); return data; }
+export async function deleteLlmProviderConfig(): Promise<{ ok: boolean }> { const { data } = await api.delete('/api-automation/providers/config'); return data; }
+export async function testLlmProvider(input?: { provider?: string; model?: string; baseUrl?: string; apiKey?: string }): Promise<{ ok: boolean; reply?: string; error?: string; elapsedMs: number }> { const { data } = await api.post('/api-automation/providers/test', input || {}, { timeout: 60_000 }); return data; }
+
+/* ── 6. MCP server tokens ── */
+export interface McpToken { id: string; token: string; name: string; createdBy: string; createdAt: string; lastUsedAt: string | null }
+export async function listMcpTokens(): Promise<{ tokens: McpToken[] }> { const { data } = await api.get('/api-automation/mcp-tokens'); return data; }
+export async function createMcpToken(name?: string): Promise<{ token: McpToken }> { const { data } = await api.post('/api-automation/mcp-tokens', { name }); return data; }
+export async function deleteMcpToken(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/mcp-tokens/${encodeURIComponent(id)}`); return data; }
+
+/* ── 7. Event/queue + gRPC ── */
+export interface KafkaResult { mode: string; topic: string; produced?: { partition: number; offset?: string }; messages?: { partition: number; offset: string; key: string | null; value: string; timestamp?: string }[]; elapsedMs: number }
+export interface GrpcResult { ok: boolean; service: string; method: string; response?: unknown; error?: string; code?: number | string; elapsedMs: number }
+export async function kafkaProbe(input: { brokers: string; topic: string; mode: 'produce' | 'consume'; message?: string; key?: string; groupId?: string; fromBeginning?: boolean; ssl?: boolean; sasl?: { mechanism?: string; username?: string; password?: string }; timeoutMs?: number }): Promise<KafkaResult> {
+  const { data } = await api.post('/api-automation/messaging/kafka', input, { timeout: 60_000 });
+  return data;
+}
+export async function grpcCall(input: { target: string; protoText: string; service: string; method: string; requestJson?: string; tls?: boolean; metadata?: Record<string, string>; timeoutMs?: number }): Promise<GrpcResult> {
+  const { data } = await api.post('/api-automation/messaging/grpc', input, { timeout: 60_000 });
+  return data;
+}
+
+/* ── 8. Distributed / geo load ── */
+export interface GeoRegionInput { name: string; concurrency?: number; proxyUrl?: string; addedLatencyMs?: number }
+interface GeoLatency { min: number; p50: number; p90: number; p95: number; p99: number; max: number; avg: number }
+export interface GeoRegionResult { name: string; concurrency: number; proxied: boolean; addedLatencyMs: number; completed: number; failed: number; non2xx: number; throughputRps: number; latency: GeoLatency }
+export interface GeoLoadResult { url: string; method: string; durationMs: number; regions: GeoRegionResult[]; totals: { completed: number; failed: number; non2xx: number; throughputRps: number; errorRatePct: number; latency: GeoLatency }; statusCounts: Record<string, number>; errors: { message: string; count: number }[]; sla: { pass: boolean; checks: { name: string; limit: number; actual: number; unit: string; pass: boolean }[] } | null; notes: string[] }
+export async function runGeoLoad(input: { endpoint: any; regions: GeoRegionInput[]; durationSec?: number; sla?: { p95Ms?: number; p99Ms?: number; maxErrorRatePct?: number; minThroughputRps?: number }; allowWrites?: boolean }): Promise<GeoLoadResult> {
+  const { data } = await api.post('/api-automation/loadtest/geo', input, { timeout: 180_000 });
+  return data;
+}
+
+/* ── 9. Test-level collaboration + versioning ── */
+export interface ApiTestComment { id: string; testKey: string; author: string; body: string; createdAt: string }
+export interface ApiTestVersion { id: string; testKey: string; versionNo: number; label: string; snapshot: any; author: string; createdAt: string }
+export interface ApiFieldDiff { field: string; change: 'added' | 'removed' | 'changed'; before?: string; after?: string }
+export async function listApiComments(testKey: string): Promise<{ comments: ApiTestComment[] }> { const { data } = await api.get('/api-automation/collab/comments', { params: { testKey } }); return data; }
+export async function addApiComment(testKey: string, body: string): Promise<{ comment: ApiTestComment }> { const { data } = await api.post('/api-automation/collab/comments', { testKey, body }); return data; }
+export async function deleteApiComment(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/collab/comments/${encodeURIComponent(id)}`); return data; }
+export async function listApiVersions(testKey: string): Promise<{ versions: ApiTestVersion[] }> { const { data } = await api.get('/api-automation/collab/versions', { params: { testKey } }); return data; }
+export async function saveApiVersion(input: { testKey: string; label?: string; snapshot: any }): Promise<{ version: ApiTestVersion }> { const { data } = await api.post('/api-automation/collab/versions', input); return data; }
+export async function deleteApiVersion(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/collab/versions/${encodeURIComponent(id)}`); return data; }
+export async function getApiVersionDiff(from: string, to: string): Promise<{ from: ApiTestVersion; to: ApiTestVersion; diff: ApiFieldDiff[] }> { const { data } = await api.get('/api-automation/collab/versions/diff', { params: { from, to } }); return data; }
+
+/* ── 10. Browser-extension recorder source ── */
+export interface RecorderExtensionFile { path: string; content: string; contentType: string }
+export async function getRecorderExtension(): Promise<{ files: RecorderExtensionFile[] }> { const { data } = await api.get('/api-automation/capture/recorder-extension'); return data; }
+
+/* ═══════════════════════════════════════════════════════════════
+   Enterprise batch (Tier 1–3) — all additive, opt-in API clients.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── T1. Stateful service virtualization (data-plane: /vs/:token) ── */
+export type VirtualFault = 'none' | 'abort' | 'malformed' | 'server-500' | 'timeout';
+export interface VirtualMatch { method?: string; pathPattern?: string; bodyContains?: string; header?: { name: string; value: string }; query?: { name: string; value: string }; stateEquals?: { key: string; value: string } }
+export interface VirtualRespond { status: number; headers?: { key: string; value: string }[]; body?: string; delayMs?: number; fault?: VirtualFault }
+export interface VirtualRule { id?: string; name?: string; when: VirtualMatch; respond: VirtualRespond; setState?: Record<string, string> }
+export interface VirtualService { id: string; token: string; name: string; enabled: boolean; rules: VirtualRule[]; state: Record<string, string>; hitCount: number; createdBy: string; createdAt: string; updatedAt: string }
+export async function listVirtualServices(): Promise<{ services: VirtualService[] }> { const { data } = await api.get('/api-automation/virtual-services'); return data; }
+export async function createVirtualService(input: { name?: string; rules?: VirtualRule[] }): Promise<{ service: VirtualService }> { const { data } = await api.post('/api-automation/virtual-services', input); return data; }
+export async function updateVirtualService(id: string, patch: { name?: string; rules?: VirtualRule[]; enabled?: boolean; resetState?: boolean }): Promise<{ service: VirtualService }> { const { data } = await api.put(`/api-automation/virtual-services/${encodeURIComponent(id)}`, patch); return data; }
+export async function deleteVirtualService(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/virtual-services/${encodeURIComponent(id)}`); return data; }
+
+/* ── T2. Consumer-driven contracts (Pact broker) ── */
+export interface StoredPact { id: string; consumer: string; provider: string; version: string; branch: string; interactionCount: number; createdAt: string; lastVerification?: { success: boolean; providerVersion: string; at: string } }
+export interface PactVerification { id: string; pactId: string; providerVersion: string; success: boolean; results: { description: string; expected: number; actual?: number; ok: boolean; error?: string }[]; createdAt: string }
+export interface CanIDeployResult { deployable: boolean; pacticipant: string; version: string; environment: string; reasons: string[]; pairs: { consumer: string; provider: string; verified: boolean; detail: string }[] }
+export async function listPacts(): Promise<{ pacts: StoredPact[] }> { const { data } = await api.get('/api-automation/pacts'); return data; }
+export async function publishPact(input: { consumer?: string; provider?: string; version?: string; branch?: string; contract: any }): Promise<{ pact: StoredPact }> { const { data } = await api.post('/api-automation/pacts', input); return data; }
+export async function deletePact(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/pacts/${encodeURIComponent(id)}`); return data; }
+export async function verifyPact(id: string, providerBaseUrl: string, providerVersion?: string): Promise<{ verification: PactVerification }> { const { data } = await api.post(`/api-automation/pacts/${encodeURIComponent(id)}/verify`, { providerBaseUrl, providerVersion }, { timeout: 120_000 }); return data; }
+export async function recordPactDeployment(input: { pacticipant: string; version: string; environment: string }): Promise<{ ok: boolean }> { const { data } = await api.post('/api-automation/pacts/deployments', input); return data; }
+export async function canIDeploy(pacticipant: string, version: string, environment: string): Promise<CanIDeployResult> { const { data } = await api.get('/api-automation/pacts/can-i-deploy', { params: { pacticipant, version, environment } }); return data; }
+
+/* ── T3. Chaos / resilience probe ── */
+export interface ChaosExperiment { name: string; description: string; status?: number; elapsedMs: number; outcome: 'resilient' | 'fragile' | 'skipped'; detail: string }
+export interface ChaosReport { url: string; method: string; experiments: ChaosExperiment[]; burst: { requests: number; concurrency: number; completed: number; serverErrors: number; failures: number; avgMs: number; outcome: 'resilient' | 'fragile' }; resilienceScore: number; grade: 'A' | 'B' | 'C' | 'D' | 'F'; summary: { resilient: number; fragile: number; skipped: number } }
+export async function runChaosProbe(input: { endpoint: any; requests?: number; concurrency?: number; allowWrites?: boolean; timeoutMs?: number }): Promise<ChaosReport> { const { data } = await api.post('/api-automation/chaos/probe', input, { timeout: 120_000 }); return data; }
+
+/* ── T4. OAuth2 token helper + external secret managers ── */
+export interface OAuthToken { accessToken: string; tokenType: string; expiresIn?: number; refreshToken?: string; scope?: string; raw: Record<string, unknown> }
+export interface OAuthConfigView { id: string; name: string; grant: string; tokenUrl: string; clientId: string; scope: string; hasSecret: boolean; createdAt: string }
+export interface SecretResult { ok: boolean; valueMasked?: string; value?: string; error?: string }
+export async function fetchOAuthToken(input: any): Promise<OAuthToken> { const { data } = await api.post('/api-automation/oauth/token', input, { timeout: 60_000 }); return data; }
+export async function listOAuthConfigs(): Promise<{ configs: OAuthConfigView[] }> { const { data } = await api.get('/api-automation/oauth/configs'); return data; }
+export async function saveOAuthConfig(input: any): Promise<{ config: OAuthConfigView }> { const { data } = await api.post('/api-automation/oauth/configs', input); return data; }
+export async function deleteOAuthConfig(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/oauth/configs/${encodeURIComponent(id)}`); return data; }
+export async function fetchOAuthTokenFromConfig(id: string): Promise<OAuthToken> { const { data } = await api.post(`/api-automation/oauth/configs/${encodeURIComponent(id)}/token`, {}, { timeout: 60_000 }); return data; }
+export async function resolveSecret(input: any): Promise<SecretResult> { const { data } = await api.post('/api-automation/secrets/resolve', input, { timeout: 60_000 }); return data; }
+
+/* ── T5. Database validation (read-only SELECT assertions) ── */
+export interface DbConnection { id: string; name: string; dialect: 'mssql' | 'postgres' | 'mysql'; host: string; database: string; user: string; hasPassword: boolean; createdAt: string }
+export interface DbValidateResult { rowCount: number; rows: Record<string, unknown>[]; checks: { name: string; pass: boolean; detail: string }[]; passed: boolean; elapsedMs: number }
+export async function listDbConnections(): Promise<{ connections: DbConnection[] }> { const { data } = await api.get('/api-automation/db/connections'); return data; }
+export async function saveDbConnection(input: any): Promise<{ connection: DbConnection }> { const { data } = await api.post('/api-automation/db/connections', input); return data; }
+export async function deleteDbConnection(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/db/connections/${encodeURIComponent(id)}`); return data; }
+export async function runDbValidation(input: { connectionId?: string; config?: any; query: string; expect?: { minRows?: number; maxRows?: number; column?: string; equals?: string } }): Promise<DbValidateResult> { const { data } = await api.post('/api-automation/db/validate', input, { timeout: 60_000 }); return data; }
+
+/* ── T6. AsyncAPI (event-driven) contracts ── */
+export interface AsyncChannel { name: string; operations: string[]; messageNames: string[]; hasSchema: boolean }
+export interface AsyncApiSummary { title: string; version: string; asyncapi: string; channels: AsyncChannel[] }
+export interface AsyncValidateResult { valid: boolean; channel: string; errors: { path: string; message: string }[]; schemaFound: boolean }
+export async function summarizeAsyncApi(text: string): Promise<AsyncApiSummary> { const { data } = await api.post('/api-automation/asyncapi/summary', { text }); return data; }
+export async function validateAsyncMessage(text: string, channel: string, payload: any): Promise<AsyncValidateResult> { const { data } = await api.post('/api-automation/asyncapi/validate', { text, channel, payload }); return data; }
+
+/* ── T7. Distributed-trace correlation probe ── */
+export interface TraceSpan { name: string; service: string; durationMs: number; error?: boolean }
+export interface TraceResult { traceId: string; correlationId: string; request: { status?: number; elapsedMs: number; error?: string }; backend?: string; spans: TraceSpan[]; spanCount: number; assertions: { name: string; pass: boolean; detail?: string }[]; note?: string }
+export async function runTraceProbe(input: { endpoint: any; tracing?: { type: 'jaeger' | 'zipkin' | 'tempo'; queryUrl: string }; expectSpans?: string[]; minSpans?: number; waitMs?: number }): Promise<TraceResult> { const { data } = await api.post('/api-automation/trace/probe', input, { timeout: 60_000 }); return data; }
+
+/* ── T8. Test intelligence: flaky detection, quarantine, change-impact ── */
+export interface FlakyTest { name: string; appearances: number; passed: number; failed: number; flips: number; flakiness: number; lastStatuses: string[] }
+export interface FlakyReport { runsAnalyzed: number; totalTests: number; flaky: FlakyTest[]; summary: { flaky: number; stable: number } }
+export interface QuarantineItem { id: string; testKey: string; reason: string; createdBy: string; createdAt: string }
+export interface ImpactResult { changedSignatures: string[]; impacted: { id?: string; title?: string; method: string; url: string; signature: string }[]; notImpacted: number; summary: { candidates: number; impacted: number; selectedPct: number } }
+export async function detectFlakyTests(runLimit?: number): Promise<FlakyReport> { const { data } = await api.get('/api-automation/testintel/flaky', { params: { runLimit } }); return data; }
+export async function listQuarantine(): Promise<{ items: QuarantineItem[] }> { const { data } = await api.get('/api-automation/testintel/quarantine'); return data; }
+export async function addQuarantine(testKey: string, reason?: string): Promise<{ item: QuarantineItem }> { const { data } = await api.post('/api-automation/testintel/quarantine', { testKey, reason }); return data; }
+export async function removeQuarantine(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/testintel/quarantine/${encodeURIComponent(id)}`); return data; }
+export async function analyzeImpact(input: { changed: { method?: string; url: string }[]; candidates: { id?: string; title?: string; method: string; url: string }[] }): Promise<ImpactResult> { const { data } = await api.post('/api-automation/testintel/impact', input); return data; }
+
+/* ── T9. gRPC server-streaming + reflection ── */
+export interface GrpcStreamResult { ok: boolean; service: string; method: string; messages: unknown[]; count: number; truncated: boolean; error?: string; code?: number | string; elapsedMs: number }
+export interface GrpcReflectResult { ok: boolean; services: string[]; error?: string }
+export async function grpcServerStream(input: any): Promise<GrpcStreamResult> { const { data } = await api.post('/api-automation/messaging/grpc-stream', input, { timeout: 90_000 }); return data; }
+export async function grpcReflect(input: { target: string; tls?: boolean }): Promise<GrpcReflectResult> { const { data } = await api.post('/api-automation/messaging/grpc-reflect', input, { timeout: 60_000 }); return data; }
+
+/* ── T10. Distributed cloud load (remote agents) ── */
+export interface LoadAgent { id: string; name: string; url: string; region: string; enabled: boolean; createdAt: string }
+interface CloudLatency { min: number; p50: number; p90: number; p95: number; p99: number; max: number; avg: number }
+export interface CloudNodeResult { node: string; region: string; remote: boolean; completed: number; failed: number; non2xx: number; throughputRps: number; latency: CloudLatency; error?: string }
+export interface CloudLoadResult { url: string; method: string; durationMs: number; nodes: CloudNodeResult[]; totals: { completed: number; failed: number; non2xx: number; throughputRps: number; errorRatePct: number; latency: CloudLatency }; sla: { pass: boolean; checks: { name: string; limit: number; actual: number; unit: string; pass: boolean }[] } | null; note: string }
+export async function listLoadAgents(): Promise<{ agents: LoadAgent[] }> { const { data } = await api.get('/api-automation/load-agents'); return data; }
+export async function saveLoadAgent(input: { id?: string; name?: string; url: string; region?: string; enabled?: boolean }): Promise<{ agent: LoadAgent }> { const { data } = await api.post('/api-automation/load-agents', input); return data; }
+export async function deleteLoadAgent(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/load-agents/${encodeURIComponent(id)}`); return data; }
+export async function runCloudLoad(input: { endpoint: any; durationSec?: number; concurrencyPerAgent?: number; allowWrites?: boolean; sla?: { p95Ms?: number; maxErrorRatePct?: number; minThroughputRps?: number } }): Promise<CloudLoadResult> { const { data } = await api.post('/api-automation/loadtest/cloud', input, { timeout: 200_000 }); return data; }
+
+/* ── T11. Access control: RBAC + SSO(OIDC) + SCIM ── */
+export interface PermissionDef { key: string; label: string; group: string }
+export interface AccessPermissions { catalog: PermissionDef[]; roles: Record<string, string[]> }
+export interface SsoConfigView { type: 'oidc' | 'saml' | 'none'; enabled: boolean; issuer: string; clientId: string; hasSecret: boolean; samlEntryPoint: string; defaultRole: string }
+export interface ScimTokenView { hasToken: boolean; token?: string; baseUrl: string }
+export async function getAccessPermissions(): Promise<AccessPermissions> { const { data } = await api.get('/api-automation/access/permissions'); return data; }
+export async function setRolePermissions(role: string, permissions: string[]): Promise<{ roles: Record<string, string[]> }> { const { data } = await api.put('/api-automation/access/permissions', { role, permissions }); return data; }
+export async function getSsoConfig(): Promise<SsoConfigView> { const { data } = await api.get('/api-automation/access/sso'); return data; }
+export async function saveSsoConfig(input: any): Promise<SsoConfigView> { const { data } = await api.put('/api-automation/access/sso', input); return data; }
+export async function testOidcDiscovery(issuer: string): Promise<{ ok: boolean; authorizationEndpoint?: string; tokenEndpoint?: string; userinfoEndpoint?: string; error?: string }> { const { data } = await api.post('/api-automation/access/sso/test', { issuer }, { timeout: 30_000 }); return data; }
+export async function getScimToken(): Promise<ScimTokenView> { const { data } = await api.get('/api-automation/access/scim'); return data; }
+export async function rotateScimToken(): Promise<{ token: string }> { const { data } = await api.post('/api-automation/access/scim/rotate', {}); return data; }
+export async function revokeScimToken(): Promise<{ ok: boolean }> { const { data } = await api.delete('/api-automation/access/scim'); return data; }
+
+/* ── T12. Autonomous remediation PRs (GitHub/GitLab) ── */
+export interface RemediationResult { url: string; branch: string; provider: string; filesCommitted: number }
+export async function openRemediationPr(input: { provider: 'github' | 'gitlab'; token: string; repo: string; baseBranch?: string; branch?: string; title: string; body?: string; files: { path: string; content: string }[]; host?: string }): Promise<RemediationResult> { const { data } = await api.post('/api-automation/remediation/pr', input, { timeout: 90_000 }); return data; }
+
+/* ── T13. Compliance vertical packs (PCI/HIPAA/GDPR/PSD2) ── */
+export type ComplianceControlStatus = 'pass' | 'warn' | 'fail' | 'review' | 'not_assessed';
+export interface ComplianceControl { id: string; title: string; status: ComplianceControlStatus; assessment: 'static' | 'supplied' | 'manual'; finding: string; remediation: string }
+export interface CompliancePack { pack: string; packLabel: string; controls: ComplianceControl[]; score: number; grade: 'A' | 'B' | 'C' | 'D' | 'F'; summary: Record<ComplianceControlStatus, number> }
+export async function listCompliancePacks(): Promise<{ packs: { id: string; label: string }[] }> { const { data } = await api.get('/api-automation/compliance/packs'); return data; }
+export async function runCompliancePack(pack: string, endpoints: any[], security?: { transportSecure?: boolean; headersSecure?: boolean }): Promise<CompliancePack> { const { data } = await api.post('/api-automation/compliance/scan', { pack, endpoints, security }); return data; }
+
+/* ── T14. Git-synced test-as-code ── */
+export interface GitSyncConfigView { provider: 'github' | 'gitlab' | 'none'; repo: string; branch: string; path: string; host: string; hasToken: boolean }
+export async function getGitSyncConfig(): Promise<GitSyncConfigView> { const { data } = await api.get('/api-automation/git-sync/config'); return data; }
+export async function saveGitSyncConfig(input: any): Promise<GitSyncConfigView> { const { data } = await api.put('/api-automation/git-sync/config', input); return data; }
+export async function pushToGit(content: string): Promise<{ url: string; path: string; branch: string; commit?: string }> { const { data } = await api.post('/api-automation/git-sync/push', { content }, { timeout: 60_000 }); return data; }
+export async function pullFromGit(): Promise<{ content: string; path: string; branch: string }> { const { data } = await api.post('/api-automation/git-sync/pull', {}, { timeout: 60_000 }); return data; }
+
+/* ═══════════════════════════════════════════════════════════════
+   Testsigma-gap batch — rich requests, flow control, data profiles,
+   AI coworker, identity hardening. All additive, opt-in.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── G1. Interactive request send (rich bodies + OAuth2) ── */
+export interface SendRequestResult { ok: boolean; status?: number; headers: Record<string, string>; bodyText: string; elapsedMs: number; error?: string }
+export async function sendApiRequest(input: { method: string; url: string; headers?: { key: string; value: string }[]; auth?: ApiHttpAuth; body?: string; bodyMode?: string; formFields?: ApiFormField[]; bodyBase64?: string; bodyContentType?: string }): Promise<SendRequestResult> {
+  const { data } = await api.post('/api-automation/request/send', input, { timeout: 30_000 });
+  return data;
+}
+
+/* ── G2. Reusable step groups (flows reference them via groupId) ── */
+export interface ApiStepGroup { id: string; name: string; steps: FlowStep[]; createdBy: string; createdAt: string; updatedAt: string }
+export async function listStepGroups(): Promise<{ groups: ApiStepGroup[] }> { const { data } = await api.get('/api-automation/step-groups'); return data; }
+export async function saveStepGroup(input: { id?: string; name: string; steps: FlowStep[] }): Promise<{ group: ApiStepGroup }> { const { data } = await api.post('/api-automation/step-groups', input); return data; }
+export async function deleteStepGroup(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/step-groups/${encodeURIComponent(id)}`); return data; }
+
+/* ── G3. Reusable test-data profiles ── */
+export interface DataProfile { id: string; name: string; columns: string[]; rows: Record<string, string>[]; rowCount: number; source: string; createdBy: string; createdAt: string; updatedAt: string }
+export interface ProfileFlowRunResult { total: number; passed: number; failed: number; runs: { row: number; passed: boolean; stepsRun: number; stepsTotal: number; durationMs: number; firstError?: string }[] }
+export async function listDataProfiles(): Promise<{ profiles: DataProfile[] }> { const { data } = await api.get('/api-automation/data-profiles'); return data; }
+export async function saveDataProfile(input: { id?: string; name: string; columns: string[]; rows: Record<string, string>[]; source?: string }): Promise<{ profile: DataProfile }> { const { data } = await api.post('/api-automation/data-profiles', input); return data; }
+export async function deleteDataProfile(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/data-profiles/${encodeURIComponent(id)}`); return data; }
+export async function importProfileCsv(text: string): Promise<{ columns: string[]; rows: Record<string, string>[] }> { const { data } = await api.post('/api-automation/data-profiles/import/csv', { text }); return data; }
+export async function importProfileExcel(base64: string): Promise<{ columns: string[]; rows: Record<string, string>[] }> { const { data } = await api.post('/api-automation/data-profiles/import/excel', { base64 }); return data; }
+export async function profileFromDb(input: { connectionId?: string; config?: any; query: string }): Promise<{ columns: string[]; rows: Record<string, string>[] }> { const { data } = await api.post('/api-automation/data-profiles/from-db', input, { timeout: 60_000 }); return data; }
+export async function runProfileOverFlow(input: { steps: FlowStep[]; rows: Record<string, string>[]; allowWrites?: boolean; maxRows?: number }): Promise<ProfileFlowRunResult> { const { data } = await api.post('/api-automation/data-profiles/run-flow', input, { timeout: 200_000 }); return data; }
+
+/* ── G4. AI coworker / orchestrator ── */
+export interface OrchestrateResult { reply: string; intent: string; plan?: { action: string; params?: Record<string, unknown> }; data?: any }
+export interface OrchestratorConfigView { enabled: boolean; triggers: string[]; action: string; hasToken: boolean; token?: string; eventPath: string }
+export interface OrchestratorEvent { id: string; source: string; type: string; summary: string; status: string; createdAt: string }
+export async function orchestrate(input: { message: string; endpoints?: any[]; changed?: { method?: string; url: string }[]; history?: { role: 'user' | 'assistant'; content: string }[] }): Promise<OrchestrateResult> { const { data } = await api.post('/api-automation/orchestrator/chat', input, { timeout: 120_000 }); return data; }
+export async function getOrchestratorConfig(): Promise<OrchestratorConfigView> { const { data } = await api.get('/api-automation/orchestrator/config'); return data; }
+export async function saveOrchestratorConfig(input: { enabled?: boolean; triggers?: string[]; action?: string }): Promise<OrchestratorConfigView> { const { data } = await api.put('/api-automation/orchestrator/config', input); return data; }
+export async function rotateOrchestratorToken(): Promise<{ token: string }> { const { data } = await api.post('/api-automation/orchestrator/token', {}); return data; }
+export async function listOrchestratorEvents(): Promise<{ events: OrchestratorEvent[] }> { const { data } = await api.get('/api-automation/orchestrator/events'); return data; }
+
+/* ── Atto coworker lifecycle tools (all additive, opt-in) ── */
+
+/** A ready-to-apply strategy brief (same shape the NL author produces). */
+export interface AttoBrief { requirements: string; coverage: 'essential' | 'standard' | 'exhaustive'; layers: string[]; focus: string[]; outline: string[] }
+
+// Story-driven generation
+export interface AcceptanceCriterion { id: string; text: string; endpoints: string[]; testIdeas: string[]; kind: 'happy-path' | 'negative' | 'auth' | 'validation' | 'edge' | 'other' }
+export interface StoryGenResult { title: string; summary: string; criteria: AcceptanceCriterion[]; brief: AttoBrief; unmappedCriteria: number }
+export async function generateFromStory(input: { story: string; endpoints: any[] }): Promise<StoryGenResult> { const { data } = await api.post('/api-automation/story/generate', input, { timeout: 180_000 }); return data; }
+
+// Multimodal inputs
+export interface DetectedFlow { name: string; steps: string[] }
+export interface DetectedField { name: string; constraint: string }
+export interface MultimodalResult { observations: string[]; flows: DetectedFlow[]; fields: DetectedField[]; mappedEndpoints: string[]; brief: AttoBrief }
+export async function analyzeMultimodal(input: { images?: { data: string; mediaType: string }[]; figma?: string; transcript?: string; note?: string; endpoints: any[] }): Promise<MultimodalResult> { const { data } = await api.post('/api-automation/multimodal/analyze', input, { timeout: 180_000 }); return data; }
+
+// Suite optimizer
+export interface PrioritizedEndpoint { id?: string; title?: string; method: string; url: string; signature: string; score: number; priority: 'critical' | 'high' | 'medium' | 'low'; reasons: string[]; failRate: number; appearances: number; traffic: number; quarantined: boolean }
+export interface RedundancyCluster { signature: string; endpoints: { id?: string; title?: string; method: string; url: string }[] }
+export interface SuiteOptimizerResult { runsAnalyzed: number; prioritized: PrioritizedEndpoint[]; redundancies: RedundancyCluster[]; summary: { endpoints: number; redundantGroups: number; prunable: number; critical: number; high: number } }
+export async function optimizeSuite(input: { endpoints: any[]; runLimit?: number }): Promise<SuiteOptimizerResult> { const { data } = await api.post('/api-automation/suite/optimize', input, { timeout: 120_000 }); return data; }
+
+// Semantic self-healing
+export interface HealProposal { endpointId?: string; title: string; method: string; url: string; classification: 'regression' | 'contract-evolution' | 'flaky' | 'environment' | 'auth' | 'unknown'; confidence: 'high' | 'medium' | 'low'; shouldHeal: boolean; summary: string; rationale: string; observed?: { status?: number; reachable: boolean; bodySnippet?: string }; patch?: { expectedStatus?: number; expectedResponse?: string }; note?: string }
+export interface HealResult { proposals: HealProposal[]; summary: { analyzed: number; healable: number; regressions: number; flaky: number; skipped: number } }
+export async function proposeHeal(input: { failures: any[]; allowWrites?: boolean }): Promise<HealResult> { const { data } = await api.post('/api-automation/heal/propose', input, { timeout: 180_000 }); return data; }
+
+// History-/flow-aware change impact
+export interface ImpactedFlow { id: string; name: string; matchedSignatures: string[]; endpoints: { method: string; url: string; signature: string }[] }
+export interface ImpactedEndpoint { id?: string; title?: string; method: string; url: string; signature: string; via: ('structural' | 'flow')[]; viaFlows: string[]; failRate: number; appearances: number; priorityScore: number }
+export interface DeepImpactResult { changedSignatures: string[]; impacted: ImpactedEndpoint[]; flows: ImpactedFlow[]; summary: { candidates: number; structural: number; withFlows: number; total: number; selectedPct: number } }
+export async function analyzeImpactDeep(input: { changed: { method?: string; url: string }[]; endpoints?: any[]; candidates?: any[] }): Promise<DeepImpactResult> { const { data } = await api.post('/api-automation/impact/deep', input); return data; }
+
+// Auto bug-report artifact
+export interface BugReport { title: string; severity: 'critical' | 'high' | 'medium' | 'low'; labels: string[]; markdown: string; jira: { summary: string; description: string; issuetype: string; priority: string; labels: string[] }; github: { title: string; body: string; labels: string[] }; diagnosis?: { category: string; rootCause: string; suggestedFix: string; confidence: string; reproCurl: string }; reproCurl: string }
+export async function buildBugReport(input: { title?: string; method: string; url: string; error?: string; expectedStatus?: number; expectedResponse?: string; responseStatus?: number; requestBody?: string; responseBody?: string; requestHeaders?: { key: string; value: string }[]; responseHeaders?: { key: string; value: string }[]; environment?: string; runId?: string; reportUrl?: string }): Promise<BugReport> { const { data } = await api.post('/api-automation/bug-report', input, { timeout: 120_000 }); return data; }
+
+// Always-on monitoring loop
+export interface MonitorConfigView { enabled: boolean; intervalMinutes: number; checks: ('health' | 'drift' | 'coverage')[]; endpointCount: number; nextRunAt?: string; lastRunAt?: string; lastStatus?: string; lastSummary?: string }
+export interface MonitorEvent { id: string; checkKind: string; severity: 'info' | 'warning' | 'critical'; title: string; detail: string; signature?: string; createdAt: string }
+export async function getMonitorConfig(): Promise<MonitorConfigView> { const { data } = await api.get('/api-automation/monitor/config'); return data; }
+export async function saveMonitorConfig(input: { enabled?: boolean; intervalMinutes?: number; endpoints?: any[]; checks?: string[] }): Promise<MonitorConfigView> { const { data } = await api.put('/api-automation/monitor/config', input); return data; }
+export async function listMonitorEvents(limit = 100): Promise<{ events: MonitorEvent[] }> { const { data } = await api.get('/api-automation/monitor/events', { params: { limit } }); return data; }
+export async function runMonitorNow(): Promise<MonitorConfigView> { const { data } = await api.post('/api-automation/monitor/run', {}, { timeout: 180_000 }); return data; }
+
+/* ── G5. Identity hardening — security settings + MFA enrolment ── */
+export interface ApiPasswordPolicy { minLength: number; requireUpper: boolean; requireNumber: boolean; requireSymbol: boolean }
+export interface ApiSecuritySettings { ssoEnforced: boolean; mfaRequired: boolean; passwordPolicy: ApiPasswordPolicy }
+export async function getSecuritySettings(): Promise<ApiSecuritySettings> { const { data } = await api.get('/api-automation/access/security'); return data; }
+export async function saveSecuritySettings(input: Partial<ApiSecuritySettings>): Promise<ApiSecuritySettings> { const { data } = await api.put('/api-automation/access/security', input); return data; }
+export async function getMfaStatus(): Promise<{ enrolled: boolean }> { const { data } = await api.get('/api-automation/access/mfa/status'); return data; }
+export async function beginMfaEnrollment(): Promise<{ secret: string; otpauthUrl: string }> { const { data } = await api.post('/api-automation/access/mfa/begin', {}); return data; }
+export async function confirmMfaEnrollment(secret: string, code: string): Promise<{ ok: boolean; enrolled: boolean }> { const { data } = await api.post('/api-automation/access/mfa/confirm', { secret, code }); return data; }
+export async function disableMfa(): Promise<{ ok: boolean }> { const { data } = await api.post('/api-automation/access/mfa/disable', {}); return data; }
+
+/* ─────────────────────────────────────────────────────────────
+   Execution/CI batch — hybrid API+UI, release gate, CI trigger, parallel queue
+   (all additive, opt-in; never touched by the core pipeline)
+   ───────────────────────────────────────────────────────────── */
+
+// Feature A — API + UI hybrid test (seed via API → verify in a browser → cleanup via API)
+export type UiCheckKind = 'textPresent' | 'textAbsent' | 'selectorPresent' | 'selectorCount' | 'titleContains' | 'urlContains';
+export interface UiCheck { kind: UiCheckKind; selector?: string; text?: string; count?: number }
+export interface HybridUi { url: string; engine?: 'chromium' | 'firefox' | 'webkit'; waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' | 'commit'; checks: UiCheck[] }
+export interface HybridTest { id: string; name: string; seed: FlowStep[]; ui: HybridUi; cleanup: FlowStep[]; createdBy: string; createdAt: string; updatedAt: string }
+export interface HybridUiResult { reached: boolean; checks: { label: string; pass: boolean; detail?: string }[]; screenshotBase64?: string; title?: string; finalUrl?: string; error?: string }
+export interface HybridRunResult { passed: boolean; durationMs: number; seed: FlowRunResult; ui: HybridUiResult; cleanup: FlowRunResult; variables: Record<string, string> }
+export async function listHybridTests(): Promise<HybridTest[]> { const { data } = await api.get('/api-automation/hybrid'); return data.tests || []; }
+export async function saveHybridTest(input: Partial<HybridTest>): Promise<HybridTest> { const { data } = await api.post('/api-automation/hybrid', input); return data.test; }
+export async function deleteHybridTest(id: string): Promise<void> { await api.delete(`/api-automation/hybrid/${encodeURIComponent(id)}`); }
+export async function runHybridTest(input: { seed?: FlowStep[]; ui: HybridUi; cleanup?: FlowStep[]; variables?: Record<string, string>; allowWrites?: boolean }): Promise<HybridRunResult> { const { data } = await api.post('/api-automation/hybrid/run', input, { timeout: 120_000 }); return data; }
+
+// Feature B — Agentic release gate (score a finished run → go / no-go)
+export interface GatePolicy { id: string; name: string; minPassRate: number; maxFailed: number; maxBroken: number; minConfidence: number; requireNoNewFailures: boolean; blockOnHighSeverityFail: boolean; createdBy: string; createdAt: string; updatedAt: string }
+export interface GateCheck { label: string; pass: boolean; actual: number | string; threshold: number | string }
+export interface GateResult { decision: 'go' | 'no-go'; score: number; runId: string; title: string; stats: { total: number; passed: number; failed: number; broken: number; passRate: number } | null; checks: GateCheck[]; reasons: string[]; anomalies: { flaky: number; slow: number; newFailure: number } }
+export async function listGatePolicies(): Promise<GatePolicy[]> { const { data } = await api.get('/api-automation/release-gates'); return data.policies || []; }
+export async function saveGatePolicy(input: Partial<GatePolicy>): Promise<GatePolicy> { const { data } = await api.post('/api-automation/release-gates', input); return data.policy; }
+export async function deleteGatePolicy(id: string): Promise<void> { await api.delete(`/api-automation/release-gates/${encodeURIComponent(id)}`); }
+export async function evaluateReleaseGate(input: { runId: string; policyId?: string; thresholds?: Partial<GatePolicy> }): Promise<GateResult> { const { data } = await api.post('/api-automation/release-gate/evaluate', input); return data; }
+
+// Feature C — First-party CI / GitHub Action (mint the token the public /api/ci trigger uses)
+export interface CiConfigView { enabled: boolean; hasToken: boolean; tokenMasked: string; triggerPath: string }
+export async function getCiConfig(): Promise<CiConfigView> { const { data } = await api.get('/api-automation/ci/config'); return data; }
+export async function rotateCiToken(): Promise<{ token: string }> { const { data } = await api.post('/api-automation/ci/token', {}); return data; }
+export async function setCiEnabled(enabled: boolean): Promise<CiConfigView> { const { data } = await api.put('/api-automation/ci/config', { enabled }); return data; }
+
+// Feature D — Parallel execution queue (slot model over the headless pipeline)
+export type QueueStatus = 'queued' | 'running' | 'done' | 'failed' | 'canceled';
+export interface QueueItem { id: string; title: string; status: QueueStatus; endpointCount: number; jobId?: string; stats?: { total: number; passed: number; failed: number; passRate: number } | null; error?: string; enqueuedAt: string; startedAt?: string; finishedAt?: string }
+export interface QueueView { slots: number; running: number; queued: number; items: QueueItem[] }
+export async function getExecQueue(): Promise<QueueView> { const { data } = await api.get('/api-automation/exec-queue'); return data; }
+export async function saveExecQueueConfig(slots: number): Promise<{ slots: number }> { const { data } = await api.put('/api-automation/exec-queue/config', { slots }); return data; }
+export async function enqueueRun(input: { title?: string; endpoints: unknown[]; coverage?: string; execute?: boolean; heal?: boolean }): Promise<QueueItem> { const { data } = await api.post('/api-automation/exec-queue/enqueue', input); return data.item; }
+export async function cancelQueueItem(id: string): Promise<void> { await api.delete(`/api-automation/exec-queue/${encodeURIComponent(id)}`); }
+
+// Feature E — Cloud browser/device lab (run the UI checks on hosted provider browsers; cross-browser matrix)
+export type CloudProvider = 'browserstack' | 'lambdatest' | 'custom';
+export interface CloudTarget { browser?: string; browserVersion?: string; os?: string; osVersion?: string; label?: string }
+export interface CloudLabConfig { id: string; name: string; provider: CloudProvider; username: string; enabled: boolean; hasAccessKey: boolean; hasWsEndpoint: boolean; accessKeyMasked?: string; createdBy: string; createdAt: string; updatedAt: string }
+export interface CloudCheckOutcome { label: string; pass: boolean; detail?: string }
+export interface CloudTargetResult { label: string; target: CloudTarget; reached: boolean; passed: boolean; checks: CloudCheckOutcome[]; screenshotBase64?: string; title?: string; finalUrl?: string; durationMs: number; error?: string }
+export interface CloudRunResult { passed: boolean; total: number; passedCount: number; failedCount: number; durationMs: number; url: string; provider: CloudProvider; results: CloudTargetResult[] }
+export async function listCloudLabs(): Promise<CloudLabConfig[]> { const { data } = await api.get('/api-automation/cloud-labs'); return data.labs || []; }
+export async function saveCloudLab(input: { id?: string; name: string; provider: CloudProvider; username?: string; accessKey?: string; wsEndpoint?: string; enabled?: boolean }): Promise<CloudLabConfig> { const { data } = await api.post('/api-automation/cloud-labs', input); return data.lab; }
+export async function deleteCloudLab(id: string): Promise<void> { await api.delete(`/api-automation/cloud-labs/${encodeURIComponent(id)}`); }
+export async function testCloudLab(id: string): Promise<{ ok: boolean; detail: string; label?: string }> { const { data } = await api.post(`/api-automation/cloud-labs/${encodeURIComponent(id)}/test`, {}, { timeout: 90_000 }); return data; }
+export async function runCloudMatrix(input: { configId: string; url: string; name?: string; targets?: CloudTarget[]; checks?: UiCheck[]; variables?: Record<string, string>; waitUntil?: HybridUi['waitUntil'] }): Promise<CloudRunResult> { const { data } = await api.post('/api-automation/cloud-labs/run', input, { timeout: 240_000 }); return data; }
+
 /* ─────────────────────────────────────────────────────────────
    Test generation (chat wizard core)
    ───────────────────────────────────────────────────────────── */

@@ -64,6 +64,47 @@ import { analyzeCoverageGaps } from '../services/api-coverage-gaps.service.js';
 import { runSemanticAssertion } from '../services/api-semantic.service.js';
 import { analyzeFailureClusters } from '../services/api-failure-clusters.service.js';
 import { listListeners, createListener, deleteListener, getEvents } from '../services/api-callback.service.js';
+import { runFlow, listFlows, getFlow, saveFlow, deleteFlow, listStepGroups, saveStepGroup, deleteStepGroup, getStepGroupMap } from '../services/api-flow.service.js';
+import { chatRefineTest } from '../services/api-chat-test.service.js';
+import { generateSyntheticData } from '../services/api-synth-data.service.js';
+import { planMaintenance } from '../services/api-maintenance.service.js';
+import { getProviderConfig, saveProviderConfig, deleteProviderConfig, testProvider } from '../services/api-llm-providers.service.js';
+import { listMcpTokens, createMcpToken, deleteMcpToken } from '../services/api-mcp.service.js';
+import { kafkaProbe, grpcCall, grpcServerStream, grpcReflect } from '../services/api-messaging.service.js';
+import { runGeoLoad } from '../services/api-geo-load.service.js';
+import { listComments, addComment, deleteComment, commentCounts, listVersions, saveVersion, deleteVersion, getVersionDiff } from '../services/api-collab.service.js';
+import { recorderExtensionFiles } from '../services/api-recorder-extension.service.js';
+// ─── Enterprise batch (Tier 1–3): all additive, opt-in; never touched by the pipeline ───
+import { listVirtualServices, createVirtualService, updateVirtualService, deleteVirtualService } from '../services/api-virtual.service.js';
+import { publishPact, listPacts, deletePact, verifyPact, recordDeployment, canIDeploy } from '../services/api-pact-broker.service.js';
+import { runChaosProbe } from '../services/api-chaos.service.js';
+import { fetchOAuthToken, listOAuthConfigs, saveOAuthConfig, deleteOAuthConfig, fetchTokenFromConfig, resolveSecret, resolveHttpAuth } from '../services/api-oauth.service.js';
+import { buildRequestInit, fetchFull } from '../utils/api-http.js';
+import { listDataProfiles, saveDataProfile, deleteDataProfile, parseCsv, parseExcel, profileFromDb, runProfileOverFlow } from '../services/api-data-profiles.service.js';
+import { orchestrate, getOrchestratorConfig, saveOrchestratorConfig, rotateOrchestratorToken, listOrchestratorEvents } from '../services/api-orchestrator.service.js';
+// ─── Atto coworker lifecycle tools (all additive, opt-in; pipeline untouched) ───
+import { generateFromStory } from '../services/api-story-gen.service.js';
+import { analyzeMultimodal } from '../services/api-multimodal.service.js';
+import { optimizeSuite } from '../services/api-suite-optimizer.service.js';
+import { proposeHeal } from '../services/api-heal.service.js';
+import { analyzeImpactDeep } from '../services/api-impact.service.js';
+import { buildBugReport } from '../services/api-bug-report.service.js';
+import { getMonitorConfig, saveMonitorConfig, listMonitorEvents, runMonitorNow } from '../services/api-monitor.service.js';
+import { listDbConnections, saveDbConnection, deleteDbConnection, runDbValidation } from '../services/api-db-validate.service.js';
+import { summarizeAsyncApi, validateAsyncMessage } from '../services/api-asyncapi.service.js';
+import { runTraceProbe } from '../services/api-trace.service.js';
+import { detectFlaky, listQuarantine, addQuarantine, removeQuarantine, analyzeImpact } from '../services/api-testintel.service.js';
+import { listLoadAgents, saveLoadAgent, deleteLoadAgent, runCloudLoad } from '../services/api-cloud-load.service.js';
+import { PERMISSION_CATALOG, getRolePermissions, setRolePermissions, getSsoConfig, saveSsoConfig, testOidcDiscovery, getScimToken, rotateScimToken, revokeScimToken, getSecuritySettings, saveSecuritySettings, beginMfaEnrollment, confirmMfaEnrollment, disableMfa, userHasMfa } from '../services/api-access.service.js';
+import { openRemediationPr } from '../services/api-remediation.service.js';
+import { runCompliancePack, listCompliancePacks } from '../services/api-compliance.service.js';
+import { getGitSyncConfig, saveGitSyncConfig, pushToGit, pullFromGit } from '../services/api-git-sync.service.js';
+// ─── Execution/CI batch: API+UI hybrid, release gate, CI trigger, parallel queue (all additive, opt-in) ───
+import { listHybridTests, saveHybridTest, deleteHybridTest, runHybrid } from '../services/api-hybrid.service.js';
+import { listGatePolicies, saveGatePolicy, deleteGatePolicy, evaluateGate } from '../services/api-release-gate.service.js';
+import { getCiConfig, rotateCiToken, setCiEnabled } from '../services/api-ci.service.js';
+import { listQueue, saveQueueConfig, enqueueRun, cancelQueued } from '../services/api-exec-queue.service.js';
+import { listCloudLabs, saveCloudLab, deleteCloudLab, testCloudLab, runCloudMatrix } from '../services/api-cloud-lab.service.js';
 import {
   listEnvironments, getEnvironment, createEnvironment, updateEnvironment, deleteEnvironment, applyEnvironment, resolveApiCase,
 } from '../services/api-environments.service.js';
@@ -938,6 +979,695 @@ router.use((err: any, _req: Request, res: Response, _next: any) => {
   if (err?.code === 'LIMIT_FILE_SIZE') { res.status(413).json({ error: 'File too large. Maximum upload size is 15 MB per file.' }); return; }
   if (err?.code === 'LIMIT_FILE_COUNT' || err?.code === 'LIMIT_UNEXPECTED_FILE') { res.status(400).json({ error: 'Too many files — upload at most 20 at a time.' }); return; }
   res.status(400).json({ error: err?.message || 'Upload failed' });
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   Visual flow / journey builder (opt-in; chains live requests)
+   ═══════════════════════════════════════════════════════════════ */
+router.get('/flows', async (req: Request, res: Response) => {
+  try { res.json({ flows: await listFlows(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.get('/flows/:id', async (req: Request, res: Response) => {
+  try {
+    const flow = await getFlow(req.user!.tenantId, String(req.params.id));
+    if (!flow) { res.status(404).json({ error: 'Flow not found.' }); return; }
+    res.json({ flow });
+  } catch (err) { fail(res, err); }
+});
+router.post('/flows', async (req: Request, res: Response) => {
+  try { res.status(201).json({ flow: await saveFlow(req.user!.tenantId, req.user!.username, { id: req.body?.id, name: req.body?.name, steps: req.body?.steps, variables: req.body?.variables }) }); }
+  catch (err) { fail(res, err); }
+});
+router.delete('/flows/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteFlow(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Flow not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.post('/flows/run', async (req: Request, res: Response) => {
+  try {
+    // Resolve the tenant's reusable step groups so `group` steps can expand.
+    const groups = await getStepGroupMap(req.user!.tenantId).catch(() => ({}));
+    res.json(await runFlow({ steps: req.body?.steps, variables: req.body?.variables, allowWrites: !!req.body?.allowWrites, groups }));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Reusable step groups (opt-in; referenced by flows via groupId) ── */
+router.get('/step-groups', async (req: Request, res: Response) => {
+  try { res.json({ groups: await listStepGroups(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/step-groups', async (req: Request, res: Response) => {
+  try { res.status(201).json({ group: await saveStepGroup(req.user!.tenantId, req.user!.username, { id: req.body?.id, name: req.body?.name, steps: req.body?.steps }) }); }
+  catch (err) { fail(res, err); }
+});
+router.delete('/step-groups/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteStepGroup(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Step group not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Interactive request send (opt-in; rich bodies + OAuth2, resolved here) ── */
+router.post('/request/send', async (req: Request, res: Response) => {
+  try {
+    const r = req.body || {};
+    if (!/^https?:\/\//i.test(String(r.url || ''))) { res.status(400).json({ error: 'Provide an http(s) URL.' }); return; }
+    const auth = await resolveHttpAuth(r.auth);   // oauth2 → bearer; else unchanged
+    const { url, init } = buildRequestInit({
+      method: r.method, url: r.url, headers: r.headers, auth, body: r.body,
+      bodyMode: r.bodyMode, formFields: r.formFields, bodyBase64: r.bodyBase64, bodyContentType: r.bodyContentType,
+    });
+    const result = await fetchFull(url, init, 20_000, 200_000);
+    res.json(result);
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Reusable test-data profiles (opt-in; CSV/Excel/DB import, flow iteration) ── */
+router.get('/data-profiles', async (req: Request, res: Response) => {
+  try { res.json({ profiles: await listDataProfiles(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/data-profiles', async (req: Request, res: Response) => {
+  try { res.status(201).json({ profile: await saveDataProfile(req.user!.tenantId, req.user!.username, req.body || {}) }); } catch (err) { fail(res, err); }
+});
+router.delete('/data-profiles/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteDataProfile(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Data profile not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.post('/data-profiles/import/csv', (req: Request, res: Response) => {
+  try { res.json(parseCsv(String(req.body?.text || ''))); } catch (err) { fail(res, err); }
+});
+router.post('/data-profiles/import/excel', (req: Request, res: Response) => {
+  try { res.json(parseExcel(String(req.body?.base64 || ''))); } catch (err) { fail(res, err); }
+});
+router.post('/data-profiles/from-db', async (req: Request, res: Response) => {
+  try {
+    if (!req.body?.query) { res.status(400).json({ error: 'A SELECT query is required.' }); return; }
+    res.json(await profileFromDb(req.user!.tenantId, { connectionId: req.body?.connectionId, config: req.body?.config, query: String(req.body.query) }));
+  } catch (err) { fail(res, err); }
+});
+router.post('/data-profiles/run-flow', async (req: Request, res: Response) => {
+  try { res.json(await runProfileOverFlow({ steps: req.body?.steps, rows: req.body?.rows, allowWrites: !!req.body?.allowWrites, maxRows: Number(req.body?.maxRows) || undefined })); }
+  catch (err) { fail(res, err); }
+});
+
+/* ── AI coworker / orchestrator (opt-in; routes to existing tools) ── */
+router.post('/orchestrator/chat', async (req: Request, res: Response) => {
+  try {
+    const llm = await getTenantLlm(req.user!.tenantId);
+    res.json(await orchestrate(req.user!.tenantId, { message: String(req.body?.message || ''), endpoints: req.body?.endpoints, changed: req.body?.changed, history: req.body?.history }, llm));
+  } catch (err) { fail(res, err); }
+});
+router.get('/orchestrator/config', async (req: Request, res: Response) => {
+  try { res.json(await getOrchestratorConfig(req.user!.tenantId)); } catch (err) { fail(res, err, 500); }
+});
+router.put('/orchestrator/config', async (req: Request, res: Response) => {
+  try { res.json(await saveOrchestratorConfig(req.user!.tenantId, req.body || {})); } catch (err) { fail(res, err); }
+});
+router.post('/orchestrator/token', async (req: Request, res: Response) => {
+  try { res.json(await rotateOrchestratorToken(req.user!.tenantId)); } catch (err) { fail(res, err); }
+});
+router.get('/orchestrator/events', async (req: Request, res: Response) => {
+  try { res.json({ events: await listOrchestratorEvents(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+
+/* ── Atto coworker lifecycle tools (opt-in; each routes to an existing/new standalone service) ── */
+
+// Story-driven generation — Jira story / PRD → acceptance criteria → brief (LLM-gated).
+router.post('/story/generate', async (req: Request, res: Response) => {
+  try {
+    const llm = await getTenantLlm(req.user!.tenantId);
+    if (!llm) { res.status(400).json({ error: 'Configure an LLM (System Configuration → LLM) or an API-automation provider to generate from a story.' }); return; }
+    const endpoints = endpointsFromBody(req.body?.endpoints).map((e) => ({ method: e.method, url: e.url, title: e.title }));
+    res.json(await generateFromStory(String(req.body?.story || ''), endpoints, llm));
+  } catch (err) { fail(res, err); }
+});
+
+// Multimodal inputs — screenshots / Figma / transcript → brief (vision LLM).
+router.post('/multimodal/analyze', async (req: Request, res: Response) => {
+  try {
+    const llm = await getTenantLlm(req.user!.tenantId);
+    if (!llm) { res.status(400).json({ error: 'Configure an Anthropic LLM (System Configuration → LLM) to analyze images.' }); return; }
+    const endpoints = endpointsFromBody(req.body?.endpoints).map((e) => ({ method: e.method, url: e.url, title: e.title }));
+    res.json(await analyzeMultimodal({ images: req.body?.images, figma: req.body?.figma, transcript: req.body?.transcript, note: req.body?.note, endpoints }, llm));
+  } catch (err) { fail(res, err); }
+});
+
+// Suite optimizer — risk prioritization + redundancy pruning (read-only).
+router.post('/suite/optimize', async (req: Request, res: Response) => {
+  try {
+    const endpoints = endpointsFromBody(req.body?.endpoints).map((e, i) => ({ id: (req.body?.endpoints?.[i]?.id ? String(req.body.endpoints[i].id) : undefined), title: e.title, method: e.method, url: e.url, auth: e.auth }));
+    res.json(await optimizeSuite(req.user!.tenantId, endpoints as any, { runLimit: Number(req.body?.runLimit) || undefined }));
+  } catch (err) { fail(res, err); }
+});
+
+// Semantic self-healing — intent-aware fix proposals for failing tests (LLM-gated).
+router.post('/heal/propose', async (req: Request, res: Response) => {
+  try {
+    const llm = await getTenantLlm(req.user!.tenantId);
+    if (!llm) { res.status(400).json({ error: 'Configure an LLM (System Configuration → LLM) or an API-automation provider to self-heal tests.' }); return; }
+    res.json(await proposeHeal(req.body?.failures, llm, { allowWrites: !!req.body?.allowWrites }));
+  } catch (err) { fail(res, err); }
+});
+
+// History-/flow-aware change impact (read-only).
+router.post('/impact/deep', async (req: Request, res: Response) => {
+  try {
+    const changed = Array.isArray(req.body?.changed) ? req.body.changed.filter((c: any) => c && c.url).map((c: any) => ({ method: c.method ? String(c.method) : undefined, url: String(c.url) })) : [];
+    const candidates = endpointsFromBody(req.body?.candidates || req.body?.endpoints).map((e, i) => {
+      const src = (req.body?.candidates || req.body?.endpoints)?.[i];
+      return { id: src?.id ? String(src.id) : undefined, title: e.title, method: e.method, url: e.url };
+    });
+    res.json(await analyzeImpactDeep(req.user!.tenantId, { changed, candidates }));
+  } catch (err) { fail(res, err); }
+});
+
+// Auto-generated bug-report artifact from a failure (LLM optional — enriches with root-cause).
+router.post('/bug-report', async (req: Request, res: Response) => {
+  try {
+    const llm = await getTenantLlm(req.user!.tenantId).catch(() => null);
+    const b = req.body || {};
+    res.json(await buildBugReport({
+      title: b.title, method: String(b.method || 'GET'), url: String(b.url || ''), error: String(b.error || ''),
+      expectedStatus: b.expectedStatus != null ? Number(b.expectedStatus) : undefined,
+      expectedResponse: typeof b.expectedResponse === 'string' ? b.expectedResponse : undefined,
+      responseStatus: b.responseStatus != null ? Number(b.responseStatus) : undefined,
+      requestBody: typeof b.requestBody === 'string' ? b.requestBody : undefined,
+      responseBody: typeof b.responseBody === 'string' ? b.responseBody : undefined,
+      requestHeaders: Array.isArray(b.requestHeaders) ? b.requestHeaders : undefined,
+      responseHeaders: Array.isArray(b.responseHeaders) ? b.responseHeaders : undefined,
+      environment: b.environment ? String(b.environment) : undefined,
+      runId: b.runId ? String(b.runId) : undefined,
+      reportUrl: b.reportUrl ? String(b.reportUrl) : undefined,
+    }, llm));
+  } catch (err) { fail(res, err); }
+});
+
+// Always-on monitoring loop (opt-in; read-only watcher + alert timeline).
+router.get('/monitor/config', async (req: Request, res: Response) => {
+  try { res.json(await getMonitorConfig(req.user!.tenantId)); } catch (err) { fail(res, err, 500); }
+});
+router.put('/monitor/config', async (req: Request, res: Response) => {
+  try { res.json(await saveMonitorConfig(req.user!.tenantId, req.body || {})); } catch (err) { fail(res, err); }
+});
+router.get('/monitor/events', async (req: Request, res: Response) => {
+  try { res.json({ events: await listMonitorEvents(req.user!.tenantId, Number(req.query?.limit) || 100) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/monitor/run', async (req: Request, res: Response) => {
+  try { res.json(await runMonitorNow(req.user!.tenantId)); } catch (err) { fail(res, err); }
+});
+
+/* ── Identity hardening (opt-in; security settings + MFA enrolment) ── */
+router.get('/access/security', async (req: Request, res: Response) => {
+  try { res.json(await getSecuritySettings(req.user!.tenantId)); } catch (err) { fail(res, err, 500); }
+});
+router.put('/access/security', async (req: Request, res: Response) => {
+  try { res.json(await saveSecuritySettings(req.user!.tenantId, req.body || {})); } catch (err) { fail(res, err); }
+});
+router.get('/access/mfa/status', async (req: Request, res: Response) => {
+  try { res.json({ enrolled: await userHasMfa(req.user!.userId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/access/mfa/begin', (req: Request, res: Response) => {
+  try { res.json(beginMfaEnrollment(req.user!.username)); } catch (err) { fail(res, err); }
+});
+router.post('/access/mfa/confirm', async (req: Request, res: Response) => {
+  try {
+    const ok = await confirmMfaEnrollment(req.user!.userId, String(req.body?.secret || ''), String(req.body?.code || ''));
+    if (!ok) { res.status(400).json({ error: 'That code did not match — check your authenticator and try again.' }); return; }
+    res.json({ ok: true, enrolled: true });
+  } catch (err) { fail(res, err); }
+});
+router.post('/access/mfa/disable', async (req: Request, res: Response) => {
+  try { res.json({ ok: await disableMfa(req.user!.userId) }); } catch (err) { fail(res, err); }
+});
+
+/* ── Conversational chat-to-test (opt-in; LLM refines one endpoint's test) ── */
+router.post('/chat-test/refine', async (req: Request, res: Response) => {
+  try {
+    const endpoint = req.body?.endpoint;
+    if (!endpoint || !/^https?:\/\//i.test(String(endpoint.url || ''))) { res.status(400).json({ error: 'Send an endpoint with an http(s) URL.' }); return; }
+    const llm = await getTenantLlm(req.user!.tenantId);
+    if (!llm) { res.status(400).json({ error: 'Chat-to-test needs an LLM — add a provider under System Configuration → LLM Configuration.' }); return; }
+    res.json(await chatRefineTest({ endpoint, current: req.body?.current, history: req.body?.history, instruction: String(req.body?.instruction || '') }, llm));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Synthetic test-data factory (opt-in; deterministic + optional LLM schema) ── */
+router.post('/synth-data/generate', async (req: Request, res: Response) => {
+  try {
+    const needsLlm = !!req.body?.endpoint && !(Array.isArray(req.body?.fields) && req.body.fields.length) && !req.body?.sampleBody;
+    const llm = needsLlm ? await getTenantLlm(req.user!.tenantId) : null;
+    res.json(await generateSyntheticData({
+      fields: req.body?.fields,
+      sampleBody: typeof req.body?.sampleBody === 'string' ? req.body.sampleBody : undefined,
+      endpoint: req.body?.endpoint,
+      count: Number(req.body?.count) || undefined,
+      seed: req.body?.seed != null ? Number(req.body.seed) : undefined,
+      locale: req.body?.locale,
+      piiMask: !!req.body?.piiMask,
+      edgeCases: !!req.body?.edgeCases,
+    }, llm));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Autonomous test maintenance (opt-in; drift + gaps → reviewable changeset) ── */
+router.post('/maintenance/plan', async (req: Request, res: Response) => {
+  try {
+    // Maintenance must keep each endpoint's catalogue id so adopt-* proposals can
+    // be applied back to the right row — so map here (endpointsFromBody drops id).
+    const raw = Array.isArray(req.body?.endpoints) ? req.body.endpoints : [];
+    const endpoints = raw
+      .filter((e: any) => e && /^https?:\/\//i.test(String(e.url || '')))
+      .slice(0, 500)
+      .map((e: any) => ({
+        id: String(e.id || ''),
+        title: typeof e.title === 'string' ? e.title.slice(0, 160) : undefined,
+        method: String(e.method || 'GET').toUpperCase().replace(/[^A-Z]/g, '') || 'GET',
+        url: String(e.url).slice(0, 4000),
+        headers: Array.isArray(e.headers) ? e.headers.filter((h: any) => h && String(h.key || '').trim()).slice(0, 40).map((h: any) => ({ key: String(h.key).slice(0, 200), value: String(h.value ?? '').slice(0, 2000) })) : [],
+        auth: e.auth && ['none', 'bearer', 'basic', 'apikey'].includes(String(e.auth.type)) ? { type: e.auth.type, value: e.auth.value ? String(e.auth.value).slice(0, 4000) : undefined, headerName: e.auth.headerName ? String(e.auth.headerName).slice(0, 100) : undefined } : undefined,
+        body: typeof e.body === 'string' ? e.body.slice(0, 20000) : undefined,
+        expectedStatus: Number.isInteger(Number(e.expectedStatus)) ? Number(e.expectedStatus) : undefined,
+        expectedResponse: typeof e.expectedResponse === 'string' ? e.expectedResponse.slice(0, 20000) : undefined,
+      }));
+    const explain = !!req.body?.explain;
+    const llm = explain ? await getTenantLlm(req.user!.tenantId) : null;
+    const sessionId = typeof req.body?.sessionId === 'string' && req.body.sessionId ? req.body.sessionId : undefined;
+    res.json(await planMaintenance(req.user!.tenantId, endpoints as any, { sessionId, explain, llm }));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Multi-LLM provider config (opt-in; overrides the default Anthropic path) ── */
+router.get('/providers/config', async (req: Request, res: Response) => {
+  try { res.json(await getProviderConfig(req.user!.tenantId)); } catch (err) { fail(res, err, 500); }
+});
+router.put('/providers/config', async (req: Request, res: Response) => {
+  try { res.json(await saveProviderConfig(req.user!.tenantId, req.body || {})); } catch (err) { fail(res, err); }
+});
+router.delete('/providers/config', async (req: Request, res: Response) => {
+  try { res.json({ ok: await deleteProviderConfig(req.user!.tenantId) }); } catch (err) { fail(res, err); }
+});
+router.post('/providers/test', async (req: Request, res: Response) => {
+  try { res.json(await testProvider(req.user!.tenantId, req.body || {})); } catch (err) { fail(res, err); }
+});
+
+/* ── MCP server tokens (opt-in; expose IntelliQE tools to MCP clients) ── */
+router.get('/mcp-tokens', async (req: Request, res: Response) => {
+  try { res.json({ tokens: await listMcpTokens(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/mcp-tokens', async (req: Request, res: Response) => {
+  try { res.status(201).json({ token: await createMcpToken(req.user!.tenantId, req.user!.username, req.body?.name) }); } catch (err) { fail(res, err); }
+});
+router.delete('/mcp-tokens/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteMcpToken(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Token not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Event/queue + gRPC (opt-in; optional deps, graceful when missing) ── */
+router.post('/messaging/kafka', async (req: Request, res: Response) => {
+  try { res.json(await kafkaProbe(req.body || {})); } catch (err) { fail(res, err); }
+});
+router.post('/messaging/grpc', async (req: Request, res: Response) => {
+  try { res.json(await grpcCall(req.body || {})); } catch (err) { fail(res, err); }
+});
+
+/* ── Distributed / geo load (opt-in; per-region concurrency + SLA) ── */
+router.post('/loadtest/geo', async (req: Request, res: Response) => {
+  try {
+    const endpoint = req.body?.endpoint;
+    if (!endpoint || !/^https?:\/\//i.test(String(endpoint.url || ''))) { res.status(400).json({ error: 'Send an endpoint with an http(s) URL.' }); return; }
+    res.json(await runGeoLoad({ endpoint, regions: req.body?.regions, durationSec: Number(req.body?.durationSec) || undefined, sla: req.body?.sla, allowWrites: !!req.body?.allowWrites }));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Test-level collaboration + versioning (opt-in) ── */
+router.get('/collab/comments', async (req: Request, res: Response) => {
+  try { res.json({ comments: await listComments(req.user!.tenantId, String(req.query.testKey || '')) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/collab/comments', async (req: Request, res: Response) => {
+  try { res.status(201).json({ comment: await addComment(req.user!.tenantId, req.user!.username, req.body?.testKey, req.body?.body) }); } catch (err) { fail(res, err); }
+});
+router.delete('/collab/comments/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteComment(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Comment not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.post('/collab/comment-counts', async (req: Request, res: Response) => {
+  try { res.json({ counts: await commentCounts(req.user!.tenantId, Array.isArray(req.body?.testKeys) ? req.body.testKeys.map(String) : []) }); } catch (err) { fail(res, err); }
+});
+router.get('/collab/versions', async (req: Request, res: Response) => {
+  try { res.json({ versions: await listVersions(req.user!.tenantId, String(req.query.testKey || '')) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/collab/versions', async (req: Request, res: Response) => {
+  try { res.status(201).json({ version: await saveVersion(req.user!.tenantId, req.user!.username, { testKey: req.body?.testKey, label: req.body?.label, snapshot: req.body?.snapshot }) }); } catch (err) { fail(res, err); }
+});
+router.delete('/collab/versions/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteVersion(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Version not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.get('/collab/versions/diff', async (req: Request, res: Response) => {
+  try { res.json(await getVersionDiff(req.user!.tenantId, String(req.query.from || ''), String(req.query.to || ''))); } catch (err) { fail(res, err); }
+});
+
+/* ── Browser-extension recorder source (opt-in; download & load unpacked) ── */
+router.get('/capture/recorder-extension', (_req: Request, res: Response) => {
+  res.json({ files: recorderExtensionFiles() });
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Enterprise batch (Tier 1–3) — every route below is additive and opt-in.
+   None is read by the generate → execute → heal pipeline; the data-plane
+   faces (virtual services /vs, SCIM, SSO) are mounted separately in index.ts.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Stateful service virtualization (management; data-plane is public /vs) ── */
+router.get('/virtual-services', async (req: Request, res: Response) => {
+  try { res.json({ services: await listVirtualServices(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/virtual-services', async (req: Request, res: Response) => {
+  try { res.status(201).json({ service: await createVirtualService(req.user!.tenantId, req.user!.username, req.body || {}) }); } catch (err) { fail(res, err); }
+});
+router.put('/virtual-services/:id', async (req: Request, res: Response) => {
+  try {
+    const svc = await updateVirtualService(req.user!.tenantId, String(req.params.id), req.body || {});
+    if (!svc) { res.status(404).json({ error: 'Virtual service not found.' }); return; }
+    res.json({ service: svc });
+  } catch (err) { fail(res, err); }
+});
+router.delete('/virtual-services/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteVirtualService(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Virtual service not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Consumer-driven contracts (Pact broker) ── */
+router.get('/pacts', async (req: Request, res: Response) => {
+  try { res.json({ pacts: await listPacts(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/pacts', async (req: Request, res: Response) => {
+  try { res.status(201).json({ pact: await publishPact(req.user!.tenantId, req.body || {}) }); } catch (err) { fail(res, err); }
+});
+router.get('/pacts/can-i-deploy', async (req: Request, res: Response) => {
+  try { res.json(await canIDeploy(req.user!.tenantId, String(req.query.pacticipant || ''), String(req.query.version || ''), String(req.query.environment || ''))); } catch (err) { fail(res, err); }
+});
+router.post('/pacts/deployments', async (req: Request, res: Response) => {
+  try { res.json(await recordDeployment(req.user!.tenantId, String(req.body?.pacticipant || ''), String(req.body?.version || ''), String(req.body?.environment || ''))); } catch (err) { fail(res, err); }
+});
+router.post('/pacts/:id/verify', async (req: Request, res: Response) => {
+  try { res.json({ verification: await verifyPact(req.user!.tenantId, String(req.params.id), String(req.body?.providerBaseUrl || ''), String(req.body?.providerVersion || '0.0.0')) }); } catch (err) { fail(res, err); }
+});
+router.delete('/pacts/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deletePact(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Pact not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Chaos / resilience probe (opt-in; non-destructive unless allowWrites) ── */
+router.post('/chaos/probe', async (req: Request, res: Response) => {
+  try {
+    const endpoint = req.body?.endpoint;
+    if (!endpoint || !/^https?:\/\//i.test(String(endpoint.url || ''))) { res.status(400).json({ error: 'Send an endpoint with an http(s) URL.' }); return; }
+    res.json(await runChaosProbe({ endpoint, requests: Number(req.body?.requests) || undefined, concurrency: Number(req.body?.concurrency) || undefined, allowWrites: !!req.body?.allowWrites, timeoutMs: Number(req.body?.timeoutMs) || undefined }));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── OAuth2 token helper + external secret managers (opt-in) ── */
+router.post('/oauth/token', async (req: Request, res: Response) => {
+  try { res.json(await fetchOAuthToken(req.body || {})); } catch (err) { fail(res, err); }
+});
+router.get('/oauth/configs', async (req: Request, res: Response) => {
+  try { res.json({ configs: await listOAuthConfigs(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/oauth/configs', async (req: Request, res: Response) => {
+  try { res.status(201).json({ config: await saveOAuthConfig(req.user!.tenantId, req.user!.username, req.body || {}) }); } catch (err) { fail(res, err); }
+});
+router.delete('/oauth/configs/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteOAuthConfig(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'OAuth config not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.post('/oauth/configs/:id/token', async (req: Request, res: Response) => {
+  try { res.json(await fetchTokenFromConfig(req.user!.tenantId, String(req.params.id))); } catch (err) { fail(res, err); }
+});
+router.post('/secrets/resolve', async (req: Request, res: Response) => {
+  try { res.json(await resolveSecret(req.body || {}, !!req.body?.reveal)); } catch (err) { fail(res, err); }
+});
+
+/* ── Database validation (opt-in; strictly read-only SELECT assertions) ── */
+router.get('/db/connections', async (req: Request, res: Response) => {
+  try { res.json({ connections: await listDbConnections(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/db/connections', async (req: Request, res: Response) => {
+  try { res.status(201).json({ connection: await saveDbConnection(req.user!.tenantId, req.user!.username, req.body || {}) }); } catch (err) { fail(res, err); }
+});
+router.delete('/db/connections/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteDbConnection(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Connection not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.post('/db/validate', async (req: Request, res: Response) => {
+  try {
+    if (!req.body?.query) { res.status(400).json({ error: 'A SELECT query is required.' }); return; }
+    res.json(await runDbValidation(req.user!.tenantId, { connectionId: req.body?.connectionId, config: req.body?.config, query: String(req.body.query), expect: req.body?.expect }));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── AsyncAPI (event-driven) contract summary + message validation ── */
+router.post('/asyncapi/summary', (req: Request, res: Response) => {
+  try { res.json(summarizeAsyncApi(String(req.body?.text || ''))); } catch (err) { fail(res, err); }
+});
+router.post('/asyncapi/validate', (req: Request, res: Response) => {
+  try { res.json(validateAsyncMessage(String(req.body?.text || ''), String(req.body?.channel || ''), req.body?.payload)); } catch (err) { fail(res, err); }
+});
+
+/* ── Distributed-trace correlation probe (opt-in; Jaeger/Zipkin/Tempo) ── */
+router.post('/trace/probe', async (req: Request, res: Response) => {
+  try {
+    const endpoint = req.body?.endpoint;
+    if (!endpoint || !/^https?:\/\//i.test(String(endpoint.url || ''))) { res.status(400).json({ error: 'Send an endpoint with an http(s) URL.' }); return; }
+    res.json(await runTraceProbe({ endpoint, tracing: req.body?.tracing, expectSpans: Array.isArray(req.body?.expectSpans) ? req.body.expectSpans.map(String) : undefined, minSpans: Number(req.body?.minSpans) || undefined, waitMs: Number(req.body?.waitMs) || undefined }));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Test intelligence: flaky detection, quarantine, change-impact selection ── */
+router.get('/testintel/flaky', async (req: Request, res: Response) => {
+  try { res.json(await detectFlaky(req.user!.tenantId, Number(req.query.runLimit) || 20)); } catch (err) { fail(res, err, 500); }
+});
+router.get('/testintel/quarantine', async (req: Request, res: Response) => {
+  try { res.json({ items: await listQuarantine(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/testintel/quarantine', async (req: Request, res: Response) => {
+  try { res.status(201).json({ item: await addQuarantine(req.user!.tenantId, req.user!.username, req.body?.testKey, req.body?.reason) }); } catch (err) { fail(res, err); }
+});
+router.delete('/testintel/quarantine/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await removeQuarantine(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Quarantine entry not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.post('/testintel/impact', (req: Request, res: Response) => {
+  try {
+    const changed = Array.isArray(req.body?.changed)
+      ? req.body.changed.filter((c: any) => c && c.url).map((c: any) => ({ method: c.method ? String(c.method) : undefined, url: String(c.url) }))
+      : [];
+    const candidates = Array.isArray(req.body?.candidates)
+      ? req.body.candidates.filter((c: any) => c && /^https?:\/\//i.test(String(c.url || ''))).slice(0, 1000).map((c: any) => ({ id: c.id ? String(c.id) : undefined, title: c.title ? String(c.title) : undefined, method: String(c.method || 'GET').toUpperCase(), url: String(c.url) }))
+      : [];
+    res.json(analyzeImpact({ changed, candidates }));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── gRPC server-streaming + reflection (opt-in; optional deps) ── */
+router.post('/messaging/grpc-stream', async (req: Request, res: Response) => {
+  try { res.json(await grpcServerStream(req.body || {})); } catch (err) { fail(res, err); }
+});
+router.post('/messaging/grpc-reflect', async (req: Request, res: Response) => {
+  try { res.json(await grpcReflect({ target: String(req.body?.target || ''), tls: !!req.body?.tls })); } catch (err) { fail(res, err); }
+});
+
+/* ── Distributed cloud load (opt-in; fans out to registered remote agents) ── */
+router.get('/load-agents', async (req: Request, res: Response) => {
+  try { res.json({ agents: await listLoadAgents(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/load-agents', async (req: Request, res: Response) => {
+  try { res.status(201).json({ agent: await saveLoadAgent(req.user!.tenantId, req.body || {}) }); } catch (err) { fail(res, err); }
+});
+router.delete('/load-agents/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteLoadAgent(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Load agent not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.post('/loadtest/cloud', async (req: Request, res: Response) => {
+  try {
+    const endpoint = req.body?.endpoint;
+    if (!endpoint || !/^https?:\/\//i.test(String(endpoint.url || ''))) { res.status(400).json({ error: 'Send an endpoint with an http(s) URL.' }); return; }
+    res.json(await runCloudLoad(req.user!.tenantId, { endpoint, durationSec: Number(req.body?.durationSec) || undefined, concurrencyPerAgent: Number(req.body?.concurrencyPerAgent) || undefined, allowWrites: !!req.body?.allowWrites, sla: req.body?.sla }));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Access control: RBAC + SSO(OIDC) config + SCIM token (data-plane in index.ts) ── */
+router.get('/access/permissions', async (req: Request, res: Response) => {
+  try { res.json({ catalog: PERMISSION_CATALOG, roles: await getRolePermissions(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.put('/access/permissions', async (req: Request, res: Response) => {
+  try { res.json({ roles: await setRolePermissions(req.user!.tenantId, String(req.body?.role || ''), Array.isArray(req.body?.permissions) ? req.body.permissions.map(String) : []) }); } catch (err) { fail(res, err); }
+});
+router.get('/access/sso', async (req: Request, res: Response) => {
+  try { res.json(await getSsoConfig(req.user!.tenantId)); } catch (err) { fail(res, err, 500); }
+});
+router.put('/access/sso', async (req: Request, res: Response) => {
+  try { res.json(await saveSsoConfig(req.user!.tenantId, req.body || {})); } catch (err) { fail(res, err); }
+});
+router.post('/access/sso/test', async (req: Request, res: Response) => {
+  try { res.json(await testOidcDiscovery(String(req.body?.issuer || ''))); } catch (err) { fail(res, err); }
+});
+router.get('/access/scim', async (req: Request, res: Response) => {
+  try { res.json(await getScimToken(req.user!.tenantId)); } catch (err) { fail(res, err, 500); }
+});
+router.post('/access/scim/rotate', async (req: Request, res: Response) => {
+  try { res.json(await rotateScimToken(req.user!.tenantId)); } catch (err) { fail(res, err); }
+});
+router.delete('/access/scim', async (req: Request, res: Response) => {
+  try { res.json({ ok: await revokeScimToken(req.user!.tenantId) }); } catch (err) { fail(res, err); }
+});
+
+/* ── Autonomous remediation PRs (opt-in; GitHub/GitLab, token from request) ── */
+router.post('/remediation/pr', async (req: Request, res: Response) => {
+  try { res.json(await openRemediationPr(req.body || {})); } catch (err) { fail(res, err); }
+});
+
+/* ── Compliance vertical packs (PCI/HIPAA/GDPR/PSD2; pure analysis) ── */
+router.get('/compliance/packs', (_req: Request, res: Response) => {
+  res.json({ packs: listCompliancePacks() });
+});
+router.post('/compliance/scan', (req: Request, res: Response) => {
+  try {
+    const eps = endpointsFromBody(req.body?.endpoints).map((e) => ({ method: e.method, url: e.url, auth: e.auth, queryParams: Array.isArray(e.queryParams) ? e.queryParams.map((q: any) => ({ name: String(q?.name ?? q ?? '') })) : undefined }));
+    res.json(runCompliancePack(String(req.body?.pack || ''), eps, req.body?.security));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Git-synced test-as-code (opt-in; token encrypted at rest) ── */
+router.get('/git-sync/config', async (req: Request, res: Response) => {
+  try { res.json(await getGitSyncConfig(req.user!.tenantId)); } catch (err) { fail(res, err, 500); }
+});
+router.put('/git-sync/config', async (req: Request, res: Response) => {
+  try { res.json(await saveGitSyncConfig(req.user!.tenantId, req.body || {})); } catch (err) { fail(res, err); }
+});
+router.post('/git-sync/push', async (req: Request, res: Response) => {
+  try { res.json(await pushToGit(req.user!.tenantId, String(req.body?.content || ''))); } catch (err) { fail(res, err); }
+});
+router.post('/git-sync/pull', async (req: Request, res: Response) => {
+  try { res.json(await pullFromGit(req.user!.tenantId)); } catch (err) { fail(res, err); }
+});
+
+/* ── API + UI hybrid tests (opt-in; seed via API → verify in a real browser → cleanup via API) ── */
+router.get('/hybrid', async (req: Request, res: Response) => {
+  try { res.json({ tests: await listHybridTests(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/hybrid', async (req: Request, res: Response) => {
+  try { res.status(201).json({ test: await saveHybridTest(req.user!.tenantId, req.user!.username, req.body || {}) }); } catch (err) { fail(res, err); }
+});
+router.delete('/hybrid/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteHybridTest(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Hybrid test not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.post('/hybrid/run', async (req: Request, res: Response) => {
+  try { res.json(await runHybrid(req.user!.tenantId, { seed: req.body?.seed, ui: req.body?.ui, cleanup: req.body?.cleanup, variables: req.body?.variables, allowWrites: !!req.body?.allowWrites })); } catch (err) { fail(res, err); }
+});
+
+/* ── Agentic release gate (opt-in; scores a finished run → go / no-go) ── */
+router.get('/release-gates', async (req: Request, res: Response) => {
+  try { res.json({ policies: await listGatePolicies(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/release-gates', async (req: Request, res: Response) => {
+  try { res.status(201).json({ policy: await saveGatePolicy(req.user!.tenantId, req.user!.username, req.body || {}) }); } catch (err) { fail(res, err); }
+});
+router.delete('/release-gates/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteGatePolicy(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Release gate not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.post('/release-gate/evaluate', async (req: Request, res: Response) => {
+  try { res.json(await evaluateGate(req.user!.tenantId, { runId: String(req.body?.runId || ''), policyId: req.body?.policyId, thresholds: req.body?.thresholds })); } catch (err) { fail(res, err); }
+});
+
+/* ── First-party CI / GitHub Action (opt-in; mints the token used by the public /api/ci trigger) ── */
+router.get('/ci/config', async (req: Request, res: Response) => {
+  try { res.json(await getCiConfig(req.user!.tenantId)); } catch (err) { fail(res, err, 500); }
+});
+router.post('/ci/token', async (req: Request, res: Response) => {
+  try { res.json(await rotateCiToken(req.user!.tenantId, req.user!.username)); } catch (err) { fail(res, err); }
+});
+router.put('/ci/config', async (req: Request, res: Response) => {
+  try { res.json(await setCiEnabled(req.user!.tenantId, !!req.body?.enabled)); } catch (err) { fail(res, err); }
+});
+
+/* ── Parallel execution queue (opt-in; slot model over the headless pipeline) ── */
+router.get('/exec-queue', async (req: Request, res: Response) => {
+  try { res.json(await listQueue(req.user!.tenantId)); } catch (err) { fail(res, err, 500); }
+});
+router.put('/exec-queue/config', async (req: Request, res: Response) => {
+  try { res.json(await saveQueueConfig(req.user!.tenantId, req.body?.slots)); } catch (err) { fail(res, err); }
+});
+router.post('/exec-queue/enqueue', async (req: Request, res: Response) => {
+  try { res.status(201).json({ item: await enqueueRun(req.user!.tenantId, req.user!.username, req.body || {}) }); } catch (err) { fail(res, err); }
+});
+router.delete('/exec-queue/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await cancelQueued(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Queue item not found or not cancelable.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Cloud browser/device lab (opt-in; runs the UI checks on hosted provider browsers) ── */
+router.get('/cloud-labs', async (req: Request, res: Response) => {
+  try { res.json({ labs: await listCloudLabs(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/cloud-labs', async (req: Request, res: Response) => {
+  try { res.status(201).json({ lab: await saveCloudLab(req.user!.tenantId, req.user!.username, req.body || {}) }); } catch (err) { fail(res, err); }
+});
+router.delete('/cloud-labs/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteCloudLab(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Cloud lab not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.post('/cloud-labs/:id/test', async (req: Request, res: Response) => {
+  try { res.json(await testCloudLab(req.user!.tenantId, String(req.params.id))); } catch (err) { fail(res, err); }
+});
+router.post('/cloud-labs/run', async (req: Request, res: Response) => {
+  try { res.json(await runCloudMatrix(req.user!.tenantId, req.body || {})); } catch (err) { fail(res, err); }
 });
 
 export default router;

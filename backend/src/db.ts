@@ -954,7 +954,355 @@ export async function initDb(): Promise<void> {
         updated_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
       )`);
 
+    // Visual flow / journey builder: a saved multi-step journey (ordered HTTP
+    // steps with variable extraction + per-step checks). Opt-in and standalone —
+    // the generate/execute/heal pipeline never reads it; running a flow just
+    // chains live requests.
+    await createTable('api_flows', `
+      CREATE TABLE ${SCHEMA}.api_flows (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        name        NVARCHAR(200) NOT NULL,
+        steps       NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        variables   NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        created_by  NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+
+    // MCP tokens: a per-tenant bearer token that lets an MCP client (Claude Code,
+    // Cursor, …) call IntelliQE's API tools at /mcp/:token. Opt-in and standalone;
+    // deleting the row revokes access. The pipeline is never involved.
+    await createTable('api_mcp_tokens', `
+      CREATE TABLE ${SCHEMA}.api_mcp_tokens (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id    UNIQUEIDENTIFIER NOT NULL,
+        token        NVARCHAR(80) NOT NULL,
+        name         NVARCHAR(200) NOT NULL,
+        created_by   NVARCHAR(100),
+        created_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        last_used_at DATETIMEOFFSET
+      )`);
+
+    // Test-level collaboration: threaded comments on a test (keyed by a stable
+    // "METHOD url" test key) and point-in-time version snapshots. Opt-in and
+    // standalone — never read by the pipeline.
+    await createTable('api_test_comments', `
+      CREATE TABLE ${SCHEMA}.api_test_comments (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        test_key    NVARCHAR(500) NOT NULL,
+        author      NVARCHAR(100),
+        body        NVARCHAR(MAX) NOT NULL,
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_test_versions', `
+      CREATE TABLE ${SCHEMA}.api_test_versions (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        test_key    NVARCHAR(500) NOT NULL,
+        version_no  INT NOT NULL DEFAULT 1,
+        label       NVARCHAR(200),
+        snapshot    NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        author      NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+
+    // ─── Enterprise batch (Tier 1–3): all opt-in, never read by the pipeline ───
+    // Stateful service virtualization.
+    await createTable('api_virtual_services', `
+      CREATE TABLE ${SCHEMA}.api_virtual_services (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        token       NVARCHAR(80) NOT NULL,
+        name        NVARCHAR(200) NOT NULL,
+        enabled     BIT NOT NULL DEFAULT 1,
+        rules       NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        state       NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        hit_count   INT NOT NULL DEFAULT 0,
+        created_by  NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    // Pact broker.
+    await createTable('api_pacts', `
+      CREATE TABLE ${SCHEMA}.api_pacts (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        consumer    NVARCHAR(200) NOT NULL,
+        provider    NVARCHAR(200) NOT NULL,
+        version     NVARCHAR(100) NOT NULL DEFAULT '0.0.0',
+        branch      NVARCHAR(100) NOT NULL DEFAULT 'main',
+        contract    NVARCHAR(MAX) NOT NULL,
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_pact_verifications', `
+      CREATE TABLE ${SCHEMA}.api_pact_verifications (
+        id               UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id        UNIQUEIDENTIFIER NOT NULL,
+        pact_id          UNIQUEIDENTIFIER NOT NULL,
+        provider_version NVARCHAR(100) NOT NULL DEFAULT '0.0.0',
+        success          BIT NOT NULL DEFAULT 0,
+        results          NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        created_at       DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_pact_deployments', `
+      CREATE TABLE ${SCHEMA}.api_pact_deployments (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        pacticipant NVARCHAR(200) NOT NULL,
+        version     NVARCHAR(100) NOT NULL,
+        environment NVARCHAR(100) NOT NULL,
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    // OAuth configs + DB connections (secrets encrypted in the JSON config).
+    await createTable('api_oauth_configs', `
+      CREATE TABLE ${SCHEMA}.api_oauth_configs (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        name        NVARCHAR(200) NOT NULL,
+        config      NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        created_by  NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_db_connections', `
+      CREATE TABLE ${SCHEMA}.api_db_connections (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        name        NVARCHAR(200) NOT NULL,
+        config      NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        created_by  NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    // Flaky-test quarantine + cloud load agents.
+    await createTable('api_quarantine', `
+      CREATE TABLE ${SCHEMA}.api_quarantine (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        test_key    NVARCHAR(500) NOT NULL,
+        reason      NVARCHAR(500),
+        created_by  NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_load_agents', `
+      CREATE TABLE ${SCHEMA}.api_load_agents (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        name        NVARCHAR(200) NOT NULL,
+        url         NVARCHAR(1000) NOT NULL,
+        region      NVARCHAR(80),
+        enabled     BIT NOT NULL DEFAULT 1,
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    // RBAC role→permission mapping.
+    await createTable('api_role_permissions', `
+      CREATE TABLE ${SCHEMA}.api_role_permissions (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        role        NVARCHAR(50) NOT NULL,
+        permission  NVARCHAR(100) NOT NULL
+      )`);
+    // SSO config + SCIM token + Git-sync config (one row per tenant → tenant_id PK).
+    await createTable('api_sso_config', `
+      CREATE TABLE ${SCHEMA}.api_sso_config (
+        tenant_id   UNIQUEIDENTIFIER PRIMARY KEY,
+        config      NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        status      NVARCHAR(20) NOT NULL DEFAULT 'disconnected',
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_scim_tokens', `
+      CREATE TABLE ${SCHEMA}.api_scim_tokens (
+        tenant_id   UNIQUEIDENTIFIER PRIMARY KEY,
+        token       NVARCHAR(80) NOT NULL,
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_git_sync_config', `
+      CREATE TABLE ${SCHEMA}.api_git_sync_config (
+        tenant_id   UNIQUEIDENTIFIER PRIMARY KEY,
+        config      NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+
+    // ─── Testsigma-gap batch: data profiles, step groups, orchestrator, security (all opt-in) ───
+    await createTable('api_data_profiles', `
+      CREATE TABLE ${SCHEMA}.api_data_profiles (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        name        NVARCHAR(200) NOT NULL,
+        columns     NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        rows        NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        source      NVARCHAR(40) NOT NULL DEFAULT 'manual',
+        created_by  NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_step_groups', `
+      CREATE TABLE ${SCHEMA}.api_step_groups (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        name        NVARCHAR(200) NOT NULL,
+        steps       NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        created_by  NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_orchestrator_config', `
+      CREATE TABLE ${SCHEMA}.api_orchestrator_config (
+        tenant_id   UNIQUEIDENTIFIER PRIMARY KEY,
+        enabled     BIT NOT NULL DEFAULT 0,
+        triggers    NVARCHAR(MAX) NOT NULL DEFAULT '["pull_request","sprint_started"]',
+        action      NVARCHAR(40) NOT NULL DEFAULT 'maintenance',
+        token       NVARCHAR(80),
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_orchestrator_events', `
+      CREATE TABLE ${SCHEMA}.api_orchestrator_events (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        source      NVARCHAR(40) NOT NULL DEFAULT 'webhook',
+        type        NVARCHAR(60) NOT NULL DEFAULT 'event',
+        summary     NVARCHAR(400),
+        status      NVARCHAR(60) NOT NULL DEFAULT 'recorded',
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_security_settings', `
+      CREATE TABLE ${SCHEMA}.api_security_settings (
+        tenant_id   UNIQUEIDENTIFIER PRIMARY KEY,
+        settings    NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    // Always-on monitoring loop (opt-in; read-only health/drift/coverage watcher).
+    await createTable('api_monitor_config', `
+      CREATE TABLE ${SCHEMA}.api_monitor_config (
+        tenant_id        UNIQUEIDENTIFIER PRIMARY KEY,
+        enabled          BIT NOT NULL DEFAULT 0,
+        interval_minutes INT NOT NULL DEFAULT 60,
+        endpoints        NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        checks           NVARCHAR(MAX) NOT NULL DEFAULT '["health","drift","coverage"]',
+        next_run_at      DATETIMEOFFSET,
+        last_run_at      DATETIMEOFFSET,
+        last_status      NVARCHAR(40),
+        last_summary     NVARCHAR(MAX),
+        updated_at       DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_monitor_events', `
+      CREATE TABLE ${SCHEMA}.api_monitor_events (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        check_kind  NVARCHAR(40) NOT NULL DEFAULT 'health',
+        severity    NVARCHAR(20) NOT NULL DEFAULT 'info',
+        title       NVARCHAR(400),
+        detail      NVARCHAR(MAX),
+        signature   NVARCHAR(400),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    // Per-user TOTP secret (encrypted at rest); NULL ⇒ MFA not enrolled (login unchanged).
+    await addColumn('users', 'mfa_secret', 'NVARCHAR(200)');
+
+    // ─── Execution/CI batch: hybrid API+UI tests, release gates, CI token, parallel queue (all opt-in) ───
+    await createTable('api_hybrid_tests', `
+      CREATE TABLE ${SCHEMA}.api_hybrid_tests (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        name        NVARCHAR(200) NOT NULL,
+        seed        NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        ui          NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        cleanup     NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        created_by  NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_release_gates', `
+      CREATE TABLE ${SCHEMA}.api_release_gates (
+        id                       UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id                UNIQUEIDENTIFIER NOT NULL,
+        name                     NVARCHAR(200) NOT NULL,
+        min_pass_rate            INT NOT NULL DEFAULT 80,
+        max_failed               INT NOT NULL DEFAULT 0,
+        max_broken               INT NOT NULL DEFAULT 0,
+        min_confidence           INT NOT NULL DEFAULT 70,
+        require_no_new_failures  BIT NOT NULL DEFAULT 0,
+        block_high_sev           BIT NOT NULL DEFAULT 0,
+        created_by               NVARCHAR(100),
+        created_at               DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at               DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_ci_config', `
+      CREATE TABLE ${SCHEMA}.api_ci_config (
+        tenant_id   UNIQUEIDENTIFIER PRIMARY KEY,
+        token       NVARCHAR(80),
+        enabled     BIT NOT NULL DEFAULT 1,
+        created_by  NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_exec_queue_config', `
+      CREATE TABLE ${SCHEMA}.api_exec_queue_config (
+        tenant_id   UNIQUEIDENTIFIER PRIMARY KEY,
+        slots       INT NOT NULL DEFAULT 2,
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_exec_queue_items', `
+      CREATE TABLE ${SCHEMA}.api_exec_queue_items (
+        id             UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id      UNIQUEIDENTIFIER NOT NULL,
+        title          NVARCHAR(200) NOT NULL,
+        status         NVARCHAR(20) NOT NULL DEFAULT 'queued',
+        endpoint_count INT NOT NULL DEFAULT 0,
+        payload        NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        stats          NVARCHAR(MAX),
+        job_id         NVARCHAR(80),
+        error          NVARCHAR(MAX),
+        created_by     NVARCHAR(100),
+        enqueued_at    DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        started_at     DATETIMEOFFSET,
+        finished_at    DATETIMEOFFSET
+      )`);
+    await createTable('api_cloud_labs', `
+      CREATE TABLE ${SCHEMA}.api_cloud_labs (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id    UNIQUEIDENTIFIER NOT NULL,
+        name         NVARCHAR(200) NOT NULL,
+        provider     NVARCHAR(40) NOT NULL DEFAULT 'custom',
+        username     NVARCHAR(200),
+        access_key   NVARCHAR(MAX),
+        ws_endpoint  NVARCHAR(MAX),
+        enabled      BIT NOT NULL DEFAULT 1,
+        created_by   NVARCHAR(100),
+        created_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+
     // ─── 11. Indexes ───
+    await createIndex('idx_api_data_profiles_tenant', 'api_data_profiles', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_step_groups_tenant', 'api_step_groups', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_orchestrator_config_token', 'api_orchestrator_config', '(token)');
+    await createIndex('idx_api_orchestrator_events_tenant', 'api_orchestrator_events', '(tenant_id, created_at DESC)');
+    await createIndex('idx_api_monitor_events_tenant', 'api_monitor_events', '(tenant_id, created_at DESC)');
+    await createIndex('idx_api_monitor_config_due', 'api_monitor_config', '(enabled, next_run_at)');
+    await createIndex('idx_api_hybrid_tests_tenant', 'api_hybrid_tests', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_release_gates_tenant', 'api_release_gates', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_ci_config_token', 'api_ci_config', '(token)');
+    await createIndex('idx_api_exec_queue_items_tenant', 'api_exec_queue_items', '(tenant_id, enqueued_at DESC)');
+    await createIndex('idx_api_cloud_labs_tenant', 'api_cloud_labs', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_virtual_services_tenant', 'api_virtual_services', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_virtual_services_token', 'api_virtual_services', '(token)');
+    await createIndex('idx_api_pacts_tenant', 'api_pacts', '(tenant_id, created_at DESC)');
+    await createIndex('idx_api_pact_verifications_pact', 'api_pact_verifications', '(tenant_id, pact_id, created_at DESC)');
+    await createIndex('idx_api_oauth_configs_tenant', 'api_oauth_configs', '(tenant_id, created_at DESC)');
+    await createIndex('idx_api_db_connections_tenant', 'api_db_connections', '(tenant_id, created_at DESC)');
+    await createIndex('idx_api_quarantine_tenant', 'api_quarantine', '(tenant_id, created_at DESC)');
+    await createIndex('idx_api_load_agents_tenant', 'api_load_agents', '(tenant_id, created_at DESC)');
+    await createIndex('idx_api_role_permissions_tenant', 'api_role_permissions', '(tenant_id, role)');
+    await createIndex('idx_api_scim_tokens_token', 'api_scim_tokens', '(token)');
+    await createIndex('idx_api_flows_tenant', 'api_flows', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_mcp_tokens_tenant', 'api_mcp_tokens', '(tenant_id, created_at DESC)');
+    await createIndex('idx_api_mcp_tokens_token', 'api_mcp_tokens', '(token)');
+    await createIndex('idx_api_test_comments_key', 'api_test_comments', '(tenant_id, test_key, created_at)');
+    await createIndex('idx_api_test_versions_key', 'api_test_versions', '(tenant_id, test_key, version_no DESC)');
     await createIndex('idx_api_environments_tenant', 'api_environments', '(tenant_id)');
     await createIndex('idx_web_visual_baselines_tenant', 'web_visual_baselines', '(tenant_id, updated_at DESC)');
     await createIndex('idx_api_callback_listeners_tenant', 'api_callback_listeners', '(tenant_id, created_at DESC)');
