@@ -1276,6 +1276,119 @@ export async function initDb(): Promise<void> {
         updated_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
       )`);
 
+    // ─── Enterprise test-management & governance ───
+    await createTable('api_test_suites', `
+      CREATE TABLE ${SCHEMA}.api_test_suites (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id    UNIQUEIDENTIFIER NOT NULL,
+        name         NVARCHAR(200) NOT NULL,
+        description  NVARCHAR(MAX),
+        endpoints    NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        tags         NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        created_by   NVARCHAR(100),
+        created_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_test_plans', `
+      CREATE TABLE ${SCHEMA}.api_test_plans (
+        id             UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id      UNIQUEIDENTIFIER NOT NULL,
+        name           NVARCHAR(200) NOT NULL,
+        description    NVARCHAR(MAX),
+        suite_ids      NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        environment_id NVARCHAR(80),
+        coverage       NVARCHAR(20) NOT NULL DEFAULT 'standard',
+        gate           NVARCHAR(MAX),
+        created_by     NVARCHAR(100),
+        created_at     DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at     DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_test_cycles', `
+      CREATE TABLE ${SCHEMA}.api_test_cycles (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id    UNIQUEIDENTIFIER NOT NULL,
+        plan_id      UNIQUEIDENTIFIER NOT NULL,
+        name         NVARCHAR(200) NOT NULL,
+        status       NVARCHAR(20) NOT NULL DEFAULT 'planned',
+        run_id       NVARCHAR(100),
+        job_id       NVARCHAR(80),
+        stats        NVARCHAR(MAX),
+        error        NVARCHAR(MAX),
+        created_by   NVARCHAR(100),
+        created_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        started_at   DATETIMEOFFSET,
+        finished_at  DATETIMEOFFSET
+      )`);
+    await createTable('api_test_assignments', `
+      CREATE TABLE ${SCHEMA}.api_test_assignments (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id    UNIQUEIDENTIFIER NOT NULL,
+        plan_id      UNIQUEIDENTIFIER NOT NULL,
+        suite_id     UNIQUEIDENTIFIER,
+        assignee     NVARCHAR(100) NOT NULL,
+        status       NVARCHAR(20) NOT NULL DEFAULT 'todo',
+        notes        NVARCHAR(MAX),
+        created_by   NVARCHAR(100),
+        created_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_requirements', `
+      CREATE TABLE ${SCHEMA}.api_requirements (
+        id                UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id         UNIQUEIDENTIFIER NOT NULL,
+        req_key           NVARCHAR(60),
+        title             NVARCHAR(300) NOT NULL,
+        description       NVARCHAR(MAX),
+        priority          NVARCHAR(20) NOT NULL DEFAULT 'medium',
+        source            NVARCHAR(100),
+        linked_endpoints  NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        linked_scenarios  NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        defects           NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        created_by        NVARCHAR(100),
+        created_at        DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at        DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_tm_connectors', `
+      CREATE TABLE ${SCHEMA}.api_tm_connectors (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id    UNIQUEIDENTIFIER NOT NULL,
+        vendor       NVARCHAR(30) NOT NULL,
+        name         NVARCHAR(200) NOT NULL,
+        base_url     NVARCHAR(500),
+        project_key  NVARCHAR(200),
+        auth         NVARCHAR(MAX),
+        enabled      BIT NOT NULL DEFAULT 1,
+        created_by   NVARCHAR(100),
+        created_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_approval_workflows', `
+      CREATE TABLE ${SCHEMA}.api_approval_workflows (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id    UNIQUEIDENTIFIER NOT NULL,
+        name         NVARCHAR(200) NOT NULL,
+        stages       NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        created_by   NVARCHAR(100),
+        created_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_approval_requests', `
+      CREATE TABLE ${SCHEMA}.api_approval_requests (
+        id             UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id      UNIQUEIDENTIFIER NOT NULL,
+        workflow_id    UNIQUEIDENTIFIER NOT NULL,
+        workflow_name  NVARCHAR(200),
+        run_id         NVARCHAR(100),
+        title          NVARCHAR(300),
+        status         NVARCHAR(20) NOT NULL DEFAULT 'pending',
+        current_stage  INT NOT NULL DEFAULT 0,
+        stages         NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        decisions      NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        created_by     NVARCHAR(100),
+        created_at     DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at     DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+
     // ─── 11. Indexes ───
     await createIndex('idx_api_data_profiles_tenant', 'api_data_profiles', '(tenant_id, updated_at DESC)');
     await createIndex('idx_api_step_groups_tenant', 'api_step_groups', '(tenant_id, updated_at DESC)');
@@ -1288,6 +1401,14 @@ export async function initDb(): Promise<void> {
     await createIndex('idx_api_ci_config_token', 'api_ci_config', '(token)');
     await createIndex('idx_api_exec_queue_items_tenant', 'api_exec_queue_items', '(tenant_id, enqueued_at DESC)');
     await createIndex('idx_api_cloud_labs_tenant', 'api_cloud_labs', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_test_suites_tenant', 'api_test_suites', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_test_plans_tenant', 'api_test_plans', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_test_cycles_plan', 'api_test_cycles', '(tenant_id, plan_id, created_at DESC)');
+    await createIndex('idx_api_test_assignments_plan', 'api_test_assignments', '(tenant_id, plan_id)');
+    await createIndex('idx_api_requirements_tenant', 'api_requirements', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_tm_connectors_tenant', 'api_tm_connectors', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_approval_workflows_tenant', 'api_approval_workflows', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_approval_requests_run', 'api_approval_requests', '(tenant_id, run_id, created_at DESC)');
     await createIndex('idx_api_virtual_services_tenant', 'api_virtual_services', '(tenant_id, updated_at DESC)');
     await createIndex('idx_api_virtual_services_token', 'api_virtual_services', '(token)');
     await createIndex('idx_api_pacts_tenant', 'api_pacts', '(tenant_id, created_at DESC)');

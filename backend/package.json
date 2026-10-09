@@ -16,6 +16,7 @@
     "@playwright/test": "1.48.0",
     "@types/bcrypt": "^6.0.0",
     "@types/jsonwebtoken": "^9.0.7",
+    "@xmldom/xmldom": "^0.9.12",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "allure-commandline": "^2.30.0",
@@ -38,6 +39,7 @@
     "pixelmatch": "^8.0.0",
     "pngjs": "^7.0.0",
     "xlsx": "^0.18.5",
+    "xpath": "^0.0.34",
     "yaml": "^2.9.1",
     "zod": "^3.24.0"
   },
@@ -68,6 +70,7 @@
     "grpc-reflection-js": "^0.3.0",
     "kafkajs": "^2.2.4",
     "mysql2": "^3.11.0",
+    "pdf-lib": "^1.17.1",
     "pg": "^8.13.0",
     "undici": "^6.21.3"
   }

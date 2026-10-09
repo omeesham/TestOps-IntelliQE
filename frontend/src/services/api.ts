@@ -1017,7 +1017,8 @@ export async function captureWebPerformance(input: { url: string; engine?: WebEn
 
 /* ── 1. Visual flow / journey builder ── */
 export interface FlowExtract { name: string; from: 'body' | 'header' | 'status'; path?: string }
-export interface FlowCheck { kind: 'status' | 'jsonPathExists' | 'jsonPathEquals' | 'bodyContains' | 'responseTimeUnderMs'; equals?: number | string; oneOf?: number[]; path?: string; value?: unknown; text?: string; ms?: number }
+export type CompareMode = 'strict' | 'strict-order' | 'lenient' | 'non-extensible';
+export interface FlowCheck { kind: 'status' | 'jsonPathExists' | 'jsonPathEquals' | 'bodyContains' | 'responseTimeUnderMs' | 'header' | 'bodyMatches' | 'xpath'; equals?: number | string; oneOf?: number[]; path?: string; value?: unknown; text?: string; ms?: number; name?: string; op?: 'equals' | 'contains' | 'exists'; compareMode?: CompareMode }
 export interface ApiOAuth2Config { grant?: string; tokenUrl?: string; clientId?: string; clientSecret?: string; scope?: string; audience?: string; username?: string; password?: string; refreshToken?: string; clientAuthBasic?: boolean }
 export interface ApiHttpAuth { type: string; value?: string; headerName?: string; oauth2?: ApiOAuth2Config }
 export interface ApiFormField { key: string; value?: string; type?: 'text' | 'file'; filename?: string; contentType?: string; dataBase64?: string }
@@ -1280,7 +1281,8 @@ export async function deleteDataProfile(id: string): Promise<{ ok: boolean }> { 
 export async function importProfileCsv(text: string): Promise<{ columns: string[]; rows: Record<string, string>[] }> { const { data } = await api.post('/api-automation/data-profiles/import/csv', { text }); return data; }
 export async function importProfileExcel(base64: string): Promise<{ columns: string[]; rows: Record<string, string>[] }> { const { data } = await api.post('/api-automation/data-profiles/import/excel', { base64 }); return data; }
 export async function profileFromDb(input: { connectionId?: string; config?: any; query: string }): Promise<{ columns: string[]; rows: Record<string, string>[] }> { const { data } = await api.post('/api-automation/data-profiles/from-db', input, { timeout: 60_000 }); return data; }
-export async function runProfileOverFlow(input: { steps: FlowStep[]; rows: Record<string, string>[]; allowWrites?: boolean; maxRows?: number }): Promise<ProfileFlowRunResult> { const { data } = await api.post('/api-automation/data-profiles/run-flow', input, { timeout: 200_000 }); return data; }
+export async function importProfileGoogleSheet(url: string): Promise<{ columns: string[]; rows: Record<string, string>[] }> { const { data } = await api.post('/api-automation/data-profiles/from-gsheet', { url }, { timeout: 60_000 }); return data; }
+export async function runProfileOverFlow(input: { steps: FlowStep[]; rows: Record<string, string>[]; allowWrites?: boolean; maxRows?: number; rowStart?: number; rowEnd?: number }): Promise<ProfileFlowRunResult> { const { data } = await api.post('/api-automation/data-profiles/run-flow', input, { timeout: 200_000 }); return data; }
 
 /* ── G4. AI coworker / orchestrator ── */
 export interface OrchestrateResult { reply: string; intent: string; plan?: { action: string; params?: Record<string, unknown> }; data?: any }
@@ -1400,6 +1402,91 @@ export async function saveCloudLab(input: { id?: string; name: string; provider:
 export async function deleteCloudLab(id: string): Promise<void> { await api.delete(`/api-automation/cloud-labs/${encodeURIComponent(id)}`); }
 export async function testCloudLab(id: string): Promise<{ ok: boolean; detail: string; label?: string }> { const { data } = await api.post(`/api-automation/cloud-labs/${encodeURIComponent(id)}/test`, {}, { timeout: 90_000 }); return data; }
 export async function runCloudMatrix(input: { configId: string; url: string; name?: string; targets?: CloudTarget[]; checks?: UiCheck[]; variables?: Record<string, string>; waitUntil?: HybridUi['waitUntil'] }): Promise<CloudRunResult> { const { data } = await api.post('/api-automation/cloud-labs/run', input, { timeout: 240_000 }); return data; }
+
+/* ─────────────────────────────────────────────────────────────
+   Enterprise test management & governance (all additive, opt-in)
+   ───────────────────────────────────────────────────────────── */
+
+// Suites / Plans / Cycles + assignments + progress (items 1 & 2)
+export interface TestSuite { id: string; name: string; description: string; endpoints: any[]; tags: string[]; createdBy: string; createdAt: string; updatedAt: string }
+export interface PlanGate { minPassRate?: number; maxFailed?: number }
+export interface TestPlan { id: string; name: string; description: string; suiteIds: string[]; environmentId?: string; coverage: 'essential' | 'standard' | 'exhaustive'; gate?: PlanGate | null; createdBy: string; createdAt: string; updatedAt: string }
+export type CycleStatus = 'planned' | 'running' | 'completed' | 'failed' | 'aborted';
+export interface TestCycle { id: string; planId: string; name: string; status: CycleStatus; runId?: string; jobId?: string; stats?: { total: number; passed: number; failed: number; notRun: number; passRate: number; durationMs: number } | null; error?: string; createdBy: string; createdAt: string; startedAt?: string; finishedAt?: string }
+export type AssignmentStatus = 'todo' | 'in_progress' | 'blocked' | 'done';
+export interface Assignment { id: string; planId: string; suiteId?: string; assignee: string; status: AssignmentStatus; notes: string; createdBy: string; createdAt: string; updatedAt: string }
+export interface TenantMember { username: string; fullName: string; email: string; role: string }
+export interface PlanProgress { planId: string; total: number; byStatus: Record<AssignmentStatus, number>; byAssignee: { assignee: string; total: number; done: number; byStatus: Record<AssignmentStatus, number> }[]; donePct: number }
+export async function listTestSuites(): Promise<TestSuite[]> { const { data } = await api.get('/api-automation/suites'); return data.suites || []; }
+export async function saveTestSuite(input: { id?: string; name: string; description?: string; endpoints?: unknown[]; tags?: string[] }): Promise<TestSuite> { const { data } = await api.post('/api-automation/suites', input); return data.suite; }
+export async function deleteTestSuite(id: string): Promise<void> { await api.delete(`/api-automation/suites/${encodeURIComponent(id)}`); }
+export async function listTestPlans(): Promise<TestPlan[]> { const { data } = await api.get('/api-automation/plans'); return data.plans || []; }
+export async function saveTestPlan(input: { id?: string; name: string; description?: string; suiteIds?: string[]; environmentId?: string; coverage?: string; gate?: PlanGate | null }): Promise<TestPlan> { const { data } = await api.post('/api-automation/plans', input); return data.plan; }
+export async function deleteTestPlan(id: string): Promise<void> { await api.delete(`/api-automation/plans/${encodeURIComponent(id)}`); }
+export async function getPlanProgress(id: string): Promise<PlanProgress> { const { data } = await api.get(`/api-automation/plans/${encodeURIComponent(id)}/progress`); return data; }
+export async function listTestCycles(planId?: string): Promise<TestCycle[]> { const { data } = await api.get('/api-automation/cycles', { params: planId ? { planId } : {} }); return data.cycles || []; }
+export async function startTestCycle(input: { planId: string; name?: string; execute?: boolean }): Promise<TestCycle> { const { data } = await api.post('/api-automation/cycles/start', input); return data.cycle; }
+export async function deleteTestCycle(id: string): Promise<void> { await api.delete(`/api-automation/cycles/${encodeURIComponent(id)}`); }
+export async function listAssignments(planId?: string): Promise<Assignment[]> { const { data } = await api.get('/api-automation/assignments', { params: planId ? { planId } : {} }); return data.assignments || []; }
+export async function saveAssignment(input: { id?: string; planId: string; suiteId?: string; assignee: string; status?: AssignmentStatus; notes?: string }): Promise<Assignment> { const { data } = await api.post('/api-automation/assignments', input); return data.assignment; }
+export async function setAssignmentStatus(id: string, status: AssignmentStatus): Promise<Assignment> { const { data } = await api.put(`/api-automation/assignments/${encodeURIComponent(id)}/status`, { status }); return data.assignment; }
+export async function deleteAssignment(id: string): Promise<void> { await api.delete(`/api-automation/assignments/${encodeURIComponent(id)}`); }
+export async function listTenantMembers(): Promise<TenantMember[]> { const { data } = await api.get('/api-automation/members'); return data.members || []; }
+
+// Requirements traceability matrix (item 3)
+export interface LinkedEndpoint { method: string; url: string }
+export interface DefectRef { key: string; url?: string; status?: string }
+export interface Requirement { id: string; reqKey: string; title: string; description: string; priority: 'low' | 'medium' | 'high' | 'critical'; source: string; linkedEndpoints: LinkedEndpoint[]; linkedScenarios: string[]; defects: DefectRef[]; createdBy: string; createdAt: string; updatedAt: string }
+export type TraceStatus = 'covered' | 'partial' | 'failing' | 'uncovered';
+export interface MatrixCase { id: string; title: string; status: string }
+export interface MatrixRow { requirement: { id: string; reqKey: string; title: string; priority: string }; cases: MatrixCase[]; passed: number; failed: number; notRun: number; status: TraceStatus; defects: DefectRef[] }
+export interface TraceMatrix { runId: string | null; runTitle: string | null; rows: MatrixRow[]; summary: { total: number; covered: number; partial: number; failing: number; uncovered: number; coveragePct: number } }
+export async function listRequirements(): Promise<Requirement[]> { const { data } = await api.get('/api-automation/requirements'); return data.requirements || []; }
+export async function saveRequirement(input: Partial<Requirement> & { title: string }): Promise<Requirement> { const { data } = await api.post('/api-automation/requirements', input); return data.requirement; }
+export async function deleteRequirement(id: string): Promise<void> { await api.delete(`/api-automation/requirements/${encodeURIComponent(id)}`); }
+export async function getTraceMatrix(runId?: string): Promise<TraceMatrix> { const { data } = await api.get('/api-automation/traceability/matrix', { params: runId ? { runId } : {} }); return data; }
+
+// Native TM connectors (item 4)
+export type TmVendor = 'testrail' | 'xray' | 'zephyr' | 'qtest';
+export interface TmConnector { id: string; vendor: TmVendor; name: string; baseUrl: string; projectKey: string; enabled: boolean; authFields: string[]; createdBy: string; createdAt: string; updatedAt: string }
+export interface TmExportResult { ok: boolean; detail: string; externalRef?: string; exported: number; skipped: number }
+export interface TmImportedCase { externalId: string; title: string; status?: string }
+export async function listTmConnectors(): Promise<TmConnector[]> { const { data } = await api.get('/api-automation/tm-connectors'); return data.connectors || []; }
+export async function saveTmConnector(input: { id?: string; vendor: TmVendor; name: string; baseUrl?: string; projectKey?: string; auth?: Record<string, string>; enabled?: boolean }): Promise<TmConnector> { const { data } = await api.post('/api-automation/tm-connectors', input); return data.connector; }
+export async function deleteTmConnector(id: string): Promise<void> { await api.delete(`/api-automation/tm-connectors/${encodeURIComponent(id)}`); }
+export async function testTmConnector(id: string): Promise<{ ok: boolean; detail: string }> { const { data } = await api.post(`/api-automation/tm-connectors/${encodeURIComponent(id)}/test`, {}, { timeout: 40_000 }); return data; }
+export async function exportRunToTm(id: string, runId: string): Promise<TmExportResult> { const { data } = await api.post(`/api-automation/tm-connectors/${encodeURIComponent(id)}/export`, { runId }, { timeout: 90_000 }); return data; }
+export async function importTmCases(id: string, limit = 100): Promise<{ ok: boolean; detail: string; cases: TmImportedCase[] }> { const { data } = await api.post(`/api-automation/tm-connectors/${encodeURIComponent(id)}/import`, { limit }, { timeout: 60_000 }); return data; }
+
+// Audit-log viewer (item 5)
+export interface AuditEntry { id: string; username: string; action: string; resourceType: string; resourceId: string; details: Record<string, unknown>; ipAddress: string; requestId: string; createdAt: string }
+export interface AuditPage { items: AuditEntry[]; total: number; page: number; pageSize: number }
+export interface AuditFacets { actions: string[]; resourceTypes: string[]; usernames: string[] }
+export interface AuditFilters { action?: string; resourceType?: string; username?: string; from?: string; to?: string; q?: string; page?: number; pageSize?: number }
+export async function listAudit(filters: AuditFilters = {}): Promise<AuditPage> { const { data } = await api.get('/api-automation/audit', { params: filters }); return data; }
+export async function getAuditFacets(): Promise<AuditFacets> { const { data } = await api.get('/api-automation/audit/facets'); return data; }
+export async function exportAuditCsv(filters: AuditFilters = {}): Promise<Blob> { const { data } = await api.get('/api-automation/audit/export', { params: filters, responseType: 'blob' }); return data as Blob; }
+
+// Multi-stage approval gating (item 6)
+export interface ApprovalStage { key: string; name: string; approvers: string[]; minApprovals: number }
+export interface ApprovalWorkflow { id: string; name: string; stages: ApprovalStage[]; createdBy: string; createdAt: string; updatedAt: string }
+export interface ApprovalDecision { stage: number; stageKey: string; approver: string; decision: 'approve' | 'reject'; note: string; at: string }
+export type ApprovalRequestStatus = 'pending' | 'approved' | 'rejected' | 'canceled';
+export interface ApprovalRequest { id: string; workflowId: string; workflowName: string; runId: string; title: string; status: ApprovalRequestStatus; currentStage: number; stages: ApprovalStage[]; decisions: ApprovalDecision[]; createdBy: string; createdAt: string; updatedAt: string }
+export interface ApprovalGate { status: ApprovalRequestStatus | 'none'; requestId?: string; workflowName?: string; stage?: number; totalStages?: number }
+export async function listApprovalWorkflows(): Promise<ApprovalWorkflow[]> { const { data } = await api.get('/api-automation/approval-workflows'); return data.workflows || []; }
+export async function saveApprovalWorkflow(input: { id?: string; name: string; stages: ApprovalStage[] }): Promise<ApprovalWorkflow> { const { data } = await api.post('/api-automation/approval-workflows', input); return data.workflow; }
+export async function deleteApprovalWorkflow(id: string): Promise<void> { await api.delete(`/api-automation/approval-workflows/${encodeURIComponent(id)}`); }
+export async function listApprovalRequests(runId?: string): Promise<ApprovalRequest[]> { const { data } = await api.get('/api-automation/approval-requests', { params: runId ? { runId } : {} }); return data.requests || []; }
+export async function createApprovalRequest(input: { workflowId: string; runId: string; title?: string }): Promise<ApprovalRequest> { const { data } = await api.post('/api-automation/approval-requests', input); return data.request; }
+export async function actOnApprovalRequest(input: { requestId: string; decision: 'approve' | 'reject'; note?: string }): Promise<ApprovalRequest> { const { data } = await api.post('/api-automation/approval-requests/act', input); return data.request; }
+export async function cancelApprovalRequest(id: string): Promise<ApprovalRequest> { const { data } = await api.post(`/api-automation/approval-requests/${encodeURIComponent(id)}/cancel`, {}); return data.request; }
+export async function getApprovalGate(runId: string): Promise<ApprovalGate> { const { data } = await api.get(`/api-automation/approval-gate/${encodeURIComponent(runId)}`); return data; }
+
+// Compliance-evidence export (item 7)
+export interface EvidenceDoc { generatedAt: string; run: { runId: string; title: string; createdAt: string; createdBy: string; reportUrl?: string; caseCount: number; stats: { total: number; passed: number; failed: number; broken: number; passRate: number; durationMs: number } | null }; compliance: { pack: string; label: string; grade: string; score: number; summary: Record<string, number> }[]; failures: { id: string; title: string; error?: string }[]; signoff: { status: string | null; count: number; latest?: { decision: string; reviewer?: string; note?: string; at: string } }; approval: ApprovalGate }
+export async function previewEvidence(runId: string, standards?: string[]): Promise<EvidenceDoc> { const { data } = await api.post('/api-automation/evidence/preview', { runId, standards }); return data; }
+export async function exportEvidence(runId: string, opts: { standards?: string[]; format?: 'pdf' | 'html' } = {}): Promise<Blob> { const { data } = await api.post('/api-automation/evidence/export', { runId, standards: opts.standards, format: opts.format }, { responseType: 'blob', timeout: 90_000 }); return data as Blob; }
 
 /* ─────────────────────────────────────────────────────────────
    Test generation (chat wizard core)

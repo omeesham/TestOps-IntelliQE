@@ -7,7 +7,7 @@
  * "Design scenarios", which starts the run for the selected endpoints.
  */
 import { useMemo, useState } from 'react';
-import { Search, Trash2, Pencil, Layers, Plus, Download, ChevronDown, ChevronRight, Globe, ShieldCheck, Gauge, ShieldAlert, ScrollText, Target, Wrench, GitCompare, Table2, Clock, Wand2, GitPullRequestArrow, Radio, BadgeCheck, Bug, Antenna, Activity, ServerCog, Radar, Sparkles, Webhook, Workflow, MessageSquare, Bot, Database, Cpu, Server, Network, Globe2, MessagesSquare, Chrome, Boxes, Handshake, Zap, KeyRound, Rss, Spline, Microscope, Cloud, Lock, GitMerge, ClipboardCheck, FolderGit2, BrainCircuit, FileText, ListFilter, GitCompareArrows, HeartPulse, Image as ImageIcon, Combine, GitBranchPlus, Rocket, ListChecks, MonitorSmartphone } from 'lucide-react';
+import { Search, Trash2, Pencil, Layers, Plus, Download, ChevronDown, ChevronRight, Globe, ShieldCheck, Gauge, ShieldAlert, ScrollText, Target, Wrench, GitCompare, Table2, Clock, Wand2, GitPullRequestArrow, Radio, BadgeCheck, Bug, Antenna, Activity, ServerCog, Radar, Sparkles, Webhook, Workflow, MessageSquare, Bot, Database, Cpu, Server, Network, Globe2, MessagesSquare, Chrome, Boxes, Handshake, Zap, KeyRound, Rss, Spline, Microscope, Cloud, Lock, GitMerge, ClipboardCheck, FolderGit2, BrainCircuit, FileText, ListFilter, GitCompareArrows, HeartPulse, Image as ImageIcon, Combine, GitBranchPlus, Rocket, ListChecks, MonitorSmartphone, ClipboardList, Waypoints, Share2, Stamp, FileCheck2 } from 'lucide-react';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { MethodBadge, StatusCode, EmptyState } from '../primitives';
 import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, CARD, BRAND_CHIP, MUTED_CHIP, STRIP, THEAD, IMPORT_METHOD_LABELS, pathOf, hostOf } from '../format';
@@ -63,12 +63,19 @@ import ImpactAnalysis from '../ImpactAnalysis';
 import SemanticHeal from '../SemanticHeal';
 import BugReport from '../BugReport';
 import Monitoring from '../Monitoring';
+import DataProfiles from '../DataProfiles';
 // ─── Execution/CI batch (all additive, opt-in) ───
 import HybridTest from '../HybridTest';
 import ReleaseGate from '../ReleaseGate';
 import CiPipeline from '../CiPipeline';
 import ExecQueue from '../ExecQueue';
 import CloudLab from '../CloudLab';
+import TestManagement from '../TestManagement';
+import Traceability from '../Traceability';
+import TmConnectors from '../TmConnectors';
+import AuditLog from '../AuditLog';
+import Approvals from '../Approvals';
+import EvidenceExport from '../EvidenceExport';
 import { toConnectorManifest, toOpenApi, toMockServer, toPactContract, downloadText } from '../generators';
 import InsightsPanel from './InsightsPanel';
 import StrategyBar from './StrategyBar';
@@ -164,12 +171,20 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
   const [healOpen, setHealOpen] = useState(false);
   const [bugReportOpen, setBugReportOpen] = useState(false);
   const [monitorOpen, setMonitorOpen] = useState(false);
+  const [profilesOpen, setProfilesOpen] = useState(false);
   // Execution/CI batch.
   const [hybridOpen, setHybridOpen] = useState(false);
   const [releaseGateOpen, setReleaseGateOpen] = useState(false);
   const [ciOpen, setCiOpen] = useState(false);
   const [execQueueOpen, setExecQueueOpen] = useState(false);
   const [cloudLabOpen, setCloudLabOpen] = useState(false);
+  // Enterprise test-management & governance batch.
+  const [tmOpen, setTmOpen] = useState(false);
+  const [traceMatrixOpen, setTraceMatrixOpen] = useState(false);
+  const [connectorsOpen, setConnectorsOpen] = useState(false);
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [approvalsOpen, setApprovalsOpen] = useState(false);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
 
   const methods = useMemo(() => [...new Set(endpoints.map((e) => e.method))].sort(), [endpoints]);
 
@@ -291,6 +306,7 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
                       { icon: Target, label: 'Test coverage', desc: 'Which endpoints are tested', open: () => setCoverageOpen(true) },
                       { icon: GitCompare, label: 'Regression baselines', desc: 'Snapshot responses & diff for drift', open: () => setBaselineOpen(true) },
                       { icon: Table2, label: 'Data-driven testing', desc: 'Run one endpoint over a data table', open: () => setDataDrivenOpen(true) },
+                      { icon: Database, label: 'Test data profiles', desc: 'Named datasets (CSV/Excel/Sheets/DB) → run a flow per row', open: () => setProfilesOpen(true) },
                       { icon: Radio, label: 'Async & streaming', desc: 'Test WebSocket and SSE endpoints', open: () => setAsyncOpen(true) },
                       { icon: ServerCog, label: 'Hosted mock server', desc: 'Publish endpoints as a live stub URL', open: () => setMockOpen(true) },
                       { icon: Clock, label: 'Schedules & webhooks', desc: 'Recurring runs and Slack/Teams alerts', open: () => setAutomationOpen(true) },
@@ -312,6 +328,12 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
                       { icon: Rocket, label: 'CI / GitHub Action', desc: 'Trigger & gate runs from your pipeline', open: () => setCiOpen(true) },
                       { icon: ListChecks, label: 'Parallel run queue', desc: 'Queue runs across concurrency slots', open: () => setExecQueueOpen(true) },
                       { icon: MonitorSmartphone, label: 'Cloud browser lab', desc: 'Run UI checks on hosted browsers · matrix', open: () => setCloudLabOpen(true) },
+                      { icon: ClipboardList, label: 'Test management', desc: 'Suites · plans · cycles · assignments', open: () => setTmOpen(true) },
+                      { icon: Waypoints, label: 'Traceability matrix', desc: 'Requirement → case → defect', open: () => setTraceMatrixOpen(true) },
+                      { icon: Share2, label: 'TM connectors', desc: 'TestRail · Xray · Zephyr · qTest export', open: () => setConnectorsOpen(true) },
+                      { icon: Stamp, label: 'Approvals', desc: 'Multi-stage release gating', open: () => setApprovalsOpen(true) },
+                      { icon: ScrollText, label: 'Audit log', desc: 'Filter & export recorded actions', open: () => setAuditOpen(true) },
+                      { icon: FileCheck2, label: 'Evidence export', desc: 'Compliance evidence → PDF', open: () => setEvidenceOpen(true) },
                     ]).map((t) => (
                       <button key={t.label} type="button" onClick={() => { setToolsOpen(false); t.open(); }} className="w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-[#F5F3FF] transition-colors">
                         <t.icon className="w-4 h-4 text-[#7C3AED] flex-shrink-0 mt-0.5" />
@@ -693,6 +715,7 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
           onClose={() => setMonitorOpen(false)}
         />
       )}
+      {profilesOpen && <DataProfiles onClose={() => setProfilesOpen(false)} />}
 
       {/* ── Execution/CI batch ── */}
       {hybridOpen && (
@@ -719,6 +742,24 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
       {cloudLabOpen && (
         <CloudLab onClose={() => setCloudLabOpen(false)} />
       )}
+
+      {/* ── Enterprise test-management & governance ── */}
+      {tmOpen && (
+        <TestManagement
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setTmOpen(false)}
+        />
+      )}
+      {traceMatrixOpen && (
+        <Traceability
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setTraceMatrixOpen(false)}
+        />
+      )}
+      {connectorsOpen && <TmConnectors onClose={() => setConnectorsOpen(false)} />}
+      {approvalsOpen && <Approvals onClose={() => setApprovalsOpen(false)} />}
+      {auditOpen && <AuditLog onClose={() => setAuditOpen(false)} />}
+      {evidenceOpen && <EvidenceExport onClose={() => setEvidenceOpen(false)} />}
     </div>
   );
 }

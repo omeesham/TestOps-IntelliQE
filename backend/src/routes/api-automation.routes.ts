@@ -80,7 +80,7 @@ import { publishPact, listPacts, deletePact, verifyPact, recordDeployment, canID
 import { runChaosProbe } from '../services/api-chaos.service.js';
 import { fetchOAuthToken, listOAuthConfigs, saveOAuthConfig, deleteOAuthConfig, fetchTokenFromConfig, resolveSecret, resolveHttpAuth } from '../services/api-oauth.service.js';
 import { buildRequestInit, fetchFull } from '../utils/api-http.js';
-import { listDataProfiles, saveDataProfile, deleteDataProfile, parseCsv, parseExcel, profileFromDb, runProfileOverFlow } from '../services/api-data-profiles.service.js';
+import { listDataProfiles, saveDataProfile, deleteDataProfile, parseCsv, parseExcel, profileFromDb, fetchGoogleSheet, runProfileOverFlow } from '../services/api-data-profiles.service.js';
 import { orchestrate, getOrchestratorConfig, saveOrchestratorConfig, rotateOrchestratorToken, listOrchestratorEvents } from '../services/api-orchestrator.service.js';
 // ─── Atto coworker lifecycle tools (all additive, opt-in; pipeline untouched) ───
 import { generateFromStory } from '../services/api-story-gen.service.js';
@@ -105,6 +105,13 @@ import { listGatePolicies, saveGatePolicy, deleteGatePolicy, evaluateGate } from
 import { getCiConfig, rotateCiToken, setCiEnabled } from '../services/api-ci.service.js';
 import { listQueue, saveQueueConfig, enqueueRun, cancelQueued } from '../services/api-exec-queue.service.js';
 import { listCloudLabs, saveCloudLab, deleteCloudLab, testCloudLab, runCloudMatrix } from '../services/api-cloud-lab.service.js';
+import { listSuites, saveSuite, deleteSuite, listPlans, savePlan, deletePlan, listCycles, startCycle, deleteCycle, listAssignments, saveAssignment, setAssignmentStatus, deleteAssignment, listTenantMembers, getPlanProgress } from '../services/api-test-management.service.js';
+import { listRequirements, saveRequirement, deleteRequirement, buildMatrix } from '../services/api-traceability.service.js';
+import { listConnectors, saveConnector, deleteConnector, testConnector, exportRun, importCases } from '../services/api-tm-connectors.service.js';
+import { listAudit, auditFacets, exportAuditCsv } from '../services/api-audit-view.service.js';
+import { listWorkflows, saveWorkflow, deleteWorkflow, listRequests, createRequest, actOnRequest, cancelRequest, evaluateApprovalGate } from '../services/api-approvals.service.js';
+import { buildEvidence, renderEvidenceHtml, renderEvidencePdf } from '../services/api-evidence.service.js';
+import { logAudit } from '../utils/audit.js';
 import {
   listEnvironments, getEnvironment, createEnvironment, updateEnvironment, deleteEnvironment, applyEnvironment, resolveApiCase,
 } from '../services/api-environments.service.js';
@@ -1070,9 +1077,22 @@ router.post('/data-profiles/from-db', async (req: Request, res: Response) => {
     res.json(await profileFromDb(req.user!.tenantId, { connectionId: req.body?.connectionId, config: req.body?.config, query: String(req.body.query) }));
   } catch (err) { fail(res, err); }
 });
+// Google Sheets-backed source — a shared/published sheet fetched as CSV (no auth).
+router.post('/data-profiles/from-gsheet', async (req: Request, res: Response) => {
+  try {
+    if (!req.body?.url) { res.status(400).json({ error: 'A Google Sheets URL is required.' }); return; }
+    res.json(await fetchGoogleSheet(String(req.body.url)));
+  } catch (err) { fail(res, err); }
+});
 router.post('/data-profiles/run-flow', async (req: Request, res: Response) => {
-  try { res.json(await runProfileOverFlow({ steps: req.body?.steps, rows: req.body?.rows, allowWrites: !!req.body?.allowWrites, maxRows: Number(req.body?.maxRows) || undefined })); }
-  catch (err) { fail(res, err); }
+  try {
+    res.json(await runProfileOverFlow({
+      steps: req.body?.steps, rows: req.body?.rows, allowWrites: !!req.body?.allowWrites,
+      maxRows: Number(req.body?.maxRows) || undefined,
+      rowStart: Number(req.body?.rowStart) || undefined,
+      rowEnd: Number(req.body?.rowEnd) || undefined,
+    }));
+  } catch (err) { fail(res, err); }
 });
 
 /* ── AI coworker / orchestrator (opt-in; routes to existing tools) ── */
@@ -1668,6 +1688,242 @@ router.post('/cloud-labs/:id/test', async (req: Request, res: Response) => {
 });
 router.post('/cloud-labs/run', async (req: Request, res: Response) => {
   try { res.json(await runCloudMatrix(req.user!.tenantId, req.body || {})); } catch (err) { fail(res, err); }
+});
+
+/* ── Enterprise test management: Suites / Plans / Cycles + assignments (opt-in; additive objects) ── */
+router.get('/suites', async (req: Request, res: Response) => {
+  try { res.json({ suites: await listSuites(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/suites', async (req: Request, res: Response) => {
+  try { res.status(201).json({ suite: await saveSuite(req.user!.tenantId, req.user!.username, req.body || {}) }); } catch (err) { fail(res, err); }
+});
+router.delete('/suites/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteSuite(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Suite not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.get('/plans', async (req: Request, res: Response) => {
+  try { res.json({ plans: await listPlans(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/plans', async (req: Request, res: Response) => {
+  try {
+    const plan = await savePlan(req.user!.tenantId, req.user!.username, req.body || {});
+    void logAudit(req, req.body?.id ? 'update' : 'create', 'api_test_plan', plan.id, { name: plan.name });
+    res.status(201).json({ plan });
+  } catch (err) { fail(res, err); }
+});
+router.delete('/plans/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deletePlan(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Plan not found.' }); return; }
+    void logAudit(req, 'delete', 'api_test_plan', String(req.params.id), {});
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.get('/plans/:id/progress', async (req: Request, res: Response) => {
+  try { res.json(await getPlanProgress(req.user!.tenantId, String(req.params.id))); } catch (err) { fail(res, err, 500); }
+});
+router.get('/cycles', async (req: Request, res: Response) => {
+  try { res.json({ cycles: await listCycles(req.user!.tenantId, req.query.planId ? String(req.query.planId) : undefined) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/cycles/start', async (req: Request, res: Response) => {
+  try {
+    const cycle = await startCycle(req.user!.tenantId, req.user!.username, req.body || {});
+    void logAudit(req, 'execute', 'api_test_cycle', cycle.id, { planId: cycle.planId, name: cycle.name });
+    res.status(201).json({ cycle });
+  } catch (err) { fail(res, err); }
+});
+router.delete('/cycles/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteCycle(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Cycle not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.get('/assignments', async (req: Request, res: Response) => {
+  try { res.json({ assignments: await listAssignments(req.user!.tenantId, req.query.planId ? String(req.query.planId) : undefined) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/assignments', async (req: Request, res: Response) => {
+  try { res.status(201).json({ assignment: await saveAssignment(req.user!.tenantId, req.user!.username, req.body || {}) }); } catch (err) { fail(res, err); }
+});
+router.put('/assignments/:id/status', async (req: Request, res: Response) => {
+  try { res.json({ assignment: await setAssignmentStatus(req.user!.tenantId, String(req.params.id), req.body?.status) }); } catch (err) { fail(res, err); }
+});
+router.delete('/assignments/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteAssignment(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Assignment not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.get('/members', async (req: Request, res: Response) => {
+  try { res.json({ members: await listTenantMembers(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+
+/* ── Requirements traceability matrix (opt-in; requirement → case → defect) ── */
+router.get('/requirements', async (req: Request, res: Response) => {
+  try { res.json({ requirements: await listRequirements(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/requirements', async (req: Request, res: Response) => {
+  try {
+    const requirement = await saveRequirement(req.user!.tenantId, req.user!.username, req.body || {});
+    void logAudit(req, req.body?.id ? 'update' : 'create', 'api_requirement', requirement.id, { title: requirement.title });
+    res.status(201).json({ requirement });
+  } catch (err) { fail(res, err); }
+});
+router.delete('/requirements/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteRequirement(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Requirement not found.' }); return; }
+    void logAudit(req, 'delete', 'api_requirement', String(req.params.id), {});
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.get('/traceability/matrix', async (req: Request, res: Response) => {
+  try { res.json(await buildMatrix(req.user!.tenantId, { runId: req.query.runId ? String(req.query.runId) : undefined })); } catch (err) { fail(res, err, 500); }
+});
+
+/* ── Native TM connectors with bidirectional result export (TestRail/Xray/Zephyr/qTest) ── */
+router.get('/tm-connectors', async (req: Request, res: Response) => {
+  try { res.json({ connectors: await listConnectors(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/tm-connectors', async (req: Request, res: Response) => {
+  try {
+    const connector = await saveConnector(req.user!.tenantId, req.user!.username, req.body || {});
+    void logAudit(req, req.body?.id ? 'update' : 'create', 'api_tm_connector', connector.id, { vendor: connector.vendor });
+    res.status(201).json({ connector });
+  } catch (err) { fail(res, err); }
+});
+router.delete('/tm-connectors/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteConnector(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Connector not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.post('/tm-connectors/:id/test', async (req: Request, res: Response) => {
+  try { res.json(await testConnector(req.user!.tenantId, String(req.params.id))); } catch (err) { fail(res, err); }
+});
+router.post('/tm-connectors/:id/export', async (req: Request, res: Response) => {
+  try {
+    const result = await exportRun(req.user!.tenantId, String(req.params.id), String(req.body?.runId || ''));
+    void logAudit(req, 'execute', 'api_tm_export', String(req.params.id), { runId: req.body?.runId, exported: result.exported, ok: result.ok });
+    res.json(result);
+  } catch (err) { fail(res, err); }
+});
+router.post('/tm-connectors/:id/import', async (req: Request, res: Response) => {
+  try { res.json(await importCases(req.user!.tenantId, String(req.params.id), Number(req.body?.limit) || 100)); } catch (err) { fail(res, err); }
+});
+
+/* ── Audit-log viewer (opt-in, read-only over the existing audit_log) ── */
+router.get('/audit', async (req: Request, res: Response) => {
+  try {
+    const q = req.query;
+    res.json(await listAudit(req.user!.tenantId, {
+      action: q.action ? String(q.action) : undefined,
+      resourceType: q.resourceType ? String(q.resourceType) : undefined,
+      username: q.username ? String(q.username) : undefined,
+      from: q.from ? String(q.from) : undefined,
+      to: q.to ? String(q.to) : undefined,
+      q: q.q ? String(q.q) : undefined,
+      page: q.page ? Number(q.page) : undefined,
+      pageSize: q.pageSize ? Number(q.pageSize) : undefined,
+    }));
+  } catch (err) { fail(res, err, 500); }
+});
+router.get('/audit/facets', async (req: Request, res: Response) => {
+  try { res.json(await auditFacets(req.user!.tenantId)); } catch (err) { fail(res, err, 500); }
+});
+router.get('/audit/export', async (req: Request, res: Response) => {
+  try {
+    const q = req.query;
+    const csv = await exportAuditCsv(req.user!.tenantId, {
+      action: q.action ? String(q.action) : undefined,
+      resourceType: q.resourceType ? String(q.resourceType) : undefined,
+      username: q.username ? String(q.username) : undefined,
+      from: q.from ? String(q.from) : undefined,
+      to: q.to ? String(q.to) : undefined,
+      q: q.q ? String(q.q) : undefined,
+    });
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="audit-log.csv"');
+    res.send(csv);
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Multi-stage approval gating (opt-in; layered beside run sign-off) ── */
+router.get('/approval-workflows', async (req: Request, res: Response) => {
+  try { res.json({ workflows: await listWorkflows(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/approval-workflows', async (req: Request, res: Response) => {
+  try {
+    const workflow = await saveWorkflow(req.user!.tenantId, req.user!.username, req.body || {});
+    void logAudit(req, req.body?.id ? 'update' : 'create', 'api_approval_workflow', workflow.id, { name: workflow.name, stages: workflow.stages.length });
+    res.status(201).json({ workflow });
+  } catch (err) { fail(res, err); }
+});
+router.delete('/approval-workflows/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteWorkflow(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Workflow not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.get('/approval-requests', async (req: Request, res: Response) => {
+  try { res.json({ requests: await listRequests(req.user!.tenantId, req.query.runId ? String(req.query.runId) : undefined) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/approval-requests', async (req: Request, res: Response) => {
+  try {
+    const request = await createRequest(req.user!.tenantId, req.user!.username, req.body || {});
+    void logAudit(req, 'create', 'api_approval_request', request.id, { runId: request.runId, workflow: request.workflowName });
+    res.status(201).json({ request });
+  } catch (err) { fail(res, err); }
+});
+router.post('/approval-requests/act', async (req: Request, res: Response) => {
+  try {
+    const request = await actOnRequest(req.user!.tenantId, req.user!.username, req.body || {});
+    void logAudit(req, req.body?.decision === 'reject' ? 'reject' : 'approve', 'api_approval_request', request.id, { runId: request.runId, status: request.status });
+    res.json({ request });
+  } catch (err) { fail(res, err); }
+});
+router.post('/approval-requests/:id/cancel', async (req: Request, res: Response) => {
+  try { res.json({ request: await cancelRequest(req.user!.tenantId, String(req.params.id)) }); } catch (err) { fail(res, err); }
+});
+router.get('/approval-gate/:runId', async (req: Request, res: Response) => {
+  try { res.json(await evaluateApprovalGate(req.user!.tenantId, String(req.params.runId))); } catch (err) { fail(res, err, 500); }
+});
+
+/* ── Compliance-evidence export (opt-in; assembles run + compliance + sign-off + approval → PDF/HTML) ── */
+router.post('/evidence/preview', async (req: Request, res: Response) => {
+  try { res.json(await buildEvidence(req.user!.tenantId, { runId: String(req.body?.runId || ''), standards: req.body?.standards })); } catch (err) { fail(res, err); }
+});
+router.post('/evidence/export', async (req: Request, res: Response) => {
+  try {
+    const runId = String(req.body?.runId || '');
+    const doc = await buildEvidence(req.user!.tenantId, { runId, standards: req.body?.standards });
+    const safe = runId.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40) || 'run';
+    void logAudit(req, 'execute', 'api_evidence_export', runId, { format: req.body?.format || 'pdf' });
+    if (req.body?.format === 'html') {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="evidence-${safe}.html"`);
+      res.send(renderEvidenceHtml(doc));
+      return;
+    }
+    try {
+      const pdf = await renderEvidencePdf(doc);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="evidence-${safe}.pdf"`);
+      res.send(pdf);
+    } catch {
+      // pdf-lib not installed → print-ready HTML fallback
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('X-Evidence-Format', 'html-fallback');
+      res.setHeader('Content-Disposition', `attachment; filename="evidence-${safe}.html"`);
+      res.send(renderEvidenceHtml(doc));
+    }
+  } catch (err) { fail(res, err); }
 });
 
 export default router;

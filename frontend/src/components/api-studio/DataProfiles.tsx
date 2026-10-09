@@ -9,12 +9,12 @@
  * here touches the generate → execute → heal pipeline.
  */
 import { useState, useEffect } from 'react';
-import { X, Database, Plus, Trash2, Save, Play, AlertTriangle, CheckCircle2, XCircle, FileSpreadsheet, ClipboardPaste, Table2 } from 'lucide-react';
+import { X, Database, Plus, Trash2, Save, Play, AlertTriangle, CheckCircle2, XCircle, FileSpreadsheet, ClipboardPaste, Table2, Link2 } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import { useToast } from '@/components/feedback/ToastProvider';
 import {
   listDataProfiles, saveDataProfile, deleteDataProfile,
-  importProfileCsv, importProfileExcel, profileFromDb,
+  importProfileCsv, importProfileExcel, profileFromDb, importProfileGoogleSheet,
   listDbConnections, listApiFlows, runProfileOverFlow,
   type DataProfile, type ProfileFlowRunResult, type DbConnection, type SavedApiFlow,
 } from '@/services/api';
@@ -24,7 +24,7 @@ import { EmptyState, CopyButton } from './primitives';
 /** The editor's working copy — a saved profile loaded for edit, or a fresh draft (no id). */
 type Draft = { id?: string; name: string; columns: string[]; rows: Record<string, string>[]; source: string };
 
-type ImportTab = 'csv' | 'excel' | 'db' | 'manual';
+type ImportTab = 'csv' | 'excel' | 'gsheet' | 'db' | 'manual';
 
 const VISIBLE_ROWS = 50;
 const EDITABLE_MAX = 25;
@@ -51,10 +51,14 @@ export default function DataProfiles({ onClose }: { onClose: () => void }) {
   const [csvText, setCsvText] = useState('');
   const [dbConnId, setDbConnId] = useState('');
   const [dbQuery, setDbQuery] = useState('');
+  const [gsheetUrl, setGsheetUrl] = useState('');
   const [newCol, setNewCol] = useState('');
 
   const [flowId, setFlowId] = useState('');
   const [allowWrites, setAllowWrites] = useState(false);
+  // Optional 1-based inclusive row range for the flow run (blank = all rows).
+  const [rowStart, setRowStart] = useState('');
+  const [rowEnd, setRowEnd] = useState('');
   const [runResult, setRunResult] = useState<ProfileFlowRunResult | null>(null);
 
   const refreshProfiles = async () => {
@@ -75,7 +79,6 @@ export default function DataProfiles({ onClose }: { onClose: () => void }) {
         setLoading(false);
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const selectProfile = (p: DataProfile) => {
@@ -158,6 +161,17 @@ export default function DataProfiles({ onClose }: { onClose: () => void }) {
     } finally { setBusy(false); }
   };
 
+  const fetchSheet = async () => {
+    if (!draft || !gsheetUrl.trim()) return;
+    setBusy(true); setError('');
+    try {
+      const { columns, rows } = await importProfileGoogleSheet(gsheetUrl.trim());
+      setDraft({ ...draft, columns, rows, source: 'gsheet' });
+    } catch (e: any) {
+      setError(e?.response?.data?.error || e?.message || 'Could not fetch the Google Sheet.');
+    } finally { setBusy(false); }
+  };
+
   const addColumn = () => {
     const name = newCol.trim();
     if (!name || !draft || draft.columns.includes(name)) return;
@@ -183,7 +197,11 @@ export default function DataProfiles({ onClose }: { onClose: () => void }) {
     if (!draft || !selectedFlow) return;
     setRunning(true); setError(''); setRunResult(null);
     try {
-      setRunResult(await runProfileOverFlow({ steps: selectedFlow.steps, rows: draft.rows, allowWrites, maxRows: 100 }));
+      setRunResult(await runProfileOverFlow({
+        steps: selectedFlow.steps, rows: draft.rows, allowWrites, maxRows: 100,
+        rowStart: rowStart.trim() ? Number(rowStart) : undefined,
+        rowEnd: rowEnd.trim() ? Number(rowEnd) : undefined,
+      }));
     } catch (e: any) {
       setError(e?.response?.data?.error || e?.message || 'Flow run failed.');
     } finally { setRunning(false); }
@@ -271,6 +289,7 @@ export default function DataProfiles({ onClose }: { onClose: () => void }) {
                     <div className="flex flex-wrap items-center gap-1 mb-2">
                       <button type="button" onClick={() => setImp('csv')} className={impBtn(imp === 'csv')}><ClipboardPaste className="w-3.5 h-3.5" />Paste CSV</button>
                       <button type="button" onClick={() => setImp('excel')} className={impBtn(imp === 'excel')}><FileSpreadsheet className="w-3.5 h-3.5" />Excel</button>
+                      <button type="button" onClick={() => setImp('gsheet')} className={impBtn(imp === 'gsheet')}><Link2 className="w-3.5 h-3.5" />Google Sheet</button>
                       <button type="button" onClick={() => setImp('db')} className={impBtn(imp === 'db')}><Database className="w-3.5 h-3.5" />From DB</button>
                       <button type="button" onClick={() => setImp('manual')} className={impBtn(imp === 'manual')}><Table2 className="w-3.5 h-3.5" />Manual</button>
                     </div>
@@ -302,6 +321,24 @@ export default function DataProfiles({ onClose }: { onClose: () => void }) {
                           className="block w-full text-[12px] text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-[12px] file:font-medium file:bg-[#F5F3FF] file:text-[#6D28D9] hover:file:bg-[#EDE9FE]"
                         />
                         <p className="text-[10.5px] text-gray-400">The first sheet's header row becomes the columns; the rest become rows.</p>
+                      </div>
+                    )}
+
+                    {imp === 'gsheet' && (
+                      <div className="space-y-1.5">
+                        <input
+                          value={gsheetUrl}
+                          onChange={(e) => { setGsheetUrl(e.target.value); setError(''); }}
+                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void fetchSheet(); } }}
+                          placeholder="https://docs.google.com/spreadsheets/d/…/edit#gid=0"
+                          className={`${INPUT} font-mono text-[11.5px]`}
+                        />
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-[10.5px] text-gray-400">The sheet must be shared “Anyone with the link” or published to the web. The tab in the link (gid) is used; its header row becomes the columns.</p>
+                          <button type="button" onClick={() => void fetchSheet()} disabled={busy || !gsheetUrl.trim()} className={`${SECONDARY_BTN} flex-shrink-0`}>
+                            {busy ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Link2 className="w-3.5 h-3.5" />}Fetch sheet
+                          </button>
+                        </div>
                       </div>
                     )}
 
@@ -396,6 +433,12 @@ export default function DataProfiles({ onClose }: { onClose: () => void }) {
                           <option value="">{flows.length ? 'Select a saved flow…' : 'No saved flows'}</option>
                           {flows.map((f) => <option key={f.id} value={f.id}>{f.name} · {f.steps.length} step{f.steps.length === 1 ? '' : 's'}</option>)}
                         </select>
+                      </div>
+                      <div className="flex items-center gap-1 text-[11.5px] text-gray-600" title="Optional 1-based, inclusive. Leave blank to run every row.">
+                        <span>Rows</span>
+                        <input type="number" min={1} value={rowStart} onChange={(e) => setRowStart(e.target.value)} placeholder="1" className={`${FIELD} w-16 py-1`} aria-label="From row" />
+                        <span>–</span>
+                        <input type="number" min={1} value={rowEnd} onChange={(e) => setRowEnd(e.target.value)} placeholder={String(draft.rows.length || '')} className={`${FIELD} w-16 py-1`} aria-label="To row" />
                       </div>
                       <label className="flex items-center gap-1.5 text-[11.5px] text-gray-600">
                         <input type="checkbox" checked={allowWrites} onChange={(e) => setAllowWrites(e.target.checked)} className="w-3.5 h-3.5" />

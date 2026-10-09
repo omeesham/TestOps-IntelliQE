@@ -108,6 +108,60 @@ export async function profileFromDb(tenantId: string, input: { connectionId?: st
   return normalizeTable(res.rows.length ? Object.keys(res.rows[0]!) : [], res.rows);
 }
 
+/**
+ * Derive the CSV-export URL for a Google Sheet from a share/edit/publish URL.
+ * PURE + testable. Supports the three common shapes:
+ *   - /spreadsheets/d/<ID>/edit…        → /spreadsheets/d/<ID>/export?format=csv[&gid=]
+ *   - /spreadsheets/d/e/<PUBID>/pub…     → /spreadsheets/d/e/<PUBID>/pub?output=csv[&gid=]
+ *   - an already-CSV export/pub URL      → returned as-is
+ * Throws for anything that isn't a docs.google.com spreadsheet URL. The sheet
+ * must be shared ("anyone with the link") or published — there is no auth here.
+ */
+export function googleSheetCsvUrl(raw: string): string {
+  const url = String(raw || '').trim();
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { throw new Error('Enter a valid Google Sheets URL.'); }
+  if (!/(^|\.)docs\.google\.com$/i.test(parsed.hostname)) throw new Error('That is not a Google Sheets link (expected a docs.google.com URL).');
+  // Already a CSV endpoint.
+  if (/[?&](format|output)=csv/i.test(parsed.search)) return parsed.toString();
+  // gid may live in the query or the #fragment.
+  const gid = parsed.searchParams.get('gid') || (parsed.hash.match(/gid=(\d+)/)?.[1] ?? '');
+  // Published-to-web form: /spreadsheets/d/e/<PUBID>/...
+  const pub = parsed.pathname.match(/\/spreadsheets\/d\/e\/([^/]+)\//);
+  if (pub) {
+    const u = `https://docs.google.com/spreadsheets/d/e/${pub[1]}/pub?output=csv`;
+    return gid ? `${u}&gid=${gid}` : u;
+  }
+  // Standard document id form: /spreadsheets/d/<ID>/...
+  const doc = parsed.pathname.match(/\/spreadsheets\/d\/([^/]+)/);
+  if (doc) {
+    const u = `https://docs.google.com/spreadsheets/d/${doc[1]}/export?format=csv`;
+    return gid ? `${u}&gid=${gid}` : u;
+  }
+  throw new Error('Could not find a spreadsheet id in that Google Sheets URL.');
+}
+
+/** Fetch a shared/published Google Sheet as CSV and parse it into columns + rows. */
+export async function fetchGoogleSheet(rawUrl: string): Promise<{ columns: string[]; rows: Record<string, string>[] }> {
+  const csvUrl = googleSheetCsvUrl(rawUrl);
+  // Belt-and-braces SSRF guard: the derived URL is always docs.google.com, but verify.
+  if (!/^https:\/\/docs\.google\.com\//i.test(csvUrl)) throw new Error('Refusing to fetch a non-Google-Sheets URL.');
+  let res: Response;
+  try {
+    res = await fetch(csvUrl, { redirect: 'follow', signal: AbortSignal.timeout(20_000), headers: { accept: 'text/csv,*/*' } });
+  } catch (e) {
+    throw new Error(`Could not reach Google Sheets: ${(e as Error).message}`);
+  }
+  if (!res.ok) throw new Error(`Google Sheets returned ${res.status}. Make sure the sheet is shared "anyone with the link" or published to the web.`);
+  const text = await res.text();
+  const ctype = res.headers.get('content-type') || '';
+  // A sign-in / permission page comes back as HTML, not CSV — detect and explain.
+  if (/text\/html/i.test(ctype) || /^\s*<(!doctype|html)/i.test(text)) {
+    throw new Error('That sheet is not publicly readable. In Google Sheets choose Share → "Anyone with the link", or File → Share → Publish to web, then paste the link again.');
+  }
+  return parseCsv(text);
+}
+
 /* ── CRUD ── */
 
 function mapProfile(r: any): DataProfile {
@@ -173,22 +227,40 @@ export interface ProfileFlowRunResult {
   runs: { row: number; passed: boolean; stepsRun: number; stepsTotal: number; durationMs: number; firstError?: string }[];
 }
 
-export async function runProfileOverFlow(input: { steps: FlowStep[]; rows: Record<string, string>[]; allowWrites?: boolean; maxRows?: number }): Promise<ProfileFlowRunResult> {
+/**
+ * Resolve an optional 1-based inclusive row range against a row count. PURE.
+ * Omitted bounds default to the first/last row; out-of-range values are clamped.
+ * Returns 0-based [start, endExclusive).
+ */
+export function resolveRowRange(count: number, rowStart?: unknown, rowEnd?: unknown): [number, number] {
+  const n = Math.max(0, count);
+  const s = Number.isFinite(Number(rowStart)) && Number(rowStart) >= 1 ? Math.floor(Number(rowStart)) : 1;
+  const e = Number.isFinite(Number(rowEnd)) && Number(rowEnd) >= 1 ? Math.floor(Number(rowEnd)) : n;
+  const start = Math.min(n, s - 1);
+  const end = Math.min(n, Math.max(start, e));
+  return [start, end];
+}
+
+export async function runProfileOverFlow(input: { steps: FlowStep[]; rows: Record<string, string>[]; allowWrites?: boolean; maxRows?: number; rowStart?: number; rowEnd?: number }): Promise<ProfileFlowRunResult> {
   const steps = Array.isArray(input.steps) ? input.steps : [];
   if (!steps.length) throw new Error('Provide the flow steps to iterate.');
+  const all = Array.isArray(input.rows) ? input.rows : [];
+  // Row range (1-based, inclusive) selects a slice; the cap still bounds the run.
+  const [start, end] = resolveRowRange(all.length, input.rowStart, input.rowEnd);
   const cap = Math.min(200, Math.max(1, input.maxRows || 100));
-  const rows = (Array.isArray(input.rows) ? input.rows : []).slice(0, cap);
-  if (!rows.length) throw new Error('The profile has no rows to iterate.');
+  const rows = all.slice(start, end).slice(0, cap);
+  if (!rows.length) throw new Error(all.length ? 'The selected row range is empty.' : 'The profile has no rows to iterate.');
   const runs: ProfileFlowRunResult['runs'] = [];
   let passed = 0;
   for (let i = 0; i < rows.length; i++) {
+    const row = start + i; // absolute 0-based index into the profile, so results name the real row
     try {
       const r = await runFlow({ steps, variables: rows[i], allowWrites: input.allowWrites });
       if (r.passed) passed++;
       const firstErr = r.steps.find((s) => s.error)?.error || r.steps.find((s) => !s.ok)?.checks.find((c) => !c.pass)?.label;
-      runs.push({ row: i, passed: r.passed, stepsRun: r.stepsRun, stepsTotal: r.stepsTotal, durationMs: r.durationMs, firstError: r.passed ? undefined : firstErr });
+      runs.push({ row, passed: r.passed, stepsRun: r.stepsRun, stepsTotal: r.stepsTotal, durationMs: r.durationMs, firstError: r.passed ? undefined : firstErr });
     } catch (e) {
-      runs.push({ row: i, passed: false, stepsRun: 0, stepsTotal: steps.length, durationMs: 0, firstError: (e as Error).message });
+      runs.push({ row, passed: false, stepsRun: 0, stepsTotal: steps.length, durationMs: 0, firstError: (e as Error).message });
     }
   }
   return { total: rows.length, passed, failed: rows.length - passed, runs };

@@ -30,6 +30,10 @@ function describeCheck(c: FlowCheck): string {
     case 'jsonPathEquals': return `${c.path || 'body'} = ${String(c.value ?? '')}`;
     case 'bodyContains': return `body contains "${c.text || ''}"`;
     case 'responseTimeUnderMs': return `response < ${c.ms ?? 0}ms`;
+    case 'header': return `header ${c.name || ''} ${c.op || 'exists'}${c.op && c.op !== 'exists' ? ` "${String(c.value ?? '')}"` : ''}`;
+    case 'bodyMatches': return `body matches (${c.compareMode || 'lenient'})`;
+    case 'xpath': return `xpath ${c.path || ''} ${c.op || 'exists'}${c.op && c.op !== 'exists' ? ` "${String(c.value ?? '')}"` : ''}`;
+    default: return 'check';
   }
 }
 

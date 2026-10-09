@@ -25,7 +25,7 @@ import type { Catalog } from './hooks/useCatalog';
 type ExtractRow = NonNullable<FlowStep['extract']>[number];
 
 interface EditExtract { _k: string; name: string; from: ExtractRow['from']; path: string }
-interface EditCheck { _k: string; kind: FlowCheck['kind']; oneOf: string; path: string; value: string; text: string; ms: string }
+interface EditCheck { _k: string; kind: FlowCheck['kind']; oneOf: string; path: string; value: string; text: string; ms: string; name: string; op: string; compareMode: string }
 interface EditStep {
   id: string;
   name: string;
@@ -49,6 +49,9 @@ const CHECK_LABELS: Record<FlowCheck['kind'], string> = {
   jsonPathEquals: 'JSON path equals',
   bodyContains: 'Body contains',
   responseTimeUnderMs: 'Response time under (ms)',
+  header: 'Header',
+  bodyMatches: 'Body matches (compare)',
+  xpath: 'XPath (XML/SOAP)',
 };
 
 const clip = (s: string, n = 48) => (s.length > n ? `${s.slice(0, n)}…` : s);
@@ -61,6 +64,9 @@ function editCheckToApi(c: EditCheck): FlowCheck {
     case 'jsonPathEquals': return { kind: 'jsonPathEquals', path: c.path, value: c.value };
     case 'bodyContains': return { kind: 'bodyContains', text: c.text };
     case 'responseTimeUnderMs': return { kind: 'responseTimeUnderMs', ms: Number(c.ms) || 0 };
+    case 'header': return { kind: 'header', name: c.name, op: (c.op || 'exists') as FlowCheck['op'], value: c.value };
+    case 'bodyMatches': return { kind: 'bodyMatches', value: c.value, compareMode: (c.compareMode || 'lenient') as FlowCheck['compareMode'] };
+    case 'xpath': return { kind: 'xpath', path: c.path, op: (c.op || 'exists') as FlowCheck['op'], value: c.value };
   }
 }
 
@@ -168,6 +174,9 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
       value: c.value != null ? String(c.value) : '',
       text: c.text || '',
       ms: c.ms != null ? String(c.ms) : '',
+      name: c.name || '',
+      op: c.op || 'exists',
+      compareMode: c.compareMode || 'lenient',
     })),
     open: false,
   });
@@ -185,7 +194,7 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
   const addExtract = (s: EditStep) => patchStep(s.id, { extract: [...s.extract, { _k: nextId('k'), name: '', from: 'body', path: '' }] });
   const setExtract = (s: EditStep, k: string, patch: Partial<EditExtract>) => patchStep(s.id, { extract: s.extract.map((x) => (x._k === k ? { ...x, ...patch } : x)) });
   const delExtract = (s: EditStep, k: string) => patchStep(s.id, { extract: s.extract.filter((x) => x._k !== k) });
-  const addCheck = (s: EditStep) => patchStep(s.id, { checks: [...s.checks, { _k: nextId('k'), kind: 'status', oneOf: '200', path: '', value: '', text: '', ms: '' }] });
+  const addCheck = (s: EditStep) => patchStep(s.id, { checks: [...s.checks, { _k: nextId('k'), kind: 'status', oneOf: '200', path: '', value: '', text: '', ms: '', name: '', op: 'exists', compareMode: 'lenient' }] });
   const setCheck = (s: EditStep, k: string, patch: Partial<EditCheck>) => patchStep(s.id, { checks: s.checks.map((c) => (c._k === k ? { ...c, ...patch } : c)) });
   const delCheck = (s: EditStep, k: string) => patchStep(s.id, { checks: s.checks.filter((c) => c._k !== k) });
 
@@ -363,10 +372,29 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
                               {(Object.keys(CHECK_LABELS) as FlowCheck['kind'][]).map((k) => <option key={k} value={k}>{CHECK_LABELS[k]}</option>)}
                             </select>
                             {c.kind === 'status' && <input value={c.oneOf} onChange={(e) => setCheck(s, c._k, { oneOf: e.target.value })} placeholder="200, 201" className={`${FIELD} flex-1 min-w-0`} />}
-                            {(c.kind === 'jsonPathExists' || c.kind === 'jsonPathEquals') && <input value={c.path} onChange={(e) => setCheck(s, c._k, { path: e.target.value })} placeholder="data.0.id" className={`${FIELD} flex-1 min-w-0`} />}
+                            {(c.kind === 'jsonPathExists' || c.kind === 'jsonPathEquals') && <input value={c.path} onChange={(e) => setCheck(s, c._k, { path: e.target.value })} placeholder="data.items[*].id · ..id · items[?(@.active==true)]" title="Rich JSONPath: dotted, [*] wildcard, [0:2] slice, ..recursion, [?(@.k==v)] filter" className={`${FIELD} flex-1 min-w-0`} />}
                             {c.kind === 'jsonPathEquals' && <input value={c.value} onChange={(e) => setCheck(s, c._k, { value: e.target.value })} placeholder="expected value" className={`${FIELD} w-32 flex-shrink-0`} />}
                             {c.kind === 'bodyContains' && <input value={c.text} onChange={(e) => setCheck(s, c._k, { text: e.target.value })} placeholder="substring" className={`${FIELD} flex-1 min-w-0`} />}
                             {c.kind === 'responseTimeUnderMs' && <input value={c.ms} onChange={(e) => setCheck(s, c._k, { ms: e.target.value })} placeholder="300" inputMode="numeric" className={`${FIELD} w-24 flex-shrink-0`} />}
+                            {c.kind === 'header' && <input value={c.name} onChange={(e) => setCheck(s, c._k, { name: e.target.value })} placeholder="Content-Type" className={`${FIELD} flex-1 min-w-0`} />}
+                            {(c.kind === 'header' || c.kind === 'xpath') && (
+                              <select value={c.op} onChange={(e) => setCheck(s, c._k, { op: e.target.value })} className={`${FIELD} flex-shrink-0`}>
+                                <option value="exists">exists</option>
+                                <option value="equals">equals</option>
+                                <option value="contains">contains</option>
+                              </select>
+                            )}
+                            {c.kind === 'xpath' && <input value={c.path} onChange={(e) => setCheck(s, c._k, { path: e.target.value })} placeholder="//book[1]/title/text()" title="XPath over an XML/SOAP response body" className={`${FIELD} flex-1 min-w-0`} />}
+                            {(c.kind === 'header' || c.kind === 'xpath') && c.op !== 'exists' && <input value={c.value} onChange={(e) => setCheck(s, c._k, { value: e.target.value })} placeholder="expected value" className={`${FIELD} w-32 flex-shrink-0`} />}
+                            {c.kind === 'bodyMatches' && (
+                              <select value={c.compareMode} onChange={(e) => setCheck(s, c._k, { compareMode: e.target.value })} title="strict = exact · strict-order = ordered, extra allowed · lenient = subset, any order · non-extensible = no extra keys" className={`${FIELD} flex-shrink-0`}>
+                                <option value="lenient">lenient</option>
+                                <option value="strict">strict</option>
+                                <option value="strict-order">strict-order</option>
+                                <option value="non-extensible">non-extensible</option>
+                              </select>
+                            )}
+                            {c.kind === 'bodyMatches' && <input value={c.value} onChange={(e) => setCheck(s, c._k, { value: e.target.value })} placeholder='{"id":1,"name":"Ada"}' title="Expected JSON body" className={`${FIELD} flex-1 min-w-0 font-mono text-[11px]`} />}
                             <button type="button" onClick={() => delCheck(s, c._k)} className="p-1 text-gray-400 hover:text-red-500 flex-shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>
                           </div>
                         ))}

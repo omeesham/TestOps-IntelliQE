@@ -15,6 +15,7 @@
 import pool from '../db.js';
 import { buildRequestInit, fetchFull, isWriteMethod, clampInt, type HttpEndpoint, type HttpAuth, type HttpFormField } from '../utils/api-http.js';
 import { resolveHttpAuth } from './api-oauth.service.js';
+import { queryPath, compareJson, type CompareMode } from '../utils/assert-engine.js';
 
 export interface FlowExtract {
   /** Variable name to bind, usable as {{name}} in later steps. */
@@ -26,13 +27,24 @@ export interface FlowExtract {
 }
 
 export interface FlowCheck {
-  kind: 'status' | 'jsonPathExists' | 'jsonPathEquals' | 'bodyContains' | 'responseTimeUnderMs';
+  kind: 'status' | 'jsonPathExists' | 'jsonPathEquals' | 'bodyContains' | 'responseTimeUnderMs'
+    // ── richer assertions ──
+    | 'header'        // assert a response header (exists | equals | contains)
+    | 'bodyMatches'   // structural JSON compare vs an expected body, with a compareMode
+    | 'xpath';        // XPath over an XML/SOAP response (exists | equals | contains)
   equals?: number | string;
   oneOf?: number[];
+  /** jsonPath*: a rich JSONPath (dotted, [*], slices, ..recursion, [?(@.k==v)] filters). xpath: an XPath expression. */
   path?: string;
   value?: unknown;
   text?: string;
   ms?: number;
+  /** header: the header name. */
+  name?: string;
+  /** header / xpath operator. Defaults to 'exists'. */
+  op?: 'equals' | 'contains' | 'exists';
+  /** bodyMatches: how strict the structural comparison is. Defaults to 'lenient'. */
+  compareMode?: CompareMode;
 }
 
 export type FlowStepType = 'request' | 'if' | 'loop' | 'wait' | 'group';
@@ -103,15 +115,37 @@ function substitute(text: string, vars: Record<string, string>): string {
   return text.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_m, k) => (k in vars ? vars[k]! : `{{${k}}}`));
 }
 
-/** Read a dotted path out of a parsed JSON value. "" or "." → the whole value. */
+/**
+ * Read a path out of a parsed JSON value via the rich reader. A plain dotted
+ * path ("data.0.id", "" = whole body) returns the single value, byte-compatible
+ * with the old split-on-dot reader; a wildcard/slice/recursive/filter path
+ * returns the array of matches.
+ */
 function readPath(obj: unknown, path: string | undefined): unknown {
-  if (!path || path === '.') return obj;
-  let cur: any = obj;
-  for (const seg of path.split('.')) {
-    if (cur == null) return undefined;
-    cur = cur[seg];
+  const r = queryPath(obj, path);
+  return r.deterministic ? r.values[0] : r.values;
+}
+
+/** Resolve the optional xml deps and evaluate an XPath expression against an XML body. */
+async function evalXPath(xml: string, expr: string): Promise<{ value: string; matched: boolean } | { error: string }> {
+  try {
+    const xmldomSpec = '@xmldom/xmldom';
+    const xpathSpec = 'xpath';
+    const { DOMParser } = await import(xmldomSpec);
+    const xpathMod: any = await import(xpathSpec);
+    const doc = new DOMParser({ onError: () => { /* tolerate malformed xml */ } }).parseFromString(xml, 'text/xml');
+    const result = xpathMod.select(expr, doc);
+    if (Array.isArray(result)) {
+      if (!result.length) return { value: '', matched: false };
+      const n = result[0];
+      const v = (n && (n.nodeValue ?? n.textContent ?? n.data)) ?? String(n);
+      return { value: String(v ?? ''), matched: true };
+    }
+    return { value: String(result ?? ''), matched: result != null && result !== false && result !== '' };
+  } catch (e) {
+    const msg = (e as Error).message || String(e);
+    return { error: /Cannot find (module|package)|ERR_MODULE_NOT_FOUND/i.test(msg) ? 'XPath support is not installed on the server (npm i @xmldom/xmldom xpath).' : msg };
   }
-  return cur;
 }
 
 function toStr(v: unknown): string {
@@ -123,26 +157,52 @@ function tryParse(text: string): unknown {
   try { return JSON.parse(text); } catch { return undefined; }
 }
 
-function runChecks(checks: FlowCheck[] | undefined, res: { status?: number; bodyText: string; elapsedMs: number }, parsed: unknown): FlowStepResult['checks'] {
+async function runChecks(checks: FlowCheck[] | undefined, res: { status?: number; bodyText: string; elapsedMs: number; headers?: Record<string, string> }, parsed: unknown): Promise<FlowStepResult['checks']> {
   const out: FlowStepResult['checks'] = [];
+  const headers = res.headers || {};
   for (const c of checks || []) {
     if (c.kind === 'status') {
       const codes = c.oneOf && c.oneOf.length ? c.oneOf : (c.equals != null ? [Number(c.equals)] : []);
       const pass = codes.length ? codes.includes(res.status ?? -1) : (res.status != null && res.status < 400);
       out.push({ kind: c.kind, label: `status ${codes.length ? codes.join('/') : '<400'}`, pass, detail: `got ${res.status ?? '—'}` });
     } else if (c.kind === 'jsonPathExists') {
-      const v = readPath(parsed, c.path);
-      out.push({ kind: c.kind, label: `${c.path || '.'} exists`, pass: v !== undefined && v !== null });
+      // Rich JSONPath: exists ⇒ at least one non-null match.
+      const { values } = queryPath(parsed, c.path);
+      const pass = values.some((v) => v !== undefined && v !== null);
+      out.push({ kind: c.kind, label: `${c.path || '.'} exists`, pass, detail: values.length > 1 ? `${values.length} matches` : undefined });
     } else if (c.kind === 'jsonPathEquals') {
-      const v = readPath(parsed, c.path);
-      const pass = toStr(v) === String(c.value ?? c.equals ?? '');
-      out.push({ kind: c.kind, label: `${c.path || '.'} = ${String(c.value ?? c.equals ?? '')}`, pass, detail: `got ${toStr(v).slice(0, 80)}` });
+      // Rich JSONPath: equals ⇒ any match equals the expected value.
+      const want = String(c.value ?? c.equals ?? '');
+      const { values } = queryPath(parsed, c.path);
+      const pass = values.some((v) => toStr(v) === want);
+      out.push({ kind: c.kind, label: `${c.path || '.'} = ${want}`, pass, detail: `got ${toStr(values[0]).slice(0, 80)}${values.length > 1 ? ` (+${values.length - 1})` : ''}` });
     } else if (c.kind === 'bodyContains') {
       const pass = res.bodyText.includes(String(c.text ?? ''));
       out.push({ kind: c.kind, label: `body contains "${String(c.text ?? '').slice(0, 40)}"`, pass });
     } else if (c.kind === 'responseTimeUnderMs') {
       const limit = Number(c.ms ?? 0);
       out.push({ kind: c.kind, label: `response < ${limit}ms`, pass: res.elapsedMs <= limit, detail: `${res.elapsedMs}ms` });
+    } else if (c.kind === 'header') {
+      const name = String(c.name || '').toLowerCase();
+      const hv = headers[name];
+      const op = c.op || 'exists';
+      const want = String(c.value ?? c.text ?? c.equals ?? '');
+      const pass = op === 'equals' ? hv === want : op === 'contains' ? (hv || '').includes(want) : hv !== undefined;
+      out.push({ kind: c.kind, label: `header ${c.name || ''} ${op}${op === 'exists' ? '' : ` "${want.slice(0, 40)}"`}`, pass, detail: hv !== undefined ? `got "${String(hv).slice(0, 80)}"` : 'header absent' });
+    } else if (c.kind === 'bodyMatches') {
+      const expected = typeof c.value === 'string' ? (tryParse(c.value) ?? c.value) : c.value;
+      const mode = (c.compareMode || 'lenient') as CompareMode;
+      const r = compareJson(parsed, expected, mode);
+      out.push({ kind: c.kind, label: `body matches (${mode})`, pass: r.pass, detail: r.detail.slice(0, 120) });
+    } else if (c.kind === 'xpath') {
+      const op = c.op || 'exists';
+      const want = String(c.value ?? c.text ?? c.equals ?? '');
+      const r = await evalXPath(res.bodyText, String(c.path || ''));
+      if ('error' in r) out.push({ kind: c.kind, label: `xpath ${String(c.path || '').slice(0, 40)}`, pass: false, detail: r.error });
+      else {
+        const pass = op === 'equals' ? r.value === want : op === 'contains' ? r.value.includes(want) : r.matched;
+        out.push({ kind: c.kind, label: `xpath ${String(c.path || '').slice(0, 40)} ${op}${op === 'exists' ? '' : ` "${want.slice(0, 30)}"`}`, pass, detail: r.matched ? `got "${r.value.slice(0, 80)}"` : 'no match' });
+      }
     }
   }
   return out;
@@ -254,7 +314,7 @@ async function execSteps(steps: FlowStep[], ctx: ExecCtx, depth: number): Promis
       ctx.vars[ex.name] = sv;
     }
 
-    const checks = runChecks(s.checks, res, parsed);
+    const checks = await runChecks(s.checks, res, parsed);
     const stepOk = !res.error && (res.status == null || res.status < 400) && checks.every((c) => c.pass);
     ctx.results.push({
       index: ctx.results.length,
