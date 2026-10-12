@@ -305,7 +305,7 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
             Sizes come from @container queries because the constraint is this
             column’s width — the nav rail and the insights panel take their cut
             first, so a viewport breakpoint would report room that is not here. */}
-        <div className={`relative z-10 flex items-center gap-2 px-4 h-11 min-w-0 overflow-hidden border-b border-gray-100 flex-shrink-0 ${STRIP}`}>
+        <div className={`relative z-10 flex items-center gap-2 px-4 h-11 min-w-0 border-b border-gray-100 flex-shrink-0 ${STRIP}`}>
           <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
             <label className="flex items-center gap-1.5 text-[11px] text-gray-600 cursor-pointer select-none flex-shrink-0">
               <input type="checkbox" checked={allVisibleSelected} onChange={() => catalog.selectMany(visible.map((e) => e.id), !allVisibleSelected)} className="w-3.5 h-3.5 rounded border-gray-300 text-[#7C3AED] focus:ring-[#A5B4FC] focus:ring-offset-0" />
