@@ -94,7 +94,7 @@ import { listDbConnections, saveDbConnection, deleteDbConnection, runDbValidatio
 import { summarizeAsyncApi, validateAsyncMessage } from '../services/api-asyncapi.service.js';
 import { runTraceProbe } from '../services/api-trace.service.js';
 import { detectFlaky, listQuarantine, addQuarantine, removeQuarantine, analyzeImpact } from '../services/api-testintel.service.js';
-import { listLoadAgents, saveLoadAgent, deleteLoadAgent, runCloudLoad } from '../services/api-cloud-load.service.js';
+import { listLoadAgents, saveLoadAgent, deleteLoadAgent, runCloudLoad, runCloudLoadProfile } from '../services/api-cloud-load.service.js';
 import { PERMISSION_CATALOG, getRolePermissions, setRolePermissions, getSsoConfig, saveSsoConfig, testOidcDiscovery, getScimToken, rotateScimToken, revokeScimToken, getSecuritySettings, saveSecuritySettings, beginMfaEnrollment, confirmMfaEnrollment, disableMfa, userHasMfa } from '../services/api-access.service.js';
 import { openRemediationPr } from '../services/api-remediation.service.js';
 import { runCompliancePack, listCompliancePacks } from '../services/api-compliance.service.js';
@@ -134,6 +134,14 @@ import { listRegistry, saveRegistryEntry, setLifecycle, deleteRegistryEntry, lis
 import { generateReferential, subsetDatasets, listDatasetVersions, getDatasetVersion, saveDatasetVersion, deleteDatasetVersion, diffDatasetVersions } from '../services/api-test-data-mgmt.service.js';
 import { generateStatefulSequences } from '../services/api-stateful-gen.service.js';
 import { gradeAssertions } from '../services/api-mutation-testing.service.js';
+// ─── Tier-1 frontier batch: coverage-guided gen, deep dynamic authz, autonomous loop (all additive, opt-in) ───
+import { runCoverageGuided } from '../services/api-covguide.service.js';
+import { runAuthzDeepScan } from '../services/api-authz-deep.service.js';
+import { getAutopilotConfig, saveAutopilotConfig, listAutopilotCycles, runAutopilotNow, approveCycle, rejectCycle } from '../services/api-autopilot.service.js';
+// ─── Tier-2 depth batch: distributed data-correctness, model-based gen, cross-layer unified test (all additive, opt-in) ───
+import { runDataCorrectness } from '../services/api-data-correctness.service.js';
+import { generateModelSequences } from '../services/api-model-gen.service.js';
+import { runUnified } from '../services/api-unified.service.js';
 import { grpcClientStream, grpcBidi } from '../services/api-messaging.service.js';
 import { logAudit } from '../utils/audit.js';
 import {
@@ -2341,6 +2349,122 @@ router.get('/status-pages/:id/view', async (req: Request, res: Response) => {
 });
 router.post('/status-pages/:id/probe', async (req: Request, res: Response) => {
   try { res.json(await probeNow(req.user!.tenantId, String(req.params.id))); } catch (err) { fail(res, err); }
+});
+
+/* ════════════════════════════════════════════════════════════════════════
+   Tier-1 frontier batch (all additive, opt-in; the pipeline is CALLED, not changed)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── #1 Coverage-guided generation: probe → find uncovered branches → generate toward them ── */
+router.post('/covguide/run', async (req: Request, res: Response) => {
+  try {
+    const eps = endpointsFromBody(req.body?.endpoints).map((e) => ({ id: e.title, title: e.title, method: e.method, url: e.url, headers: e.headers, auth: e.auth, body: e.body, queryParams: Array.isArray(e.queryParams) ? e.queryParams.map((q: any) => ({ name: String(q?.name ?? q ?? '') })) : undefined }));
+    if (!eps.length) { res.status(400).json({ error: 'Send at least one endpoint with an http(s) URL.' }); return; }
+    const llm = (await getTenantLlm(req.user!.tenantId)) || undefined;
+    const result = await runCoverageGuided(eps, { allowWrites: !!req.body?.allowWrites, externalCoverage: req.body?.externalCoverage ? String(req.body.externalCoverage) : undefined, maxGenerate: req.body?.maxGenerate, llm });
+    void logAudit(req, 'execute', 'api_covguide', '', { endpoints: result.summary.endpoints, coverage: result.summary.responseCoveragePct, generated: result.summary.generated });
+    res.json(result);
+  } catch (err) { fail(res, err); }
+});
+
+/* ── #3 Deep dynamic security: multi-role excessive-data / mass-assignment / unauth-write / method-tamper ── */
+router.post('/authz/deep-scan', async (req: Request, res: Response) => {
+  try {
+    const report = await runAuthzDeepScan(req.body?.endpoints, req.body?.identities, { allowWrites: !!req.body?.allowWrites, checks: req.body?.checks });
+    if (report.summary.endpoints === 0) { res.status(400).json({ error: 'Send at least one endpoint with an http(s) URL to test.' }); return; }
+    void logAudit(req, 'execute', 'api_authz_deep_scan', '', { endpoints: report.summary.endpoints, identities: report.summary.identities, vulnerable: report.summary.vulnerable, writesFired: report.summary.writesFired });
+    res.json(report);
+  } catch (err) { fail(res, err); }
+});
+
+/* ── #2 Mutation grading against a LIVE response (fetch the real body, then grade the pure way) ── */
+router.post('/mutation/grade-live', async (req: Request, res: Response) => {
+  try {
+    const ep = endpointsFromBody([req.body?.endpoint])[0];
+    if (!ep) { res.status(400).json({ error: 'Send an endpoint with an http(s) URL.' }); return; }
+    const { url, init } = buildRequestInit({ method: ep.method, url: ep.url, headers: ep.headers, auth: ep.auth as any, body: ep.body });
+    const r = await fetchFull(url, init);
+    if (r.error) { res.status(502).json({ error: `Could not reach the endpoint: ${r.error}` }); return; }
+    const result = gradeAssertions({ status: r.status ?? 0, body: r.bodyText }, req.body?.assertions);
+    res.json({ sample: { status: r.status, bodyPreview: r.bodyText.slice(0, 1200) }, ...result });
+  } catch (err) { fail(res, err); }
+});
+
+/* ── #4 Autonomous closed-loop agent (Autopilot) ── */
+router.get('/autopilot/config', async (req: Request, res: Response) => {
+  try { res.json({ config: await getAutopilotConfig(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.put('/autopilot/config', async (req: Request, res: Response) => {
+  try {
+    const config = await saveAutopilotConfig(req.user!.tenantId, req.body || {});
+    void logAudit(req, 'update', 'api_autopilot_config', '', { enabled: config.enabled, mode: config.mode, endpoints: config.endpointCount });
+    res.json({ config });
+  } catch (err) { fail(res, err); }
+});
+router.get('/autopilot/cycles', async (req: Request, res: Response) => {
+  try { res.json({ cycles: await listAutopilotCycles(req.user!.tenantId, Number(req.query.limit) || 50) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/autopilot/run', async (req: Request, res: Response) => {
+  try {
+    const cycle = await runAutopilotNow(req.user!.tenantId);
+    void logAudit(req, 'execute', 'api_autopilot_cycle', cycle.id, { status: cycle.status, affected: cycle.discovered.affected });
+    res.json({ cycle });
+  } catch (err) { fail(res, err); }
+});
+router.post('/autopilot/cycles/:id/approve', async (req: Request, res: Response) => {
+  try {
+    const cycle = await approveCycle(req.user!.tenantId, String(req.params.id), req.user!.username);
+    void logAudit(req, 'update', 'api_autopilot_cycle', cycle.id, { status: cycle.status, prUrl: cycle.prUrl });
+    res.json({ cycle });
+  } catch (err) { fail(res, err); }
+});
+router.post('/autopilot/cycles/:id/reject', async (req: Request, res: Response) => {
+  try {
+    const cycle = await rejectCycle(req.user!.tenantId, String(req.params.id), req.user!.username);
+    void logAudit(req, 'update', 'api_autopilot_cycle', cycle.id, { status: cycle.status });
+    res.json({ cycle });
+  } catch (err) { fail(res, err); }
+});
+
+/* ════════════════════════════════════════════════════════════════════════
+   Tier-2 depth batch (all additive, opt-in; the pipeline is never touched)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── #5 Distributed data-correctness: one write → verify it propagated across services/DBs ── */
+router.post('/data-correctness/verify', async (req: Request, res: Response) => {
+  try {
+    const result = await runDataCorrectness(req.user!.tenantId, { write: req.body?.write, probes: req.body?.probes, waitMs: req.body?.waitMs, allowWrites: !!req.body?.allowWrites });
+    void logAudit(req, 'execute', 'api_data_correctness', '', { propagated: result.propagated, probes: result.summary.probes, passed: result.summary.passed });
+    res.json(result);
+  } catch (err) { fail(res, err); }
+});
+
+/* ── #7 Stateful model-based generation: learn the resource state machine → long valid business sequences ── */
+router.post('/model-gen/generate', (req: Request, res: Response) => {
+  try {
+    const eps = Array.isArray(req.body?.endpoints) ? endpointsFromBody(req.body.endpoints).map((e) => ({ method: e.method, url: e.url, title: e.title })) : undefined;
+    res.json(generateModelSequences({ spec: req.body?.spec ? String(req.body.spec) : undefined, endpoints: eps, baseUrl: req.body?.baseUrl ? String(req.body.baseUrl) : undefined, maxSequences: req.body?.maxSequences }));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── #8 Unified cross-layer test: one ordered list of API + DB + UI steps, shared variables ── */
+router.post('/unified/run', async (req: Request, res: Response) => {
+  try {
+    const result = await runUnified(req.user!.tenantId, { steps: req.body?.steps, variables: req.body?.variables, allowWrites: !!req.body?.allowWrites });
+    void logAudit(req, 'execute', 'api_unified_run', '', { passed: result.passed, steps: result.stepsRun });
+    res.json(result);
+  } catch (err) { fail(res, err); }
+});
+
+/* ── #6 Distributed load ramp: sustained, staged high-RPS across registered agents ── */
+router.post('/loadtest/cloud-profile', async (req: Request, res: Response) => {
+  try {
+    const endpoint = endpointsFromBody([req.body?.endpoint])[0];
+    if (!endpoint) { res.status(400).json({ error: 'Send an endpoint with an http(s) URL.' }); return; }
+    const result = await runCloudLoadProfile(req.user!.tenantId, { endpoint: { method: endpoint.method, url: endpoint.url, headers: endpoint.headers, auth: endpoint.auth as any, body: endpoint.body }, stages: req.body?.stages, allowWrites: !!req.body?.allowWrites, sla: req.body?.sla });
+    void logAudit(req, 'execute', 'api_cloud_load_profile', '', { stages: result.stages.length, peakRps: result.overall.peakThroughputRps, agents: result.agentsUsed });
+    res.json(result);
+  } catch (err) { fail(res, err); }
 });
 
 export default router;

@@ -11,7 +11,7 @@ import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Too
 import { Activity, AlertTriangle, ArrowRight, Clock, RefreshCw, Layers, Upload, Gauge, Zap, TrendingUp } from 'lucide-react';
 import { getApiOverview } from '@/services/api';
 import { CARD, CARD_HOVER, TILE_ACTIVE, THEAD, PRIMARY_BTN, SECONDARY_BTN, BRAND_CHIP, MUTED_CHIP, relativeTime, formatDuration, IMPORT_METHOD_LABELS } from '../format';
-import { StatusPill } from '../primitives';
+import { StatusPill, PassRing } from '../primitives';
 import type { ApiOverview, NavView } from '../types';
 import type { Catalog } from '../hooks/useCatalog';
 
@@ -63,7 +63,7 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
         {/* KPIs */}
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
           <Kpi icon={Activity} label="API runs" value={k ? k.runs : '—'} sub={k ? 'Last 30 days' : ''} loading={loading} />
-          <Kpi icon={Gauge} label="Pass rate" value={k?.avgPassRate != null ? `${k.avgPassRate}%` : '—'} sub={k?.lastPassRate != null ? 'Latest run' : 'No runs yet'} loading={loading} tone={k?.avgPassRate != null ? (k.avgPassRate >= 90 ? 'good' : k.avgPassRate >= 70 ? 'warn' : 'bad') : 'neutral'} />
+          <Kpi icon={Gauge} label="Pass rate" value={k?.avgPassRate != null ? `${k.avgPassRate}%` : '—'} sub={k?.lastPassRate != null ? 'Latest run' : 'No runs yet'} loading={loading} tone={k?.avgPassRate != null ? (k.avgPassRate >= 90 ? 'good' : k.avgPassRate >= 70 ? 'warn' : 'bad') : 'neutral'} ring={k?.avgPassRate != null ? k.avgPassRate : undefined} />
           <Kpi icon={Layers} label="Scenarios" value={k ? k.scenarios : '—'} sub={k ? `${k.endpointsCovered} endpoints covered` : ''} loading={loading} />
           <Kpi icon={Zap} label="Anomalies" value={data ? data.anomalies.length : '—'} sub={data ? (data.anomalies.length ? `${data.anomalies.filter((a) => a.kind === 'flaky').length} flaky · ${data.anomalies.filter((a) => a.kind === 'new-failure').length} new` : 'All healthy') : ''} loading={loading} tone={data?.anomalies.length ? 'warn' : 'neutral'} />
           <Kpi icon={Upload} label="Imports" value={k ? k.imports : '—'} sub={k?.lastRunAt ? relativeTime(k.lastRunAt) : data ? `${Object.keys(data.imports.byMethod).length} methods` : ''} loading={loading} />
@@ -184,12 +184,12 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
   );
 }
 
-function Kpi({ icon: Icon, label, value, sub, loading, tone = 'neutral' }: { icon: React.ElementType; label: string; value: string | number; sub?: string; loading: boolean; tone?: 'neutral' | 'good' | 'warn' | 'bad' }) {
+function Kpi({ icon: Icon, label, value, sub, loading, tone = 'neutral', ring }: { icon: React.ElementType; label: string; value: string | number; sub?: string; loading: boolean; tone?: 'neutral' | 'good' | 'warn' | 'bad'; ring?: number }) {
   const valueCls = tone === 'good' ? 'text-emerald-600' : tone === 'warn' ? 'text-amber-600' : tone === 'bad' ? 'text-red-600' : 'text-gray-900';
   return (
     <div className={`${CARD_HOVER} p-4`}>
       <div className="flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-gray-500"><Icon className="w-3.5 h-3.5 text-[#7C3AED]" />{label}</div>
-      <div className={`mt-3 text-[28px] font-bold tabular-nums leading-none ${valueCls}`}>{loading && value === '—' ? <Loader size="sm" /> : value}</div>
+      <div className="mt-3 flex items-center justify-between gap-2"><span className={`text-[28px] font-bold tabular-nums leading-none ${valueCls}`}>{loading && value ==='—' ? <Loader size="sm" /> : value}</span>{ring != null && !loading && <span className="flex-shrink-0"><PassRing value={ring} size={40} /></span>}</div>
       <p className="mt-2 text-[11px] font-medium text-gray-400 truncate">{sub || ' '}</p>
     </div>
   );

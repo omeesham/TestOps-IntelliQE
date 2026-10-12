@@ -2935,6 +2935,75 @@ export async function gradeAssertionMutations(sample: { status: number; body: st
 export async function grpcClientStream(input: { target: string; protoText: string; service: string; method: string; messages?: unknown[]; requestJson?: string; tls?: boolean; metadata?: Record<string, string>; timeoutMs?: number }): Promise<GrpcResult> { const { data } = await api.post('/api-automation/messaging/grpc-client-stream', input, { timeout: 90_000 }); return data; }
 export async function grpcBidi(input: { target: string; protoText: string; service: string; method: string; messages?: unknown[]; requestJson?: string; maxMessages?: number; tls?: boolean; metadata?: Record<string, string>; timeoutMs?: number }): Promise<GrpcStreamResult> { const { data } = await api.post('/api-automation/messaging/grpc-bidi', input, { timeout: 90_000 }); return data; }
 
+/* ════ Tier-1 frontier batch: coverage-guided gen · deep dynamic authz · live mutation grade · autonomous loop ════ */
+
+/* #1 Coverage-guided generation */
+export type CovStatusClass = '2xx' | '3xx' | '4xx' | '5xx' | 'err';
+export interface CovSignal { signature: string; method: string; url: string; probes: number; statusClassesSeen: CovStatusClass[]; statusesSeen: number[]; fieldsSeen: string[]; contentType?: string; branchComplete: boolean }
+export interface CovUncovered { signature: string; method: string; url: string; kind: 'missing-error-path' | 'missing-success-path' | 'untested-param' | 'unverified-auth' | 'no-boundary'; detail: string; suggestion: string }
+export interface CovGenerated { title: string; method: string; url: string; rationale: string; targets: string; queryParams?: { name: string; value: string }[]; body?: string; expectedStatusClass?: CovStatusClass }
+export interface CovExternal { source: 'lcov' | 'istanbul-json'; linesPct?: number; branchesPct?: number; functionsPct?: number; totalFiles: number; uncoveredFiles: { file: string; uncoveredLines?: number; branchesPct?: number }[]; mappedEndpoints: { file: string; endpoint: string }[] }
+export interface CovGuideResult { summary: { endpoints: number; probes: number; responseCoveragePct: number; branchesIdentified: number; generated: number; usedLlm: boolean }; signals: CovSignal[]; uncovered: CovUncovered[]; generated: CovGenerated[]; external?: CovExternal; notes: string[] }
+export async function runCoverageGuided(input: { endpoints: unknown[]; allowWrites?: boolean; externalCoverage?: string; maxGenerate?: number }): Promise<CovGuideResult> { const { data } = await api.post('/api-automation/covguide/run', input, { timeout: 120_000 }); return data; }
+
+/* #3 Deep dynamic security (multi-role) */
+export type DeepAuthzCheck = 'excessive-data' | 'mass-assignment' | 'unauth-write' | 'method-tamper';
+export interface DeepAuthzFinding { endpointId: string; title: string; method: string; url: string; check: DeepAuthzCheck; category: string; severity: 'high' | 'medium' | 'low' | 'info'; status: 'vulnerable' | 'ok' | 'info' | 'skipped'; detail: string; identities?: string[]; evidence?: { request?: string; response?: string; fields?: string[] } }
+export interface DeepAuthzReport { findings: DeepAuthzFinding[]; summary: { endpoints: number; identities: number; checksRun: DeepAuthzCheck[]; vulnerable: number; high: number; medium: number; low: number; info: number; writesFired: number }; notes: string[] }
+export async function runApiAuthzDeepScan(endpoints: unknown[], identities: AuthzIdentityInput[], opts: { allowWrites?: boolean; checks?: DeepAuthzCheck[] } = {}): Promise<DeepAuthzReport> { const { data } = await api.post('/api-automation/authz/deep-scan', { endpoints, identities, allowWrites: opts.allowWrites, checks: opts.checks }, { timeout: 120_000 }); return data; }
+
+/* #2 Mutation grading against a live endpoint */
+export async function gradeAssertionsLive(endpoint: { method: string; url: string; headers?: { key: string; value: string }[]; auth?: unknown; body?: string }, assertions: MutationAssertion[]): Promise<MutationResult & { sample: { status?: number; bodyPreview: string } }> { const { data } = await api.post('/api-automation/mutation/grade-live', { endpoint, assertions }, { timeout: 60_000 }); return data; }
+
+/* #4 Autonomous closed-loop agent (Autopilot) */
+export type AutopilotMode = 'suggest' | 'autonomous';
+export type AutopilotCycleStatus = 'no_change' | 'awaiting_approval' | 'pr_opened' | 'dismissed' | 'error' | 'passed_clean';
+export interface AutopilotGitConfig { provider: 'github' | 'gitlab'; repo: string; baseBranch?: string; host?: string; token?: string }
+export interface AutopilotConfigView { enabled: boolean; intervalMinutes: number; mode: AutopilotMode; autoGenerate: boolean; gate: { minPassRate: number }; endpointCount: number; environmentId?: string; git?: { provider: 'github' | 'gitlab'; repo: string; baseBranch?: string; host?: string; tokenMasked?: string }; nextRunAt?: string; lastRunAt?: string; lastStatus?: string; lastSummary?: string }
+export interface AutopilotCycle { id: string; status: AutopilotCycleStatus; trigger: 'scheduled' | 'manual'; discovered: { drift: number; gaps: number; affected: number }; affectedEndpoints: { method: string; url: string; reason: string }[]; run?: { runId: string | null; total: number; passed: number; failed: number; passRate: number; healed: number } | null; decision: string; gatePassed: boolean; prUrl?: string; changeset?: { path: string; summary: string }; error?: string; createdAt: string; decidedAt?: string; decidedBy?: string }
+export async function getAutopilotConfig(): Promise<AutopilotConfigView> { const { data } = await api.get('/api-automation/autopilot/config'); return data.config; }
+export async function saveAutopilotConfig(input: { enabled?: boolean; intervalMinutes?: number; mode?: AutopilotMode; autoGenerate?: boolean; gate?: { minPassRate?: number }; endpoints?: unknown[]; environmentId?: string; git?: AutopilotGitConfig | null }): Promise<AutopilotConfigView> { const { data } = await api.put('/api-automation/autopilot/config', input); return data.config; }
+export async function listAutopilotCycles(limit = 50): Promise<AutopilotCycle[]> { const { data } = await api.get('/api-automation/autopilot/cycles', { params: { limit } }); return data.cycles; }
+export async function runAutopilotNow(): Promise<AutopilotCycle> { const { data } = await api.post('/api-automation/autopilot/run', {}, { timeout: 180_000 }); return data.cycle; }
+export async function approveAutopilotCycle(id: string): Promise<AutopilotCycle> { const { data } = await api.post(`/api-automation/autopilot/cycles/${id}/approve`, {}); return data.cycle; }
+export async function rejectAutopilotCycle(id: string): Promise<AutopilotCycle> { const { data } = await api.post(`/api-automation/autopilot/cycles/${id}/reject`, {}); return data.cycle; }
+
+/* ════ Tier-2 depth batch: data-correctness · model-based gen · unified cross-layer · distributed ramp ════ */
+
+/* #5 Distributed data-correctness */
+export interface DcExtract { name: string; from: 'body' | 'header' | 'status'; path?: string }
+export interface DcApiCheck { path?: string; op?: 'equals' | 'contains' | 'exists' | 'notEquals'; value?: string }
+export interface DcApiProbe { kind: 'api'; name?: string; method?: string; url: string; headers?: { key: string; value: string }[]; auth?: unknown; body?: string; expectStatus?: number; checks?: DcApiCheck[] }
+export interface DcDbProbe { kind: 'db'; name?: string; connectionId?: string; config?: unknown; query: string; expect?: { minRows?: number; maxRows?: number; column?: string; equals?: string } }
+export type DcProbe = DcApiProbe | DcDbProbe;
+export interface DcWrite { method?: string; url: string; headers?: { key: string; value: string }[]; auth?: unknown; body?: string; extract?: DcExtract[] }
+export interface DcProbeResult { name: string; kind: 'api' | 'db'; target: string; passed: boolean; status?: number; detail: string; checks: { label: string; pass: boolean; detail?: string }[] }
+export interface DcResult { write: { method: string; url: string; status?: number; ok: boolean; error?: string; extracted: Record<string, string> }; waitedMs: number; probes: DcProbeResult[]; propagated: boolean; summary: { probes: number; passed: number; failed: number }; notes: string[] }
+export async function runDataCorrectness(input: { write: DcWrite; probes: DcProbe[]; waitMs?: number; allowWrites?: boolean }): Promise<DcResult> { const { data } = await api.post('/api-automation/data-correctness/verify', input, { timeout: 90_000 }); return data; }
+
+/* #7 Stateful model-based generation */
+export interface MgState { name: string; terminal?: boolean }
+export interface MgTransition { from: string; to: string; via: string; method: string; path: string; action?: string }
+export interface MgStep { order: number; name: string; method: string; path: string; injects: { param: string; var: string }[]; extracts: { field: string; var: string }[]; expectState?: string }
+export interface MgSequence { id: string; name: string; resource: string; lengthClass: 'short' | 'long'; steps: MgStep[]; note: string }
+export interface MgResourceModel { resource: string; states: MgState[]; transitions: MgTransition[] }
+export interface ModelGenResult { operations: number; resources: string[]; models: MgResourceModel[]; sequences: MgSequence[]; notes: string[] }
+export async function generateModelSequences(input: { spec?: string; endpoints?: { method: string; url: string; title?: string }[]; baseUrl?: string; maxSequences?: number }): Promise<ModelGenResult> { const { data } = await api.post('/api-automation/model-gen/generate', input); return data; }
+
+/* #8 Unified cross-layer test */
+export type UnifiedStepKind = 'api' | 'db' | 'ui';
+export interface UnifiedUiCheck { kind: 'textPresent' | 'textAbsent' | 'selectorPresent' | 'selectorCount' | 'titleContains' | 'urlContains'; selector?: string; text?: string; count?: number }
+export interface UnifiedStep { id?: string; name?: string; kind: UnifiedStepKind; method?: string; url?: string; headers?: { key: string; value: string }[]; auth?: unknown; body?: string; expectStatus?: number; extract?: DcExtract[]; checks?: DcApiCheck[]; connectionId?: string; config?: unknown; query?: string; expect?: { minRows?: number; maxRows?: number; column?: string; equals?: string }; uiUrl?: string; uiChecks?: UnifiedUiCheck[]; engine?: string }
+export interface UnifiedStepResult { index: number; name: string; kind: UnifiedStepKind; ok: boolean; status?: number; detail: string; checks: { label: string; pass: boolean; detail?: string }[]; extracted?: Record<string, string>; screenshotBase64?: string }
+export interface UnifiedResult { passed: boolean; durationMs: number; steps: UnifiedStepResult[]; variables: Record<string, string>; stepsRun: number; stepsTotal: number; notes: string[] }
+export async function runUnifiedTest(input: { steps: UnifiedStep[]; variables?: Record<string, string>; allowWrites?: boolean }): Promise<UnifiedResult> { const { data } = await api.post('/api-automation/unified/run', input, { timeout: 120_000 }); return data; }
+
+/* #6 Distributed load ramp (staged high-RPS across registered agents) */
+export interface CloudProfileStage { concurrencyPerAgent: number; durationSec: number }
+export interface CloudProfileStageResult { stage: number; concurrencyPerAgent: number; durationSec: number; result: CloudLoadResult }
+export interface CloudLoadProfileResult { url: string; method: string; durationMs: number; agentsUsed: number; stages: CloudProfileStageResult[]; overall: { completed: number; failed: number; non2xx: number; peakThroughputRps: number; errorRatePct: number; worstP95: number; worstP99: number }; sla: { pass: boolean; atStage: number; checks: { name: string; limit: number; actual: number; unit: string; pass: boolean }[] } | null; note: string }
+export async function runCloudLoadProfile(input: { endpoint: any; stages?: CloudProfileStage[]; allowWrites?: boolean; sla?: { p95Ms?: number; maxErrorRatePct?: number; minThroughputRps?: number } }): Promise<CloudLoadProfileResult> { const { data } = await api.post('/api-automation/loadtest/cloud-profile', input, { timeout: 300_000 }); return data; }
+
 /* ── Gap 3: LLM/agent eval harness (Promptfoo / DeepEval) ── */
 export type EvalMetricId = 'status' | 'non-empty' | 'contains' | 'exact' | 'regex' | 'json-has' | 'latency' | 'semantic';
 export interface EvalMetricDef { id: EvalMetricId; label: string; needsExpected: boolean }

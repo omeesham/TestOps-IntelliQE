@@ -156,3 +156,68 @@ export async function runCloudLoad(tenantId: string, input: CloudLoadInput): Pro
 
   return { url: buildRequestInit(ep).url, method, durationMs, nodes, totals: { completed, failed, non2xx, throughputRps, errorRatePct, latency: agg }, sla, note };
 }
+
+/* ────────────────────────────────────────────────────────────────
+   Distributed RAMP profile — sustained, staged high-RPS load across
+   the same registered agents. Each stage raises per-agent concurrency
+   (so aggregate RPS climbs); per-stage results + an overall rollup let
+   you find the point throughput plateaus or latency/error breaches.
+   (True managed global infra isn't app code — this drives the agents
+   you register; register more, in more regions, to scale wider.)
+   ──────────────────────────────────────────────────────────────── */
+export interface CloudProfileStage { concurrencyPerAgent: number; durationSec: number }
+export interface CloudProfileStageResult { stage: number; concurrencyPerAgent: number; durationSec: number; result: CloudLoadResult }
+export interface CloudLoadProfileResult {
+  url: string; method: string; durationMs: number; agentsUsed: number;
+  stages: CloudProfileStageResult[];
+  overall: { completed: number; failed: number; non2xx: number; peakThroughputRps: number; errorRatePct: number; worstP95: number; worstP99: number };
+  sla: { pass: boolean; atStage: number; checks: { name: string; limit: number; actual: number; unit: string; pass: boolean }[] } | null;
+  note: string;
+}
+
+export async function runCloudLoadProfile(
+  tenantId: string,
+  input: { endpoint: HttpEndpoint; stages?: CloudProfileStage[]; allowWrites?: boolean; sla?: CloudLoadInput['sla'] },
+): Promise<CloudLoadProfileResult> {
+  const ep = input.endpoint;
+  const method = (ep.method || 'GET').toUpperCase();
+  if (isWriteMethod(method) && !input.allowWrites) throw new Error(`A ramp against a ${method} endpoint repeats a write many times. Allow writes explicitly if that is safe.`);
+  const rawStages = Array.isArray(input.stages) && input.stages.length ? input.stages : [{ concurrencyPerAgent: 10, durationSec: 10 }, { concurrencyPerAgent: 25, durationSec: 10 }, { concurrencyPerAgent: 50, durationSec: 10 }];
+  const stages = rawStages.slice(0, 8).map((s) => ({ concurrencyPerAgent: clampInt(s.concurrencyPerAgent, 10, 1, 200), durationSec: clampInt(s.durationSec, 10, 1, 60) }));
+  const agentsUsed = (await listLoadAgents(tenantId)).filter((a) => a.enabled).length;
+
+  const started = Date.now();
+  const stageResults: CloudProfileStageResult[] = [];
+  for (let i = 0; i < stages.length; i++) {
+    const st = stages[i]!;
+    // No per-stage SLA; the SLA is evaluated against the ramp's peak below.
+    const result = await runCloudLoad(tenantId, { endpoint: ep, concurrencyPerAgent: st.concurrencyPerAgent, durationSec: st.durationSec, allowWrites: input.allowWrites });
+    stageResults.push({ stage: i + 1, concurrencyPerAgent: st.concurrencyPerAgent, durationSec: st.durationSec, result });
+  }
+  const durationMs = Date.now() - started;
+
+  const completed = stageResults.reduce((a, s) => a + s.result.totals.completed, 0);
+  const failed = stageResults.reduce((a, s) => a + s.result.totals.failed, 0);
+  const non2xx = stageResults.reduce((a, s) => a + s.result.totals.non2xx, 0);
+  const totalReq = completed + failed;
+  const errorRatePct = totalReq > 0 ? +(((failed + non2xx) / totalReq) * 100).toFixed(2) : 0;
+  const peakThroughputRps = Math.max(0, ...stageResults.map((s) => s.result.totals.throughputRps));
+  const worstP95 = Math.max(0, ...stageResults.map((s) => s.result.totals.latency.p95));
+  const worstP99 = Math.max(0, ...stageResults.map((s) => s.result.totals.latency.p99));
+
+  // SLA against the PEAK stage (the one with the highest throughput).
+  let sla: CloudLoadProfileResult['sla'] = null;
+  const t = input.sla;
+  if (t && (t.p95Ms || t.maxErrorRatePct != null || t.minThroughputRps)) {
+    let peakIdx = 0; for (let i = 1; i < stageResults.length; i++) if (stageResults[i]!.result.totals.throughputRps > stageResults[peakIdx]!.result.totals.throughputRps) peakIdx = i;
+    const peak = stageResults[peakIdx]!.result.totals;
+    const checks: NonNullable<CloudLoadProfileResult['sla']>['checks'] = [];
+    if (t.p95Ms) checks.push({ name: 'p95 latency', limit: t.p95Ms, actual: peak.latency.p95, unit: 'ms', pass: peak.latency.p95 <= t.p95Ms });
+    if (t.maxErrorRatePct != null) checks.push({ name: 'error rate', limit: t.maxErrorRatePct, actual: peak.errorRatePct, unit: '%', pass: peak.errorRatePct <= t.maxErrorRatePct });
+    if (t.minThroughputRps) checks.push({ name: 'throughput', limit: t.minThroughputRps, actual: peak.throughputRps, unit: 'rps', pass: peak.throughputRps >= t.minThroughputRps });
+    sla = { pass: checks.every((c) => c.pass), atStage: peakIdx + 1, checks };
+  }
+
+  const note = agentsUsed ? `Ramped ${stages.length} stage(s) across ${agentsUsed} remote agent${agentsUsed === 1 ? '' : 's'}.` : `No remote agents configured — ran the ramp locally. Register agents in more regions to scale the aggregate RPS.`;
+  return { url: buildRequestInit(ep).url, method, durationMs, agentsUsed, stages: stageResults, overall: { completed, failed, non2xx, peakThroughputRps, errorRatePct, worstP95, worstP99 }, sla, note };
+}

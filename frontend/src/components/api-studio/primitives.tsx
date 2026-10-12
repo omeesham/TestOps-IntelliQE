@@ -227,6 +227,82 @@ export function CopyButton({ text, label = 'Copy', className = '' }: { text: str
   );
 }
 
+/* ── Pass-rate ring ─────────────────────────────────────────────────────── */
+
+/**
+ * The one hero visual for a run: an SVG donut that reads the outcome before any
+ * number does. Colour follows the same outcome rule as everything else — a
+ * healthy run is green, a shaky one amber, a failing one red — so the ring says
+ * "good / watch / bad" at a glance and the centred figure gives the exact value.
+ * Purely presentational: it renders a number the caller already has.
+ */
+export function PassRing({ value, size = 104, label }: { value: number; size?: number; label?: string }) {
+  const v = Math.max(0, Math.min(100, Math.round(value)));
+  const stroke = Math.round(size * 0.1);
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const arc = (v / 100) * c;
+  const tone = v >= 90 ? '#059669' : v >= 70 ? '#D97706' : '#DC2626';
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={`Pass rate ${v}%`}>
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#EDE9FE" strokeWidth={stroke} />
+      <circle
+        cx={size / 2} cy={size / 2} r={r} fill="none" stroke={tone} strokeWidth={stroke} strokeLinecap="round"
+        strokeDasharray={`${arc} ${c}`} transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        style={{ transition: 'stroke-dasharray 600ms cubic-bezier(0.22,1,0.36,1)' }}
+      />
+      <text x="50%" y="48%" textAnchor="middle" dominantBaseline="middle" className="font-bold tabular-nums" style={{ fontSize: size * 0.26, fill: tone }}>{v}%</text>
+      {label && <text x="50%" y="68%" textAnchor="middle" dominantBaseline="middle" style={{ fontSize: size * 0.1, fill: '#9CA3AF' }}>{label}</text>}
+    </svg>
+  );
+}
+
+/* ── Filter chip ────────────────────────────────────────────────────────── */
+
+/**
+ * The one chip the tabs reach for to filter a table — the violet pill from the
+ * Scenarios tab, lifted out so Runs, History and Reports all filter the same
+ * way. Active is the solid brand fill; inactive is the standard muted chip.
+ */
+export function FilterChip({
+  active, onClick, children, count, tone = 'brand',
+}: {
+  active: boolean; onClick: () => void; children: ReactNode; count?: number;
+  /** `brand` is the default violet; `danger` tints the active state red for a "Failed" filter. */
+  tone?: 'brand' | 'danger';
+}) {
+  const activeCls = tone === 'danger' ? 'bg-red-500 text-white border-transparent' : 'bg-[#7C3AED] text-white border-transparent';
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full border text-[11px] font-medium transition-colors ${
+        active ? activeCls : 'text-[#6B7280] bg-white border-gray-200 hover:text-[#7C3AED] hover:border-[#DDD6FE]'
+      }`}
+    >
+      {children}
+      {count !== undefined && <span className={active ? 'text-white/70 tabular-nums' : 'text-gray-400 tabular-nums'}>{count}</span>}
+    </button>
+  );
+}
+
+/* ── Duration bar ───────────────────────────────────────────────────────── */
+
+/**
+ * A hairline bar behind a row's duration, scaled to the slowest row — the
+ * cheapest way to show which cases are the slow ones without a chart. The number
+ * stays the source of truth; the bar is just a sense of proportion.
+ */
+export function DurationBar({ ms, max, className = '' }: { ms: number; max: number; className?: string }) {
+  const pct = max > 0 ? Math.max(3, Math.round((ms / max) * 100)) : 0;
+  return (
+    <span className={`inline-block h-1 rounded-full bg-[#EDE9FE] overflow-hidden align-middle ${className}`} style={{ width: 40 }}>
+      <span className="block h-full rounded-full bg-[#A78BFA]" style={{ width: `${pct}%` }} />
+    </span>
+  );
+}
+
 /* ── Empty state ────────────────────────────────────────────────────────── */
 
 export function EmptyState({ icon: Icon, title, hint }: { icon: React.ElementType; title: string; hint?: string }) {

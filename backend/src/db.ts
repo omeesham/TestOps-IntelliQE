@@ -1284,6 +1284,44 @@ export async function initDb(): Promise<void> {
     // Per-user TOTP secret (encrypted at rest); NULL ⇒ MFA not enrolled (login unchanged).
     await addColumn('users', 'mfa_secret', 'NVARCHAR(200)');
 
+    // ─── Autonomous closed-loop agent (Autopilot): opt-in; discover→generate→run→heal→reviewed-PR ───
+    await createTable('api_autopilot_config', `
+      CREATE TABLE ${SCHEMA}.api_autopilot_config (
+        tenant_id        UNIQUEIDENTIFIER PRIMARY KEY,
+        enabled          BIT NOT NULL DEFAULT 0,
+        interval_minutes INT NOT NULL DEFAULT 60,
+        mode             NVARCHAR(20) NOT NULL DEFAULT 'suggest',
+        auto_generate    BIT NOT NULL DEFAULT 1,
+        gate             NVARCHAR(MAX) NOT NULL DEFAULT '{"minPassRate":90}',
+        endpoints        NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        environment_id   NVARCHAR(100),
+        git              NVARCHAR(MAX),
+        next_run_at      DATETIMEOFFSET,
+        last_run_at      DATETIMEOFFSET,
+        last_status      NVARCHAR(40),
+        last_summary     NVARCHAR(MAX),
+        updated_at       DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_autopilot_cycles', `
+      CREATE TABLE ${SCHEMA}.api_autopilot_cycles (
+        id                 UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id          UNIQUEIDENTIFIER NOT NULL,
+        status             NVARCHAR(40) NOT NULL DEFAULT 'no_change',
+        trigger_kind       NVARCHAR(20) NOT NULL DEFAULT 'scheduled',
+        discovered         NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        affected_endpoints NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        run_stats          NVARCHAR(MAX),
+        decision           NVARCHAR(MAX),
+        gate_passed        BIT NOT NULL DEFAULT 1,
+        pr_url             NVARCHAR(1000),
+        changeset          NVARCHAR(MAX),
+        error              NVARCHAR(MAX),
+        decided_at         DATETIMEOFFSET,
+        decided_by         NVARCHAR(100),
+        created_at         DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createIndex('idx_api_autopilot_cycles_tenant', 'api_autopilot_cycles', '(tenant_id, created_at DESC)');
+
     // ─── Execution/CI batch: hybrid API+UI tests, release gates, CI token, parallel queue (all opt-in) ───
     await createTable('api_hybrid_tests', `
       CREATE TABLE ${SCHEMA}.api_hybrid_tests (

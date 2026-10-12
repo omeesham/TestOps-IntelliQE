@@ -59,6 +59,19 @@ import AuthzScan from '../AuthzScan';
 import SpecDiff from '../SpecDiff';
 import ReplayTest from '../ReplayTest';
 import LlmTesting from '../LlmTesting';
+// ─── Tier-1 frontier batch: coverage-guided gen · stateful/mutation gen · deep dynamic authz · autonomous loop ───
+import SmartGeneration from '../SmartGeneration';
+import CoverageGuided from '../CoverageGuided';
+import MutationLive from '../MutationLive';
+import AuthzDeep from '../AuthzDeep';
+import Autopilot from '../Autopilot';
+// ─── Tier-2 depth & coherence: data-correctness, model-based gen, unified canvas, step groups, distributed load, fix workflow ───
+import DataCorrectness from '../DataCorrectness';
+import ModelGen from '../ModelGen';
+import UnifiedCanvas from '../UnifiedCanvas';
+import StepGroups from '../StepGroups';
+import DistributedLoad from '../DistributedLoad';
+import FixWorkflow from '../FixWorkflow';
 // ─── Tier 3 — strategic / packaging (enterprise deals; all additive, opt-in) ───
 import FinOpsMetering from '../FinOpsMetering';
 import OnPremDeploy from '../OnPremDeploy';
@@ -149,6 +162,19 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
   const [specDiffOpen, setSpecDiffOpen] = useState(false);
   const [replayOpen, setReplayOpen] = useState(false);
   const [llmTestingOpen, setLlmTestingOpen] = useState(false);
+  // Tier-1 frontier batch
+  const [smartGenOpen, setSmartGenOpen] = useState(false);
+  const [covGuideOpen, setCovGuideOpen] = useState(false);
+  const [mutationLiveOpen, setMutationLiveOpen] = useState(false);
+  const [authzDeepOpen, setAuthzDeepOpen] = useState(false);
+  const [autopilotOpen, setAutopilotOpen] = useState(false);
+  // Tier-2 depth & coherence
+  const [dataCorrectnessOpen, setDataCorrectnessOpen] = useState(false);
+  const [modelGenOpen, setModelGenOpen] = useState(false);
+  const [unifiedOpen, setUnifiedOpen] = useState(false);
+  const [stepGroupsOpen, setStepGroupsOpen] = useState(false);
+  const [distLoadOpen, setDistLoadOpen] = useState(false);
+  const [fixWorkflowOpen, setFixWorkflowOpen] = useState(false);
   const [dataDrivenOpen, setDataDrivenOpen] = useState(false);
   const [automationOpen, setAutomationOpen] = useState(false);
   const [nlOpen, setNlOpen] = useState(false);
@@ -388,11 +414,26 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
                       { icon: FlaskConical, label: 'LLM eval harness', desc: 'Promptfoo-style scoring · LLM judge', open: () => setLlmEvalOpen(true) },
                       { icon: Network, label: 'Contract proxy', desc: 'Validate live traffic · simulate deps', open: () => setProxyOpen(true) },
                       { icon: Gauge, label: 'Public status page', desc: 'Shareable uptime + SLO', open: () => setStatusPagesOpen(true) },
-                    ] as { icon: typeof Wrench; label: string; desc: string; open: () => void; tier1?: boolean; tier3?: boolean; gap?: boolean }[]).map((t) => (
+                      // ── Tier 1 · frontier (coverage-guided gen, mutation quality, deep dynamic security, autonomous loop) ──
+                      { icon: Bot, label: 'Autopilot (autonomous loop)', desc: 'Discover → generate → run → heal → reviewed PR', open: () => setAutopilotOpen(true), frontier: true },
+                      { icon: Target, label: 'Coverage-guided generation', desc: 'Probe branches → generate toward the gaps', open: () => setCovGuideOpen(true) },
+                      { icon: Boxes, label: 'Stateful / white-box generation', desc: 'Producer→consumer CRUD sequences', open: () => setSmartGenOpen(true) },
+                      { icon: Microscope, label: 'Assertion strength (mutation)', desc: 'Grade assertions against a live response', open: () => setMutationLiveOpen(true) },
+                      { icon: ShieldAlert, label: 'Deep authorization & data exposure', desc: 'Multi-role excessive-data, mass-assignment, more', open: () => setAuthzDeepOpen(true) },
+                      // ── Tier 2 · depth & coherence ──
+                      { icon: Combine, label: 'Unified cross-layer test', desc: 'One test: API + DB + UI steps, shared vars', open: () => setUnifiedOpen(true), tier2: true },
+                      { icon: GitMerge, label: 'Data-correctness verify', desc: 'Assert a write propagated across services/DBs', open: () => setDataCorrectnessOpen(true) },
+                      { icon: Workflow, label: 'Model-based generation', desc: 'Learn the state machine → long business sequences', open: () => setModelGenOpen(true) },
+                      { icon: Layers, label: 'Step groups library', desc: 'Reusable login / token / teardown sequences', open: () => setStepGroupsOpen(true) },
+                      { icon: Cloud, label: 'Distributed load ramp', desc: 'Staged high-RPS across registered agents', open: () => setDistLoadOpen(true) },
+                      { icon: HeartPulse, label: 'Failure → fix workflow', desc: 'Cluster → heal → PR, one guided flow', open: () => setFixWorkflowOpen(true) },
+                    ] as { icon: typeof Wrench; label: string; desc: string; open: () => void; tier1?: boolean; tier3?: boolean; gap?: boolean; frontier?: boolean; tier2?: boolean }[]).map((t) => (
                       <div key={t.label}>
                         {t.tier1 && <div className="mx-2 mt-1 mb-0.5 pt-1 border-t border-gray-100"><p className="px-1 text-[9.5px] font-semibold uppercase tracking-wide text-[#A78BDA]">Tier 1 · market-leading</p></div>}
                         {t.tier3 && <div className="mx-2 mt-1 mb-0.5 pt-1 border-t border-gray-100"><p className="px-1 text-[9.5px] font-semibold uppercase tracking-wide text-[#A78BDA]">Tier 3 · strategic / packaging</p></div>}
                         {t.gap && <div className="mx-2 mt-1 mb-0.5 pt-1 border-t border-gray-100"><p className="px-1 text-[9.5px] font-semibold uppercase tracking-wide text-[#A78BDA]">Governance &amp; deep testing</p></div>}
+                        {t.frontier && <div className="mx-2 mt-1 mb-0.5 pt-1 border-t border-gray-100"><p className="px-1 text-[9.5px] font-semibold uppercase tracking-wide text-[#A78BDA]">Tier 1 · frontier</p></div>}
+                        {t.tier2 && <div className="mx-2 mt-1 mb-0.5 pt-1 border-t border-gray-100"><p className="px-1 text-[9.5px] font-semibold uppercase tracking-wide text-[#A78BDA]">Tier 2 · depth &amp; coherence</p></div>}
                         <button type="button" onClick={() => { setToolsOpen(false); t.open(); }} className="w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-[#F5F3FF] transition-colors">
                           <t.icon className="w-4 h-4 text-[#7C3AED] flex-shrink-0 mt-0.5" />
                           <span className="min-w-0">
@@ -575,6 +616,72 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
         <LlmTesting
           endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
           onClose={() => setLlmTestingOpen(false)}
+        />
+      )}
+      {autopilotOpen && (
+        <Autopilot
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setAutopilotOpen(false)}
+        />
+      )}
+      {covGuideOpen && (
+        <CoverageGuided
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setCovGuideOpen(false)}
+        />
+      )}
+      {smartGenOpen && (
+        <SmartGeneration
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setSmartGenOpen(false)}
+        />
+      )}
+      {mutationLiveOpen && (
+        <MutationLive
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setMutationLiveOpen(false)}
+        />
+      )}
+      {authzDeepOpen && (
+        <AuthzDeep
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setAuthzDeepOpen(false)}
+        />
+      )}
+      {unifiedOpen && (
+        <UnifiedCanvas
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setUnifiedOpen(false)}
+        />
+      )}
+      {dataCorrectnessOpen && (
+        <DataCorrectness
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setDataCorrectnessOpen(false)}
+        />
+      )}
+      {modelGenOpen && (
+        <ModelGen
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setModelGenOpen(false)}
+        />
+      )}
+      {stepGroupsOpen && (
+        <StepGroups
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setStepGroupsOpen(false)}
+        />
+      )}
+      {distLoadOpen && (
+        <DistributedLoad
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setDistLoadOpen(false)}
+        />
+      )}
+      {fixWorkflowOpen && (
+        <FixWorkflow
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setFixWorkflowOpen(false)}
         />
       )}
       {dataDrivenOpen && (

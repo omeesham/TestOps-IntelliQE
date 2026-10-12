@@ -70,6 +70,7 @@ import { startApiScheduler } from './services/api-scheduler.service.js';
 import { startApiMonitor } from './services/api-monitor.service.js';
 import { startApiSynthetics } from './services/api-synthetics.service.js';
 import { startApiStatus } from './services/api-status.service.js';
+import { startApiAutopilot } from './services/api-autopilot.service.js';
 import { decryptField } from './utils/crypto.js';
 import { signToken } from './utils/jwt.js';
 import { getSecuritySettings, getUserMfaSecret, verifyTotp, validatePassword } from './services/api-access.service.js';
@@ -430,6 +431,10 @@ initDb()
     // Opt-in public status page: periodically probe enabled status pages so the
     // shareable /status/:token page shows fresh uptime/SLO. Read-only (GET/HEAD).
     startApiStatus();
+    // Opt-in autonomous closed-loop agent (Autopilot): discovers drift/coverage
+    // gaps and runs the headless pipeline, then surfaces a reviewable changeset.
+    // Default mode "suggest" never merges or auto-applies anything.
+    startApiAutopilot();
     app.listen(PORT, () => {
       logger.info(`JBS IntelliQE API listening`, { port: PORT, env: NODE_ENV });
     });

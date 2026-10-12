@@ -12,7 +12,7 @@ import {
   GitBranch, AlertTriangle, Sparkles, Layers,
 } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
-import { EmptyState, MethodBadge } from './primitives';
+import { EmptyState, MethodBadge, PassRing } from './primitives';
 import { formatDuration, CARD, CARD_HOVER, TILE_ACTIVE, PRIMARY_BTN, SECONDARY_BTN } from './format';
 import Diagnose, { type FailurePayload } from './Diagnose';
 import FailureClusters, { type ClusterFailureInput } from './FailureClusters';
@@ -89,9 +89,11 @@ export default function ReportTab({
       <div className="max-w-4xl mx-auto p-5 space-y-4">
         {/* Verdict header */}
         <div className="flex items-center gap-4 flex-wrap">
-          <span className={`w-11 h-11 rounded-xl flex items-center justify-center ${TILE_ACTIVE}`}>
-            {green ? <CheckCircle2 className="w-5 h-5 text-white" /> : <BarChart3 className="w-5 h-5 text-white" />}
-          </span>
+          {report.total > 0
+            ? <span className="flex-shrink-0"><PassRing value={report.passRate} size={52} /></span>
+            : <span className={`w-11 h-11 rounded-xl flex items-center justify-center ${TILE_ACTIVE}`}>
+                {green ? <CheckCircle2 className="w-5 h-5 text-white" /> : <BarChart3 className="w-5 h-5 text-white" />}
+              </span>}
           <div className="min-w-0">
             <h2 className="text-[17px] font-bold text-gray-900 leading-tight">
               {green

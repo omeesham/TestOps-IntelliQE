@@ -9,9 +9,9 @@
 import { Fragment, useMemo, useState } from 'react';
 import { ChevronRight, ListChecks, Search, Check, Send } from 'lucide-react';
 import {
-  MethodBadge, CategoryChip, PriorityChip, StatusCode, CodeBlock, EmptyState,
+  MethodBadge, CategoryChip, PriorityChip, StatusCode, CodeBlock, EmptyState, FilterChip,
 } from './primitives';
-import { prettyJson, categoryMeta, STRIP, THEAD, INSET, RAISED, TILE_ACTIVE, BRAND_CHIP, MUTED_CHIP } from './format';
+import { prettyJson, categoryMeta, STRIP, THEAD, INSET, RAISED, TILE_ACTIVE } from './format';
 import type { Scenario } from './types';
 
 interface Props {
@@ -99,28 +99,11 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
 
       {/* Category filters */}
       <div className={`flex items-center gap-1.5 flex-wrap px-4 py-2 border-b border-gray-100 flex-shrink-0 ${STRIP}`}>
-        <button
-          type="button"
-          onClick={() => setCategory('all')}
-          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-medium transition-colors ${
-            category === 'all' ? 'bg-[#7C3AED] text-white border-transparent' : BRAND_CHIP
-          }`}
-        >
-          All<span className={category === 'all' ? 'text-white/70' : 'text-gray-400'}>{scenarios.length}</span>
-        </button>
+        <FilterChip active={category === 'all'} onClick={() => setCategory('all')} count={scenarios.length}>All</FilterChip>
         {categories.map((c) => {
           const n = scenarios.filter((s) => (s.type || 'other').toLowerCase() === c.id).length;
           return (
-            <button
-              key={c.id}
-              type="button"
-              onClick={() => setCategory(c.id)}
-              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-medium transition-colors ${
-                category === c.id ? 'bg-[#7C3AED] text-white border-transparent' : MUTED_CHIP
-              }`}
-            >
-              {c.label}<span className={category === c.id ? 'text-white/70' : 'text-gray-400'}>{n}</span>
-            </button>
+            <FilterChip key={c.id} active={category === c.id} onClick={() => setCategory(c.id)} count={n}>{c.label}</FilterChip>
           );
         })}
       </div>
