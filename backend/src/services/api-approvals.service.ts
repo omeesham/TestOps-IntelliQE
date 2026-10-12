@@ -28,10 +28,18 @@ export interface ApprovalRequest {
 
 // ─── workflows ──────────────────────────────────────────────────────────────
 
+// `decisions` isn't on the db.ts JSON_COLUMNS allowlist (so it can arrive as a raw
+// JSON string); `stages` is, but coercing both keeps the mappers robust regardless.
+function jArr(v: any): any[] {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string' && v.trim().startsWith('[')) { try { const p = JSON.parse(v); if (Array.isArray(p)) return p; } catch { /* leave empty */ } }
+  return [];
+}
+
 function toWorkflow(r: any): ApprovalWorkflow {
   return {
     id: String(r.id), name: r.name || '',
-    stages: Array.isArray(r.stages) ? r.stages : [],
+    stages: jArr(r.stages),
     createdBy: r.created_by || '', createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
@@ -78,13 +86,13 @@ export async function deleteWorkflow(tenantId: string, id: string): Promise<bool
 // ─── requests ────────────────────────────────────────────────────────────────
 
 function toRequest(r: any): ApprovalRequest {
-  const stages: ApprovalStage[] = Array.isArray(r.stages) ? r.stages : [];
+  const stages: ApprovalStage[] = jArr(r.stages);
   return {
     id: String(r.id), workflowId: String(r.workflow_id), workflowName: r.workflow_name || '',
     runId: r.run_id || '', title: r.title || '',
     status: (['pending', 'approved', 'rejected', 'canceled'].includes(r.status) ? r.status : 'pending') as RequestStatus,
     currentStage: Number(r.current_stage || 0), stages,
-    decisions: Array.isArray(r.decisions) ? r.decisions : [],
+    decisions: jArr(r.decisions),
     createdBy: r.created_by || '', createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }

@@ -126,6 +126,33 @@ ${fails}
 </body></html>`;
 }
 
+// pdf-lib's StandardFonts (Helvetica) can only encode WinAnsi/CP1252. LLM-generated
+// scenario titles and healing notes routinely contain arrows (→), check marks (✓/✗),
+// math symbols or emoji that are OUTSIDE CP1252 — drawText throws on the first such
+// glyph, which previously collapsed the whole PDF to the HTML fallback. We map the
+// common offenders to ASCII and replace any remaining non-CP1252 code point with '?'.
+const CP1252_EXTRA = new Set([
+  0x20ac, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160,
+  0x2039, 0x0152, 0x017d, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014,
+  0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x017e, 0x0178,
+]);
+const SYMBOL_MAP: Record<string, string> = {
+  '→': '->', '←': '<-', '↔': '<->', '⇒': '=>', '⟶': '->',
+  '≥': '>=', '≤': '<=', '≠': '!=', '≈': '~', '∞': 'inf',
+  '✓': '[ok]', '✔': '[ok]', '✅': '[ok]', '✗': '[x]', '✘': '[x]', '❌': '[x]',
+  '′': "'", '″': '"',
+};
+function winAnsi(s: string): string {
+  let out = '';
+  for (const ch of String(s)) {
+    const mapped = SYMBOL_MAP[ch];
+    if (mapped !== undefined) { out += mapped; continue; }
+    const cp = ch.codePointAt(0) ?? 0x3f;
+    out += (cp <= 0x7f || (cp >= 0xa0 && cp <= 0xff) || CP1252_EXTRA.has(cp)) ? ch : '?';
+  }
+  return out;
+}
+
 /** Real PDF via pdf-lib. Variable-specifier import keeps tsc green with or without the dep. */
 export async function renderEvidencePdf(doc: EvidenceDoc): Promise<Buffer> {
   const spec = 'pdf-lib';
@@ -145,7 +172,7 @@ export async function renderEvidencePdf(doc: EvidenceDoc): Promise<Buffer> {
 
   const ensure = (need: number) => { if (y - need < margin) { page = pdf.addPage(A4); y = A4[1] - margin; } };
   const wrap = (text: string, f: any, size: number, maxW: number): string[] => {
-    const words = String(text).replace(/\s+/g, ' ').trim().split(' ');
+    const words = winAnsi(String(text)).replace(/\s+/g, ' ').trim().split(' ');
     const lines: string[] = []; let line = '';
     for (const w of words) {
       const t = line ? `${line} ${w}` : w;

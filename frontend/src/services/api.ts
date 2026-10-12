@@ -1247,6 +1247,75 @@ export interface CompliancePack { pack: string; packLabel: string; controls: Com
 export async function listCompliancePacks(): Promise<{ packs: { id: string; label: string }[] }> { const { data } = await api.get('/api-automation/compliance/packs'); return data; }
 export async function runCompliancePack(pack: string, endpoints: any[], security?: { transportSecure?: boolean; headersSecure?: boolean }): Promise<CompliancePack> { const { data } = await api.post('/api-automation/compliance/scan', { pack, endpoints, security }); return data; }
 
+/* ══ Tier 3 — strategic / packaging (enterprise deals) ══ */
+
+/* ── AI-cost / FinOps metering (cap token spend per run) ── */
+export interface ModelRate { id: string; label: string; inputPerM: number; outputPerM: number }
+export interface FinOpsStageCost { id: string; label: string; inputTokens: number; outputTokens: number; costUsd: number }
+export interface FinOpsEstimate {
+  model: ModelRate; endpoints: number; complexity: number; iterations: number;
+  stages: FinOpsStageCost[]; inputTokens: number; outputTokens: number; totalTokens: number; costUsd: number;
+  cap: { usd: number | null; tokens: number | null }; within: boolean;
+  overspend: { usd: number; tokens: number }; remaining: { usd: number | null; tokens: number | null };
+  verdict: 'within-budget' | 'over-budget' | 'uncapped'; notes: string[];
+}
+export interface FinOpsEstimateInput { model?: string; rate?: { inputPerM?: number; outputPerM?: number }; endpoints?: number; complexity?: number; iterations?: number; capUsd?: number | null; capTokens?: number | null }
+export async function listModelRates(): Promise<{ rates: ModelRate[] }> { const { data } = await api.get('/api-automation/finops/rates'); return data; }
+export async function estimateRunCost(input: FinOpsEstimateInput): Promise<FinOpsEstimate> { const { data } = await api.post('/api-automation/finops/estimate', input); return data; }
+
+/* ── On-prem / air-gapped packaging + data residency ── */
+export type DeployMode = 'docker' | 'kubernetes' | 'airgapped';
+export interface ResidencyRegion { id: string; label: string }
+export interface DeployArtifact { path: string; language: string; content: string }
+export interface ResidencyFinding { host: string; endpoints: number; region: string | null; regionLabel: string; status: 'allowed' | 'disallowed' | 'egress' | 'unknown'; note: string }
+export interface ResidencyReport { mode: DeployMode; allowedRegions: string[]; findings: ResidencyFinding[]; summary: { allowed: number; disallowed: number; egress: number; unknown: number }; compliant: boolean }
+export interface DeployPlan { mode: DeployMode; artifacts: DeployArtifact[]; residency: ResidencyReport; checklist: string[] }
+export async function listResidencyRegions(): Promise<{ regions: ResidencyRegion[] }> { const { data } = await api.get('/api-automation/onprem/regions'); return data; }
+export async function planDeployment(input: { mode: DeployMode; allowedRegions: string[]; endpoints: any[]; llmBaseUrl?: string; imageTag?: string }): Promise<DeployPlan> { const { data } = await api.post('/api-automation/onprem/plan', input); return data; }
+
+/* ── AI-era compliance packs (EU AI Act, DORA) ── */
+export interface AiComplianceContext { transportSecure?: boolean; humanOversight?: boolean; hasMonitoring?: boolean; hasResilienceTesting?: boolean; hasAudit?: boolean; hasDocumentation?: boolean }
+export interface AiCompliancePack { pack: string; packLabel: string; controls: ComplianceControl[]; score: number; grade: 'A' | 'B' | 'C' | 'D' | 'F'; summary: Record<ComplianceControlStatus, number> }
+export async function listAiCompliancePacks(): Promise<{ packs: { id: string; label: string }[] }> { const { data } = await api.get('/api-automation/ai-compliance/packs'); return data; }
+export async function runAiCompliancePack(pack: string, endpoints: any[], context?: AiComplianceContext): Promise<AiCompliancePack> { const { data } = await api.post('/api-automation/ai-compliance/scan', { pack, endpoints, context }); return data; }
+
+/* ── Full-code escape hatch + local-first/IDE authoring + Monitoring-as-Code ── */
+export type CodegenTarget = 'playwright' | 'k6';
+export interface CodeFile { path: string; language: string; content: string }
+export interface CodegenResult { target: CodegenTarget; projectName: string; files: CodeFile[]; fileCount: number }
+export async function generateCodeProject(input: { endpoints: any[]; target: CodegenTarget; projectName?: string }): Promise<CodegenResult> { const { data } = await api.post('/api-automation/codegen/project', input); return data; }
+
+/* ══ Competitive-landscape gaps 1–7 ══ */
+
+/* ── Gap 1: Configurable governance rulesets + CI gate (Spectral / SwaggerHub) ── */
+export type GovSeverity = 'error' | 'warn' | 'info' | 'off';
+export interface GovFinding { ruleId: string; severity: GovSeverity; message: string; endpoint?: string; hint?: string }
+export interface GovGateBudget { maxErrors?: number; maxWarnings?: number; minScore?: number }
+export interface GovReport { ruleset: string; evaluated: number; findings: GovFinding[]; summary: Record<GovSeverity, number>; score: number; grade: 'A' | 'B' | 'C' | 'D' | 'F'; gate: { budget: GovGateBudget; passed: boolean; reasons: string[] } }
+export interface GovCustomRule { id: string; severity?: GovSeverity; field: 'url' | 'method' | 'description' | 'title' | 'auth.type' | 'tags'; assert: 'defined' | 'pattern' | 'notPattern' | 'equals' | 'oneOf'; value?: string; message?: string; appliesTo?: 'all' | 'write' | 'read' }
+export async function listGovernanceRulesets(): Promise<{ rulesets: { id: string; label: string }[]; rules: { id: string; defaultSeverity: GovSeverity; description: string }[] }> { const { data } = await api.get('/api-automation/governance/rulesets'); return data; }
+export async function runGovernance(endpoints: any[], opts?: { ruleset?: string; customRules?: GovCustomRule[]; gate?: GovGateBudget }): Promise<GovReport> { const { data } = await api.post('/api-automation/governance/lint', { endpoints, ...opts }); return data; }
+
+/* ── Gap 2: Static OpenAPI security audit & score (42Crunch Audit) ── */
+export type AuditSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+export interface AuditFinding { id: string; severity: AuditSeverity; owasp: string; message: string; pointer: string }
+export interface SpecAuditReport { title: string; version: string; operations: number; findings: AuditFinding[]; summary: Record<AuditSeverity, number>; score: number; grade: 'A' | 'B' | 'C' | 'D' | 'F'; categories: { security: number; dataValidation: number; transport: number }; gate: { minScore?: number; maxCritical?: number; maxHigh?: number; passed: boolean; reasons: string[] } }
+export async function auditOpenApiSpec(spec: string, gate?: { minScore?: number; maxCritical?: number; maxHigh?: number }): Promise<SpecAuditReport> { const { data } = await api.post('/api-automation/spec-audit/scan', { spec, gate }); return data; }
+
+/* ── Gap 4: Stateful sequence fuzzing (RESTler / EvoMaster) ── */
+export type SeqStepFinding = 'ok' | 'server-error' | 'auth-bypass' | 'bad-request-handled' | 'unexpected-2xx' | 'skipped' | 'error';
+export interface SeqStep { label: string; method: string; url: string; variant: 'baseline' | 'malformed-id' | 'auth-stripped'; status?: number; finding: SeqStepFinding; note: string }
+export interface SeqFuzzSequence { resource: string; ran: boolean; idCaptured: string | null; steps: SeqStep[]; issues: string[] }
+export interface SeqFuzzReport { sequences: SeqFuzzSequence[]; summary: { sequencesBuilt: number; sequencesRan: number; stepsRun: number; issues: Record<string, number> }; grade: 'A' | 'B' | 'C' | 'D' | 'F'; allowWrites: boolean; note: string }
+export async function runSeqFuzz(endpoints: any[], opts?: { allowWrites?: boolean; maxResources?: number; timeoutMs?: number }): Promise<SeqFuzzReport> { const { data } = await api.post('/api-automation/seqfuzz/run', { endpoints, ...opts }, { timeout: 120_000 }); return data; }
+
+/* ── Gap 5: Sensitive-data classification + shadow-API discovery (Akto / Escape) ── */
+export type DataSeverity = 'high' | 'medium' | 'low';
+export interface ClassifyFinding { endpoint: string; location: 'url' | 'request' | 'response'; field: string; category: string; severity: DataSeverity; sample: string }
+export interface ShadowApi { method: string; path: string; signature: string }
+export interface ClassifyReport { source: 'catalogue' | 'traffic'; scanned: number; findings: ClassifyFinding[]; sensitivity: { category: string; label: string; severity: DataSeverity; count: number }[]; shadowApis: ShadowApi[]; summary: { high: number; medium: number; low: number; fields: number }; score: number; grade: 'A' | 'B' | 'C' | 'D' | 'F' }
+export async function classifyData(endpoints: any[], sessionId?: string): Promise<ClassifyReport> { const { data } = await api.post('/api-automation/data-classify/scan', { endpoints, sessionId }, { timeout: 60_000 }); return data; }
+
 /* ── T14. Git-synced test-as-code ── */
 export interface GitSyncConfigView { provider: 'github' | 'gitlab' | 'none'; repo: string; branch: string; path: string; host: string; hasToken: boolean }
 export async function getGitSyncConfig(): Promise<GitSyncConfigView> { const { data } = await api.get('/api-automation/git-sync/config'); return data; }
@@ -2702,3 +2771,207 @@ export function subscribeToAgentPerformance(
     onStatusChange?.(false);
   };
 }
+
+/* ── Multi-role authorization testing — BOLA/BFLA (opt-in, standalone) ── */
+export type AuthzCheck = 'bola' | 'bfla' | 'unauth' | 'baseline';
+export interface AuthzIdentityInput { label: string; auth?: { type: string; value?: string; headerName?: string }; headers?: { key: string; value: string }[] }
+export interface AuthzFinding {
+  endpointId: string; title: string; method: string; url: string;
+  check: AuthzCheck; severity: 'high' | 'medium' | 'low' | 'info';
+  status: 'vulnerable' | 'ok' | 'info' | 'skipped'; detail: string;
+  identities?: string[]; statuses?: Record<string, number | string>;
+}
+export interface AuthzReport {
+  findings: AuthzFinding[];
+  summary: { endpoints: number; identities: number; vulnerable: number; high: number; medium: number; low: number; info: number };
+}
+export async function runApiAuthzScan(endpoints: any[], identities: AuthzIdentityInput[], allowWrites = false): Promise<AuthzReport> {
+  const { data } = await api.post('/api-automation/authz/scan', { endpoints, identities, allowWrites }, { timeout: 180_000 });
+  return data;
+}
+
+/* ── Spec-vs-spec breaking-change gate (opt-in, standalone) ── */
+export interface SpecChange { kind: string; breaking: boolean; location: string; detail: string }
+export interface SpecDiffResult {
+  changes: SpecChange[];
+  summary: { total: number; breaking: number; nonBreaking: number; additions: number };
+  gate: { enabled: boolean; passed: boolean; reason: string };
+  oldInfo: { title?: string; version?: string };
+  newInfo: { title?: string; version?: string };
+}
+export async function runApiSpecDiff(oldSpec: string, newSpec: string, failOnBreaking = true): Promise<SpecDiffResult> {
+  const { data } = await api.post('/api-automation/specdiff', { oldSpec, newSpec, failOnBreaking }, { timeout: 60_000 });
+  return data;
+}
+
+/* ── Deterministic record-and-replay (opt-in, standalone, zero model cost) ── */
+export interface ReplayRecord {
+  id: string; sig: string; method: string; url: string; title: string;
+  status?: number; contentType?: string; noisePaths: string[]; deps: any[];
+  capturedBy?: string; capturedAt: string; updatedAt: string;
+}
+export interface ReplayResult {
+  id: string; title: string; method: string; url: string;
+  hasRecording: boolean; reachable: boolean; status?: number; recordedStatus?: number;
+  match: boolean; drift: DriftEntry[]; noiseIgnored: number;
+}
+export interface ReplayReport {
+  results: ReplayResult[];
+  summary: { total: number; replayed: number; matched: number; drifted: number; unreachable: number; noRecording: number };
+}
+export interface ReplayRecordReport { recorded: number; skipped: number; total: number; recordings: ReplayRecord[] }
+export async function listApiReplays(): Promise<{ recordings: ReplayRecord[] }> {
+  const { data } = await api.get('/api-automation/replays');
+  return data;
+}
+export async function recordApiReplays(endpoints: any[]): Promise<ReplayRecordReport> {
+  const { data } = await api.post('/api-automation/replays/record', { endpoints }, { timeout: 180_000 });
+  return data;
+}
+export async function runApiReplays(endpoints: any[]): Promise<ReplayReport> {
+  const { data } = await api.post('/api-automation/replays/run', { endpoints }, { timeout: 180_000 });
+  return data;
+}
+export async function deleteApiReplay(id: string): Promise<{ ok: boolean }> {
+  const { data } = await api.delete(`/api-automation/replays/${id}`);
+  return data;
+}
+
+/* ── AI/LLM & MCP-era testing (opt-in, standalone) ── */
+export interface LlmEvalCriterionInput { name: string; description: string; weight?: number }
+export interface CriterionScore { name: string; score: number; max: number; passed: boolean; rationale: string }
+export interface LlmEvalResult {
+  passed: boolean; score: number; passThreshold: number;
+  perCriterion: CriterionScore[];
+  observed: { ok: boolean; status?: number; elapsedMs: number; bodyPreview: string; error?: string };
+  baseline?: { score: number; capturedAt: string }; regression: boolean; savedBaseline: boolean;
+}
+export async function runApiLlmEval(endpoint: any, criteria: LlmEvalCriterionInput[], opts: { saveBaseline?: boolean; passThreshold?: number } = {}): Promise<LlmEvalResult> {
+  const { data } = await api.post('/api-automation/llm/eval', { endpoint, criteria, ...opts }, { timeout: 120_000 });
+  return data;
+}
+export interface LlmSecurityFinding { category: string; title: string; severity: 'high' | 'medium' | 'low' | 'info'; status: 'vulnerable' | 'ok' | 'info'; detail: string; payload?: string }
+export interface LlmSecurityReport { findings: LlmSecurityFinding[]; summary: { probes: number; vulnerable: number; high: number; medium: number; low: number }; observedField: string }
+export async function runApiLlmSecurityScan(endpoint: any, field?: string): Promise<LlmSecurityReport> {
+  const { data } = await api.post('/api-automation/llm/security', { endpoint, field }, { timeout: 120_000 });
+  return data;
+}
+export interface McpTool { name: string; description: string }
+export interface McpSecurityReport { serverUrl: string; reachable: boolean; tools: McpTool[]; findings: LlmSecurityFinding[]; summary: { tools: number; vulnerable: number; high: number; medium: number; low: number } }
+export async function runApiMcpSecurityScan(serverUrl: string, token?: string): Promise<McpSecurityReport> {
+  const { data } = await api.post('/api-automation/mcp/security', { serverUrl, token }, { timeout: 120_000 });
+  return data;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Tier 2 — deepen partial → full (all additive, opt-in)
+   Synthetic monitoring · API registry/governance platform ·
+   Enterprise test-data management · Protocol depth + smart generation.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Synthetic monitoring (multi-location + trace correlation + canary/rollback) ── */
+export interface SyntheticLocation { name: string; proxyUrl?: string }
+export interface SyntheticCheckEndpoint { method: string; url: string; headers?: { key: string; value: string }[]; auth?: { type?: string; value?: string; headerName?: string }; expectedStatus?: number; assertText?: string }
+export interface CanaryConfig { baselineUrl?: string; maxErrorRatePct?: number; maxLatencyMs?: number; maxLatencyDeltaPct?: number; rollbackWebhookUrl?: string }
+export interface SyntheticTracingConfig { type: 'jaeger' | 'zipkin' | 'tempo'; queryUrl: string }
+export interface SyntheticMonitor {
+  id: string; name: string; enabled: boolean; intervalMinutes: number;
+  endpoint: SyntheticCheckEndpoint; locations: SyntheticLocation[];
+  tracing?: SyntheticTracingConfig | null; canary?: CanaryConfig | null;
+  nextRunAt?: string; lastRunAt?: string; lastStatus?: string; createdBy?: string; createdAt?: string; updatedAt?: string;
+}
+export interface SyntheticLocationResult { location: string; proxied: boolean; ok: boolean; status?: number; elapsedMs: number; assertPassed?: boolean; error?: string }
+export interface CanaryVerdict { evaluated: boolean; healthy: boolean; reasons: string[]; canary: { errorRatePct: number; latencyMs: number }; baseline?: { ok: boolean; status?: number; latencyMs: number; error?: string }; rollbackSignalled: boolean }
+export interface SyntheticTraceSummary { traceId: string; correlationId: string; backend?: string; spanCount: number; note?: string; assertions?: { name: string; pass: boolean; detail?: string }[] }
+export type SyntheticStatus = 'up' | 'degraded' | 'down' | 'rollback';
+export interface SyntheticResult { id: string; monitorId: string; status: SyntheticStatus; locations: SyntheticLocationResult[]; canary?: CanaryVerdict | null; trace?: SyntheticTraceSummary | null; summary: string; createdAt: string }
+export async function listSyntheticMonitors(): Promise<{ monitors: SyntheticMonitor[] }> { const { data } = await api.get('/api-automation/synthetics'); return data; }
+export async function saveSyntheticMonitor(input: Partial<SyntheticMonitor>): Promise<SyntheticMonitor> { const { data } = await api.post('/api-automation/synthetics', input); return data; }
+export async function setSyntheticMonitorEnabled(id: string, enabled: boolean): Promise<SyntheticMonitor> { const { data } = await api.post(`/api-automation/synthetics/${id}/enabled`, { enabled }); return data; }
+export async function deleteSyntheticMonitor(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/synthetics/${id}`); return data; }
+export async function listSyntheticResults(id: string, limit = 50): Promise<{ results: SyntheticResult[] }> { const { data } = await api.get(`/api-automation/synthetics/${id}/results`, { params: { limit } }); return data; }
+export async function runSyntheticMonitor(id: string): Promise<SyntheticResult> { const { data } = await api.post(`/api-automation/synthetics/${id}/run`, {}, { timeout: 120_000 }); return data; }
+export async function previewSyntheticCheck(input: { endpoint: SyntheticCheckEndpoint; locations?: SyntheticLocation[]; tracing?: SyntheticTracingConfig | null; canary?: CanaryConfig | null }): Promise<Omit<SyntheticResult, 'id' | 'monitorId' | 'createdAt'>> { const { data } = await api.post('/api-automation/synthetics/preview', input, { timeout: 120_000 }); return data; }
+
+/* ── API registry / catalog: versioning + deprecation lifecycle + spec sync ── */
+export type Lifecycle = 'draft' | 'published' | 'deprecated' | 'retired';
+export interface RegistryEntry { id: string; name: string; description?: string; owner?: string; lifecycle: Lifecycle; tags: string[]; versionCount?: number; latestVersion?: string; createdBy?: string; createdAt?: string; updatedAt?: string }
+export interface RegistryVersion { id: string; apiId: string; version: string; status: Lifecycle; deprecationDate?: string; sunsetDate?: string; notes?: string; hasSpec: boolean; createdBy?: string; createdAt?: string; updatedAt?: string }
+export async function listApiRegistry(): Promise<{ apis: RegistryEntry[] }> { const { data } = await api.get('/api-automation/registry'); return data; }
+export async function saveRegistryEntry(input: Partial<RegistryEntry>): Promise<RegistryEntry> { const { data } = await api.post('/api-automation/registry', input); return data; }
+export async function setRegistryLifecycle(id: string, lifecycle: Lifecycle): Promise<RegistryEntry> { const { data } = await api.post(`/api-automation/registry/${id}/lifecycle`, { lifecycle }); return data; }
+export async function deleteRegistryEntry(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/registry/${id}`); return data; }
+export async function listRegistryVersions(apiId: string): Promise<{ versions: RegistryVersion[] }> { const { data } = await api.get(`/api-automation/registry/${apiId}/versions`); return data; }
+export async function addRegistryVersion(apiId: string, input: { version: string; spec?: string; status?: Lifecycle; deprecationDate?: string; sunsetDate?: string; notes?: string }): Promise<RegistryVersion> { const { data } = await api.post(`/api-automation/registry/${apiId}/versions`, input); return data; }
+export async function getRegistryVersionSpec(versionId: string): Promise<{ version: RegistryVersion; spec: string }> { const { data } = await api.get(`/api-automation/registry/versions/${versionId}/spec`); return data; }
+export async function updateRegistryVersionStatus(versionId: string, input: { status?: Lifecycle; deprecationDate?: string; sunsetDate?: string }): Promise<RegistryVersion> { const { data } = await api.post(`/api-automation/registry/versions/${versionId}/status`, input); return data; }
+export async function deleteRegistryVersion(versionId: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/registry/versions/${versionId}`); return data; }
+export async function diffRegistryVersions(versionIdA: string, versionIdB: string): Promise<SpecDiffResult & { a: string; b: string }> { const { data } = await api.post('/api-automation/registry/diff', { versionIdA, versionIdB }); return data; }
+
+/* ── Enterprise test-data management: referential + subsetting + versioning ── */
+export interface RefEntityInput { name: string; count: number; pk: string; fields: { name: string; type: string; min?: number; max?: number; options?: string[] }[]; refs?: { field: string; entity: string }[] }
+export interface ReferentialResult { entities: Record<string, Record<string, unknown>[]>; order: string[]; seed: number; summary: { entity: string; rows: number; refs: string[] }[]; notes: string[] }
+export interface SubsetRelationship { child: string; childField: string; parent: string; parentKey: string }
+export interface SubsetResult { tables: Record<string, Record<string, unknown>[]>; summary: { table: string; before: number; after: number }[]; notes: string[] }
+export interface DatasetVersion { id: string; name: string; version: number; rowCount: number; hash: string; notes?: string; tables: string[]; createdBy?: string; createdAt: string; data?: Record<string, unknown> }
+export interface DatasetDiff { a: { id: string; name: string; version: number; hash: string }; b: { id: string; name: string; version: number; hash: string }; identical: boolean; tables: { table: string; beforeRows: number; afterRows: number; rowDelta: number; addedColumns: string[]; removedColumns: string[]; status: 'added' | 'removed' | 'changed' | 'unchanged' }[] }
+export async function generateReferentialData(entities: RefEntityInput[], seed?: number): Promise<ReferentialResult> { const { data } = await api.post('/api-automation/test-data/referential', { entities, seed }); return data; }
+export async function subsetDatasets(input: { tables: Record<string, Record<string, unknown>[]>; relationships?: SubsetRelationship[]; root: string; size?: number; fraction?: number; seed?: number }): Promise<SubsetResult> { const { data } = await api.post('/api-automation/test-data/subset', input); return data; }
+export async function listDatasetVersions(): Promise<{ versions: DatasetVersion[] }> { const { data } = await api.get('/api-automation/datasets'); return data; }
+export async function getDatasetVersion(id: string): Promise<DatasetVersion> { const { data } = await api.get(`/api-automation/datasets/${id}`); return data; }
+export async function saveDatasetVersion(input: { name: string; data: Record<string, unknown>; notes?: string }): Promise<DatasetVersion> { const { data } = await api.post('/api-automation/datasets', input); return data; }
+export async function deleteDatasetVersion(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/datasets/${id}`); return data; }
+export async function diffDatasetVersions(idA: string, idB: string): Promise<DatasetDiff> { const { data } = await api.post('/api-automation/datasets/diff', { idA, idB }); return data; }
+
+/* ── Protocol depth + smarter generation: stateful white-box gen + mutation grading + gRPC streaming ── */
+export interface GenSeqStep { order: number; name: string; method: string; path: string; injects: { param: string; var: string }[]; extracts: { field: string; var: string }[] }
+export interface StatefulSequence { id: string; name: string; target: string; steps: GenSeqStep[]; note: string }
+export interface StatefulGenResult { operations: number; resources: string[]; dependencies: { producer: string; consumer: string; via: string }[]; sequences: StatefulSequence[]; notes: string[] }
+export async function generateStatefulSequences(input: { spec?: string; endpoints?: { method: string; url: string; title?: string }[]; baseUrl?: string; maxSequences?: number }): Promise<StatefulGenResult> { const { data } = await api.post('/api-automation/stateful/generate', input); return data; }
+export interface MutationAssertion { kind: 'status' | 'jsonpath' | 'bodyContains' | 'bodyNotContains'; path?: string; op?: 'exists' | 'equals' | 'notEquals' | 'contains' | 'type' | 'gt' | 'lt'; value?: string | number }
+export interface MutationMutant { id: string; operator: string; target: string; description: string; killedBy: string[]; survived: boolean }
+export interface MutationResult { gradable: boolean; failingOnOriginal: { index: number; summary: string }[]; total: number; killed: number; survived: number; mutationScore: number; grade: 'A' | 'B' | 'C' | 'D' | 'F'; survivors: MutationMutant[]; mutants: MutationMutant[]; suggestions: string[]; notes: string[] }
+export async function gradeAssertionMutations(sample: { status: number; body: string }, assertions: MutationAssertion[]): Promise<MutationResult> { const { data } = await api.post('/api-automation/mutation/grade', { sample, assertions }); return data; }
+export async function grpcClientStream(input: { target: string; protoText: string; service: string; method: string; messages?: unknown[]; requestJson?: string; tls?: boolean; metadata?: Record<string, string>; timeoutMs?: number }): Promise<GrpcResult> { const { data } = await api.post('/api-automation/messaging/grpc-client-stream', input, { timeout: 90_000 }); return data; }
+export async function grpcBidi(input: { target: string; protoText: string; service: string; method: string; messages?: unknown[]; requestJson?: string; maxMessages?: number; tls?: boolean; metadata?: Record<string, string>; timeoutMs?: number }): Promise<GrpcStreamResult> { const { data } = await api.post('/api-automation/messaging/grpc-bidi', input, { timeout: 90_000 }); return data; }
+
+/* ── Gap 3: LLM/agent eval harness (Promptfoo / DeepEval) ── */
+export type EvalMetricId = 'status' | 'non-empty' | 'contains' | 'exact' | 'regex' | 'json-has' | 'latency' | 'semantic';
+export interface EvalMetricDef { id: EvalMetricId; label: string; needsExpected: boolean }
+export interface EvalTarget { method?: string; url: string; headers?: { key: string; value: string }[]; auth?: unknown; bodyTemplate?: string }
+export interface EvalRow { input: string; expected?: string; vars?: Record<string, string> }
+export interface EvalDataset { id: string; name: string; target: EvalTarget; rows: EvalRow[]; metrics: EvalMetricId[]; latencyMs?: number; createdBy: string; createdAt: string; updatedAt: string }
+export interface EvalMetricOutcome { metric: EvalMetricId; passed: boolean; detail: string }
+export interface EvalRowResult { input: string; status?: number; latencyMs: number; outputSample: string; metrics: EvalMetricOutcome[]; passed: boolean }
+export interface EvalRunSummary { datasetId: string; datasetName: string; at: string; rowsRun: number; passRate: number; avgLatencyMs: number; perMetric: { metric: EvalMetricId; passRate: number }[]; score: number; grade: 'A' | 'B' | 'C' | 'D' | 'F'; rows: EvalRowResult[] }
+export interface EvalRunHistory { at: string; passRate: number; score: number; grade: string; rowsRun: number }
+export async function listEvalMetrics(): Promise<EvalMetricDef[]> { const { data } = await api.get('/api-automation/llm-eval/metrics'); return data.metrics; }
+export async function listEvalDatasets(): Promise<EvalDataset[]> { const { data } = await api.get('/api-automation/llm-eval/datasets'); return data.datasets; }
+export async function saveEvalDataset(input: { id?: string; name: string; target: EvalTarget; rows: EvalRow[]; metrics: EvalMetricId[]; latencyMs?: number }): Promise<EvalDataset> { const { data } = await api.post('/api-automation/llm-eval/datasets', input); return data.dataset; }
+export async function deleteEvalDataset(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/llm-eval/datasets/${id}`); return data; }
+export async function listEvalRuns(id: string): Promise<EvalRunHistory[]> { const { data } = await api.get(`/api-automation/llm-eval/datasets/${id}/runs`); return data.runs; }
+export async function runEval(input: { datasetId?: string; dataset?: Partial<EvalDataset> }): Promise<EvalRunSummary> { const { data } = await api.post('/api-automation/llm-eval/run', input, { timeout: 120_000 }); return data; }
+
+/* ── Gap 6: Contract-validating / simulating proxy (Prism / Hoverfly) ── */
+export type ProxyMode = 'validate' | 'simulate';
+export interface ApiProxy { id: string; token: string; name: string; targetBase: string; mode: ProxyMode; enabled: boolean; hitCount: number; routeCount: number; createdBy: string; createdAt: string; updatedAt: string }
+export interface ProxyEvent { at: string; method: string; path: string; upstreamStatus: number | null; ok: boolean; issues: string[] }
+export async function listProxies(): Promise<ApiProxy[]> { const { data } = await api.get('/api-automation/proxies'); return data.proxies; }
+export async function createProxy(input: { name: string; mode: ProxyMode; targetBase: string; endpoints?: unknown[] }): Promise<ApiProxy> { const { data } = await api.post('/api-automation/proxies', input); return data.proxy; }
+export async function setProxyEnabled(id: string, enabled: boolean): Promise<ApiProxy> { const { data } = await api.post(`/api-automation/proxies/${id}/enabled`, { enabled }); return data.proxy; }
+export async function deleteProxy(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/proxies/${id}`); return data; }
+export async function listProxyEvents(id: string): Promise<ProxyEvent[]> { const { data } = await api.get(`/api-automation/proxies/${id}/events`); return data.events; }
+
+/* ── Gap 7: Public status page + SLO (Checkly) ── */
+export interface StatusTarget { name: string; method: string; url: string }
+export interface StatusRegion { id: string; proxyUrl?: string }
+export interface StatusSlo { uptimePct: number; p95Ms: number }
+export interface StatusPage { id: string; token: string; name: string; targets: StatusTarget[]; regions: StatusRegion[]; slo: StatusSlo; enabled: boolean; createdBy: string; createdAt: string; updatedAt: string }
+export interface StatusTargetView { name: string; uptimePct: number; p95Ms: number; avgMs: number; samples: number; lastOk: boolean; lastStatus: number | null; sloMet: boolean }
+export interface StatusView { name: string; targets: StatusTargetView[]; slo: StatusSlo; overall: 'operational' | 'degraded' | 'down' | 'no-data'; checkedAt: string | null }
+export async function listStatusPages(): Promise<StatusPage[]> { const { data } = await api.get('/api-automation/status-pages'); return data.pages; }
+export async function saveStatusPage(input: { id?: string; name: string; targets: StatusTarget[]; regions?: StatusRegion[]; slo?: StatusSlo }): Promise<StatusPage> { const { data } = await api.post('/api-automation/status-pages', input); return data.page; }
+export async function setStatusEnabled(id: string, enabled: boolean): Promise<StatusPage> { const { data } = await api.post(`/api-automation/status-pages/${id}/enabled`, { enabled }); return data.page; }
+export async function deleteStatusPage(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/status-pages/${id}`); return data; }
+export async function getStatusView(id: string): Promise<StatusView> { const { data } = await api.get(`/api-automation/status-pages/${id}/view`); return data; }
+export async function probeStatusNow(id: string): Promise<{ probed: number }> { const { data } = await api.post(`/api-automation/status-pages/${id}/probe`); return data; }

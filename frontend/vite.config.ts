@@ -29,6 +29,11 @@ export default defineConfig({
       // Hosted mock servers are served publicly from the backend at /mock/* —
       // proxy it too so a copied mock URL works against the dev frontend origin.
       '/mock': 'http://127.0.0.1:3001',
+      // Same deal for the contract proxy (/proxy/*) and the public status page
+      // (/status/*): both are served publicly from the backend, so proxy them
+      // so a copied URL resolves against the dev frontend origin as it does in prod.
+      '/proxy': 'http://127.0.0.1:3001',
+      '/status': 'http://127.0.0.1:3001',
     },
   },
 })

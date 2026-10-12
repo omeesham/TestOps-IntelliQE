@@ -54,11 +54,26 @@ export interface Assignment {
 
 // ─── suites ─────────────────────────────────────────────────────────────────
 
+// Local JSON coercion. The db.ts read-side shim only auto-parses columns on its
+// JSON_COLUMNS allowlist; these governance tables add columns (endpoints, suite_ids,
+// gate, stats) that aren't on it, so they arrive as raw JSON strings. Parse them here
+// rather than widening the shared allowlist (which could collide with core tables).
+function jArr(v: any): any[] {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string' && v.trim().startsWith('[')) { try { const p = JSON.parse(v); if (Array.isArray(p)) return p; } catch { /* leave empty */ } }
+  return [];
+}
+function jObj(v: any): any {
+  if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+  if (typeof v === 'string' && v.trim().startsWith('{')) { try { const p = JSON.parse(v); if (p && typeof p === 'object') return p; } catch { /* leave null */ } }
+  return null;
+}
+
 function toSuite(r: any): TestSuite {
   return {
     id: String(r.id), name: r.name || '', description: r.description || '',
-    endpoints: Array.isArray(r.endpoints) ? r.endpoints : [],
-    tags: Array.isArray(r.tags) ? r.tags : [],
+    endpoints: jArr(r.endpoints),
+    tags: jArr(r.tags),
     createdBy: r.created_by || '', createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
@@ -99,10 +114,10 @@ const COVERAGES = new Set(['essential', 'standard', 'exhaustive']);
 function toPlan(r: any): TestPlan {
   return {
     id: String(r.id), name: r.name || '', description: r.description || '',
-    suiteIds: Array.isArray(r.suite_ids) ? r.suite_ids.map(String) : [],
+    suiteIds: jArr(r.suite_ids).map(String),
     environmentId: r.environment_id || undefined,
     coverage: (COVERAGES.has(r.coverage) ? r.coverage : 'standard') as TestPlan['coverage'],
-    gate: r.gate && typeof r.gate === 'object' ? r.gate : null,
+    gate: jObj(r.gate),
     createdBy: r.created_by || '', createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
@@ -170,7 +185,7 @@ function toCycle(r: any): TestCycle {
   return {
     id: String(r.id), planId: String(r.plan_id), name: r.name || '', status: (r.status || 'planned') as CycleStatus,
     runId: r.run_id || undefined, jobId: r.job_id || undefined,
-    stats: r.stats && typeof r.stats === 'object' ? r.stats : null,
+    stats: jObj(r.stats),
     error: r.error || undefined,
     createdBy: r.created_by || '', createdAt: r.created_at, startedAt: r.started_at || undefined, finishedAt: r.finished_at || undefined,
   };

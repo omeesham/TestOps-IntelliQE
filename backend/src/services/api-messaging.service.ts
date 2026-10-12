@@ -242,6 +242,109 @@ export async function grpcServerStream(input: GrpcInput & { maxMessages?: number
   }
 }
 
+/** A client-streaming gRPC call: send many request messages, receive one response. */
+export async function grpcClientStream(input: GrpcInput & { messages?: unknown[] }): Promise<GrpcResult> {
+  const target = String(input.target || '').trim();
+  const service = String(input.service || '').trim();
+  const method = String(input.method || '').trim();
+  if (!target || !service || !method) throw new Error('Provide target, service and method.');
+  if (!input.protoText || input.protoText.trim().length < 10) throw new Error('Paste the .proto definition.');
+  const timeoutMs = Math.min(60_000, Math.max(1_000, Number(input.timeoutMs) || 15_000));
+
+  // Message list: explicit `messages`, else a single `requestJson`.
+  let messages: any[] = Array.isArray(input.messages) ? input.messages.slice(0, 500) : [];
+  if (!messages.length && input.requestJson && input.requestJson.trim()) {
+    try { const parsed = JSON.parse(input.requestJson); messages = Array.isArray(parsed) ? parsed.slice(0, 500) : [parsed]; }
+    catch { throw new Error('requestJson is not valid JSON (send an object or an array of objects).'); }
+  }
+  if (!messages.length) throw new Error('Provide at least one request message to stream.');
+
+  const grpc = await optional('@grpc/grpc-js');
+  const protoLoader = await optional('@grpc/proto-loader');
+  const dir = await mkdtemp(join(tmpdir(), 'iqe-proto-'));
+  const protoPath = join(dir, 'service.proto');
+  const started = Date.now();
+  try {
+    await writeFile(protoPath, input.protoText, 'utf-8');
+    const packageDef = await protoLoader.load(protoPath, { keepCase: true, longs: String, enums: String, defaults: true, oneofs: true });
+    const loaded = grpc.loadPackageDefinition(packageDef);
+    const ServiceCtor = findService(loaded, service);
+    if (!ServiceCtor) throw new Error(`Service "${service}" not found in the proto.`);
+    const creds = input.tls ? grpc.credentials.createSsl() : grpc.credentials.createInsecure();
+    const client = new ServiceCtor(target, creds);
+    if (typeof client[method] !== 'function') throw new Error(`Method "${method}" not found on service "${service}".`);
+    const metadata = new grpc.Metadata();
+    for (const [k, v] of Object.entries(input.metadata || {})) metadata.set(k, String(v));
+    const deadline = new Date(Date.now() + timeoutMs);
+
+    const response = await new Promise<unknown>((resolve, reject) => {
+      const call = client[method](metadata, { deadline }, (err: any, res: unknown) => { if (err) reject(err); else resolve(res); });
+      for (const m of messages) call.write(m);
+      call.end();
+    });
+    try { client.close?.(); } catch { /* ignore */ }
+    return { ok: true, service, method, response, elapsedMs: Date.now() - started };
+  } catch (err: any) {
+    return { ok: false, service, method, error: err?.details || err?.message || String(err), code: err?.code, elapsedMs: Date.now() - started };
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/** A bidirectional-streaming gRPC call: send many messages, collect up to a cap of responses. */
+export async function grpcBidi(input: GrpcInput & { messages?: unknown[]; maxMessages?: number }): Promise<GrpcStreamResult> {
+  const target = String(input.target || '').trim();
+  const service = String(input.service || '').trim();
+  const method = String(input.method || '').trim();
+  if (!target || !service || !method) throw new Error('Provide target, service and method.');
+  if (!input.protoText || input.protoText.trim().length < 10) throw new Error('Paste the .proto definition.');
+  const timeoutMs = Math.min(60_000, Math.max(1_000, Number(input.timeoutMs) || 15_000));
+  const cap = Math.min(500, Math.max(1, Number(input.maxMessages) || 50));
+
+  let messages: any[] = Array.isArray(input.messages) ? input.messages.slice(0, 500) : [];
+  if (!messages.length && input.requestJson && input.requestJson.trim()) {
+    try { const parsed = JSON.parse(input.requestJson); messages = Array.isArray(parsed) ? parsed.slice(0, 500) : [parsed]; }
+    catch { throw new Error('requestJson is not valid JSON (send an object or an array of objects).'); }
+  }
+  if (!messages.length) throw new Error('Provide at least one request message to stream.');
+
+  const grpc = await optional('@grpc/grpc-js');
+  const protoLoader = await optional('@grpc/proto-loader');
+  const dir = await mkdtemp(join(tmpdir(), 'iqe-proto-'));
+  const protoPath = join(dir, 'service.proto');
+  const started = Date.now();
+  try {
+    await writeFile(protoPath, input.protoText, 'utf-8');
+    const packageDef = await protoLoader.load(protoPath, { keepCase: true, longs: String, enums: String, defaults: true, oneofs: true });
+    const loaded = grpc.loadPackageDefinition(packageDef);
+    const ServiceCtor = findService(loaded, service);
+    if (!ServiceCtor) throw new Error(`Service "${service}" not found in the proto.`);
+    const creds = input.tls ? grpc.credentials.createSsl() : grpc.credentials.createInsecure();
+    const client = new ServiceCtor(target, creds);
+    if (typeof client[method] !== 'function') throw new Error(`Method "${method}" not found on service "${service}".`);
+    const metadata = new grpc.Metadata();
+    for (const [k, v] of Object.entries(input.metadata || {})) metadata.set(k, String(v));
+
+    const received: unknown[] = [];
+    let truncated = false;
+    const call = client[method](metadata);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => { try { call.cancel(); } catch { /* ignore */ } resolve(); }, timeoutMs);
+      call.on('data', (m: unknown) => { if (received.length < cap) received.push(m); else { truncated = true; try { call.cancel(); } catch { /* ignore */ } } });
+      call.on('end', () => { clearTimeout(timer); resolve(); });
+      call.on('error', (e: any) => { clearTimeout(timer); if (e?.code === grpc.status?.CANCELLED) resolve(); else reject(e); });
+      for (const m of messages) call.write(m);
+      call.end();
+    });
+    try { client.close?.(); } catch { /* ignore */ }
+    return { ok: true, service, method, messages: received, count: received.length, truncated, elapsedMs: Date.now() - started };
+  } catch (err: any) {
+    return { ok: false, service, method, messages: [], count: 0, truncated: false, error: err?.details || err?.message || String(err), code: err?.code, elapsedMs: Date.now() - started };
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 export interface GrpcReflectResult { ok: boolean; services: string[]; error?: string }
 
 /** List services exposed by a reflection-enabled gRPC server (no .proto needed). */

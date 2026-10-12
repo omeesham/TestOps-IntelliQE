@@ -53,7 +53,7 @@ export interface SynthDataResult {
 }
 
 /* ── Deterministic PRNG (mulberry32) ── */
-function mulberry32(seed: number): () => number {
+export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
     a |= 0; a = (a + 0x6d2b79f5) | 0;
@@ -74,7 +74,7 @@ function pick<T>(rng: () => number, arr: T[]): T { return arr[Math.floor(rng() *
 function intIn(rng: () => number, min: number, max: number): number { return Math.floor(rng() * (max - min + 1)) + min; }
 function pad(n: number, w = 2): string { return String(n).padStart(w, '0'); }
 
-function genValue(f: SynthField, rng: () => number): unknown {
+export function genValue(f: SynthField, rng: () => number): unknown {
   switch (f.type) {
     case 'firstName': return pick(rng, FIRST);
     case 'lastName': return pick(rng, LAST);

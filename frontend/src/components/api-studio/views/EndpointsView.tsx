@@ -7,7 +7,7 @@
  * "Design scenarios", which starts the run for the selected endpoints.
  */
 import { useMemo, useState } from 'react';
-import { Search, Trash2, Pencil, Layers, Plus, Download, ChevronDown, ChevronRight, Globe, ShieldCheck, Gauge, ShieldAlert, ScrollText, Target, Wrench, GitCompare, Table2, Clock, Wand2, GitPullRequestArrow, Radio, BadgeCheck, Bug, Antenna, Activity, ServerCog, Radar, Sparkles, Webhook, Workflow, MessageSquare, Bot, Database, Cpu, Server, Network, Globe2, MessagesSquare, Chrome, Boxes, Handshake, Zap, KeyRound, Rss, Spline, Microscope, Cloud, Lock, GitMerge, ClipboardCheck, FolderGit2, BrainCircuit, FileText, ListFilter, GitCompareArrows, HeartPulse, Image as ImageIcon, Combine, GitBranchPlus, Rocket, ListChecks, MonitorSmartphone, ClipboardList, Waypoints, Share2, Stamp, FileCheck2 } from 'lucide-react';
+import { Search, Trash2, Pencil, Layers, Plus, Download, ChevronDown, ChevronRight, Globe, ShieldCheck, Gauge, ShieldAlert, ScrollText, Target, Wrench, GitCompare, Table2, Clock, Wand2, GitPullRequestArrow, Radio, BadgeCheck, Bug, Antenna, Activity, ServerCog, Radar, Sparkles, Webhook, Workflow, MessageSquare, Bot, Database, Cpu, Server, Network, Globe2, MessagesSquare, Chrome, Boxes, Handshake, Zap, KeyRound, Rss, Spline, Microscope, Cloud, Lock, GitMerge, ClipboardCheck, FolderGit2, BrainCircuit, FileText, ListFilter, GitCompareArrows, HeartPulse, Image as ImageIcon, Combine, GitBranchPlus, Rocket, ListChecks, MonitorSmartphone, ClipboardList, Waypoints, Share2, Stamp, FileCheck2, Wallet, HardDrive, Scale, FileCode2, Gavel, FileSearch, GitFork, Fingerprint, FlaskConical } from 'lucide-react';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { MethodBadge, StatusCode, EmptyState } from '../primitives';
 import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, CARD, BRAND_CHIP, MUTED_CHIP, STRIP, THEAD, IMPORT_METHOD_LABELS, pathOf, hostOf } from '../format';
@@ -54,6 +54,24 @@ import AccessControl from '../AccessControl';
 import RemediationPr from '../RemediationPr';
 import CompliancePacks from '../CompliancePacks';
 import GitSync from '../GitSync';
+// ─── Tier 1 — market-leading gaps (all additive, opt-in) ───
+import AuthzScan from '../AuthzScan';
+import SpecDiff from '../SpecDiff';
+import ReplayTest from '../ReplayTest';
+import LlmTesting from '../LlmTesting';
+// ─── Tier 3 — strategic / packaging (enterprise deals; all additive, opt-in) ───
+import FinOpsMetering from '../FinOpsMetering';
+import OnPremDeploy from '../OnPremDeploy';
+import AiCompliance from '../AiCompliance';
+import FullCodeExport from '../FullCodeExport';
+// ─── Competitive-landscape gaps (governance, spec-audit, seq-fuzz, data-classify; additive, opt-in) ───
+import GovernanceLint from '../GovernanceLint';
+import SpecAudit from '../SpecAudit';
+import SeqFuzz from '../SeqFuzz';
+import DataClassify from '../DataClassify';
+import LlmEval from '../LlmEval';
+import ProxyServer from '../ProxyServer';
+import StatusPages from '../StatusPages';
 // ─── Atto coworker lifecycle tools (all additive, opt-in) ───
 import AiCoworker from '../AiCoworker';
 import StoryGen from '../StoryGen';
@@ -126,6 +144,11 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
   const [governanceOpen, setGovernanceOpen] = useState(false);
   const [coverageOpen, setCoverageOpen] = useState(false);
   const [baselineOpen, setBaselineOpen] = useState(false);
+  // Tier 1 — market-leading gaps
+  const [authzOpen, setAuthzOpen] = useState(false);
+  const [specDiffOpen, setSpecDiffOpen] = useState(false);
+  const [replayOpen, setReplayOpen] = useState(false);
+  const [llmTestingOpen, setLlmTestingOpen] = useState(false);
   const [dataDrivenOpen, setDataDrivenOpen] = useState(false);
   const [automationOpen, setAutomationOpen] = useState(false);
   const [nlOpen, setNlOpen] = useState(false);
@@ -162,6 +185,19 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
   const [remediationOpen, setRemediationOpen] = useState(false);
   const [complianceOpen, setComplianceOpen] = useState(false);
   const [gitSyncOpen, setGitSyncOpen] = useState(false);
+  // Tier 3 — strategic / packaging (enterprise deals).
+  const [finopsOpen, setFinopsOpen] = useState(false);
+  const [onPremOpen, setOnPremOpen] = useState(false);
+  const [aiComplianceOpen, setAiComplianceOpen] = useState(false);
+  const [fullCodeOpen, setFullCodeOpen] = useState(false);
+  // Competitive-landscape gaps.
+  const [govLintOpen, setGovLintOpen] = useState(false);
+  const [specAuditOpen, setSpecAuditOpen] = useState(false);
+  const [seqFuzzOpen, setSeqFuzzOpen] = useState(false);
+  const [dataClassifyOpen, setDataClassifyOpen] = useState(false);
+  const [llmEvalOpen, setLlmEvalOpen] = useState(false);
+  const [proxyOpen, setProxyOpen] = useState(false);
+  const [statusPagesOpen, setStatusPagesOpen] = useState(false);
   // Atto coworker lifecycle tools.
   const [coworkerOpen, setCoworkerOpen] = useState(false);
   const [storyOpen, setStoryOpen] = useState(false);
@@ -270,7 +306,7 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
               {toolsOpen && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setToolsOpen(false)} />
-                  <div className="absolute right-0 mt-1 z-50 w-60 bg-white border border-[#E4E0F5] rounded-lg py-1 shadow-[0_14px_32px_-12px_rgba(76,29,149,0.5)]">
+                  <div className="absolute right-0 mt-1 z-50 w-60 max-h-[70vh] overflow-y-auto bg-white border border-[#E4E0F5] rounded-lg py-1 shadow-[0_14px_32px_-12px_rgba(76,29,149,0.5)]">
                     {([
                       { icon: BrainCircuit, label: 'AI coworker (Atto)', desc: 'Chat + autonomy across the lifecycle', open: () => setCoworkerOpen(true) },
                       { icon: FileText, label: 'Story-driven generation', desc: 'Jira story / PRD → a test plan', open: () => setStoryOpen(true) },
@@ -334,14 +370,37 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
                       { icon: Stamp, label: 'Approvals', desc: 'Multi-stage release gating', open: () => setApprovalsOpen(true) },
                       { icon: ScrollText, label: 'Audit log', desc: 'Filter & export recorded actions', open: () => setAuditOpen(true) },
                       { icon: FileCheck2, label: 'Evidence export', desc: 'Compliance evidence → PDF', open: () => setEvidenceOpen(true) },
-                    ]).map((t) => (
-                      <button key={t.label} type="button" onClick={() => { setToolsOpen(false); t.open(); }} className="w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-[#F5F3FF] transition-colors">
-                        <t.icon className="w-4 h-4 text-[#7C3AED] flex-shrink-0 mt-0.5" />
-                        <span className="min-w-0">
-                          <span className="block text-[12px] font-medium text-gray-800">{t.label}</span>
-                          <span className="block text-[10.5px] text-gray-400">{t.desc}</span>
-                        </span>
-                      </button>
+                      // ── Tier 1 — market-leading gaps (additive, opt-in) ──
+                      { icon: Lock, label: 'Authorization (BOLA/BFLA)', desc: 'Multi-role cross-user & privileged access', open: () => setAuthzOpen(true), tier1: true },
+                      { icon: GitCompareArrows, label: 'Breaking-change gate', desc: 'Diff two OpenAPI specs → go / no-go', open: () => setSpecDiffOpen(true) },
+                      { icon: Radio, label: 'Record & replay', desc: 'Deterministic, zero-cost regression replay', open: () => setReplayOpen(true) },
+                      { icon: Sparkles, label: 'AI / LLM & MCP testing', desc: 'Quality eval · LLM Top-10 · MCP security', open: () => setLlmTestingOpen(true) },
+                      // ── Tier 3 — strategic / packaging (enterprise deals) ──
+                      { icon: HardDrive, label: 'On-prem / air-gapped', desc: 'Self-host + data-residency policy', open: () => setOnPremOpen(true), tier3: true },
+                      { icon: Wallet, label: 'AI cost / FinOps', desc: 'Estimate & cap token spend per run', open: () => setFinopsOpen(true) },
+                      { icon: Scale, label: 'AI-era compliance', desc: 'EU AI Act · DORA posture', open: () => setAiComplianceOpen(true) },
+                      { icon: FileCode2, label: 'Full-code & Monitoring-as-Code', desc: 'Owned code · local-first · no lock-in', open: () => setFullCodeOpen(true) },
+                      // ── Governance & deep testing (competitive-landscape parity) ──
+                      { icon: Gavel, label: 'API governance', desc: 'Spectral-style rulesets · CI gate', open: () => setGovLintOpen(true), gap: true },
+                      { icon: FileSearch, label: 'OpenAPI security audit', desc: '42Crunch-style spec scoring', open: () => setSpecAuditOpen(true) },
+                      { icon: GitFork, label: 'Sequence fuzzing', desc: 'Stateful CRUD-chain fuzzing', open: () => setSeqFuzzOpen(true) },
+                      { icon: Fingerprint, label: 'Data classification', desc: 'PII/secrets + shadow APIs', open: () => setDataClassifyOpen(true) },
+                      { icon: FlaskConical, label: 'LLM eval harness', desc: 'Promptfoo-style scoring · LLM judge', open: () => setLlmEvalOpen(true) },
+                      { icon: Network, label: 'Contract proxy', desc: 'Validate live traffic · simulate deps', open: () => setProxyOpen(true) },
+                      { icon: Gauge, label: 'Public status page', desc: 'Shareable uptime + SLO', open: () => setStatusPagesOpen(true) },
+                    ] as { icon: typeof Wrench; label: string; desc: string; open: () => void; tier1?: boolean; tier3?: boolean; gap?: boolean }[]).map((t) => (
+                      <div key={t.label}>
+                        {t.tier1 && <div className="mx-2 mt-1 mb-0.5 pt-1 border-t border-gray-100"><p className="px-1 text-[9.5px] font-semibold uppercase tracking-wide text-[#A78BDA]">Tier 1 · market-leading</p></div>}
+                        {t.tier3 && <div className="mx-2 mt-1 mb-0.5 pt-1 border-t border-gray-100"><p className="px-1 text-[9.5px] font-semibold uppercase tracking-wide text-[#A78BDA]">Tier 3 · strategic / packaging</p></div>}
+                        {t.gap && <div className="mx-2 mt-1 mb-0.5 pt-1 border-t border-gray-100"><p className="px-1 text-[9.5px] font-semibold uppercase tracking-wide text-[#A78BDA]">Governance &amp; deep testing</p></div>}
+                        <button type="button" onClick={() => { setToolsOpen(false); t.open(); }} className="w-full flex items-start gap-2.5 px-3 py-2 text-left hover:bg-[#F5F3FF] transition-colors">
+                          <t.icon className="w-4 h-4 text-[#7C3AED] flex-shrink-0 mt-0.5" />
+                          <span className="min-w-0">
+                            <span className="block text-[12px] font-medium text-gray-800">{t.label}</span>
+                            <span className="block text-[10.5px] text-gray-400">{t.desc}</span>
+                          </span>
+                        </button>
+                      </div>
                     ))}
                     <div className="mx-2 my-1 border-t border-gray-100" />
                     <p className="px-3 py-1 text-[10px] text-gray-400">Runs on {selectedCount > 0 ? `${selectedCount} selected` : 'all'} endpoint{selectedCount === 1 ? '' : 's'}</p>
@@ -495,6 +554,27 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
         <BaselineDiff
           endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
           onClose={() => setBaselineOpen(false)}
+        />
+      )}
+      {authzOpen && (
+        <AuthzScan
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setAuthzOpen(false)}
+        />
+      )}
+      {specDiffOpen && (
+        <SpecDiff onClose={() => setSpecDiffOpen(false)} />
+      )}
+      {replayOpen && (
+        <ReplayTest
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setReplayOpen(false)}
+        />
+      )}
+      {llmTestingOpen && (
+        <LlmTesting
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setLlmTestingOpen(false)}
         />
       )}
       {dataDrivenOpen && (
@@ -656,6 +736,55 @@ export default function EndpointsView({ catalog, running, onDesign, onImport, sc
           endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
           onClose={() => setGitSyncOpen(false)}
         />
+      )}
+
+      {/* ── Tier 3 — strategic / packaging (enterprise deals) ── */}
+      {onPremOpen && (
+        <OnPremDeploy
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setOnPremOpen(false)}
+        />
+      )}
+      {finopsOpen && (
+        <FinOpsMetering
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setFinopsOpen(false)}
+        />
+      )}
+      {aiComplianceOpen && (
+        <AiCompliance
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setAiComplianceOpen(false)}
+        />
+      )}
+      {fullCodeOpen && (
+        <FullCodeExport
+          endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints}
+          onClose={() => setFullCodeOpen(false)}
+        />
+      )}
+
+      {/* ── Competitive-landscape gaps (governance, spec-audit, seq-fuzz, data-classify) ── */}
+      {govLintOpen && (
+        <GovernanceLint endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints} onClose={() => setGovLintOpen(false)} />
+      )}
+      {specAuditOpen && (
+        <SpecAudit endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints} onClose={() => setSpecAuditOpen(false)} />
+      )}
+      {seqFuzzOpen && (
+        <SeqFuzz endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints} onClose={() => setSeqFuzzOpen(false)} />
+      )}
+      {dataClassifyOpen && (
+        <DataClassify endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints} onClose={() => setDataClassifyOpen(false)} />
+      )}
+      {llmEvalOpen && (
+        <LlmEval onClose={() => setLlmEvalOpen(false)} />
+      )}
+      {proxyOpen && (
+        <ProxyServer endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints} onClose={() => setProxyOpen(false)} />
+      )}
+      {statusPagesOpen && (
+        <StatusPages endpoints={selectedCount > 0 ? endpoints.filter((e) => selected.has(e.id)) : endpoints} onClose={() => setStatusPagesOpen(false)} />
       )}
 
       {/* ── Atto coworker lifecycle tools ── */}

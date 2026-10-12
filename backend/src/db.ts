@@ -909,6 +909,88 @@ export async function initDb(): Promise<void> {
         updated_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
       )`);
 
+    // ── Competitive-landscape gaps 3/6/7 (additive, opt-in; no pipeline coupling) ──
+    // Dataset-scale LLM evaluation: a dataset of input/expected rows + metric
+    // suite, run against an AI endpoint; runs persist for regression tracking.
+    await createTable('api_llm_eval_datasets', `
+      CREATE TABLE ${SCHEMA}.api_llm_eval_datasets (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        name        NVARCHAR(200) NOT NULL,
+        target      NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        data_rows   NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        metrics     NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        latency_ms  INT NULL,
+        created_by  NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_llm_eval_runs', `
+      CREATE TABLE ${SCHEMA}.api_llm_eval_runs (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        dataset_id  UNIQUEIDENTIFIER NOT NULL,
+        model       NVARCHAR(100),
+        summary     NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        created_by  NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    // Contract-validating / simulating proxy: a public /proxy/:token/* URL.
+    await createTable('api_proxies', `
+      CREATE TABLE ${SCHEMA}.api_proxies (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        token       NVARCHAR(64) NOT NULL,
+        name        NVARCHAR(200) NOT NULL,
+        target_base NVARCHAR(2000) NOT NULL,
+        mode        NVARCHAR(20) NOT NULL DEFAULT 'validate',
+        routes_json NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        enabled     BIT NOT NULL DEFAULT 1,
+        hit_count   INT NOT NULL DEFAULT 0,
+        created_by  NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_proxy_events', `
+      CREATE TABLE ${SCHEMA}.api_proxy_events (
+        id              UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id       UNIQUEIDENTIFIER NOT NULL,
+        proxy_id        UNIQUEIDENTIFIER NOT NULL,
+        method          NVARCHAR(10),
+        path            NVARCHAR(500),
+        upstream_status INT NULL,
+        ok              BIT NOT NULL DEFAULT 0,
+        issues          NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        created_at      DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    // Multi-region synthetic monitoring + SLO + public status page (/status/:token).
+    await createTable('api_status_pages', `
+      CREATE TABLE ${SCHEMA}.api_status_pages (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        token       NVARCHAR(64) NOT NULL,
+        name        NVARCHAR(200) NOT NULL,
+        targets     NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        regions     NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        slo         NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        enabled     BIT NOT NULL DEFAULT 1,
+        created_by  NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_status_checks', `
+      CREATE TABLE ${SCHEMA}.api_status_checks (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        page_id     UNIQUEIDENTIFIER NOT NULL,
+        target_name NVARCHAR(200),
+        region      NVARCHAR(40),
+        ok          BIT NOT NULL DEFAULT 0,
+        status      INT NULL,
+        ms          INT NOT NULL DEFAULT 0,
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+
     // Async callback / webhook capture: a disposable public URL (/hook/:token)
     // that records inbound requests so a test can assert the API's async
     // callback arrived with the expected payload. Opt-in and standalone — the
@@ -1388,6 +1470,113 @@ export async function initDb(): Promise<void> {
         created_at     DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
         updated_at     DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
       )`);
+    // Deterministic record-replay recordings (feature: zero-cost regression replay).
+    await createTable('api_replay_recordings', `
+      CREATE TABLE ${SCHEMA}.api_replay_recordings (
+        id            UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id     UNIQUEIDENTIFIER NOT NULL,
+        sig           NVARCHAR(MAX) NOT NULL,
+        method        NVARCHAR(10) NOT NULL,
+        url           NVARCHAR(4000) NOT NULL,
+        title         NVARCHAR(300),
+        status        INT,
+        content_type  NVARCHAR(200),
+        body          NVARCHAR(MAX),
+        noise_paths   NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        deps          NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        captured_by   NVARCHAR(100),
+        captured_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at    DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    // LLM output-quality eval baselines (feature: answer-quality regression tracking).
+    await createTable('api_llm_eval_baselines', `
+      CREATE TABLE ${SCHEMA}.api_llm_eval_baselines (
+        id            UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id     UNIQUEIDENTIFIER NOT NULL,
+        sig           NVARCHAR(MAX) NOT NULL,
+        method        NVARCHAR(10) NOT NULL,
+        url           NVARCHAR(4000) NOT NULL,
+        criteria      NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        score         INT NOT NULL DEFAULT 0,
+        captured_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at    DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+
+    // ─── Tier 2 — deepen monitoring/governance/test-data/protocol (all additive, opt-in) ───
+    // Synthetic monitoring: scheduled multi-location checks + trace correlation + canary/rollback signal.
+    await createTable('api_synthetic_monitors', `
+      CREATE TABLE ${SCHEMA}.api_synthetic_monitors (
+        id               UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id        UNIQUEIDENTIFIER NOT NULL,
+        name             NVARCHAR(200) NOT NULL,
+        enabled          BIT NOT NULL DEFAULT 0,
+        interval_minutes INT NOT NULL DEFAULT 15,
+        endpoint         NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        locations        NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        tracing          NVARCHAR(MAX),
+        canary           NVARCHAR(MAX),
+        next_run_at      DATETIMEOFFSET,
+        last_run_at      DATETIMEOFFSET,
+        last_status      NVARCHAR(40),
+        created_by       NVARCHAR(100),
+        created_at       DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at       DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_synthetic_results', `
+      CREATE TABLE ${SCHEMA}.api_synthetic_results (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        monitor_id  UNIQUEIDENTIFIER NOT NULL,
+        status      NVARCHAR(40) NOT NULL DEFAULT 'up',
+        locations   NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        canary      NVARCHAR(MAX),
+        trace       NVARCHAR(MAX),
+        summary     NVARCHAR(MAX),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    // API governance platform: registry/catalog with versioning & lifecycle.
+    await createTable('api_registry_entries', `
+      CREATE TABLE ${SCHEMA}.api_registry_entries (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        name        NVARCHAR(200) NOT NULL,
+        description NVARCHAR(MAX),
+        owner       NVARCHAR(200),
+        lifecycle   NVARCHAR(40) NOT NULL DEFAULT 'draft',
+        tags        NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        created_by  NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('api_registry_versions', `
+      CREATE TABLE ${SCHEMA}.api_registry_versions (
+        id               UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id        UNIQUEIDENTIFIER NOT NULL,
+        api_id           UNIQUEIDENTIFIER NOT NULL,
+        version          NVARCHAR(60) NOT NULL,
+        spec             NVARCHAR(MAX),
+        status           NVARCHAR(40) NOT NULL DEFAULT 'draft',
+        deprecation_date NVARCHAR(40),
+        sunset_date      NVARCHAR(40),
+        notes            NVARCHAR(MAX),
+        created_by       NVARCHAR(100),
+        created_at       DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at       DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    // Enterprise test-data: versioned datasets (referential synthetic + production subsets).
+    await createTable('api_dataset_versions', `
+      CREATE TABLE ${SCHEMA}.api_dataset_versions (
+        id          UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        name        NVARCHAR(200) NOT NULL,
+        version     INT NOT NULL DEFAULT 1,
+        data        NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+        row_count   INT NOT NULL DEFAULT 0,
+        hash        NVARCHAR(80),
+        notes       NVARCHAR(MAX),
+        created_by  NVARCHAR(100),
+        created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
 
     // ─── 11. Indexes ───
     await createIndex('idx_api_data_profiles_tenant', 'api_data_profiles', '(tenant_id, updated_at DESC)');
@@ -1409,6 +1598,14 @@ export async function initDb(): Promise<void> {
     await createIndex('idx_api_tm_connectors_tenant', 'api_tm_connectors', '(tenant_id, updated_at DESC)');
     await createIndex('idx_api_approval_workflows_tenant', 'api_approval_workflows', '(tenant_id, updated_at DESC)');
     await createIndex('idx_api_approval_requests_run', 'api_approval_requests', '(tenant_id, run_id, created_at DESC)');
+    await createIndex('idx_api_replay_recordings_tenant', 'api_replay_recordings', '(tenant_id)');
+    await createIndex('idx_api_llm_eval_baselines_tenant', 'api_llm_eval_baselines', '(tenant_id)');
+    await createIndex('idx_api_synthetic_monitors_due', 'api_synthetic_monitors', '(enabled, next_run_at)');
+    await createIndex('idx_api_synthetic_monitors_tenant', 'api_synthetic_monitors', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_synthetic_results_monitor', 'api_synthetic_results', '(tenant_id, monitor_id, created_at DESC)');
+    await createIndex('idx_api_registry_entries_tenant', 'api_registry_entries', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_registry_versions_api', 'api_registry_versions', '(tenant_id, api_id, created_at DESC)');
+    await createIndex('idx_api_dataset_versions_tenant', 'api_dataset_versions', '(tenant_id, name, version DESC)');
     await createIndex('idx_api_virtual_services_tenant', 'api_virtual_services', '(tenant_id, updated_at DESC)');
     await createIndex('idx_api_virtual_services_token', 'api_virtual_services', '(token)');
     await createIndex('idx_api_pacts_tenant', 'api_pacts', '(tenant_id, created_at DESC)');
@@ -1433,6 +1630,14 @@ export async function initDb(): Promise<void> {
     await createIndex('idx_api_capture_entries_session', 'api_capture_entries', '(tenant_id, session_id, created_at)');
     await createIndex('idx_api_mocks_tenant', 'api_mocks', '(tenant_id, updated_at DESC)');
     await createIndex('idx_api_mocks_mockid', 'api_mocks', '(mock_id)');
+    await createIndex('idx_api_llm_eval_datasets_tenant', 'api_llm_eval_datasets', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_llm_eval_runs_dataset', 'api_llm_eval_runs', '(tenant_id, dataset_id, created_at DESC)');
+    await createIndex('idx_api_proxies_tenant', 'api_proxies', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_proxies_token', 'api_proxies', '(token)');
+    await createIndex('idx_api_proxy_events_proxy', 'api_proxy_events', '(tenant_id, proxy_id, created_at DESC)');
+    await createIndex('idx_api_status_pages_tenant', 'api_status_pages', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_status_pages_token', 'api_status_pages', '(token)');
+    await createIndex('idx_api_status_checks_page', 'api_status_checks', '(page_id, created_at DESC)');
     await createIndex('idx_api_import_sources_tenant', 'api_import_sources', '(tenant_id, created_at DESC)');
     await createIndex('idx_api_response_baselines_tenant', 'api_response_baselines', '(tenant_id)');
     await createIndex('idx_api_schedules_due', 'api_schedules', '(enabled, next_run_at)');

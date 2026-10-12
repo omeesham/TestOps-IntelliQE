@@ -98,6 +98,19 @@ import { listLoadAgents, saveLoadAgent, deleteLoadAgent, runCloudLoad } from '..
 import { PERMISSION_CATALOG, getRolePermissions, setRolePermissions, getSsoConfig, saveSsoConfig, testOidcDiscovery, getScimToken, rotateScimToken, revokeScimToken, getSecuritySettings, saveSecuritySettings, beginMfaEnrollment, confirmMfaEnrollment, disableMfa, userHasMfa } from '../services/api-access.service.js';
 import { openRemediationPr } from '../services/api-remediation.service.js';
 import { runCompliancePack, listCompliancePacks } from '../services/api-compliance.service.js';
+// ─── Tier 3 — strategic / packaging (enterprise deals; all additive, opt-in) ───
+import { estimateRunCost, listModelRates } from '../services/api-finops.service.js';
+import { planDeployment, listResidencyRegions } from '../services/api-onprem.service.js';
+import { runAiCompliancePack, listAiCompliancePacks } from '../services/api-ai-compliance.service.js';
+import { generateCodeProject } from '../services/api-codegen.service.js';
+// ─── Competitive-landscape gaps 1–7 (all additive, opt-in) ───
+import { runGovernance, listGovernanceRulesets, listGovernanceRules } from '../services/api-governance.service.js';
+import { auditOpenApiSpec } from '../services/api-spec-audit.service.js';
+import { runSeqFuzz } from '../services/api-seqfuzz.service.js';
+import { classifyData } from '../services/api-data-classify.service.js';
+import { listEvalDatasets, saveEvalDataset, deleteEvalDataset, listEvalRuns, runEval, listEvalMetrics } from '../services/api-llm-eval.service.js';
+import { listProxies, createProxy, setProxyEnabled, deleteProxy, listProxyEvents } from '../services/api-proxy.service.js';
+import { listStatusPages, saveStatusPage, setStatusEnabled, deleteStatusPage, getStatusView, probeNow } from '../services/api-status.service.js';
 import { getGitSyncConfig, saveGitSyncConfig, pushToGit, pullFromGit } from '../services/api-git-sync.service.js';
 // ─── Execution/CI batch: API+UI hybrid, release gate, CI trigger, parallel queue (all additive, opt-in) ───
 import { listHybridTests, saveHybridTest, deleteHybridTest, runHybrid } from '../services/api-hybrid.service.js';
@@ -111,6 +124,17 @@ import { listConnectors, saveConnector, deleteConnector, testConnector, exportRu
 import { listAudit, auditFacets, exportAuditCsv } from '../services/api-audit-view.service.js';
 import { listWorkflows, saveWorkflow, deleteWorkflow, listRequests, createRequest, actOnRequest, cancelRequest, evaluateApprovalGate } from '../services/api-approvals.service.js';
 import { buildEvidence, renderEvidenceHtml, renderEvidencePdf } from '../services/api-evidence.service.js';
+import { runAuthzScan } from '../services/api-authz.service.js';
+import { diffSpecs } from '../services/api-specdiff.service.js';
+import { recordReplays, listReplays, replayAll, deleteReplay } from '../services/api-replay.service.js';
+import { runLlmEval, runLlmSecurityScan, runMcpSecurityScan } from '../services/api-llm-testing.service.js';
+// ─── Tier 2 — deepen monitoring/governance/test-data/protocol (all additive, opt-in) ───
+import { listSyntheticMonitors, saveSyntheticMonitor, setSyntheticEnabled, deleteSyntheticMonitor, listSyntheticResults, runSyntheticMonitorNow, runSyntheticCheck } from '../services/api-synthetics.service.js';
+import { listRegistry, saveRegistryEntry, setLifecycle, deleteRegistryEntry, listVersions as listRegistryVersions, getVersionSpec, addVersion, updateVersionStatus, deleteVersion as deleteRegistryVersion, diffVersions } from '../services/api-registry.service.js';
+import { generateReferential, subsetDatasets, listDatasetVersions, getDatasetVersion, saveDatasetVersion, deleteDatasetVersion, diffDatasetVersions } from '../services/api-test-data-mgmt.service.js';
+import { generateStatefulSequences } from '../services/api-stateful-gen.service.js';
+import { gradeAssertions } from '../services/api-mutation-testing.service.js';
+import { grpcClientStream, grpcBidi } from '../services/api-messaging.service.js';
 import { logAudit } from '../utils/audit.js';
 import {
   listEnvironments, getEnvironment, createEnvironment, updateEnvironment, deleteEnvironment, applyEnvironment, resolveApiCase,
@@ -1924,6 +1948,399 @@ router.post('/evidence/export', async (req: Request, res: Response) => {
       res.send(renderEvidenceHtml(doc));
     }
   } catch (err) { fail(res, err); }
+});
+
+/* ── Multi-role authorization testing — BOLA/BFLA (opt-in; needs ≥2 identities; non-destructive) ── */
+router.post('/authz/scan', async (req: Request, res: Response) => {
+  try {
+    const report = await runAuthzScan(req.body?.endpoints, req.body?.identities, { allowWrites: !!req.body?.allowWrites });
+    if (report.summary.endpoints === 0) { res.status(400).json({ error: 'Send at least one endpoint with an http(s) URL to test.' }); return; }
+    void logAudit(req, 'execute', 'api_authz_scan', '', { endpoints: report.summary.endpoints, identities: report.summary.identities, vulnerable: report.summary.vulnerable });
+    res.json(report);
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Spec-vs-spec breaking-change gate (opt-in; diff two OpenAPI docs → go/no-go) ── */
+router.post('/specdiff', async (req: Request, res: Response) => {
+  try {
+    const oldSpec = req.body?.oldSpec ?? req.body?.old;
+    const newSpec = req.body?.newSpec ?? req.body?.new;
+    if (!oldSpec || !newSpec) { res.status(400).json({ error: 'Send both oldSpec and newSpec (OpenAPI JSON or YAML).' }); return; }
+    const result = diffSpecs(oldSpec, newSpec, { failOnBreaking: req.body?.failOnBreaking !== false });
+    void logAudit(req, 'execute', 'api_specdiff', '', { breaking: result.summary.breaking, passed: result.gate.passed });
+    res.json(result);
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Deterministic record-and-replay (opt-in; zero model cost; auto-learns noise) ── */
+router.get('/replays', async (req: Request, res: Response) => {
+  try { res.json({ recordings: await listReplays(req.user!.tenantId) }); } catch (err) { fail(res, err); }
+});
+router.post('/replays/record', async (req: Request, res: Response) => {
+  try {
+    const report = await recordReplays(req.user!.tenantId, req.user!.username, req.body?.endpoints);
+    if (report.total === 0) { res.status(400).json({ error: 'Send at least one endpoint with an http(s) URL to record.' }); return; }
+    void logAudit(req, 'create', 'api_replay_recording', '', { recorded: report.recorded, skipped: report.skipped });
+    res.json(report);
+  } catch (err) { fail(res, err); }
+});
+router.post('/replays/run', async (req: Request, res: Response) => {
+  try {
+    const report = await replayAll(req.user!.tenantId, req.body?.endpoints);
+    if (report.summary.total === 0) { res.status(400).json({ error: 'Send the endpoints to replay.' }); return; }
+    res.json(report);
+  } catch (err) { fail(res, err); }
+});
+router.delete('/replays/:id', async (req: Request, res: Response) => {
+  try { res.json({ ok: await deleteReplay(req.user!.tenantId, String(req.params.id)) }); } catch (err) { fail(res, err); }
+});
+
+/* ── AI/LLM & MCP-era testing (opt-in) ── */
+router.post('/llm/eval', async (req: Request, res: Response) => {
+  try {
+    const ep = req.body?.endpoint;
+    if (!ep || typeof ep !== 'object' || !/^https?:\/\//i.test(String(ep.url || ''))) { res.status(400).json({ error: 'Send an endpoint with an http(s) URL.' }); return; }
+    const llm = await getTenantLlm(req.user!.tenantId);
+    if (!llm) { res.status(400).json({ error: 'LLM evaluation needs a model — add an API key under System Configuration → LLM Configuration.' }); return; }
+    const result = await runLlmEval(req.user!.tenantId, ep, req.body?.criteria, llm, { saveBaseline: !!req.body?.saveBaseline, passThreshold: req.body?.passThreshold, regressionDelta: req.body?.regressionDelta });
+    res.json(result);
+  } catch (err) { fail(res, err); }
+});
+router.post('/llm/security', async (req: Request, res: Response) => {
+  try {
+    const ep = req.body?.endpoint;
+    if (!ep || typeof ep !== 'object' || !/^https?:\/\//i.test(String(ep.url || ''))) { res.status(400).json({ error: 'Send an endpoint with an http(s) URL.' }); return; }
+    const report = await runLlmSecurityScan(ep, { field: req.body?.field });
+    void logAudit(req, 'execute', 'api_llm_security_scan', '', { vulnerable: report.summary.vulnerable });
+    res.json(report);
+  } catch (err) { fail(res, err); }
+});
+router.post('/mcp/security', async (req: Request, res: Response) => {
+  try {
+    const report = await runMcpSecurityScan(String(req.body?.serverUrl || ''), { token: req.body?.token });
+    void logAudit(req, 'execute', 'api_mcp_security_scan', '', { tools: report.summary.tools, vulnerable: report.summary.vulnerable });
+    res.json(report);
+  } catch (err) { fail(res, err); }
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   Tier 3 — strategic / packaging (enterprise deals)
+   On-prem/air-gapped + data residency · AI-cost/FinOps metering ·
+   AI-era compliance packs (EU AI Act, DORA) · full-code escape hatch +
+   local-first/IDE authoring + Monitoring-as-Code. All pure analysis /
+   templating, opt-in, no pipeline coupling.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── AI-cost / FinOps metering (estimate + cap token spend per run) ── */
+router.get('/finops/rates', (_req: Request, res: Response) => {
+  res.json({ rates: listModelRates() });
+});
+router.post('/finops/estimate', (req: Request, res: Response) => {
+  try {
+    const b = req.body || {};
+    res.json(estimateRunCost({
+      model: b.model, rate: b.rate, endpoints: b.endpoints, complexity: b.complexity,
+      iterations: b.iterations, capUsd: b.capUsd, capTokens: b.capTokens,
+    }));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── On-prem / air-gapped packaging + data-residency posture ── */
+router.get('/onprem/regions', (_req: Request, res: Response) => {
+  res.json({ regions: listResidencyRegions() });
+});
+router.post('/onprem/plan', (req: Request, res: Response) => {
+  try {
+    const eps = endpointsFromBody(req.body?.endpoints).map((e) => ({ method: e.method, url: e.url }));
+    res.json(planDeployment({
+      mode: req.body?.mode, allowedRegions: Array.isArray(req.body?.allowedRegions) ? req.body.allowedRegions.map(String) : [],
+      endpoints: eps, llmBaseUrl: req.body?.llmBaseUrl, imageTag: req.body?.imageTag,
+    }));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── AI-era compliance packs (EU AI Act, DORA; pure analysis) ── */
+router.get('/ai-compliance/packs', (_req: Request, res: Response) => {
+  res.json({ packs: listAiCompliancePacks() });
+});
+router.post('/ai-compliance/scan', (req: Request, res: Response) => {
+  try {
+    const eps = endpointsFromBody(req.body?.endpoints).map((e) => ({ method: e.method, url: e.url, auth: e.auth, queryParams: Array.isArray(e.queryParams) ? e.queryParams.map((q: any) => ({ name: String(q?.name ?? q ?? '') })) : undefined }));
+    res.json(runAiCompliancePack(String(req.body?.pack || ''), eps, req.body?.context || {}));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Full-code escape hatch + local-first/IDE authoring + Monitoring-as-Code ── */
+router.post('/codegen/project', (req: Request, res: Response) => {
+  try {
+    const eps = endpointsFromBody(req.body?.endpoints).map((e) => ({
+      method: e.method, url: e.url, title: e.title, expectedStatus: e.expectedStatus,
+      headers: e.headers, auth: e.auth, body: e.body,
+    }));
+    res.json(generateCodeProject({ endpoints: eps, target: req.body?.target, projectName: req.body?.projectName }));
+  } catch (err) { fail(res, err); }
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   Tier 2 — deepen partial → full
+   Synthetic monitoring + observability · API governance platform ·
+   Enterprise test-data management · Protocol depth + smarter generation.
+   All opt-in, additive; the pipeline is never involved.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Synthetic monitoring (multi-location + trace correlation + canary/rollback signal) ── */
+router.get('/synthetics', async (req: Request, res: Response) => {
+  try { res.json({ monitors: await listSyntheticMonitors(req.user!.tenantId) }); } catch (err) { fail(res, err); }
+});
+router.post('/synthetics', async (req: Request, res: Response) => {
+  try {
+    const m = await saveSyntheticMonitor(req.user!.tenantId, req.user!.username, req.body || {});
+    void logAudit(req, req.body?.id ? 'update' : 'create', 'api_synthetic_monitor', m.id, { name: m.name, enabled: m.enabled });
+    res.json(m);
+  } catch (err) { fail(res, err); }
+});
+router.post('/synthetics/:id/enabled', async (req: Request, res: Response) => {
+  try {
+    const m = await setSyntheticEnabled(req.user!.tenantId, String(req.params.id), !!req.body?.enabled);
+    if (!m) { res.status(404).json({ error: 'Monitor not found.' }); return; }
+    res.json(m);
+  } catch (err) { fail(res, err); }
+});
+router.delete('/synthetics/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteSyntheticMonitor(req.user!.tenantId, String(req.params.id));
+    void logAudit(req, 'delete', 'api_synthetic_monitor', String(req.params.id), {});
+    res.json({ ok });
+  } catch (err) { fail(res, err); }
+});
+router.get('/synthetics/:id/results', async (req: Request, res: Response) => {
+  try { res.json({ results: await listSyntheticResults(req.user!.tenantId, String(req.params.id), Number(req.query.limit) || 50) }); } catch (err) { fail(res, err); }
+});
+router.post('/synthetics/:id/run', async (req: Request, res: Response) => {
+  try {
+    const result = await runSyntheticMonitorNow(req.user!.tenantId, String(req.params.id));
+    void logAudit(req, 'execute', 'api_synthetic_monitor', String(req.params.id), { status: result.status });
+    res.json(result);
+  } catch (err) { fail(res, err); }
+});
+router.post('/synthetics/preview', async (req: Request, res: Response) => {
+  try {
+    const result = await runSyntheticCheck({ endpoint: req.body?.endpoint, locations: req.body?.locations, tracing: req.body?.tracing, canary: req.body?.canary });
+    res.json(result);
+  } catch (err) { fail(res, err); }
+});
+
+/* ── API registry / catalog: versioning + lifecycle + version diff (the governance-platform
+   half; the ruleset-lint half lives in api-governance.service) ── */
+router.get('/registry', async (req: Request, res: Response) => {
+  try { res.json({ apis: await listRegistry(req.user!.tenantId) }); } catch (err) { fail(res, err); }
+});
+router.post('/registry', async (req: Request, res: Response) => {
+  try {
+    const entry = await saveRegistryEntry(req.user!.tenantId, req.user!.username, req.body || {});
+    void logAudit(req, req.body?.id ? 'update' : 'create', 'api_registry_entry', entry.id, { name: entry.name, lifecycle: entry.lifecycle });
+    res.json(entry);
+  } catch (err) { fail(res, err); }
+});
+router.post('/registry/diff', async (req: Request, res: Response) => {
+  try {
+    const result = await diffVersions(req.user!.tenantId, String(req.body?.versionIdA || ''), String(req.body?.versionIdB || ''));
+    res.json(result);
+  } catch (err) { fail(res, err); }
+});
+router.get('/registry/versions/:versionId/spec', async (req: Request, res: Response) => {
+  try {
+    const v = await getVersionSpec(req.user!.tenantId, String(req.params.versionId));
+    if (!v) { res.status(404).json({ error: 'Version not found.' }); return; }
+    res.json(v);
+  } catch (err) { fail(res, err); }
+});
+router.post('/registry/versions/:versionId/status', async (req: Request, res: Response) => {
+  try {
+    const v = await updateVersionStatus(req.user!.tenantId, String(req.params.versionId), req.body || {});
+    if (!v) { res.status(404).json({ error: 'Version not found.' }); return; }
+    void logAudit(req, 'update', 'api_registry_version', v.id, { status: v.status });
+    res.json(v);
+  } catch (err) { fail(res, err); }
+});
+router.delete('/registry/versions/:versionId', async (req: Request, res: Response) => {
+  try { res.json({ ok: await deleteRegistryVersion(req.user!.tenantId, String(req.params.versionId)) }); } catch (err) { fail(res, err); }
+});
+router.post('/registry/:id/lifecycle', async (req: Request, res: Response) => {
+  try {
+    const entry = await setLifecycle(req.user!.tenantId, String(req.params.id), String(req.body?.lifecycle || ''));
+    if (!entry) { res.status(404).json({ error: 'API not found.' }); return; }
+    void logAudit(req, 'update', 'api_registry_entry', entry.id, { lifecycle: entry.lifecycle });
+    res.json(entry);
+  } catch (err) { fail(res, err); }
+});
+router.get('/registry/:id/versions', async (req: Request, res: Response) => {
+  try { res.json({ versions: await listRegistryVersions(req.user!.tenantId, String(req.params.id)) }); } catch (err) { fail(res, err); }
+});
+router.post('/registry/:id/versions', async (req: Request, res: Response) => {
+  try {
+    const v = await addVersion(req.user!.tenantId, req.user!.username, String(req.params.id), req.body || {});
+    void logAudit(req, 'create', 'api_registry_version', v.id, { apiId: String(req.params.id), version: v.version });
+    res.json(v);
+  } catch (err) { fail(res, err); }
+});
+router.delete('/registry/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteRegistryEntry(req.user!.tenantId, String(req.params.id));
+    void logAudit(req, 'delete', 'api_registry_entry', String(req.params.id), {});
+    res.json({ ok });
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Enterprise test-data management: referential + subsetting + versioning ── */
+router.post('/test-data/referential', (req: Request, res: Response) => {
+  try { res.json(generateReferential(req.body?.entities, { seed: req.body?.seed })); } catch (err) { fail(res, err); }
+});
+router.post('/test-data/subset', (req: Request, res: Response) => {
+  try {
+    res.json(subsetDatasets({ tables: req.body?.tables || {}, relationships: req.body?.relationships, root: String(req.body?.root || ''), size: req.body?.size, fraction: req.body?.fraction, seed: req.body?.seed }));
+  } catch (err) { fail(res, err); }
+});
+router.get('/datasets', async (req: Request, res: Response) => {
+  try { res.json({ versions: await listDatasetVersions(req.user!.tenantId) }); } catch (err) { fail(res, err); }
+});
+router.post('/datasets/diff', async (req: Request, res: Response) => {
+  try { res.json(await diffDatasetVersions(req.user!.tenantId, String(req.body?.idA || ''), String(req.body?.idB || ''))); } catch (err) { fail(res, err); }
+});
+router.get('/datasets/:id', async (req: Request, res: Response) => {
+  try {
+    const v = await getDatasetVersion(req.user!.tenantId, String(req.params.id));
+    if (!v) { res.status(404).json({ error: 'Dataset version not found.' }); return; }
+    res.json(v);
+  } catch (err) { fail(res, err); }
+});
+router.post('/datasets', async (req: Request, res: Response) => {
+  try {
+    const v = await saveDatasetVersion(req.user!.tenantId, req.user!.username, req.body || {});
+    void logAudit(req, 'create', 'api_dataset_version', v.id, { name: v.name, version: v.version, rows: v.rowCount });
+    res.json(v);
+  } catch (err) { fail(res, err); }
+});
+router.delete('/datasets/:id', async (req: Request, res: Response) => {
+  try { res.json({ ok: await deleteDatasetVersion(req.user!.tenantId, String(req.params.id)) }); } catch (err) { fail(res, err); }
+});
+
+/* ── Protocol depth + smarter generation: stateful white-box gen + mutation grading + gRPC streaming ── */
+router.post('/stateful/generate', (req: Request, res: Response) => {
+  try {
+    const eps = req.body?.spec ? undefined : endpointsFromBody(req.body?.endpoints).map((e) => ({ method: e.method, url: e.url, title: e.title }));
+    res.json(generateStatefulSequences({ spec: req.body?.spec ? String(req.body.spec) : undefined, endpoints: eps, baseUrl: req.body?.baseUrl ? String(req.body.baseUrl) : undefined, maxSequences: req.body?.maxSequences }));
+  } catch (err) { fail(res, err); }
+});
+router.post('/mutation/grade', (req: Request, res: Response) => {
+  try {
+    const sample = req.body?.sample || {};
+    res.json(gradeAssertions({ status: Number(sample.status) || 0, body: String(sample.body ?? '') }, req.body?.assertions));
+  } catch (err) { fail(res, err); }
+});
+router.post('/messaging/grpc-client-stream', async (req: Request, res: Response) => {
+  try { res.json(await grpcClientStream(req.body || {})); } catch (err) { fail(res, err); }
+});
+router.post('/messaging/grpc-bidi', async (req: Request, res: Response) => {
+  try { res.json(await grpcBidi(req.body || {})); } catch (err) { fail(res, err); }
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   Competitive-landscape gaps 1–7 (additive, opt-in; no pipeline coupling)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Gap 1: Configurable governance rulesets + CI gate (Spectral / SwaggerHub) ── */
+router.get('/governance/rulesets', (_req: Request, res: Response) => {
+  res.json({ rulesets: listGovernanceRulesets(), rules: listGovernanceRules() });
+});
+router.post('/governance/lint', (req: Request, res: Response) => {
+  try {
+    const eps = endpointsFromBody(req.body?.endpoints).map((e) => ({ method: e.method, url: e.url, auth: e.auth, description: e.description, title: e.title, tags: e.tags, expectedStatus: e.expectedStatus, operationId: e.operationId, deprecated: e.deprecated }));
+    res.json(runGovernance(eps, { ruleset: req.body?.ruleset, customRules: Array.isArray(req.body?.customRules) ? req.body.customRules : [], gate: req.body?.gate }));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Gap 2: Static OpenAPI security audit & score (42Crunch Audit) ── */
+router.post('/spec-audit/scan', (req: Request, res: Response) => {
+  try {
+    const raw = String(req.body?.spec || '');
+    if (raw.trim().length < 20) { res.status(400).json({ error: 'Paste an OpenAPI/Swagger document (JSON or YAML).' }); return; }
+    res.json(auditOpenApiSpec(raw, { gate: req.body?.gate }));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Gap 4: Stateful, dependency-aware sequence fuzzing (RESTler / EvoMaster) ── */
+router.post('/seqfuzz/run', async (req: Request, res: Response) => {
+  try {
+    const eps = endpointsFromBody(req.body?.endpoints).map((e) => ({ method: e.method, url: e.url, headers: e.headers, auth: e.auth, body: e.body, title: e.title, expectedStatus: e.expectedStatus }));
+    res.json(await runSeqFuzz(eps, { allowWrites: !!req.body?.allowWrites, maxResources: req.body?.maxResources, timeoutMs: req.body?.timeoutMs }));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Gap 5: Sensitive-data classification + shadow-API discovery (Akto / Escape) ── */
+router.post('/data-classify/scan', async (req: Request, res: Response) => {
+  try {
+    const eps = endpointsFromBody(req.body?.endpoints).map((e) => ({ method: e.method, url: e.url, body: e.body, expectedResponse: e.expectedResponse, queryParams: Array.isArray(e.queryParams) ? e.queryParams.map((q: any) => ({ name: String(q?.name ?? q ?? '') })) : undefined }));
+    res.json(await classifyData(req.user!.tenantId, { endpoints: eps, sessionId: req.body?.sessionId ? String(req.body.sessionId) : undefined }));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Gap 3: Dataset-scale LLM evaluation (Promptfoo / DeepEval) ── */
+router.get('/llm-eval/metrics', (_req: Request, res: Response) => { res.json({ metrics: listEvalMetrics() }); });
+router.get('/llm-eval/datasets', async (req: Request, res: Response) => {
+  try { res.json({ datasets: await listEvalDatasets(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/llm-eval/datasets', async (req: Request, res: Response) => {
+  try { res.status(201).json({ dataset: await saveEvalDataset(req.user!.tenantId, req.user!.username, req.body || {}) }); } catch (err) { fail(res, err); }
+});
+router.delete('/llm-eval/datasets/:id', async (req: Request, res: Response) => {
+  try { const ok = await deleteEvalDataset(req.user!.tenantId, String(req.params.id)); if (!ok) { res.status(404).json({ error: 'Dataset not found.' }); return; } res.json({ ok: true }); } catch (err) { fail(res, err); }
+});
+router.get('/llm-eval/datasets/:id/runs', async (req: Request, res: Response) => {
+  try { res.json({ runs: await listEvalRuns(req.user!.tenantId, String(req.params.id)) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/llm-eval/run', async (req: Request, res: Response) => {
+  try {
+    const llm = (await getTenantLlm(req.user!.tenantId)) || undefined;
+    res.json(await runEval(req.user!.tenantId, req.user!.username, { datasetId: req.body?.datasetId ? String(req.body.datasetId) : undefined, dataset: req.body?.dataset, llm }));
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Gap 6: Contract-validating / simulating proxy (Prism / Hoverfly) ── */
+router.get('/proxies', async (req: Request, res: Response) => {
+  try { res.json({ proxies: await listProxies(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/proxies', async (req: Request, res: Response) => {
+  try { res.status(201).json({ proxy: await createProxy(req.user!.tenantId, req.user!.username, req.body || {}) }); } catch (err) { fail(res, err); }
+});
+router.post('/proxies/:id/enabled', async (req: Request, res: Response) => {
+  try { const p = await setProxyEnabled(req.user!.tenantId, String(req.params.id), !!req.body?.enabled); if (!p) { res.status(404).json({ error: 'Proxy not found.' }); return; } res.json({ proxy: p }); } catch (err) { fail(res, err); }
+});
+router.delete('/proxies/:id', async (req: Request, res: Response) => {
+  try { const ok = await deleteProxy(req.user!.tenantId, String(req.params.id)); if (!ok) { res.status(404).json({ error: 'Proxy not found.' }); return; } res.json({ ok: true }); } catch (err) { fail(res, err); }
+});
+router.get('/proxies/:id/events', async (req: Request, res: Response) => {
+  try { res.json({ events: await listProxyEvents(req.user!.tenantId, String(req.params.id)) }); } catch (err) { fail(res, err, 500); }
+});
+
+/* ── Gap 7: Public status page + SLO (Checkly) ── */
+router.get('/status-pages', async (req: Request, res: Response) => {
+  try { res.json({ pages: await listStatusPages(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/status-pages', async (req: Request, res: Response) => {
+  try { res.status(201).json({ page: await saveStatusPage(req.user!.tenantId, req.user!.username, req.body || {}) }); } catch (err) { fail(res, err); }
+});
+router.post('/status-pages/:id/enabled', async (req: Request, res: Response) => {
+  try { const p = await setStatusEnabled(req.user!.tenantId, String(req.params.id), !!req.body?.enabled); if (!p) { res.status(404).json({ error: 'Status page not found.' }); return; } res.json({ page: p }); } catch (err) { fail(res, err); }
+});
+router.delete('/status-pages/:id', async (req: Request, res: Response) => {
+  try { const ok = await deleteStatusPage(req.user!.tenantId, String(req.params.id)); if (!ok) { res.status(404).json({ error: 'Status page not found.' }); return; } res.json({ ok: true }); } catch (err) { fail(res, err); }
+});
+router.get('/status-pages/:id/view', async (req: Request, res: Response) => {
+  try { const v = await getStatusView(req.user!.tenantId, String(req.params.id)); if (!v) { res.status(404).json({ error: 'Status page not found.' }); return; } res.json(v); } catch (err) { fail(res, err, 500); }
+});
+router.post('/status-pages/:id/probe', async (req: Request, res: Response) => {
+  try { res.json(await probeNow(req.user!.tenantId, String(req.params.id))); } catch (err) { fail(res, err); }
 });
 
 export default router;

@@ -56,6 +56,8 @@ import apiScimPublicRoutes from './routes/api-scim-public.routes.js';
 import apiSsoPublicRoutes from './routes/api-sso-public.routes.js';
 import apiAgentPublicRoutes from './routes/api-agent-public.routes.js';
 import apiCiPublicRoutes from './routes/api-ci-public.routes.js';
+import apiProxyPublicRoutes from './routes/api-proxy-public.routes.js';
+import apiStatusPublicRoutes from './routes/api-status-public.routes.js';
 import webToolsRoutes from './routes/web-tools.routes.js';
 import apiAutomationPublicRoutes from './routes/public/api-automation-public.routes.js';
 import clientLogsRoutes from './routes/client-logs.routes.js';
@@ -66,6 +68,8 @@ import { initDb } from './db.js';
 import pool from './db.js';
 import { startApiScheduler } from './services/api-scheduler.service.js';
 import { startApiMonitor } from './services/api-monitor.service.js';
+import { startApiSynthetics } from './services/api-synthetics.service.js';
+import { startApiStatus } from './services/api-status.service.js';
 import { decryptField } from './utils/crypto.js';
 import { signToken } from './utils/jwt.js';
 import { getSecuritySettings, getUserMfaSecret, verifyTotp, validatePassword } from './services/api-access.service.js';
@@ -386,6 +390,10 @@ app.use('/agent-event', apiAgentPublicRoutes);
 // any CI) starts and polls a headless run at /api/ci/:token/runs with only its
 // per-tenant CI token. Inert until a tenant mints a token in the CI panel.
 app.use('/api/ci', apiCiPublicRoutes);
+// Contract-validating / simulating proxy (public; unguessable token is the capability).
+app.use('/proxy', apiProxyPublicRoutes);
+// Public shareable status page (uptime / SLO).
+app.use('/status', apiStatusPublicRoutes);
 
 /* ─────────────────────────────────────────────────────────────
    Public business-capability API (HIPAA boundary)
@@ -415,6 +423,13 @@ initDb()
     // Opt-in always-on monitoring: a read-only health/drift/coverage watcher that
     // only raises alerts; it never runs the pipeline or mutates the catalogue.
     startApiMonitor();
+    // Opt-in synthetic monitoring: scheduled multi-location checks + trace
+    // correlation + canary. Read-only (GET/HEAD); only SIGNALS a configured
+    // rollback webhook, never touches infrastructure.
+    startApiSynthetics();
+    // Opt-in public status page: periodically probe enabled status pages so the
+    // shareable /status/:token page shows fresh uptime/SLO. Read-only (GET/HEAD).
+    startApiStatus();
     app.listen(PORT, () => {
       logger.info(`JBS IntelliQE API listening`, { port: PORT, env: NODE_ENV });
     });

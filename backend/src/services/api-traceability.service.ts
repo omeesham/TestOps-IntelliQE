@@ -28,14 +28,22 @@ export interface Requirement {
 
 const PRIORITIES = new Set(['low', 'medium', 'high', 'critical']);
 
+// linked_endpoints/linked_scenarios/defects aren't on the db.ts JSON_COLUMNS
+// allowlist, so they arrive as raw JSON strings — coerce here.
+function jArr(v: any): any[] {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string' && v.trim().startsWith('[')) { try { const p = JSON.parse(v); if (Array.isArray(p)) return p; } catch { /* leave empty */ } }
+  return [];
+}
+
 function toReq(r: any): Requirement {
   return {
     id: String(r.id), reqKey: r.req_key || '', title: r.title || '', description: r.description || '',
     priority: (PRIORITIES.has(r.priority) ? r.priority : 'medium') as Requirement['priority'],
     source: r.source || '',
-    linkedEndpoints: Array.isArray(r.linked_endpoints) ? r.linked_endpoints : [],
-    linkedScenarios: Array.isArray(r.linked_scenarios) ? r.linked_scenarios.map(String) : [],
-    defects: Array.isArray(r.defects) ? r.defects : [],
+    linkedEndpoints: jArr(r.linked_endpoints),
+    linkedScenarios: jArr(r.linked_scenarios).map(String),
+    defects: jArr(r.defects),
     createdBy: r.created_by || '', createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
