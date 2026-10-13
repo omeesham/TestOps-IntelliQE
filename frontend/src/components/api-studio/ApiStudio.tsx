@@ -15,7 +15,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   RotateCcw, AlertTriangle, X, ListChecks, ArrowRight, Upload,
-  LayoutDashboard, Layers, FileCheck2, PlayCircle, BarChart3, Server, RefreshCw,
+  LayoutDashboard, Layers, FileCheck2, PlayCircle, BarChart3, Server, RefreshCw, Wrench,
 } from 'lucide-react';
 import { useCatalog } from './hooks/useCatalog';
 import { useApiRun } from './hooks/useApiRun';
@@ -29,6 +29,7 @@ import EndpointsView from './views/EndpointsView';
 import RunsView from './views/RunsView';
 import EnvironmentsView from './views/EnvironmentsView';
 import EnvironmentPicker from './views/EnvironmentPicker';
+import ApiToolsLauncher from './ApiToolsLauncher';
 import { EmptyState } from './primitives';
 import { PRIMARY_BTN, SECONDARY_BTN } from './format';
 import PageTabs, { type TabItem } from '@/components/ui/PageTabs';
@@ -36,7 +37,7 @@ import Loader from '@/components/feedback/Loader';
 import type { NavView, Phase } from './types';
 
 /** The tabs, left to right, in the order you walk the workflow. */
-const TAB_IDS = new Set<NavView>(['overview', 'endpoints', 'scenarios', 'runs', 'report', 'environments']);
+const TAB_IDS = new Set<NavView>(['overview', 'endpoints', 'scenarios', 'runs', 'report', 'environments', 'tools']);
 
 export default function ApiStudio() {
   const catalog = useCatalog();
@@ -93,6 +94,7 @@ export default function ApiStudio() {
     { id: 'runs', label: 'Runs', icon: PlayCircle },
     { id: 'report', label: 'Reports', icon: BarChart3 },
     { id: 'environments', label: 'Environments', icon: Server },
+    { id: 'tools', label: 'Tools', icon: Wrench },
   ];
   const activeTab: NavView = TAB_IDS.has(view) ? view : 'overview';
 
@@ -175,6 +177,7 @@ export default function ApiStudio() {
           <ReportTab report={run.report} rows={run.rows} scenarios={run.scenarios} onExport={run.handleExport} exporting={run.exporting} canExport={!!run.testRunId} onPushToRepo={run.handlePushToRepo} pushState={run.pushState} canPush={run.specs.length > 0 && run.selected.size > 0} />
         )}
         {view === 'environments' && <EnvironmentsView store={envStore} />}
+        {view === 'tools' && <ApiToolsLauncher catalog={catalog} scenarios={run.scenarios} />}
       </div>
 
       {/* ── Import API — modal ── */}
