@@ -18,10 +18,10 @@ import { createApiEnvironment, updateApiEnvironment, deleteApiEnvironment } from
 import { useToast } from '@/components/feedback/ToastProvider';
 import Loader from '@/components/feedback/Loader';
 import {
-  CARD, CARD_HOVER, TILE, TILE_ACTIVE, CHIP_3D, PRIMARY_BTN, SECONDARY_BTN, INPUT, LABEL,
+  CARD, CARD_HOVER, CHIP_3D, PRIMARY_BTN, SECONDARY_BTN, INPUT, LABEL,
   BRAND_CHIP, MUTED_CHIP, relativeTime,
 } from '../format';
-import { EmptyState } from '../primitives';
+import { EmptyState, TabHero } from '../primitives';
 import { ENV_COLORS, DEFAULT_ENV_COLOR, envColor, ENV_PRESETS, presetColor } from '../env-colors';
 import type { ApiEnvironmentsStore } from '../hooks/useApiEnvironments';
 import type { ApiEnvironment, EnvVariable } from '../types';
@@ -78,24 +78,28 @@ export default function EnvironmentsView({ store }: { store: ApiEnvironmentsStor
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-[1100px] mx-auto px-6 py-5 space-y-4">
-        <div className="flex items-center gap-4 flex-wrap">
-          <span className={`w-11 h-11 rounded-xl flex items-center justify-center ${TILE_ACTIVE}`}><Server className="w-5 h-5 text-white" /></span>
-          <div className="min-w-0">
-            <h2 className="text-[17px] font-bold text-gray-900 leading-tight">Environments</h2>
-            <p className="text-[12.5px] text-gray-500 mt-0.5">
-              {noneSelected
-                ? 'No environment active — runs use endpoints exactly as imported.'
-                : activeEnvironment
-                  ? <>Active for runs: <span className="font-semibold text-gray-700">{activeEnvironment.name}</span> — <code className="font-mono">{'{{variables}}'}</code> and the base URL resolve against it.</>
-                  : environments.length > 0
-                    ? 'Pick an environment to activate it for runs.'
-                    : 'One per target — dev, staging, prod — with base URL and credentials.'}
-            </p>
-          </div>
-          <div className="ml-auto flex items-center gap-2">
-            <button type="button" onClick={() => setEditing({ name: '', baseUrl: '', color: DEFAULT_ENV_COLOR, variables: SUGGESTED, isDefault: environments.length === 0 })} className={PRIMARY_BTN}><Plus className="w-3.5 h-3.5" />New environment</button>
-          </div>
-        </div>
+        <TabHero
+          icon={Server}
+          title="Environments"
+          subtitle={
+            noneSelected
+              ? 'No environment active — runs use endpoints exactly as imported.'
+              : activeEnvironment
+                ? `Active for runs: ${activeEnvironment.name} — {{variables}} and the base URL resolve against it.`
+                : environments.length > 0
+                  ? 'Pick an environment to activate it for runs.'
+                  : 'One per target — dev, staging, prod — with base URL and credentials.'
+          }
+          actions={
+            <button
+              type="button"
+              onClick={() => setEditing({ name: '', baseUrl: '', color: DEFAULT_ENV_COLOR, variables: SUGGESTED, isDefault: environments.length === 0 })}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white text-[#6D28D9] text-[12.5px] font-semibold shadow-[0_8px_18px_-8px_rgba(0,0,0,0.35)] hover:bg-[#F5F3FF] transition-colors active:translate-y-px"
+            >
+              <Plus className="w-3.5 h-3.5" />New environment
+            </button>
+          }
+        />
 
         {editing && <EnvForm initial={editing} saving={saving} onCancel={() => setEditing(null)} onSave={save} />}
 

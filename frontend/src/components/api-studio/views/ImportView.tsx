@@ -15,7 +15,7 @@ import {
 } from '@/services/api';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { IMPORT_METHODS, BULK_ACCEPT, type ImportMethodDef, type ImportInput } from '../importMethods';
-import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, LABEL, CARD, CARD_HOVER, MUTED_CHIP, CHIP_3D, TILE, TILE_ACTIVE, THEAD } from '../format';
+import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, LABEL, CARD, CARD_HOVER, CHIP_3D, TILE, TILE_ACTIVE, THEAD } from '../format';
 import { KeyValueRows } from '../EndpointEditor';
 import EndpointEditor from '../EndpointEditor';
 import type { Catalog } from '../hooks/useCatalog';
@@ -31,6 +31,12 @@ interface Outcome { method: ImportMethod; name: string; res: ApiImportResponse; 
 
 /** What the drop zone takes, named the way a tester thinks of them. */
 const ACCEPTED = ['OpenAPI', 'Swagger', 'Postman', 'HAR', 'Bruno', 'WSDL / XML', 'PDF', 'Word', 'Excel', 'Markdown', 'Source code'];
+
+/** A brand-ish hue per accepted format, so the chips read in colour. */
+const FORMAT_COLOR: Record<string, string> = {
+  OpenAPI: '#10B981', Swagger: '#65A30D', Postman: '#F97316', HAR: '#0EA5E9', Bruno: '#EA580C',
+  'WSDL / XML': '#6366F1', PDF: '#EF4444', Word: '#2563EB', Excel: '#16A34A', Markdown: '#64748B', 'Source code': '#8B5CF6',
+};
 
 export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
   const toast = useToast();
@@ -83,12 +89,17 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-[1180px] mx-auto px-6 py-5 space-y-4">
-        {/* Header */}
-        <div className="flex items-center gap-4 flex-wrap">
-          <span className={`w-11 h-11 rounded-xl flex items-center justify-center ${TILE_ACTIVE}`}><UploadCloud className="w-5 h-5 text-white" /></span>
-          <div className="min-w-0">
-            <h2 className="text-[17px] font-bold text-gray-900 leading-tight">Import an API</h2>
-            <p className="text-[12.5px] text-gray-500 mt-0.5">Drop any document or pick a method — every path ends in endpoints in the catalogue.</p>
+        {/* Header — a colourful gradient banner */}
+        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#5B21B6] via-[#7C3AED] to-[#4338CA] px-5 py-4 shadow-[0_18px_44px_-22px_rgba(76,29,149,0.75)]">
+          <div className="pointer-events-none absolute -top-14 -right-6 w-52 h-52 rounded-full bg-[#E879F9]/25 blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-16 -left-8 w-52 h-52 rounded-full bg-[#22D3EE]/20 blur-3xl" />
+          <div className="pointer-events-none absolute inset-0 opacity-[0.06]" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)', backgroundSize: '20px 20px' }} />
+          <div className="relative flex items-center gap-3.5">
+            <span className="w-11 h-11 rounded-xl bg-white/15 border border-white/25 flex items-center justify-center flex-shrink-0 backdrop-blur-sm"><UploadCloud className="w-5 h-5 text-white" /></span>
+            <div className="min-w-0">
+              <h2 className="text-[17px] font-bold text-white leading-tight tracking-tight">Import an API</h2>
+              <p className="text-[12px] text-white/75 mt-0.5">Drop any document or pick a method — every path ends in endpoints in the catalogue.</p>
+            </div>
           </div>
         </div>
 
@@ -97,7 +108,7 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
           onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
           onDragLeave={() => setDragging(false)}
           onDrop={onDrop}
-          className={`${CARD} px-6 py-6 text-center transition-all ${dragging ? 'border-[#A5B4FC] bg-[#F5F3FF]' : ''}`}
+          className={`relative overflow-hidden rounded-2xl border-2 border-dashed px-6 py-6 text-center transition-all ${dragging ? 'border-[#A5B4FC] bg-[#F5F3FF] scale-[1.01]' : 'border-[#DDD6FE] bg-gradient-to-b from-white to-[#FAF8FF] hover:border-[#C7BAF5]'}`}
         >
           <div className={`mx-auto w-11 h-11 rounded-xl flex items-center justify-center ${TILE_ACTIVE}`}>
             {busy === 'bulk' ? <Spinner className="w-5 h-5 text-white animate-spin" /> : <UploadCloud className="w-5 h-5 text-white" />}
@@ -112,9 +123,14 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
           <input ref={fileRef} type="file" multiple accept={BULK_ACCEPT} className="hidden" onChange={(e) => { bulk(Array.from(e.target.files || [])); e.target.value = ''; }} />
           {/* What's accepted, as scannable chips rather than a paragraph. */}
           <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5">
-            {ACCEPTED.map((f) => (
-              <span key={f} className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[10.5px] font-medium ${MUTED_CHIP} ${CHIP_3D}`}>{f}</span>
-            ))}
+            {ACCEPTED.map((f) => {
+              const c = FORMAT_COLOR[f] || '#7C3AED';
+              return (
+                <span key={f} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[10.5px] font-semibold ${CHIP_3D}`} style={{ color: c, backgroundColor: `${c}14`, borderColor: `${c}33` }}>
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: c }} />{f}
+                </span>
+              );
+            })}
           </div>
         </div>
 
@@ -146,8 +162,13 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
                   className={`${CARD_HOVER} text-left p-4 group ${isActive ? 'border-[#A5B4FC] ring-2 ring-[#EDE9FE]' : ''}`}
                 >
                   <div className="flex items-center gap-2">
-                    <span className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${isActive ? TILE_ACTIVE : TILE}`}>
-                      <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-[#7C3AED]'}`} />
+                    <span
+                      className="w-8 h-8 rounded-lg flex items-center justify-center border transition-all group-hover:scale-105"
+                      style={isActive
+                        ? { backgroundColor: m.accent, borderColor: m.accent }
+                        : { backgroundColor: `${m.accent}1A`, borderColor: `${m.accent}40` }}
+                    >
+                      <Icon className="w-4 h-4" style={{ color: isActive ? '#fff' : m.accent }} />
                     </span>
                     <span className="text-[13px] font-semibold text-gray-900 leading-tight">{m.label}</span>
                   </div>

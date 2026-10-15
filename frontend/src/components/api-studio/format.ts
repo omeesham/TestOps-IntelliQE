@@ -24,10 +24,25 @@ export const BRAND_CHIP = 'text-[#6D28D9] bg-[#F5F3FF] border-[#DDD6FE]';
 /** A badge for something intentionally de-emphasised. */
 export const MUTED_CHIP = 'text-[#6B7280] bg-gray-50 border-gray-200';
 
-/* ── HTTP method ── */
+/* ── HTTP method ──
+ * Colourful, Swagger-style method badges: each verb gets its own hue so a table
+ * of endpoints reads at a glance. Decorative colour (it labels the verb), which
+ * is why it stays distinct from the green/red the outcome pills use. */
+
+const METHOD_CHIP: Record<string, string> = {
+  GET: 'text-sky-700 bg-sky-50 border-sky-200',
+  POST: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+  PUT: 'text-amber-700 bg-amber-50 border-amber-200',
+  PATCH: 'text-teal-700 bg-teal-50 border-teal-200',
+  DELETE: 'text-rose-700 bg-rose-50 border-rose-200',
+  HEAD: 'text-violet-700 bg-violet-50 border-violet-200',
+  OPTIONS: 'text-fuchsia-700 bg-fuchsia-50 border-fuchsia-200',
+  TRACE: 'text-slate-600 bg-slate-50 border-slate-200',
+};
 
 export function methodColor(method: string): string {
-  return (method || '').trim() ? BRAND_CHIP : MUTED_CHIP;
+  const m = (method || '').trim().toUpperCase();
+  return METHOD_CHIP[m] || (m ? BRAND_CHIP : MUTED_CHIP);
 }
 
 /* ── Scenario category ──
@@ -102,14 +117,27 @@ export const LABEL = 'block text-[10.5px] font-semibold uppercase tracking-wide 
 export const THEAD = 'bg-gray-50';
 /** Section/toolbar strip inside a card — a soft violet wash with a hairline
     gradient, so modal headers and in-card toolbars read as a premium surface. */
-export const STRIP = 'bg-gradient-to-b from-white to-[#F7F4FD] border-[#EDE9FE]';
+export const STRIP = 'bg-gradient-to-r from-[#EDE9FE] via-[#F3E8FF] to-[#E0E7FF] border-[#D9CDF5]';
 /** Icon tile — the little squircle that holds a lucide icon (native flat violet). */
 export const TILE = 'bg-[#F5F3FF] border border-[#DDD6FE]';
 export const TILE_ACTIVE = 'bg-gradient-to-br from-[#7C3AED] to-[#6366F1] border border-transparent';
 
+/** A distinct hue per coverage category, so a mixed suite reads in colour. */
+const CATEGORY_CHIP: Record<string, string> = {
+  positive: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+  api: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+  negative: 'text-rose-700 bg-rose-50 border-rose-200',
+  security: 'text-amber-700 bg-amber-50 border-amber-200',
+  data: 'text-sky-700 bg-sky-50 border-sky-200',
+  edge: 'text-fuchsia-700 bg-fuchsia-50 border-fuchsia-200',
+  performance: 'text-orange-700 bg-orange-50 border-orange-200',
+  e2e: 'text-indigo-700 bg-indigo-50 border-indigo-200',
+  flow: 'text-indigo-700 bg-indigo-50 border-indigo-200',
+};
+
 export function categoryMeta(type: string) {
   const key = (type || '').toLowerCase();
-  return { label: CATEGORY_LABELS[key] || type || 'Other', cls: CATEGORY_LABELS[key] ? BRAND_CHIP : MUTED_CHIP };
+  return { label: CATEGORY_LABELS[key] || type || 'Other', cls: CATEGORY_CHIP[key] || (CATEGORY_LABELS[key] ? BRAND_CHIP : MUTED_CHIP) };
 }
 
 /* ── Query parameters ──

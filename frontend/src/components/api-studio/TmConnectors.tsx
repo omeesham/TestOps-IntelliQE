@@ -34,10 +34,10 @@ const PROJECT_PLACEHOLDER: Record<TmVendor, string> = { testrail: 'project id (e
 interface Form { id?: string; vendor: TmVendor; name: string; baseUrl: string; projectKey: string; auth: Record<string, string> }
 const blankForm = (): Form => ({ vendor: 'testrail', name: '', baseUrl: '', projectKey: '', auth: {} });
 
-export default function TmConnectors({ onClose }: { onClose: () => void }) {
+export default function TmConnectors({ onClose, initialVendor }: { onClose: () => void; initialVendor?: TmVendor }) {
   const toast = useToast();
   const [connectors, setConnectors] = useState<TmConnector[]>([]);
-  const [form, setForm] = useState<Form>(blankForm());
+  const [form, setForm] = useState<Form>(() => (initialVendor ? { ...blankForm(), vendor: initialVendor } : blankForm()));
   const [savingCfg, setSavingCfg] = useState(false);
   const [testingId, setTestingId] = useState('');
   const [error, setError] = useState('');
@@ -175,21 +175,25 @@ export default function TmConnectors({ onClose }: { onClose: () => void }) {
           {/* Export / import */}
           <div className={`${CARD} p-3 space-y-2.5`}>
             <h4 className="text-[12px] font-semibold text-gray-800">Export results / import cases</h4>
-            <div className="flex flex-wrap items-end gap-2">
-              <div className="min-w-[160px]"><label className={LABEL}>Connector</label>
-                <select value={opConnId} onChange={(e) => setOpConnId(e.target.value)} className={FIELD}>
-                  <option value="">choose…</option>
-                  {connectors.filter((c) => c.enabled).map((c) => <option key={c.id} value={c.id}>{c.name} · {VENDOR_LABELS[c.vendor]}</option>)}
-                </select>
+            <div className="space-y-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="min-w-0"><label className={LABEL}>Connector</label>
+                  <select value={opConnId} onChange={(e) => setOpConnId(e.target.value)} className={`${FIELD} w-full`}>
+                    <option value="">choose…</option>
+                    {connectors.filter((c) => c.enabled).map((c) => <option key={c.id} value={c.id}>{c.name} · {VENDOR_LABELS[c.vendor]}</option>)}
+                  </select>
+                </div>
+                <div className="min-w-0"><label className={LABEL}>Run to export</label>
+                  <select value={opRunId} onChange={(e) => setOpRunId(e.target.value)} className={`${FIELD} w-full`} disabled={!runs.length}>
+                    {runs.length === 0 && <option value="">No runs yet</option>}
+                    {runs.map((r, i) => <option key={r.runId ?? r.id ?? i} value={String(r.runId ?? r.id ?? '')}>{(r.title || r.runId || 'Run')} — {r.stats?.passRate ?? '–'}%</option>)}
+                  </select>
+                </div>
               </div>
-              <div className="flex-1 min-w-[160px]"><label className={LABEL}>Run to export</label>
-                <select value={opRunId} onChange={(e) => setOpRunId(e.target.value)} className={FIELD} disabled={!runs.length}>
-                  {runs.length === 0 && <option value="">No runs yet</option>}
-                  {runs.map((r, i) => <option key={r.runId ?? r.id ?? i} value={String(r.runId ?? r.id ?? '')}>{(r.title || r.runId || 'Run')} — {r.stats?.passRate ?? '–'}%</option>)}
-                </select>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => void doExport()} disabled={!!busy || !opConnId || !opRunId} className={`${PRIMARY_BTN} flex-shrink-0`}>{busy === 'export' ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}Export</button>
+                <button type="button" onClick={() => void doImport()} disabled={!!busy || !opConnId} className={`${SECONDARY_BTN} flex-shrink-0`}>{busy === 'import' ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}Import cases</button>
               </div>
-              <button type="button" onClick={() => void doExport()} disabled={!!busy || !opConnId || !opRunId} className={PRIMARY_BTN}>{busy === 'export' ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}Export</button>
-              <button type="button" onClick={() => void doImport()} disabled={!!busy || !opConnId} className={SECONDARY_BTN}>{busy === 'import' ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}Import cases</button>
             </div>
             {imported && (
               <div className="border border-gray-100 rounded-lg max-h-48 overflow-y-auto divide-y divide-gray-100">

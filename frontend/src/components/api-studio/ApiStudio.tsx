@@ -49,6 +49,9 @@ export default function ApiStudio() {
   const [openRunId, setOpenRunId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [overviewKey, setOverviewKey] = useState(0);
+  /** Seed for the Tools gallery search — set when a caller deep-links to a
+      capability (e.g. an Overview feature chip), cleared on a plain Tools visit. */
+  const [toolsSeed, setToolsSeed] = useState('');
 
   /* Follow the run: design → scenarios, execute → runs, finished → report. */
   const onPhase = (p: Phase) => {
@@ -62,8 +65,9 @@ export default function ApiStudio() {
 
   /* One navigator for tabs and for in-view links. Import is a modal, not a tab,
      so a request to "go to import" opens the modal over whatever tab is showing. */
-  const navigate = (v: NavView) => {
+  const navigate = (v: NavView, toolsSearch?: string) => {
     if (v === 'import') { setImportOpen(true); return; }
+    if (v === 'tools') setToolsSeed(toolsSearch ?? '');
     setView(v);
     if (v !== 'runs') setOpenRunId(null);
   };
@@ -177,7 +181,7 @@ export default function ApiStudio() {
           <ReportTab report={run.report} rows={run.rows} scenarios={run.scenarios} onExport={run.handleExport} exporting={run.exporting} canExport={!!run.testRunId} onPushToRepo={run.handlePushToRepo} pushState={run.pushState} canPush={run.specs.length > 0 && run.selected.size > 0} />
         )}
         {view === 'environments' && <EnvironmentsView store={envStore} />}
-        {view === 'tools' && <ApiToolsLauncher catalog={catalog} scenarios={run.scenarios} />}
+        {view === 'tools' && <ApiToolsLauncher key={`tools:${toolsSeed}`} catalog={catalog} scenarios={run.scenarios} initialSearch={toolsSeed} />}
       </div>
 
       {/* ── Import API — modal ── */}

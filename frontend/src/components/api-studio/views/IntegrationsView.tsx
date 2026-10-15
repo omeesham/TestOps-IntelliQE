@@ -8,11 +8,13 @@
  * Confluence, SharePoint) are set up under System Configuration → Integrations,
  * so they are not repeated here.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
-  ClipboardList, Webhook, Bot, Gauge, MonitorSmartphone, GitBranch, ExternalLink,
+  ClipboardList, Webhook, Bot, Gauge, MonitorSmartphone, GitBranch, ExternalLink, Plug,
 } from 'lucide-react';
 import { CARD, TILE, MUTED_CHIP, CHIP_3D } from '../format';
+import { listTmConnectors, type TmConnector, type TmVendor } from '@/services/api';
+import TmConnectors from '../TmConnectors';
 
 interface Tool {
   name: string;
@@ -99,6 +101,15 @@ const CATEGORIES: Category[] = [
   },
 ];
 
+/**
+ * Tools whose live two-way connector already exists (api-tm-connectors.service).
+ * A card for one of these opens the real connect → test → export/import flow,
+ * with the vendor preselected — the rest of the catalogue stays a directory.
+ */
+const LIVE_VENDOR: Record<string, TmVendor> = {
+  TestRail: 'testrail', Xray: 'xray', 'Zephyr Scale': 'zephyr', qTest: 'qtest',
+};
+
 /** A tool's brand logo, falling back to its category icon if the logo 404s. */
 function ToolLogo({ slug, Icon }: { slug?: string; Icon: React.ElementType }) {
   const [failed, setFailed] = useState(false);
@@ -109,6 +120,14 @@ function ToolLogo({ slug, Icon }: { slug?: string; Icon: React.ElementType }) {
 }
 
 export default function IntegrationsView() {
+  const [connectors, setConnectors] = useState<TmConnector[]>([]);
+  const [connectVendor, setConnectVendor] = useState<TmVendor | null>(null);
+
+  /** The live status behind the TestRail/Xray/Zephyr/qTest cards — a convenience,
+      so a failure just leaves them showing "Live" rather than "Connected". */
+  const loadConnectors = () => { listTmConnectors().then(setConnectors).catch(() => { /* status is best-effort */ }); };
+  useEffect(() => { loadConnectors(); }, []);
+
   return (
     <div className="max-w-[1180px] space-y-5">
         {/* Catalogue */}
@@ -122,18 +141,39 @@ export default function IntegrationsView() {
                 <span className="text-[11px] text-gray-400 tabular-nums">{cat.tools.length}</span>
               </div>
               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
-                {cat.tools.map((tool) => (
-                  <div key={tool.name} className={`${CARD} p-3`}>
+                {cat.tools.map((tool) => {
+                  const vendor = LIVE_VENDOR[tool.name];
+                  const connected = vendor ? connectors.some((c) => c.vendor === vendor && c.enabled) : false;
+                  return (
+                  <div key={tool.name} className={`${CARD} p-3 flex flex-col ${vendor ? 'border-[#E4DDF8]' : ''}`}>
                     <div className="flex items-center gap-2">
                       <span className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 ${TILE}`}>
                         <ToolLogo slug={tool.slug} Icon={cat.icon} />
                       </span>
                       <span className="text-[12.5px] font-semibold text-gray-800 leading-tight min-w-0 truncate">{tool.name}</span>
-                      <span className={`ml-auto inline-flex items-center px-1.5 py-0.5 rounded border text-[9px] font-semibold flex-shrink-0 ${MUTED_CHIP} ${CHIP_3D}`}>Soon</span>
+                      {vendor ? (
+                        connected ? (
+                          <span className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9px] font-semibold flex-shrink-0 text-[#15803D] bg-[#DCFCE7] border-[#BBF7D0]"><span className="w-1.5 h-1.5 rounded-full bg-[#22C55E]" />Connected</span>
+                        ) : (
+                          <span className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9px] font-semibold flex-shrink-0 text-[#6D28D9] bg-[#F5F3FF] border-[#DDD6FE]"><span className="w-1.5 h-1.5 rounded-full bg-[#A78BFA]" />Live</span>
+                        )
+                      ) : (
+                        <span className={`ml-auto inline-flex items-center px-1.5 py-0.5 rounded border text-[9px] font-semibold flex-shrink-0 ${MUTED_CHIP} ${CHIP_3D}`}>Soon</span>
+                      )}
                     </div>
                     <p className="mt-1.5 text-[10.5px] text-gray-500 truncate">{tool.blurb}</p>
+                    {vendor && (
+                      <button
+                        type="button"
+                        onClick={() => setConnectVendor(vendor)}
+                        className="mt-2.5 w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white text-[11px] font-semibold shadow-sm hover:shadow hover:-translate-y-px transition-all active:translate-y-0 focus:outline-none focus:ring-2 focus:ring-[#A5B4FC]"
+                      >
+                        <Plug className="w-3.5 h-3.5" />{connected ? 'Manage connection' : 'Connect'}
+                      </button>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           );
@@ -144,6 +184,8 @@ export default function IntegrationsView() {
           <ExternalLink className="w-3 h-3" />
           JIRA, Azure DevOps, Confluence and SharePoint are wired up under the Code Repositories and Requirement Sources tabs.
         </p>
+
+        {connectVendor && <TmConnectors initialVendor={connectVendor} onClose={() => { setConnectVendor(null); loadConnectors(); }} />}
     </div>
   );
 }

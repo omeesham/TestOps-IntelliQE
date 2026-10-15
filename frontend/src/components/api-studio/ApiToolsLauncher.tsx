@@ -120,10 +120,15 @@ interface Props {
   catalog: Catalog;
   /** The current run's designed scenarios — read-only, for coverage-type tools. */
   scenarios?: Scenario[];
+  /** Pre-fills the gallery search — lets a caller (e.g. an Overview feature chip)
+      deep-link straight to a capability's tools. */
+  initialSearch?: string;
 }
 
 interface ToolDef { icon: ElementType; label: string; desc: string; open: () => void }
-interface ToolGroup { title: string; blurb: string; items: ToolDef[] }
+/** Each group carries its own vivid hue so the catalogue reads as colourful
+    while staying on the violet brand — decorative, not an outcome colour. */
+interface ToolGroup { title: string; blurb: string; accent: string; items: ToolDef[] }
 
 /** Stable per-tool key derived from its label (persistence id for toggles). */
 const toolKey = (label: string) => label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -147,12 +152,55 @@ function Switch({ checked, onChange, disabled, label }: { checked: boolean; onCh
   );
 }
 
-export default function ApiToolsLauncher({ catalog, scenarios = [] }: Props) {
+/**
+ * Group order, rebuilt from the 2026 competitor + gap analysis
+ * (docs/api-automation-competitor-gap-analysis.md). Lead with where we beat the
+ * field — AI/agentic authoring, security depth, LLM/MCP testing and coverage
+ * intelligence — and close with the execution/CI lifecycle that every rival
+ * already ships (table stakes). The group definitions are unchanged; only the
+ * display order is.
+ */
+const GROUP_ORDER: string[] = [
+  'Generate & author',
+  'Security & authorization',
+  'Protocols, data & AI',
+  'Coverage & intelligence',
+  'Contracts & virtualization',
+  'Performance & resilience',
+  'Governance & compliance',
+  'Execution, CI & lifecycle',
+];
+
+/**
+ * "Edge" tools — the capabilities the gap analysis flags as competitive
+ * white-space: few or no rivals cover them, or only standalone point tools do
+ * while we offer them inside one platform. Marked with an EDGE badge so the
+ * gallery reads the way the market analysis ranks us.
+ */
+const DIFFERENTIATORS = new Set<string>([
+  // Agentic / autonomous loop
+  'AI coworker (Atto)', 'Autopilot (autonomous loop)', 'Autonomous maintenance',
+  'Semantic self-healing', 'Failure → fix workflow',
+  // Deep authorization inside a functional QA platform
+  'Authorization (BOLA/BFLA)', 'Deep authorization & data exposure', 'Assertion strength (mutation)',
+  // AI/LLM & MCP testing + security combined
+  'AI / LLM & MCP testing', 'LLM eval harness', 'MCP server', 'LLM providers',
+  // Contracts/replay/virtualization edges
+  'Breaking-change gate', 'Record & replay', 'Service virtualization',
+  // Governance-as-code + regulatory packs
+  'API governance', 'Compliance packs', 'AI-era compliance',
+  // No-lock-in / data residency
+  'On-prem / air-gapped', 'Full-code & Monitoring-as-Code',
+  // Cross-layer + shift-right
+  'Unified cross-layer test', 'API + UI hybrid test', 'Monitoring', 'Public status page',
+]);
+
+export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearch = '' }: Props) {
   const { endpoints, selected } = catalog;
   const toast = useToast();
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
-  const [q, setQ] = useState('');
+  const [q, setQ] = useState(initialSearch);
 
   // ── Tool availability toggles (per-tenant; a key absent ⇒ enabled) ──
   const [disabledTools, setDisabledTools] = useState<Set<string>>(new Set());
@@ -256,6 +304,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [] }: Props) {
   const GROUPS: ToolGroup[] = useMemo(() => [
     {
       title: 'Generate & author',
+      accent: '#7C3AED',
       blurb: 'Design and generate tests — from prose, specs, models or the live API.',
       items: [
         { icon: BrainCircuit, label: 'AI coworker (Atto)', desc: 'Chat + autonomy across the lifecycle', open: () => setCoworkerOpen(true) },
@@ -276,6 +325,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [] }: Props) {
     },
     {
       title: 'Security & authorization',
+      accent: '#F43F5E',
       blurb: 'Find vulnerabilities, weak auth and sensitive-data exposure.',
       items: [
         { icon: ShieldAlert, label: 'Security scan', desc: 'Broken auth, injection, headers, CORS', open: () => setSecurityOpen(true) },
@@ -294,6 +344,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [] }: Props) {
     },
     {
       title: 'Performance & resilience',
+      accent: '#F59E0B',
       blurb: 'Latency, throughput, SLA gates and fault tolerance.',
       items: [
         { icon: Gauge, label: 'Load test', desc: 'Latency, throughput, status mix', open: () => setLoadOpen(true) },
@@ -306,6 +357,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [] }: Props) {
     },
     {
       title: 'Contracts & virtualization',
+      accent: '#10B981',
       blurb: 'Validate contracts, catch drift, replay and stub dependencies.',
       items: [
         { icon: ShieldCheck, label: 'Contract validation', desc: 'Live-check status, JSON & schema', open: () => setContractOpen(true) },
@@ -322,6 +374,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [] }: Props) {
     },
     {
       title: 'Coverage & intelligence',
+      accent: '#0EA5E9',
       blurb: 'See what is tested, what is flaky, and what a change touches.',
       items: [
         { icon: Target, label: 'Test coverage', desc: 'Which endpoints are tested', open: () => setCoverageOpen(true) },
@@ -335,6 +388,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [] }: Props) {
     },
     {
       title: 'Protocols, data & AI',
+      accent: '#6366F1',
       blurb: 'Streaming, events, databases, and testing AI/LLM systems.',
       items: [
         { icon: Radio, label: 'Async & streaming', desc: 'Test WebSocket and SSE endpoints', open: () => setAsyncOpen(true) },
@@ -354,6 +408,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [] }: Props) {
     },
     {
       title: 'Governance & compliance',
+      accent: '#D946EF',
       blurb: 'API design rules, regulatory posture and cost governance.',
       items: [
         { icon: Gavel, label: 'API governance', desc: 'Spectral-style rulesets · CI gate', open: () => setGovLintOpen(true) },
@@ -367,6 +422,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [] }: Props) {
     },
     {
       title: 'Execution, CI & lifecycle',
+      accent: '#EC4899',
       blurb: 'Schedule, gate, report and manage tests across the delivery flow.',
       items: [
         { icon: Clock, label: 'Schedules & webhooks', desc: 'Recurring runs and Slack/Teams alerts', open: () => setAutomationOpen(true) },
@@ -396,7 +452,8 @@ export default function ApiToolsLauncher({ catalog, scenarios = [] }: Props) {
   const needle = q.trim().toLowerCase();
   const filtered = useMemo(() => GROUPS
     .map((g) => ({ ...g, items: needle ? g.items.filter((t) => t.label.toLowerCase().includes(needle) || t.desc.toLowerCase().includes(needle)) : g.items }))
-    .filter((g) => g.items.length > 0), [GROUPS, needle]);
+    .filter((g) => g.items.length > 0)
+    .sort((a, b) => GROUP_ORDER.indexOf(a.title) - GROUP_ORDER.indexOf(b.title)), [GROUPS, needle]);
   const shownCount = filtered.reduce((n, g) => n + g.items.length, 0);
 
   // ── Toggle state: keys, counts, load, and persistence ──
@@ -486,9 +543,9 @@ export default function ApiToolsLauncher({ catalog, scenarios = [] }: Props) {
             {filtered.map((g) => (
               <section key={g.title}>
                 <div className="flex items-center gap-2 mb-2.5">
-                  <span className="w-1 h-4 rounded-full bg-gradient-to-b from-[#7C3AED] to-[#6366F1] flex-shrink-0" />
+                  <span className="w-1.5 h-4 rounded-full flex-shrink-0" style={{ backgroundColor: g.accent }} />
                   <h3 className="text-[12px] font-bold text-gray-800 tracking-tight">{g.title}</h3>
-                  <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-[#F5F3FF] border border-[#E9E5FB] text-[10px] font-semibold text-[#7C3AED] tabular-nums">{g.items.length}</span>
+                  <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full border text-[10px] font-semibold tabular-nums" style={{ color: g.accent, backgroundColor: `${g.accent}14`, borderColor: `${g.accent}33` }}>{g.items.length}</span>
                   {!needle && <p className="text-[11px] text-gray-400 truncate">{g.blurb}</p>}
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
@@ -508,15 +565,19 @@ export default function ApiToolsLauncher({ catalog, scenarios = [] }: Props) {
                               : 'border-gray-100 bg-gray-50 opacity-60 cursor-not-allowed'
                           }`}
                         >
-                          <span className={`w-9 h-9 rounded-lg flex items-center justify-center border flex-shrink-0 transition-colors ${
-                            on
-                              ? 'bg-[#F5F3FF] border-[#DDD6FE] group-hover:bg-gradient-to-br group-hover:from-[#7C3AED] group-hover:to-[#6366F1] group-hover:border-transparent'
-                              : 'bg-gray-100 border-gray-200'
-                          }`}>
-                            <t.icon className={`w-4 h-4 transition-colors ${on ? 'text-[#7C3AED] group-hover:text-white' : 'text-gray-400'}`} />
+                          <span
+                            className={`w-9 h-9 rounded-lg flex items-center justify-center border flex-shrink-0 transition-all group-hover:scale-105 ${on ? '' : 'bg-gray-100 border-gray-200'}`}
+                            style={on ? { backgroundColor: `${g.accent}1A`, borderColor: `${g.accent}40` } : undefined}
+                          >
+                            <t.icon className={`w-4 h-4 ${on ? '' : 'text-gray-400'}`} style={on ? { color: g.accent } : undefined} />
                           </span>
                           <span className="min-w-0">
-                            <span className={`block text-[13px] font-semibold transition-colors ${on ? 'text-gray-800 group-hover:text-[#7C3AED]' : 'text-gray-500'}`}>{t.label}</span>
+                            <span className={`flex items-center gap-1.5 text-[13px] font-semibold transition-colors ${on ? 'text-gray-800 group-hover:text-[#7C3AED]' : 'text-gray-500'}`}>
+                              <span className="truncate">{t.label}</span>
+                              {DIFFERENTIATORS.has(t.label) && (
+                                <span title="Competitive white-space — few or no rivals cover this" className="inline-flex items-center px-1 py-px rounded text-[8px] font-bold tracking-wide leading-none flex-shrink-0 text-[#B45309] bg-[#FEF3C7] border border-[#FDE68A]">EDGE</span>
+                              )}
+                            </span>
                             <span className="block text-[11px] text-gray-500 leading-snug mt-0.5">{t.desc}</span>
                           </span>
                         </button>

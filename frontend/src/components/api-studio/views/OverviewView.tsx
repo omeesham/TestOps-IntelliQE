@@ -8,15 +8,30 @@
  */
 import { useEffect, useState } from 'react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Activity, AlertTriangle, ArrowRight, Clock, RefreshCw, Layers, Upload, Gauge, Zap, TrendingUp, ChevronRight, Timer, ShieldCheck, Sparkles } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowRight, Clock, RefreshCw, Layers, Upload, Gauge, Zap, TrendingUp, ChevronRight, Timer, ShieldCheck, Sparkles, BrainCircuit, ShieldAlert, HeartPulse, Radar } from 'lucide-react';
 import { getApiOverview } from '@/services/api';
-import { CARD, CARD_HOVER, THEAD, BRAND_CHIP, MUTED_CHIP, relativeTime, formatDuration, IMPORT_METHOD_LABELS } from '../format';
+import { CARD, CARD_HOVER, THEAD, BRAND_CHIP, MUTED_CHIP, relativeTime, formatDuration, IMPORT_METHOD_LABELS, methodColor } from '../format';
 import { StatusPill, PassRing } from '../primitives';
 import type { ApiOverview, NavView } from '../types';
 import type { Catalog } from '../hooks/useCatalog';
 
 import Loader from '@/components/feedback/Loader';
-interface Props { catalog: Catalog; onNavigate: (v: NavView) => void; onOpenRun: (runId: string) => void; refreshKey: number }
+interface Props { catalog: Catalog; onNavigate: (v: NavView, toolsSearch?: string) => void; onOpenRun: (runId: string) => void; refreshKey: number }
+
+/**
+ * The capability strip in the hero — the platform's headline features as vivid,
+ * on-brand chips. Each keeps its own hue so the banner reads as colourful while
+ * the violet gradient holds it together. Decorative: these colours label the
+ * capability, they are not outcome colours.
+ */
+const HERO_FEATURES: { icon: React.ElementType; label: string; color: string; seed: string }[] = [
+  { icon: BrainCircuit, label: 'AI test generation', color: '#C4B5FD', seed: 'generation' },
+  { icon: ShieldAlert, label: 'Security & OWASP', color: '#FB7185', seed: 'security' },
+  { icon: Gauge, label: 'Load & performance', color: '#FBBF24', seed: 'load' },
+  { icon: ShieldCheck, label: 'Contracts & drift', color: '#34D399', seed: 'contract' },
+  { icon: HeartPulse, label: 'Self-healing', color: '#F472B6', seed: 'heal' },
+  { icon: Radar, label: 'Coverage intelligence', color: '#38BDF8', seed: 'coverage' },
+];
 
 export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKey }: Props) {
   const [data, setData] = useState<ApiOverview | null>(null);
@@ -42,10 +57,11 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
     <div className="h-full overflow-y-auto">
       <div className="max-w-[1280px] mx-auto px-6 py-5 space-y-4">
         {/* ── Hero banner — the first-look showcase ── */}
-        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#4C1D95] via-[#6D28D9] to-[#4F46E5] px-6 py-6 sm:px-8 sm:py-7 shadow-[0_24px_60px_-24px_rgba(76,29,149,0.75)]">
-          {/* soft light pools + a faint dotted grid give the panel depth */}
-          <div className="pointer-events-none absolute -top-24 -right-12 w-80 h-80 rounded-full bg-[#A78BFA]/30 blur-3xl" />
-          <div className="pointer-events-none absolute -bottom-28 -left-16 w-80 h-80 rounded-full bg-[#22D3EE]/20 blur-3xl" />
+        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#5B21B6] via-[#7C3AED] to-[#4338CA] px-6 py-6 sm:px-8 sm:py-7 shadow-[0_24px_60px_-24px_rgba(76,29,149,0.8)]">
+          {/* vivid light pools + a faint dotted grid give the panel colourful depth */}
+          <div className="pointer-events-none absolute -top-24 -right-10 w-80 h-80 rounded-full bg-[#E879F9]/30 blur-3xl" />
+          <div className="pointer-events-none absolute top-10 right-40 w-64 h-64 rounded-full bg-[#818CF8]/30 blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-28 -left-16 w-80 h-80 rounded-full bg-[#22D3EE]/25 blur-3xl" />
           <div className="pointer-events-none absolute inset-0 opacity-[0.06]" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)', backgroundSize: '22px 22px' }} />
           <div className="relative flex items-center gap-6 flex-wrap">
             <div className="min-w-0 flex-1">
@@ -80,6 +96,27 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
               <div className="w-px h-10 bg-white/20" />
               <HeroStat value={k ? k.scenarios : '—'} label="Scenarios" loading={loading} />
             </div>
+          </div>
+
+          {/* Capability strip — the headline features, each in its own vivid hue */}
+          <div className="relative mt-4 pt-3.5 border-t border-white/10 flex flex-wrap items-center gap-2">
+            {HERO_FEATURES.map((f) => (
+              <button
+                key={f.label}
+                type="button"
+                onClick={() => onNavigate('tools', f.seed)}
+                title={`Open ${f.label} tools`}
+                className="group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/10 border border-white/15 backdrop-blur-sm hover:bg-white/20 hover:border-white/30 hover:-translate-y-0.5 transition-all active:translate-y-0 focus:outline-none focus:ring-2 focus:ring-white/40"
+              >
+                <span className="w-4 h-4 rounded-md flex items-center justify-center flex-shrink-0" style={{ backgroundColor: `${f.color}26` }}>
+                  <f.icon className="w-3 h-3" style={{ color: f.color }} />
+                </span>
+                <span className="text-[11px] font-medium text-white/90 whitespace-nowrap">{f.label}</span>
+              </button>
+            ))}
+            <button type="button" onClick={() => onNavigate('tools')} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/15 border border-white/25 text-[11px] font-semibold text-white hover:bg-white/25 transition-colors">
+              +80 more tools <ArrowRight className="w-3 h-3" />
+            </button>
           </div>
         </div>
 
@@ -131,7 +168,7 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
             )}
             {methods.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1">
-                {methods.map(([m, n]) => <span key={m} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border font-mono text-[10px] ${BRAND_CHIP}`}>{m}<span className="text-gray-400">{n}</span></span>)}
+                {methods.map(([m, n]) => <span key={m} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border font-mono text-[10px] ${methodColor(m)}`}>{m}<span className="opacity-60">{n}</span></span>)}
               </div>
             )}
           </div>
