@@ -41,7 +41,7 @@ export default function Diagnose({ failure, onClose }: { failure: FailurePayload
   const confCls = diag ? { high: 'text-emerald-700 bg-emerald-50 border-emerald-200', medium: 'text-amber-700 bg-amber-50 border-amber-200', low: 'text-gray-600 bg-gray-100 border-gray-300' }[diag.confidence] : '';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#1E1B4B]/30 backdrop-blur-sm p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#1E1B4B]/45 backdrop-blur-md p-4" onClick={onClose}>
       <div className={`${CARD} w-full max-w-xl max-h-[85vh] flex flex-col overflow-hidden`} onClick={(e) => e.stopPropagation()}>
         <div className={`flex items-center gap-2 px-4 h-12 border-b border-[#EDE9FE] flex-shrink-0 ${STRIP}`}>
           <Sparkles className="w-4 h-4 text-[#7C3AED]" />

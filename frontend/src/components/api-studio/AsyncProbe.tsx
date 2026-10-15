@@ -48,7 +48,7 @@ export default function AsyncProbe({ initialUrl = '', onClose }: { initialUrl?: 
   const ok = result && result.connected && !result.error && (result.matched === undefined || result.matched);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#1E1B4B]/30 backdrop-blur-sm p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#1E1B4B]/45 backdrop-blur-md p-4" onClick={onClose}>
       <div className={`${CARD} w-full max-w-xl max-h-[85vh] flex flex-col overflow-hidden`} onClick={(e) => e.stopPropagation()}>
         <div className={`flex items-center gap-2 px-4 h-12 border-b border-[#EDE9FE] flex-shrink-0 ${STRIP}`}>
           <Radio className="w-4 h-4 text-[#7C3AED]" />

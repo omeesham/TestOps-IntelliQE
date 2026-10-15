@@ -78,11 +78,11 @@ export const SECONDARY_3D = '';
 export const BRAND_BUTTON =
   'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:from-[#6D28D9] hover:to-[#4F46E5]';
 /** The primary call-to-action — native gradient + soft violet shadow. */
-export const PRIMARY_BTN = `inline-flex items-center gap-1.5 px-3.5 py-2 text-[13px] font-semibold text-white ${BRAND_BUTTON} rounded-lg shadow-md shadow-purple-500/25 disabled:opacity-40 transition-all`;
+export const PRIMARY_BTN = `inline-flex items-center gap-1.5 px-4 py-2 text-[13px] font-semibold text-white ${BRAND_BUTTON} rounded-xl shadow-md shadow-purple-500/25 disabled:opacity-40 transition-all`;
 /** The secondary call-to-action — the native white/outline button. */
-export const SECONDARY_BTN = 'inline-flex items-center gap-1.5 px-3 py-2 text-[13px] font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:text-[#7C3AED] transition-colors disabled:opacity-40';
+export const SECONDARY_BTN = 'inline-flex items-center gap-1.5 px-3.5 py-2 text-[13px] font-medium text-gray-700 bg-white border border-[#E7E3F5] rounded-xl hover:bg-[#FAF9FE] hover:border-[#DDD6FE] hover:text-[#7C3AED] transition-colors disabled:opacity-40';
 /** The native card/panel — the global stylesheet adds the violet raise + hover. */
-export const CARD = 'bg-white rounded-2xl border border-gray-100 shadow-sm';
+export const CARD = 'bg-white rounded-2xl border border-[#ECE9F8] shadow-sm';
 /** An interactive card (hover handled globally, with an explicit fallback). */
 export const CARD_HOVER = `${CARD} transition-shadow hover:shadow-md`;
 /**
@@ -100,8 +100,9 @@ export const INPUT = `w-full ${FIELD}`;
 export const LABEL = 'block text-[10.5px] font-semibold uppercase tracking-wide text-gray-500 mb-1';
 /** Table header strip — the native `bg-gray-50` head (global CSS bevels it). */
 export const THEAD = 'bg-gray-50';
-/** Section/toolbar strip inside a card — a light native tint. */
-export const STRIP = 'bg-gray-50/60 border-gray-100';
+/** Section/toolbar strip inside a card — a soft violet wash with a hairline
+    gradient, so modal headers and in-card toolbars read as a premium surface. */
+export const STRIP = 'bg-gradient-to-b from-white to-[#F7F4FD] border-[#EDE9FE]';
 /** Icon tile — the little squircle that holds a lucide icon (native flat violet). */
 export const TILE = 'bg-[#F5F3FF] border border-[#DDD6FE]';
 export const TILE_ACTIVE = 'bg-gradient-to-br from-[#7C3AED] to-[#6366F1] border border-transparent';

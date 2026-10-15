@@ -8,7 +8,7 @@
  * catalogue when nothing is selected) — exactly as the dropdown did, so no run
  * behaviour changes, only where you reach the tools from.
  */
-import { useMemo, useState, type ElementType } from 'react';
+import { useEffect, useMemo, useState, type ElementType } from 'react';
 import {
   Search, Layers, BrainCircuit, FileText, Image as ImageIcon, ListFilter, GitCompareArrows, HeartPulse,
   Bug, Activity, Antenna, Radar, Sparkles, Webhook, Wand2, Workflow, MessageSquare, Bot, Database,
@@ -19,6 +19,8 @@ import {
   FileCheck2, HardDrive, Wallet, Scale, FileCode2, Gavel, FileSearch, GitFork, Fingerprint, FlaskConical,
 } from 'lucide-react';
 import { useToast } from '@/components/feedback/ToastProvider';
+import { useAuth } from '@/contexts/AuthContext';
+import { getApiToolToggles, updateApiToolToggles } from '@/services/api';
 import { FIELD } from './format';
 import { EmptyState } from './primitives';
 
@@ -123,10 +125,38 @@ interface Props {
 interface ToolDef { icon: ElementType; label: string; desc: string; open: () => void }
 interface ToolGroup { title: string; blurb: string; items: ToolDef[] }
 
+/** Stable per-tool key derived from its label (persistence id for toggles). */
+const toolKey = (label: string) => label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+/** Compact on/off switch — same visual language as the Feature Toggles page. */
+function Switch({ checked, onChange, disabled, label }: { checked: boolean; onChange: () => void; disabled?: boolean; label: string }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={(e) => { e.stopPropagation(); if (!disabled) onChange(); }}
+      className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-[#7C3AED] focus:ring-offset-1 ${
+        checked ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1]' : 'bg-gray-300'
+      } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+    >
+      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform duration-200 ${checked ? 'translate-x-4' : 'translate-x-0.5'}`} />
+    </button>
+  );
+}
+
 export default function ApiToolsLauncher({ catalog, scenarios = [] }: Props) {
   const { endpoints, selected } = catalog;
   const toast = useToast();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [q, setQ] = useState('');
+
+  // ── Tool availability toggles (per-tenant; a key absent ⇒ enabled) ──
+  const [disabledTools, setDisabledTools] = useState<Set<string>>(new Set());
+  const [savingToggles, setSavingToggles] = useState(false);
 
   const selectedCount = selected.size;
   /** The endpoints a tool runs against: the selection, or everything. */
@@ -369,6 +399,53 @@ export default function ApiToolsLauncher({ catalog, scenarios = [] }: Props) {
     .filter((g) => g.items.length > 0), [GROUPS, needle]);
   const shownCount = filtered.reduce((n, g) => n + g.items.length, 0);
 
+  // ── Toggle state: keys, counts, load, and persistence ──
+  const allKeys = useMemo(() => GROUPS.flatMap((g) => g.items.map((t) => toolKey(t.label))), [GROUPS]);
+  const enabledCount = allKeys.length - disabledTools.size;
+  const allOn = disabledTools.size === 0;
+  const isOn = (key: string) => !disabledTools.has(key);
+
+  useEffect(() => {
+    let alive = true;
+    getApiToolToggles()
+      .then((d) => {
+        if (!alive) return;
+        const off = new Set(Object.entries(d.tools || {}).filter(([, v]) => v === false).map(([k]) => k));
+        setDisabledTools(off);
+      })
+      .catch(() => { /* default: everything enabled */ });
+    return () => { alive = false; };
+  }, []);
+
+  /** Persist a new disabled-set to the tenant; optimistic, reverts on failure. */
+  const persist = async (next: Set<string>) => {
+    const prev = disabledTools;
+    setDisabledTools(next);
+    setSavingToggles(true);
+    try {
+      const map: Record<string, boolean> = {};
+      for (const k of allKeys) map[k] = !next.has(k);
+      await updateApiToolToggles(map);
+    } catch (err: any) {
+      setDisabledTools(prev); // revert
+      toast.error('Could not save', err?.response?.data?.error || 'Please try again.');
+    } finally {
+      setSavingToggles(false);
+    }
+  };
+
+  const toggleOne = (key: string) => {
+    if (!isAdmin) return;
+    const next = new Set(disabledTools);
+    next.has(key) ? next.delete(key) : next.add(key);
+    void persist(next);
+  };
+
+  const setAll = (value: boolean) => {
+    if (!isAdmin) return;
+    void persist(value ? new Set() : new Set(allKeys));
+  };
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-[1280px] mx-auto px-6 py-5">
@@ -384,34 +461,71 @@ export default function ApiToolsLauncher({ catalog, scenarios = [] }: Props) {
           </div>
         </div>
 
+        {/* Universal master toggle — turn every tool on or off in one click */}
+        <div className="mb-5 flex items-center justify-between gap-4 rounded-xl border border-[#E9E5FF] bg-white px-4 py-3 shadow-sm">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="w-9 h-9 rounded-lg flex items-center justify-center bg-[#F5F3FF] border border-[#DDD6FE] flex-shrink-0">
+              <Boxes className="w-4 h-4 text-[#7C3AED]" />
+            </span>
+            <div className="min-w-0">
+              <div className="text-[13px] font-semibold text-gray-800">All tools</div>
+              <div className="text-[11px] text-gray-500 mt-0.5">
+                {enabledCount} of {allKeys.length} enabled
+                {savingToggles && <span className="ml-1.5 text-[#7C3AED]">· saving…</span>}
+                {!isAdmin && <span className="ml-1.5 text-gray-400">· admin only</span>}
+              </div>
+            </div>
+          </div>
+          <Switch checked={allOn} disabled={!isAdmin || savingToggles} onChange={() => setAll(!allOn)} label="Enable or disable all tools" />
+        </div>
+
         {shownCount === 0 ? (
           <EmptyState icon={Search} title="No tools match" hint="Try another word — or clear the search to see every tool." />
         ) : (
           <div className="space-y-6">
             {filtered.map((g) => (
               <section key={g.title}>
-                <div className="flex items-baseline gap-2 mb-2">
-                  <h3 className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">{g.title}</h3>
-                  <span className="text-[10.5px] text-gray-300 tabular-nums">{g.items.length}</span>
-                  {!needle && <p className="text-[11px] text-gray-400 truncate">· {g.blurb}</p>}
+                <div className="flex items-center gap-2 mb-2.5">
+                  <span className="w-1 h-4 rounded-full bg-gradient-to-b from-[#7C3AED] to-[#6366F1] flex-shrink-0" />
+                  <h3 className="text-[12px] font-bold text-gray-800 tracking-tight">{g.title}</h3>
+                  <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-[#F5F3FF] border border-[#E9E5FB] text-[10px] font-semibold text-[#7C3AED] tabular-nums">{g.items.length}</span>
+                  {!needle && <p className="text-[11px] text-gray-400 truncate">{g.blurb}</p>}
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
-                  {g.items.map((t) => (
-                    <button
-                      key={t.label}
-                      type="button"
-                      onClick={t.open}
-                      className="group flex items-start gap-3 p-3 text-left rounded-xl border border-gray-100 bg-white hover:border-[#DDD6FE] hover:shadow-md transition-all"
-                    >
-                      <span className="w-9 h-9 rounded-lg flex items-center justify-center bg-[#F5F3FF] border border-[#DDD6FE] group-hover:bg-gradient-to-br group-hover:from-[#7C3AED] group-hover:to-[#6366F1] group-hover:border-transparent transition-colors flex-shrink-0">
-                        <t.icon className="w-4 h-4 text-[#7C3AED] group-hover:text-white transition-colors" />
-                      </span>
-                      <span className="min-w-0">
-                        <span className="block text-[13px] font-semibold text-gray-800 group-hover:text-[#7C3AED] transition-colors">{t.label}</span>
-                        <span className="block text-[11px] text-gray-500 leading-snug mt-0.5">{t.desc}</span>
-                      </span>
-                    </button>
-                  ))}
+                  {g.items.map((t) => {
+                    const key = toolKey(t.label);
+                    const on = isOn(key);
+                    return (
+                      <div key={t.label} className="relative">
+                        <button
+                          type="button"
+                          onClick={() => { if (on) t.open(); }}
+                          disabled={!on}
+                          aria-disabled={!on}
+                          className={`group w-full flex items-start gap-3 p-3.5 pr-12 text-left rounded-xl border transition-all duration-200 ${
+                            on
+                              ? 'border-[#EFECFA] bg-white hover:border-[#C7BAF5] hover:shadow-lg hover:shadow-purple-500/10 hover:-translate-y-0.5 cursor-pointer'
+                              : 'border-gray-100 bg-gray-50 opacity-60 cursor-not-allowed'
+                          }`}
+                        >
+                          <span className={`w-9 h-9 rounded-lg flex items-center justify-center border flex-shrink-0 transition-colors ${
+                            on
+                              ? 'bg-[#F5F3FF] border-[#DDD6FE] group-hover:bg-gradient-to-br group-hover:from-[#7C3AED] group-hover:to-[#6366F1] group-hover:border-transparent'
+                              : 'bg-gray-100 border-gray-200'
+                          }`}>
+                            <t.icon className={`w-4 h-4 transition-colors ${on ? 'text-[#7C3AED] group-hover:text-white' : 'text-gray-400'}`} />
+                          </span>
+                          <span className="min-w-0">
+                            <span className={`block text-[13px] font-semibold transition-colors ${on ? 'text-gray-800 group-hover:text-[#7C3AED]' : 'text-gray-500'}`}>{t.label}</span>
+                            <span className="block text-[11px] text-gray-500 leading-snug mt-0.5">{t.desc}</span>
+                          </span>
+                        </button>
+                        <div className="absolute top-2.5 right-2.5" title={isAdmin ? (on ? 'Disable this tool' : 'Enable this tool') : 'Admin only'}>
+                          <Switch checked={on} disabled={!isAdmin || savingToggles} onChange={() => toggleOne(key)} label={`${on ? 'Disable' : 'Enable'} ${t.label}`} />
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </section>
             ))}

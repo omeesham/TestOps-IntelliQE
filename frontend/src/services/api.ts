@@ -2436,6 +2436,18 @@ export async function updateFeatureToggles(
   return data as { success: boolean; features: Record<string, Record<string, boolean>> };
 }
 
+/** Get the tenant's API-automation tool-toggle map: { tools: { toolKey: bool } }. Missing key = enabled. */
+export async function getApiToolToggles() {
+  const { data } = await api.get('/api-automation/tool-toggles');
+  return data as { tools: Record<string, boolean> };
+}
+
+/** Replace the tenant's API-automation tool-toggle map (admin only). */
+export async function updateApiToolToggles(tools: Record<string, boolean>) {
+  const { data } = await api.put('/api-automation/tool-toggles', { tools });
+  return data as { success: boolean; tools: Record<string, boolean> };
+}
+
 export async function listTenantUsers() {
   const { data } = await api.get('/users');
   return data;

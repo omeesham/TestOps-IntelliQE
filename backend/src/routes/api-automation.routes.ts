@@ -35,6 +35,7 @@ import type { Request, Response } from 'express';
 import multer from 'multer';
 import { parseDocument } from '../services/document-parser.service.js';
 import { getTenantLlm } from '../services/llm.service.js';
+import { getConfigsForTenant, upsertConfig } from '../services/configurations.service.js';
 import {
   importFromText, importFromUrl, parseCurlCommands, introspectGraphql, discoverMcpTools,
   parseConnectorManifest, endpointsFromWebhook, probeEndpoint, parseStructured, dedupeEndpoints,
@@ -1011,6 +1012,44 @@ router.get('/jobs/:jobId', (req: Request, res: Response) => {
   const job = getJob(req.user!.tenantId, String(req.params.jobId));
   if (!job) { res.status(404).json({ error: 'Job not found (it may have expired or the server restarted).' }); return; }
   res.json(job);
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   Tool toggles — per-tenant enable/disable for the Tools launcher.
+   Stored as a row in the generic `client_configurations` table
+   (integration_id = 'api-tool-toggles'), exactly like 'feature-toggles'
+   and 'menu-config' — no dedicated table / migration.
+   Shape of config_data: { tools: { [toolKey]: boolean } }
+   A missing key is treated as ENABLED by the frontend, so every tool
+   stays on until an admin turns it off. UI-enforced layer only.
+   ═══════════════════════════════════════════════════════════════ */
+const TOOL_TOGGLES_INTEGRATION = 'api-tool-toggles';
+
+router.get('/tool-toggles', async (req: Request, res: Response) => {
+  try {
+    const configs = await getConfigsForTenant(req.user!.tenantId);
+    const row = configs.find((c) => c.integrationId === TOOL_TOGGLES_INTEGRATION);
+    const tools = (row?.configData?.tools && typeof row.configData.tools === 'object' && !Array.isArray(row.configData.tools))
+      ? row.configData.tools
+      : {};
+    res.json({ tools });
+  } catch (err) { fail(res, err, 500); }
+});
+
+router.put('/tool-toggles', async (req: Request, res: Response) => {
+  try {
+    if (req.user!.role !== 'admin') { res.status(403).json({ error: 'Admin access required to change tool availability.' }); return; }
+    const raw = req.body?.tools;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { res.status(400).json({ error: 'A "tools" object is required.' }); return; }
+    // Keep only boolean entries, and persist only the disabled ones (false) so
+    // the stored map stays compact and new tools default to enabled.
+    const clean: Record<string, boolean> = {};
+    for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof val === 'boolean' && val === false) clean[String(key).slice(0, 80)] = false;
+    }
+    const saved = await upsertConfig(req.user!.tenantId, TOOL_TOGGLES_INTEGRATION, 'connected', { tools: clean }, req.user!.username);
+    res.json({ success: true, tools: saved.configData?.tools || clean });
+  } catch (err) { fail(res, err); }
 });
 
 /* ── multer errors → JSON ── */

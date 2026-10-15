@@ -284,10 +284,24 @@ function EmptyCard({ icon: Icon, title, hint }: { icon: React.ElementType; title
 
 function Kpi({ icon: Icon, label, value, sub, loading, tone = 'neutral', ring }: { icon: React.ElementType; label: string; value: string | number; sub?: string; loading: boolean; tone?: 'neutral' | 'good' | 'warn' | 'bad'; ring?: number }) {
   const valueCls = tone === 'good' ? 'text-emerald-600' : tone === 'warn' ? 'text-amber-600' : tone === 'bad' ? 'text-red-600' : 'text-gray-900';
+  // A hairline accent along the top edge, tinted by the KPI's health, gives the
+  // row a premium "instrument panel" read while colour still means outcome.
+  const accent = tone === 'good' ? 'from-emerald-400 to-emerald-500'
+    : tone === 'warn' ? 'from-amber-400 to-amber-500'
+    : tone === 'bad' ? 'from-red-400 to-red-500'
+    : 'from-[#7C3AED] to-[#6366F1]';
+  const iconTile = tone === 'good' ? 'text-emerald-600 bg-emerald-50 border-emerald-100'
+    : tone === 'warn' ? 'text-amber-600 bg-amber-50 border-amber-100'
+    : tone === 'bad' ? 'text-red-600 bg-red-50 border-red-100'
+    : 'text-[#7C3AED] bg-[#F5F3FF] border-[#E9E5FB]';
   return (
-    <div className={`${CARD_HOVER} p-4`}>
-      <div className="flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-gray-500"><Icon className="w-3.5 h-3.5 text-[#7C3AED]" />{label}</div>
-      <div className="mt-3 flex items-center justify-between gap-2"><span className={`text-[28px] font-bold tabular-nums leading-none ${valueCls}`}>{loading && value ==='—' ? <Loader size="sm" /> : value}</span>{ring != null && !loading && <span className="flex-shrink-0"><PassRing value={ring} size={40} /></span>}</div>
+    <div className={`${CARD_HOVER} relative overflow-hidden p-4 pt-[18px] hover:-translate-y-0.5 transition-transform`}>
+      <span className={`absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r ${accent} opacity-80`} />
+      <div className="flex items-center gap-2">
+        <span className={`w-7 h-7 rounded-lg flex items-center justify-center border flex-shrink-0 ${iconTile}`}><Icon className="w-3.5 h-3.5" /></span>
+        <span className="text-[10.5px] font-semibold uppercase tracking-wide text-gray-500 truncate">{label}</span>
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-2"><span className={`text-[30px] font-bold tabular-nums leading-none tracking-tight ${valueCls}`}>{loading && value ==='—' ? <Loader size="sm" /> : value}</span>{ring != null && !loading && <span className="flex-shrink-0"><PassRing value={ring} size={42} /></span>}</div>
       <p className="mt-2 text-[11px] font-medium text-gray-400 truncate">{sub || ' '}</p>
     </div>
   );

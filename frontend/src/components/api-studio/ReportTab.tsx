@@ -125,6 +125,11 @@ export default function ReportTab({
   }
 
   const green = report.failed === 0 && report.notRun === 0 && report.total > 0;
+  // The verdict hero wears the run's health as a top accent + faint wash, so the
+  // outcome reads before any number — the same language as the Overview KPIs.
+  const heroTone = report.total === 0 ? 'neutral' : green ? 'good' : report.passRate >= 70 ? 'warn' : 'bad';
+  const heroAccent = { good: 'from-emerald-400 to-emerald-500', warn: 'from-amber-400 to-amber-500', bad: 'from-red-400 to-red-500', neutral: 'from-[#7C3AED] to-[#6366F1]' }[heroTone];
+  const heroWash = { good: 'from-emerald-50/70', warn: 'from-amber-50/70', bad: 'from-red-50/60', neutral: 'from-[#F5F3FF]' }[heroTone];
   const explain = (r: ResultRow) => setDiagnoseFor({
     title: r.title, method: r.method || 'GET', url: r.endpoint,
     error: r.error || '', expectedStatus: r.expectedStatus ? Number(r.expectedStatus) || undefined : undefined, requestBody: r.requestBody,
@@ -135,8 +140,10 @@ export default function ReportTab({
       <div className="max-w-5xl mx-auto p-5 space-y-3">
 
         {/* ── Verdict hero — ring, verdict, actions, bar and counters in one card ── */}
-        <section className={`${CARD} p-5`}>
-          <div className="flex items-center gap-4 flex-wrap">
+        <section className={`${CARD} relative overflow-hidden p-5 pt-6`}>
+          <span className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${heroAccent}`} />
+          <span className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${heroWash} to-transparent to-55%`} />
+          <div className="relative flex items-center gap-4 flex-wrap">
             {report.total > 0
               ? <span className="flex-shrink-0"><PassRing value={report.passRate} size={66} /></span>
               : <span className={`w-12 h-12 rounded-xl flex items-center justify-center ${TILE_ACTIVE}`}><BarChart3 className="w-5 h-5 text-white" /></span>}

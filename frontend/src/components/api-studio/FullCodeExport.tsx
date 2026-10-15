@@ -41,7 +41,7 @@ export default function FullCodeExport({ endpoints, onClose }: { endpoints: Cata
   const downloadAll = () => { if (result) for (const f of result.files) downloadOne(f.path, f.content, f.language); };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#1E1B4B]/30 backdrop-blur-sm p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#1E1B4B]/45 backdrop-blur-md p-4" onClick={onClose}>
       <div className={`${CARD} w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden`} onClick={(e) => e.stopPropagation()}>
         <div className={`flex items-center gap-2 px-4 h-12 border-b border-[#EDE9FE] flex-shrink-0 ${STRIP}`}>
           <FileCode2 className="w-4 h-4 text-[#7C3AED]" />
