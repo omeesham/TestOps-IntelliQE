@@ -15,7 +15,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronDown, ChevronRight, ExternalLink, RefreshCw, Activity, AlertTriangle, ListChecks, CheckCircle2, XCircle, MinusCircle, Clock, Search } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import { listApiRuns, getApiRun } from '@/services/api';
-import { StatusPill, MethodBadge, CategoryChip, PriorityChip, EmptyState, PassRing, FilterChip, DurationBar } from '../primitives';
+import { StatusPill, MethodBadge, CategoryChip, PriorityChip, EmptyState, PassRing, FilterChip, DurationBar, TabHero } from '../primitives';
 import { CARD, CARD_HOVER, SECONDARY_BTN, MUTED_CHIP, STRIP, THEAD, TILE_ACTIVE, FIELD, categoryMeta, relativeTime, formatDuration } from '../format';
 import type { ApiRun } from '../hooks/useApiRun';
 import type { ApiRunSummary, ApiRunDetail } from '../types';
@@ -32,6 +32,7 @@ export default function RunsView({ run, openRunId, onOpenRun, onShowReport }: Pr
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-[1200px] mx-auto px-6 py-5 space-y-4">
+        <TabHero icon={Activity} title="Runs" subtitle="Live execution and the full run history — open any run for its scenario-by-scenario report." />
         {run.started && <LiveRun run={run} onShowReport={onShowReport} />}
         <History onOpen={onOpenRun} refreshKey={run.phase === 'report' ? run.testRunId : ''} />
       </div>

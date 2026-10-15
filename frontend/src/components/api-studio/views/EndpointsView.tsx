@@ -12,7 +12,7 @@
  */
 import { useMemo, useState } from 'react';
 import { Search, Trash2, Pencil, Layers, Plus, Download, ChevronDown, ChevronRight, Globe, Antenna } from 'lucide-react';
-import { MethodBadge, StatusCode, EmptyState } from '../primitives';
+import { MethodBadge, StatusCode, EmptyState, TabHero } from '../primitives';
 import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, CARD, BRAND_CHIP, MUTED_CHIP, STRIP, THEAD, IMPORT_METHOD_LABELS, pathOf, hostOf } from '../format';
 import EndpointEditor from '../EndpointEditor';
 import TrafficCapture from '../TrafficCapture';
@@ -97,11 +97,16 @@ export default function EndpointsView({ catalog, running, onDesign, onImport }: 
 
   if (endpoints.length === 0) {
     return (
-      <div className="h-full flex flex-col">
-        <EmptyState icon={Layers} title="The catalogue is empty" />
-        <div className="flex justify-center items-center gap-2 -mt-10 pb-10">
-          <button type="button" onClick={onImport} className={PRIMARY_BTN}><Plus className="w-3.5 h-3.5" />Import APIs</button>
-          <button type="button" onClick={() => setCaptureOpen(true)} className={SECONDARY_BTN} title="Record real API traffic and turn it into endpoints"><Antenna className="w-3.5 h-3.5" />Capture traffic</button>
+      <div className="h-full flex flex-col min-h-0">
+        <div className="flex-shrink-0 px-4 pt-3 pb-2">
+          <TabHero icon={Layers} title="Endpoint catalogue" subtitle="Import an API or capture live traffic to build your catalogue." />
+        </div>
+        <div className="flex-1 flex flex-col min-h-0">
+          <EmptyState icon={Layers} title="The catalogue is empty" />
+          <div className="flex justify-center items-center gap-2 -mt-10 pb-10">
+            <button type="button" onClick={onImport} className={PRIMARY_BTN}><Plus className="w-3.5 h-3.5" />Import APIs</button>
+            <button type="button" onClick={() => setCaptureOpen(true)} className={SECONDARY_BTN} title="Record real API traffic and turn it into endpoints"><Antenna className="w-3.5 h-3.5" />Capture traffic</button>
+          </div>
         </div>
         {captureOpen && <TrafficCapture catalog={catalog} onClose={() => setCaptureOpen(false)} />}
       </div>
@@ -109,7 +114,11 @@ export default function EndpointsView({ catalog, running, onDesign, onImport }: 
   }
 
   return (
-    <div className="h-full flex min-h-0">
+    <div className="h-full flex flex-col min-h-0">
+      <div className="flex-shrink-0 px-4 pt-3 pb-2">
+        <TabHero icon={Layers} title="Endpoint catalogue" subtitle={`${endpoints.length} endpoint${endpoints.length === 1 ? '' : 's'} · ${selectedCount} selected · select what to design tests for`} />
+      </div>
+      <div className="flex-1 flex min-h-0">
       {/* ── Table ── */}
       <div className="@container flex-1 min-w-0 flex flex-col min-h-0">
         {/* The filters shrink, the actions never do, and nothing leaves the column.
@@ -222,6 +231,7 @@ export default function EndpointsView({ catalog, running, onDesign, onImport }: 
           )}
         </aside>
       )}
+      </div>
 
       {editing && (
         <EndpointEditor

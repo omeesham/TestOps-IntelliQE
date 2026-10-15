@@ -9,9 +9,9 @@
 import { Fragment, useMemo, useState } from 'react';
 import { ChevronRight, ListChecks, Search, Check, Send } from 'lucide-react';
 import {
-  MethodBadge, CategoryChip, PriorityChip, StatusCode, CodeBlock, EmptyState, FilterChip,
+  MethodBadge, CategoryChip, PriorityChip, StatusCode, CodeBlock, EmptyState, FilterChip, TabHero,
 } from './primitives';
-import { prettyJson, categoryMeta, STRIP, THEAD, INSET, RAISED, TILE_ACTIVE } from './format';
+import { prettyJson, categoryMeta, STRIP, THEAD, RAISED } from './format';
 import type { Scenario } from './types';
 
 interface Props {
@@ -67,34 +67,34 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
 
   return (
     <div className="h-full flex flex-col min-h-0">
-      {/* Header + toolbar */}
-      <div className="flex items-center gap-4 flex-wrap px-4 py-3 border-b border-gray-100 flex-shrink-0">
-        <span className={`w-11 h-11 rounded-xl flex items-center justify-center ${TILE_ACTIVE}`}><ListChecks className="w-5 h-5 text-white" /></span>
-        <div className="min-w-0">
-          <h2 className="text-[17px] font-bold text-gray-900 leading-tight">Scenarios</h2>
-          <p className="text-[12.5px] text-gray-500 mt-0.5">Review each before it runs · {selected.size} of {scenarios.length} selected</p>
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          <label className="flex items-center gap-1.5 text-[11px] text-gray-600 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={allVisibleSelected}
-              disabled={!editable}
-              onChange={() => (allVisibleSelected ? onClearAll() : onSelectAll(visible.map((s) => s.id)))}
-              className="w-3.5 h-3.5 rounded border-gray-300 text-[#7C3AED] focus:ring-[#A5B4FC] focus:ring-offset-0 disabled:opacity-40"
-            />
-            <span className="font-medium">Select all</span>
-          </label>
-          <div className="relative">
-            <Search className="w-3 h-3 text-gray-300 absolute left-2 top-1/2 -translate-y-1/2" />
-            <input
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder="Filter scenarios…"
-              className={`w-52 pl-6 pr-2 py-1.5 bg-[#FCFBFF] border border-[#E4E0F5] rounded-md text-[11px] text-gray-700 placeholder-gray-300 outline-none focus:bg-white focus:border-[#A5B4FC] focus:ring-2 focus:ring-[#EDE9FE] transition-all ${INSET}`}
-            />
-          </div>
-        </div>
+      {/* Hero + toolbar */}
+      <div className="flex-shrink-0 px-4 pt-3 pb-2">
+        <TabHero
+          icon={ListChecks}
+          title="Scenarios"
+          subtitle={`Review each before it runs · ${selected.size} of ${scenarios.length} selected`}
+          actions={<>
+            <label className="flex items-center gap-1.5 text-[11px] text-white/90 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={allVisibleSelected}
+                disabled={!editable}
+                onChange={() => (allVisibleSelected ? onClearAll() : onSelectAll(visible.map((s) => s.id)))}
+                className="w-3.5 h-3.5 rounded border-white/40 text-[#7C3AED] focus:ring-white/50 focus:ring-offset-0 disabled:opacity-40"
+              />
+              <span className="font-medium">Select all</span>
+            </label>
+            <div className="relative">
+              <Search className="w-3 h-3 text-white/60 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="Filter scenarios…"
+                className="w-44 pl-6 pr-2 py-1.5 bg-white/15 border border-white/25 rounded-lg text-[11px] text-white placeholder-white/60 outline-none focus:bg-white/25 focus:border-white/50 transition-colors"
+              />
+            </div>
+          </>}
+        />
       </div>
 
       {/* Category filters */}

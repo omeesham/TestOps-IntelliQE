@@ -303,6 +303,36 @@ export function DurationBar({ ms, max, className = '' }: { ms: number; max: numb
   );
 }
 
+/* ── Tab hero banner ────────────────────────────────────────────────────── */
+
+/**
+ * The gradient header band that opens every workspace tab — the same violet→
+ * indigo language as the Overview hero, in a compact form that sits above a
+ * tab's own toolbar and table. Purely presentational: an icon, a title, an
+ * optional subtitle and an optional right-aligned actions slot.
+ */
+export function TabHero({
+  icon: Icon, title, subtitle, actions, className = '',
+}: {
+  icon: React.ElementType; title: string; subtitle?: ReactNode; actions?: ReactNode; className?: string;
+}) {
+  return (
+    <div className={`relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#4C1D95] via-[#6D28D9] to-[#4F46E5] px-5 py-3.5 shadow-[0_18px_44px_-22px_rgba(76,29,149,0.7)] ${className}`}>
+      <div className="pointer-events-none absolute -top-16 -right-8 w-56 h-56 rounded-full bg-[#A78BFA]/25 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-20 -left-10 w-56 h-56 rounded-full bg-[#22D3EE]/15 blur-3xl" />
+      <div className="pointer-events-none absolute inset-0 opacity-[0.06]" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)', backgroundSize: '20px 20px' }} />
+      <div className="relative flex items-center gap-3.5 flex-wrap">
+        <span className="w-10 h-10 rounded-xl bg-white/15 border border-white/25 flex items-center justify-center flex-shrink-0 backdrop-blur-sm"><Icon className="w-5 h-5 text-white" /></span>
+        <div className="min-w-0">
+          <h2 className="text-[16px] font-bold text-white leading-tight tracking-tight truncate">{title}</h2>
+          {subtitle != null && subtitle !== '' && <p className="text-[11.5px] text-white/70 mt-0.5 min-w-0 truncate">{subtitle}</p>}
+        </div>
+        {actions && <div className="ml-auto flex items-center gap-2 flex-shrink-0">{actions}</div>}
+      </div>
+    </div>
+  );
+}
+
 /* ── Empty state ────────────────────────────────────────────────────────── */
 
 export function EmptyState({ icon: Icon, title, hint }: { icon: React.ElementType; title: string; hint?: string }) {

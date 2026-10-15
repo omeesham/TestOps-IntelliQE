@@ -19,7 +19,7 @@ import {
   GitBranch, AlertTriangle, Sparkles, Layers, Clock, Search, ChevronRight,
 } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
-import { EmptyState, MethodBadge, CategoryChip, PriorityChip, StatusPill, PassRing, FilterChip } from './primitives';
+import { EmptyState, MethodBadge, CategoryChip, PriorityChip, StatusPill, PassRing, FilterChip, TabHero } from './primitives';
 import { formatDuration, CARD, STRIP, THEAD, TILE_ACTIVE, FIELD, PRIMARY_BTN, SECONDARY_BTN } from './format';
 import Diagnose, { type FailurePayload } from './Diagnose';
 import FailureClusters, { type ClusterFailureInput } from './FailureClusters';
@@ -138,6 +138,8 @@ export default function ReportTab({
   return (
     <div className="h-full overflow-y-auto min-h-0">
       <div className="max-w-5xl mx-auto p-5 space-y-3">
+
+        <TabHero icon={BarChart3} title="Run report" subtitle={`${report.passed} of ${report.total} passed · ${report.passRate}% pass rate · ${formatDuration(report.durationMs)}`} />
 
         {/* ── Verdict hero — ring, verdict, actions, bar and counters in one card ── */}
         <section className={`${CARD} relative overflow-hidden p-5 pt-6`}>

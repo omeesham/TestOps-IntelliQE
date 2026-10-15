@@ -8,9 +8,9 @@
  */
 import { useEffect, useState } from 'react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Activity, AlertTriangle, ArrowRight, Clock, RefreshCw, Layers, Upload, Gauge, Zap, TrendingUp, ChevronRight, Timer, ShieldCheck } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowRight, Clock, RefreshCw, Layers, Upload, Gauge, Zap, TrendingUp, ChevronRight, Timer, ShieldCheck, Sparkles } from 'lucide-react';
 import { getApiOverview } from '@/services/api';
-import { CARD, CARD_HOVER, TILE_ACTIVE, THEAD, PRIMARY_BTN, SECONDARY_BTN, BRAND_CHIP, MUTED_CHIP, relativeTime, formatDuration, IMPORT_METHOD_LABELS } from '../format';
+import { CARD, CARD_HOVER, THEAD, BRAND_CHIP, MUTED_CHIP, relativeTime, formatDuration, IMPORT_METHOD_LABELS } from '../format';
 import { StatusPill, PassRing } from '../primitives';
 import type { ApiOverview, NavView } from '../types';
 import type { Catalog } from '../hooks/useCatalog';
@@ -41,20 +41,45 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-[1280px] mx-auto px-6 py-5 space-y-4">
-        {/* Workspace state — the next step */}
-        <div className="flex items-center gap-4 flex-wrap">
-          <span className={`w-11 h-11 rounded-xl flex items-center justify-center ${TILE_ACTIVE}`}><Layers className="w-5 h-5 text-white" /></span>
-          <div className="min-w-0">
-            <h2 className="text-[17px] font-bold text-gray-900 leading-tight">{catalog.endpoints.length > 0 ? 'Endpoint catalogue' : 'Start by importing an API'}</h2>
-            <p className="text-[12.5px] text-gray-500 mt-0.5">
-              {catalog.endpoints.length > 0
-                ? `${catalog.endpoints.length} endpoint${catalog.endpoints.length === 1 ? '' : 's'} · ${catalog.selected.size} selected`
-                : 'OpenAPI, Postman, cURL, SDK, GraphQL, MCP and more.'}
-            </p>
-          </div>
-          <div className="ml-auto flex items-center gap-2">
-            <button type="button" onClick={() => onNavigate('import')} className={SECONDARY_BTN}><Upload className="w-3.5 h-3.5" />Import</button>
-            {catalog.endpoints.length > 0 && <button type="button" onClick={() => onNavigate('endpoints')} className={PRIMARY_BTN}>Review & design<ArrowRight className="w-3.5 h-3.5" /></button>}
+        {/* ── Hero banner — the first-look showcase ── */}
+        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#4C1D95] via-[#6D28D9] to-[#4F46E5] px-6 py-6 sm:px-8 sm:py-7 shadow-[0_24px_60px_-24px_rgba(76,29,149,0.75)]">
+          {/* soft light pools + a faint dotted grid give the panel depth */}
+          <div className="pointer-events-none absolute -top-24 -right-12 w-80 h-80 rounded-full bg-[#A78BFA]/30 blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-28 -left-16 w-80 h-80 rounded-full bg-[#22D3EE]/20 blur-3xl" />
+          <div className="pointer-events-none absolute inset-0 opacity-[0.06]" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)', backgroundSize: '22px 22px' }} />
+          <div className="relative flex items-center gap-6 flex-wrap">
+            <div className="min-w-0 flex-1">
+              <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2.5 py-1 rounded-full bg-white/15 border border-white/25 text-[10.5px] font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
+                <Sparkles className="w-3 h-3 flex-shrink-0" /> AI-powered API quality
+              </span>
+              <h1 className="mt-3 text-[26px] sm:text-[31px] font-extrabold text-white leading-[1.08] tracking-tight">
+                {catalog.endpoints.length > 0 ? 'Your API test workspace' : 'Ship APIs the world can trust'}
+              </h1>
+              <p className="mt-2 text-[13px] text-white/80 max-w-xl leading-relaxed">
+                {catalog.endpoints.length > 0
+                  ? `${catalog.endpoints.length} endpoint${catalog.endpoints.length === 1 ? '' : 's'} in the catalogue · ${catalog.selected.size} selected. Generate, run and self-heal your suite end to end.`
+                  : 'Autonomous agents generate, execute and self-heal API tests — from OpenAPI, Postman, cURL, GraphQL, MCP and more.'}
+              </p>
+              <div className="mt-4 flex items-center gap-2.5 flex-wrap">
+                <button type="button" onClick={() => onNavigate('import')} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white text-[#6D28D9] text-[13px] font-semibold shadow-lg shadow-black/15 hover:shadow-xl hover:-translate-y-0.5 transition-all">
+                  <Upload className="w-4 h-4" /> Import an API
+                </button>
+                {catalog.endpoints.length > 0 && (
+                  <button type="button" onClick={() => onNavigate('endpoints')} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/10 border border-white/30 text-white text-[13px] font-semibold hover:bg-white/20 transition-all backdrop-blur-sm">
+                    Review & design <ArrowRight className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+            {/* Headline stats — a confident, glanceable product read (mirrored in
+                the KPI grid below, so it hides when the banner gets tight) */}
+            <div className="relative hidden lg:flex items-center gap-4 sm:gap-5 flex-shrink-0 rounded-2xl bg-white/10 border border-white/15 px-5 py-3.5 backdrop-blur-sm">
+              <HeroStat value={k?.avgPassRate != null ? `${k.avgPassRate}%` : '—'} label="Pass rate" loading={loading} />
+              <div className="w-px h-10 bg-white/20" />
+              <HeroStat value={k ? k.runs : '—'} label="Runs" loading={loading} />
+              <div className="w-px h-10 bg-white/20" />
+              <HeroStat value={k ? k.scenarios : '—'} label="Scenarios" loading={loading} />
+            </div>
           </div>
         </div>
 
@@ -278,6 +303,18 @@ function EmptyCard({ icon: Icon, title, hint }: { icon: React.ElementType; title
       <span className="w-12 h-12 rounded-full bg-gray-50 border border-gray-100 flex items-center justify-center"><Icon className="w-6 h-6 text-gray-300" /></span>
       <p className="text-[12.5px] font-semibold text-gray-600">{title}</p>
       <p className="text-[11px] text-gray-400 max-w-[200px] leading-relaxed">{hint}</p>
+    </div>
+  );
+}
+
+/** A single headline figure inside the hero banner's glass stat cluster. */
+function HeroStat({ value, label, loading }: { value: string | number; label: string; loading: boolean }) {
+  return (
+    <div className="text-center">
+      <div className="text-[22px] sm:text-[24px] font-extrabold text-white tabular-nums leading-none tracking-tight">
+        {loading && value === '—' ? <span className="inline-block w-8 h-5 rounded bg-white/20 animate-pulse align-middle" /> : value}
+      </div>
+      <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-white/60">{label}</div>
     </div>
   );
 }
