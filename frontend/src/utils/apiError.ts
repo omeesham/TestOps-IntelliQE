@@ -52,7 +52,7 @@ const CATALOG: Record<string, { title: string; hint?: string; severity?: ErrorSe
 
   // ── Domain-specific (Playwright/Allure) — keep aligned with backend codes ──
   NO_SCRIPTS:         { title: 'No automation scripts' },
-  MISSING_DEPS:       { title: 'Playwright not installed' },
+  MISSING_DEPS:       { title: 'Test runner not installed' },
   BROWSERS_MISSING:   { title: 'Browsers missing' },
   NO_TESTS:           { title: 'No runnable tests' },
   TARGET_UNREACHABLE: { title: 'App unreachable' },

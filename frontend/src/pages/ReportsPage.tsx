@@ -261,8 +261,8 @@ export default function ReportsPage() {
             </h3>
             <p className="text-sm text-[#6B7280] max-w-md text-center mb-4">
               {generating
-                ? 'Executing Playwright against the automation scripts for this run. This can take a moment.'
-                : 'Click "Generate Report" to run the stored Playwright scripts and build a real Allure report.'}
+                ? 'Executing tests against the automation scripts for this run. This can take a moment.'
+                : 'Click "Generate Report" to run the stored Test scripts and build a real Allure report.'}
             </p>
             <button
               onClick={() => handleGenerate()}

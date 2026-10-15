@@ -675,7 +675,7 @@ export default function ExecutionRecordingsPage() {
             {runScope === 'failed' ? 'Recording failed tests…' : runScope === 'passed' ? 'Recording passed tests…' : 'Recording execution…'}
           </h3>
           <p className="text-sm text-[#6B7280] max-w-md text-center">
-            Running the {runScope === 'all' ? 'saved Playwright scripts' : `${runScope} tests`} with screen capture. This can take a few minutes.
+            Running the {runScope === 'all' ? 'saved Test scripts' : `${runScope} tests`} with screen capture. This can take a few minutes.
           </p>
           <span className="mt-3 text-sm text-[#2143A8] font-medium tabular-nums">{formatDuration(elapsed)} elapsed</span>
         </div>
@@ -718,7 +718,7 @@ export default function ExecutionRecordingsPage() {
           <p className="text-sm text-[#6B7280] max-w-md text-center mb-4">
             {selectedRun && selectedRun.scriptCount === 0
               ? 'This run has no automation scripts yet. Generate scripts first, then record an execution.'
-              : 'Click "Record Execution" to run the stored Playwright scripts with screen capture and timing.'}
+              : 'Click "Record Execution" to run the stored Test scripts with screen capture and timing.'}
           </p>
           <button
             onClick={() => handleRecord('all')}

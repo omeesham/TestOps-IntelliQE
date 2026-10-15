@@ -311,7 +311,7 @@ export default function AutomationScriptsPage() {
         </div>
         <div>
           <h1 className="text-lg font-semibold text-[#1E3A8A]">Automation Scripts</h1>
-          <p className="text-sm text-[#6B7280]">Generated Playwright scripts</p>
+          <p className="text-sm text-[#6B7280]">Generated Test scripts</p>
         </div>
       </div>
 
