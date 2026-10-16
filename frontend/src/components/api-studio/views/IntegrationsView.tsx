@@ -13,9 +13,10 @@ import {
   ClipboardList, Webhook, Bot, Gauge, MonitorSmartphone, GitBranch, ExternalLink, Plug,
 } from 'lucide-react';
 import { CARD, TILE, MUTED_CHIP, CHIP_3D } from '../format';
-import { listTmConnectors, listCiConnectors, type TmConnector, type TmVendor, type CiConnector, type CiVendor } from '@/services/api';
+import { listTmConnectors, listCiConnectors, listApiTestConnectors, type TmConnector, type TmVendor, type CiConnector, type CiVendor, type ApiTestConnector, type ApiTestVendor } from '@/services/api';
 import TmConnectors from '../TmConnectors';
 import CiCdConnectors from '../CiCdConnectors';
+import ApiTestConnectors from '../ApiTestConnectors';
 
 interface Tool {
   name: string;
@@ -116,6 +117,12 @@ const LIVE_CI_VENDOR: Record<string, CiVendor> = {
   Jenkins: 'jenkins', 'GitHub Actions': 'github', 'GitLab CI': 'gitlab', 'Azure Pipelines': 'azuredevops', CircleCI: 'circleci',
 };
 
+/** API-testing tools whose live connector exists (api-apitest-connectors.service). */
+const LIVE_AT_VENDOR: Record<string, ApiTestVendor> = {
+  Postman: 'postman', 'SoapUI / ReadyAPI': 'soapui', Insomnia: 'insomnia', Bruno: 'bruno',
+  Hoppscotch: 'hoppscotch', Karate: 'karate', 'REST Assured': 'restassured', Pact: 'pact',
+};
+
 /** A tool's brand logo, falling back to its category icon if the logo 404s. */
 function ToolLogo({ slug, Icon }: { slug?: string; Icon: React.ElementType }) {
   const [failed, setFailed] = useState(false);
@@ -130,12 +137,15 @@ export default function IntegrationsView() {
   const [connectVendor, setConnectVendor] = useState<TmVendor | null>(null);
   const [ciConnectors, setCiConnectors] = useState<CiConnector[]>([]);
   const [connectCiVendor, setConnectCiVendor] = useState<CiVendor | null>(null);
+  const [atConnectors, setAtConnectors] = useState<ApiTestConnector[]>([]);
+  const [connectAtVendor, setConnectAtVendor] = useState<ApiTestVendor | null>(null);
 
   /** The live status behind the TestRail/Xray/Zephyr/qTest cards — a convenience,
       so a failure just leaves them showing "Live" rather than "Connected". */
   const loadConnectors = () => { listTmConnectors().then(setConnectors).catch(() => { /* status is best-effort */ }); };
   const loadCiConnectors = () => { listCiConnectors().then(setCiConnectors).catch(() => { /* status is best-effort */ }); };
-  useEffect(() => { loadConnectors(); loadCiConnectors(); }, []);
+  const loadAtConnectors = () => { listApiTestConnectors().then(setAtConnectors).catch(() => { /* status is best-effort */ }); };
+  useEffect(() => { loadConnectors(); loadCiConnectors(); loadAtConnectors(); }, []);
 
   return (
     <div className="max-w-[1180px] space-y-5">
@@ -153,13 +163,16 @@ export default function IntegrationsView() {
                 {cat.tools.map((tool) => {
                   const vendor = LIVE_VENDOR[tool.name];
                   const ciVendor = LIVE_CI_VENDOR[tool.name];
-                  const isLive = !!vendor || !!ciVendor;
+                  const atVendor = LIVE_AT_VENDOR[tool.name];
+                  const isLive = !!vendor || !!ciVendor || !!atVendor;
                   const connected = vendor
                     ? connectors.some((c) => c.vendor === vendor && c.enabled)
                     : ciVendor
                       ? ciConnectors.some((c) => c.vendor === ciVendor && c.enabled)
-                      : false;
-                  const onConnect = () => { if (vendor) setConnectVendor(vendor); else if (ciVendor) setConnectCiVendor(ciVendor); };
+                      : atVendor
+                        ? atConnectors.some((c) => c.vendor === atVendor && c.enabled)
+                        : false;
+                  const onConnect = () => { if (vendor) setConnectVendor(vendor); else if (ciVendor) setConnectCiVendor(ciVendor); else if (atVendor) setConnectAtVendor(atVendor); };
                   return (
                   <div key={tool.name} className={`${CARD} p-3 flex flex-col ${isLive ? 'border-[#E4DDF8]' : ''}`}>
                     <div className="flex items-center gap-2">
@@ -203,6 +216,7 @@ export default function IntegrationsView() {
 
         {connectVendor && <TmConnectors initialVendor={connectVendor} onClose={() => { setConnectVendor(null); loadConnectors(); }} />}
         {connectCiVendor && <CiCdConnectors initialVendor={connectCiVendor} onClose={() => { setConnectCiVendor(null); loadCiConnectors(); }} />}
+        {connectAtVendor && <ApiTestConnectors initialVendor={connectAtVendor} onClose={() => { setConnectAtVendor(null); loadAtConnectors(); }} />}
     </div>
   );
 }

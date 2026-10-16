@@ -123,6 +123,7 @@ import { listSuites, saveSuite, deleteSuite, listPlans, savePlan, deletePlan, li
 import { listRequirements, saveRequirement, deleteRequirement, buildMatrix } from '../services/api-traceability.service.js';
 import { listConnectors, saveConnector, deleteConnector, testConnector, exportRun, importCases } from '../services/api-tm-connectors.service.js';
 import { listConnectors as listCiConnectors, saveConnector as saveCiConnector, deleteConnector as deleteCiConnector, testConnector as testCiConnector, listRepos as listCiRepos } from '../services/api-cicd-connectors.service.js';
+import { listConnectors as listAtConnectors, saveConnector as saveAtConnector, deleteConnector as deleteAtConnector, testConnector as testAtConnector, listRepos as listAtRepos } from '../services/api-apitest-connectors.service.js';
 import { listAudit, auditFacets, exportAuditCsv } from '../services/api-audit-view.service.js';
 import { listWorkflows, saveWorkflow, deleteWorkflow, listRequests, createRequest, actOnRequest, cancelRequest, evaluateApprovalGate } from '../services/api-approvals.service.js';
 import { buildEvidence, renderEvidenceHtml, renderEvidencePdf } from '../services/api-evidence.service.js';
@@ -1912,6 +1913,31 @@ router.post('/cicd-connectors/:id/test', async (req: Request, res: Response) => 
 });
 router.post('/cicd-connectors/:id/repos', async (req: Request, res: Response) => {
   try { res.json(await listCiRepos(req.user!.tenantId, String(req.params.id), Number(req.body?.limit) || 100)); } catch (err) { fail(res, err); }
+});
+
+/* ── Native API-testing tool connectors (Postman/SoapUI/Insomnia/Bruno/Hoppscotch/Karate/REST Assured/Pact) ── */
+router.get('/apitest-connectors', async (req: Request, res: Response) => {
+  try { res.json({ connectors: await listAtConnectors(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/apitest-connectors', async (req: Request, res: Response) => {
+  try {
+    const connector = await saveAtConnector(req.user!.tenantId, req.user!.username, req.body || {});
+    void logAudit(req, req.body?.id ? 'update' : 'create', 'api_apitest_connector', connector.id, { vendor: connector.vendor });
+    res.status(201).json({ connector });
+  } catch (err) { fail(res, err); }
+});
+router.delete('/apitest-connectors/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteAtConnector(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Connector not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.post('/apitest-connectors/:id/test', async (req: Request, res: Response) => {
+  try { res.json(await testAtConnector(req.user!.tenantId, String(req.params.id))); } catch (err) { fail(res, err); }
+});
+router.post('/apitest-connectors/:id/repos', async (req: Request, res: Response) => {
+  try { res.json(await listAtRepos(req.user!.tenantId, String(req.params.id), Number(req.body?.limit) || 100)); } catch (err) { fail(res, err); }
 });
 
 /* ── Audit-log viewer (opt-in, read-only over the existing audit_log) ── */

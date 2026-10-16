@@ -1537,6 +1537,18 @@ export async function deleteCiConnector(id: string): Promise<void> { await api.d
 export async function testCiConnector(id: string): Promise<{ ok: boolean; detail: string }> { const { data } = await api.post(`/api-automation/cicd-connectors/${encodeURIComponent(id)}/test`, {}, { timeout: 40_000 }); return data; }
 export async function listCiRepos(id: string, limit = 100): Promise<{ ok: boolean; detail: string; repos: CiRepo[] }> { const { data } = await api.post(`/api-automation/cicd-connectors/${encodeURIComponent(id)}/repos`, { limit }, { timeout: 60_000 }); return data; }
 
+// Native API-testing tool connectors (Postman/SoapUI/Insomnia/Bruno/Hoppscotch/Karate/REST Assured/Pact)
+export type ApiTestVendor = 'postman' | 'soapui' | 'insomnia' | 'bruno' | 'hoppscotch' | 'karate' | 'restassured' | 'pact';
+export type ApiTestKind = 'apikey' | 'broker' | 'git';
+export type GitHost = 'github' | 'gitlab';
+export interface ApiTestRepo { id: string; name: string; url: string }
+export interface ApiTestConnector { id: string; vendor: ApiTestVendor; kind: ApiTestKind; name: string; baseUrl: string; orgKey: string; gitHost: GitHost | ''; enabled: boolean; authFields: string[]; linkedRepos: ApiTestRepo[]; createdBy: string; createdAt: string; updatedAt: string }
+export async function listApiTestConnectors(): Promise<ApiTestConnector[]> { const { data } = await api.get('/api-automation/apitest-connectors'); return data.connectors || []; }
+export async function saveApiTestConnector(input: { id?: string; vendor: ApiTestVendor; name: string; baseUrl?: string; orgKey?: string; gitHost?: GitHost; auth?: Record<string, string>; linkedRepos?: ApiTestRepo[]; enabled?: boolean }): Promise<ApiTestConnector> { const { data } = await api.post('/api-automation/apitest-connectors', input); return data.connector; }
+export async function deleteApiTestConnector(id: string): Promise<void> { await api.delete(`/api-automation/apitest-connectors/${encodeURIComponent(id)}`); }
+export async function testApiTestConnector(id: string): Promise<{ ok: boolean; detail: string }> { const { data } = await api.post(`/api-automation/apitest-connectors/${encodeURIComponent(id)}/test`, {}, { timeout: 40_000 }); return data; }
+export async function listApiTestRepos(id: string, limit = 100): Promise<{ ok: boolean; detail: string; repos: ApiTestRepo[] }> { const { data } = await api.post(`/api-automation/apitest-connectors/${encodeURIComponent(id)}/repos`, { limit }, { timeout: 60_000 }); return data; }
+
 // Audit-log viewer (item 5)
 export interface AuditEntry { id: string; username: string; action: string; resourceType: string; resourceId: string; details: Record<string, unknown>; ipAddress: string; requestId: string; createdAt: string }
 export interface AuditPage { items: AuditEntry[]; total: number; page: number; pageSize: number }
