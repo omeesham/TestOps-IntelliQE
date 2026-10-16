@@ -1482,6 +1482,21 @@ export async function initDb(): Promise<void> {
         created_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
         updated_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
       )`);
+    await createTable('api_cicd_connectors', `
+      CREATE TABLE ${SCHEMA}.api_cicd_connectors (
+        id            UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id     UNIQUEIDENTIFIER NOT NULL,
+        vendor        NVARCHAR(30) NOT NULL,
+        name          NVARCHAR(200) NOT NULL,
+        base_url      NVARCHAR(500),
+        org_key       NVARCHAR(200),
+        auth          NVARCHAR(MAX),
+        linked_repos  NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        enabled       BIT NOT NULL DEFAULT 1,
+        created_by    NVARCHAR(100),
+        created_at    DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        updated_at    DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
     await createTable('api_approval_workflows', `
       CREATE TABLE ${SCHEMA}.api_approval_workflows (
         id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
@@ -1634,6 +1649,7 @@ export async function initDb(): Promise<void> {
     await createIndex('idx_api_test_assignments_plan', 'api_test_assignments', '(tenant_id, plan_id)');
     await createIndex('idx_api_requirements_tenant', 'api_requirements', '(tenant_id, updated_at DESC)');
     await createIndex('idx_api_tm_connectors_tenant', 'api_tm_connectors', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_cicd_connectors_tenant', 'api_cicd_connectors', '(tenant_id, updated_at DESC)');
     await createIndex('idx_api_approval_workflows_tenant', 'api_approval_workflows', '(tenant_id, updated_at DESC)');
     await createIndex('idx_api_approval_requests_run', 'api_approval_requests', '(tenant_id, run_id, created_at DESC)');
     await createIndex('idx_api_replay_recordings_tenant', 'api_replay_recordings', '(tenant_id)');

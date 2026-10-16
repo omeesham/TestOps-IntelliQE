@@ -122,6 +122,7 @@ import { listCloudLabs, saveCloudLab, deleteCloudLab, testCloudLab, runCloudMatr
 import { listSuites, saveSuite, deleteSuite, listPlans, savePlan, deletePlan, listCycles, startCycle, deleteCycle, listAssignments, saveAssignment, setAssignmentStatus, deleteAssignment, listTenantMembers, getPlanProgress } from '../services/api-test-management.service.js';
 import { listRequirements, saveRequirement, deleteRequirement, buildMatrix } from '../services/api-traceability.service.js';
 import { listConnectors, saveConnector, deleteConnector, testConnector, exportRun, importCases } from '../services/api-tm-connectors.service.js';
+import { listConnectors as listCiConnectors, saveConnector as saveCiConnector, deleteConnector as deleteCiConnector, testConnector as testCiConnector, listRepos as listCiRepos } from '../services/api-cicd-connectors.service.js';
 import { listAudit, auditFacets, exportAuditCsv } from '../services/api-audit-view.service.js';
 import { listWorkflows, saveWorkflow, deleteWorkflow, listRequests, createRequest, actOnRequest, cancelRequest, evaluateApprovalGate } from '../services/api-approvals.service.js';
 import { buildEvidence, renderEvidenceHtml, renderEvidencePdf } from '../services/api-evidence.service.js';
@@ -1886,6 +1887,31 @@ router.post('/tm-connectors/:id/export', async (req: Request, res: Response) => 
 });
 router.post('/tm-connectors/:id/import', async (req: Request, res: Response) => {
   try { res.json(await importCases(req.user!.tenantId, String(req.params.id), Number(req.body?.limit) || 100)); } catch (err) { fail(res, err); }
+});
+
+/* ── Native CI/CD pipeline connectors (Jenkins/GitHub Actions/GitLab CI/Azure Pipelines/CircleCI) ── */
+router.get('/cicd-connectors', async (req: Request, res: Response) => {
+  try { res.json({ connectors: await listCiConnectors(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+router.post('/cicd-connectors', async (req: Request, res: Response) => {
+  try {
+    const connector = await saveCiConnector(req.user!.tenantId, req.user!.username, req.body || {});
+    void logAudit(req, req.body?.id ? 'update' : 'create', 'api_cicd_connector', connector.id, { vendor: connector.vendor });
+    res.status(201).json({ connector });
+  } catch (err) { fail(res, err); }
+});
+router.delete('/cicd-connectors/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteCiConnector(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Connector not found.' }); return; }
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+router.post('/cicd-connectors/:id/test', async (req: Request, res: Response) => {
+  try { res.json(await testCiConnector(req.user!.tenantId, String(req.params.id))); } catch (err) { fail(res, err); }
+});
+router.post('/cicd-connectors/:id/repos', async (req: Request, res: Response) => {
+  try { res.json(await listCiRepos(req.user!.tenantId, String(req.params.id), Number(req.body?.limit) || 100)); } catch (err) { fail(res, err); }
 });
 
 /* ── Audit-log viewer (opt-in, read-only over the existing audit_log) ── */

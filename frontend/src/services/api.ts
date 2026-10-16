@@ -1527,6 +1527,16 @@ export async function testTmConnector(id: string): Promise<{ ok: boolean; detail
 export async function exportRunToTm(id: string, runId: string): Promise<TmExportResult> { const { data } = await api.post(`/api-automation/tm-connectors/${encodeURIComponent(id)}/export`, { runId }, { timeout: 90_000 }); return data; }
 export async function importTmCases(id: string, limit = 100): Promise<{ ok: boolean; detail: string; cases: TmImportedCase[] }> { const { data } = await api.post(`/api-automation/tm-connectors/${encodeURIComponent(id)}/import`, { limit }, { timeout: 60_000 }); return data; }
 
+// Native CI/CD pipeline connectors (Jenkins/GitHub Actions/GitLab CI/Azure Pipelines/CircleCI)
+export type CiVendor = 'jenkins' | 'github' | 'gitlab' | 'azuredevops' | 'circleci';
+export interface CiRepo { id: string; name: string; url: string }
+export interface CiConnector { id: string; vendor: CiVendor; name: string; baseUrl: string; orgKey: string; enabled: boolean; authFields: string[]; linkedRepos: CiRepo[]; createdBy: string; createdAt: string; updatedAt: string }
+export async function listCiConnectors(): Promise<CiConnector[]> { const { data } = await api.get('/api-automation/cicd-connectors'); return data.connectors || []; }
+export async function saveCiConnector(input: { id?: string; vendor: CiVendor; name: string; baseUrl?: string; orgKey?: string; auth?: Record<string, string>; linkedRepos?: CiRepo[]; enabled?: boolean }): Promise<CiConnector> { const { data } = await api.post('/api-automation/cicd-connectors', input); return data.connector; }
+export async function deleteCiConnector(id: string): Promise<void> { await api.delete(`/api-automation/cicd-connectors/${encodeURIComponent(id)}`); }
+export async function testCiConnector(id: string): Promise<{ ok: boolean; detail: string }> { const { data } = await api.post(`/api-automation/cicd-connectors/${encodeURIComponent(id)}/test`, {}, { timeout: 40_000 }); return data; }
+export async function listCiRepos(id: string, limit = 100): Promise<{ ok: boolean; detail: string; repos: CiRepo[] }> { const { data } = await api.post(`/api-automation/cicd-connectors/${encodeURIComponent(id)}/repos`, { limit }, { timeout: 60_000 }); return data; }
+
 // Audit-log viewer (item 5)
 export interface AuditEntry { id: string; username: string; action: string; resourceType: string; resourceId: string; details: Record<string, unknown>; ipAddress: string; requestId: string; createdAt: string }
 export interface AuditPage { items: AuditEntry[]; total: number; page: number; pageSize: number }

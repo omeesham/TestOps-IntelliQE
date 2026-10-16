@@ -13,8 +13,9 @@ import {
   ClipboardList, Webhook, Bot, Gauge, MonitorSmartphone, GitBranch, ExternalLink, Plug,
 } from 'lucide-react';
 import { CARD, TILE, MUTED_CHIP, CHIP_3D } from '../format';
-import { listTmConnectors, type TmConnector, type TmVendor } from '@/services/api';
+import { listTmConnectors, listCiConnectors, type TmConnector, type TmVendor, type CiConnector, type CiVendor } from '@/services/api';
 import TmConnectors from '../TmConnectors';
+import CiCdConnectors from '../CiCdConnectors';
 
 interface Tool {
   name: string;
@@ -110,6 +111,11 @@ const LIVE_VENDOR: Record<string, TmVendor> = {
   TestRail: 'testrail', Xray: 'xray', 'Zephyr Scale': 'zephyr', qTest: 'qtest',
 };
 
+/** CI/CD tools whose live connector exists (api-cicd-connectors.service). */
+const LIVE_CI_VENDOR: Record<string, CiVendor> = {
+  Jenkins: 'jenkins', 'GitHub Actions': 'github', 'GitLab CI': 'gitlab', 'Azure Pipelines': 'azuredevops', CircleCI: 'circleci',
+};
+
 /** A tool's brand logo, falling back to its category icon if the logo 404s. */
 function ToolLogo({ slug, Icon }: { slug?: string; Icon: React.ElementType }) {
   const [failed, setFailed] = useState(false);
@@ -122,11 +128,14 @@ function ToolLogo({ slug, Icon }: { slug?: string; Icon: React.ElementType }) {
 export default function IntegrationsView() {
   const [connectors, setConnectors] = useState<TmConnector[]>([]);
   const [connectVendor, setConnectVendor] = useState<TmVendor | null>(null);
+  const [ciConnectors, setCiConnectors] = useState<CiConnector[]>([]);
+  const [connectCiVendor, setConnectCiVendor] = useState<CiVendor | null>(null);
 
   /** The live status behind the TestRail/Xray/Zephyr/qTest cards — a convenience,
       so a failure just leaves them showing "Live" rather than "Connected". */
   const loadConnectors = () => { listTmConnectors().then(setConnectors).catch(() => { /* status is best-effort */ }); };
-  useEffect(() => { loadConnectors(); }, []);
+  const loadCiConnectors = () => { listCiConnectors().then(setCiConnectors).catch(() => { /* status is best-effort */ }); };
+  useEffect(() => { loadConnectors(); loadCiConnectors(); }, []);
 
   return (
     <div className="max-w-[1180px] space-y-5">
@@ -143,15 +152,22 @@ export default function IntegrationsView() {
               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2.5">
                 {cat.tools.map((tool) => {
                   const vendor = LIVE_VENDOR[tool.name];
-                  const connected = vendor ? connectors.some((c) => c.vendor === vendor && c.enabled) : false;
+                  const ciVendor = LIVE_CI_VENDOR[tool.name];
+                  const isLive = !!vendor || !!ciVendor;
+                  const connected = vendor
+                    ? connectors.some((c) => c.vendor === vendor && c.enabled)
+                    : ciVendor
+                      ? ciConnectors.some((c) => c.vendor === ciVendor && c.enabled)
+                      : false;
+                  const onConnect = () => { if (vendor) setConnectVendor(vendor); else if (ciVendor) setConnectCiVendor(ciVendor); };
                   return (
-                  <div key={tool.name} className={`${CARD} p-3 flex flex-col ${vendor ? 'border-[#E4DDF8]' : ''}`}>
+                  <div key={tool.name} className={`${CARD} p-3 flex flex-col ${isLive ? 'border-[#E4DDF8]' : ''}`}>
                     <div className="flex items-center gap-2">
                       <span className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 ${TILE}`}>
                         <ToolLogo slug={tool.slug} Icon={cat.icon} />
                       </span>
                       <span className="text-[12.5px] font-semibold text-gray-800 leading-tight min-w-0 truncate">{tool.name}</span>
-                      {vendor ? (
+                      {isLive ? (
                         connected ? (
                           <span className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9px] font-semibold flex-shrink-0 text-[#15803D] bg-[#DCFCE7] border-[#BBF7D0]"><span className="w-1.5 h-1.5 rounded-full bg-[#22C55E]" />Connected</span>
                         ) : (
@@ -162,10 +178,10 @@ export default function IntegrationsView() {
                       )}
                     </div>
                     <p className="mt-1.5 text-[10.5px] text-gray-500 truncate">{tool.blurb}</p>
-                    {vendor && (
+                    {isLive && (
                       <button
                         type="button"
-                        onClick={() => setConnectVendor(vendor)}
+                        onClick={onConnect}
                         className="mt-2.5 w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white text-[11px] font-semibold shadow-sm hover:shadow hover:-translate-y-px transition-all active:translate-y-0 focus:outline-none focus:ring-2 focus:ring-[#A5B4FC]"
                       >
                         <Plug className="w-3.5 h-3.5" />{connected ? 'Manage connection' : 'Connect'}
@@ -186,6 +202,7 @@ export default function IntegrationsView() {
         </p>
 
         {connectVendor && <TmConnectors initialVendor={connectVendor} onClose={() => { setConnectVendor(null); loadConnectors(); }} />}
+        {connectCiVendor && <CiCdConnectors initialVendor={connectCiVendor} onClose={() => { setConnectCiVendor(null); loadCiConnectors(); }} />}
     </div>
   );
 }

@@ -33,6 +33,8 @@ export const SENSITIVE_CONFIG_KEYS = new Set([
   'connStr', 'connectionString', 'serviceKey', 'token', 'bearerToken',
   'authValue', 'smtpPassword', 'app_password', 'webhook_url',
   'anthropic_api_key', 'anthropicApiKey',
+  // CI/CD pipeline connector credentials (Jenkins/GitHub/GitLab/Azure/CircleCI)
+  'pat', 'personalAccessToken', 'circleToken', 'gitlabToken', 'jenkinsToken',
 ]);
 
 // =====================================================================
