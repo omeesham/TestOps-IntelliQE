@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+/* Enable `dark:` utilities, driven by the <html data-theme="dark"> attribute
+   (set by ThemeContext / the no-flash script in index.html). New components
+   use `dark:` directly; the retrofit skin at the bottom of this file dark-mode
+   the existing hardcoded-colour components. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 @theme {
   /* Agentic AI Workspace — Purple / Blue / Teal palette */
   --color-primary: #7C3AED;
@@ -646,4 +652,303 @@ aside[class*="1E1B4B"] button {
 :where(div)[class*="bg-gray-100"].rounded-xl:has(> button):not([data-surface="3d"] *),
 :where(div)[class*="bg-[#EDE9FE]"].rounded-lg:has(> button):not([data-surface="3d"] *) {
   box-shadow: inset 0 1px 3px rgba(30, 27, 75, 0.12);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   DARK MODE — a retrofit skin
+   ---------------------------------------------------------------------------
+   The app's components hardcode light-mode colours (bg-white, text-[#1E1B4B],
+   border-gray-200, the violet tints…). Rather than migrate ~130 files, this
+   block repaints those exact utility TOKENS when <html data-theme="dark">.
+   It uses [class~="token"] (whitespace-separated exact match) so that, e.g.,
+   `bg-white` flips but the sidebar's `bg-white/5` overlays do NOT. Core
+   surface/text/border repaints use !important for reliability, matching how
+   the "4D" layer above already works. Tune hues here — it is the single place.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Flip the @theme-referenced design tokens (body, bg-background, etc.). */
+  --color-background: #0E0C1A;
+  --color-foreground: #E7E4F4;
+  --color-card: #17152A;
+  --color-card-foreground: #E7E4F4;
+  --color-border: #2A2740;
+  --color-muted: #201D33;
+  --color-muted-foreground: #9A95B8;
+  --color-secondary: #201D33;
+  --color-secondary-foreground: #E7E4F4;
+  --color-accent: #16263A;
+  --color-accent-foreground: #BAE6FD;
+
+  /* Local dark surface ramp — referenced by the rules below. */
+  --iq-dk-bg: #0E0C1A;
+  --iq-dk-surface: #17152A;    /* cards, modals            */
+  --iq-dk-surface-2: #1E1B30;  /* tinted tiles, wells      */
+  --iq-dk-surface-3: #252138;  /* hover / raised           */
+  --iq-dk-input: #141225;      /* recessed fields          */
+  --iq-dk-border: #2A2740;
+  --iq-dk-border-2: #353150;
+  --iq-dk-text: #E7E4F4;
+  --iq-dk-text-muted: #A7A2C4;
+  --iq-dk-text-faint: #726E90;
+
+  /* Re-tint the shared "4D" shadow tokens so raised/recessed surfaces read as
+     depth over a dark page (black drop shadows, faint white top highlight). */
+  --iq-edge: #312B5C;
+  --iq-edge-soft: #2A2740;
+  --iq-hi: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --iq-raise:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 16px 34px -20px rgba(0, 0, 0, 0.75);
+  --iq-raise-hover:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 2px 4px rgba(0, 0, 0, 0.45),
+    0 24px 46px -20px rgba(0, 0, 0, 0.82);
+  --iq-inset:
+    inset 0 1.5px 3px rgba(0, 0, 0, 0.5),
+    inset 0 0 0 1px rgba(124, 58, 237, 0.12);
+  --iq-chip:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+/* ── Page backdrop — dark with subtle brand light pools ── */
+html[data-theme="dark"] body { background-color: var(--iq-dk-bg); }
+html[data-theme="dark"] main:not([data-surface="3d"] *) {
+  background-color: var(--iq-dk-bg);
+  background-image:
+    radial-gradient(1100px 520px at 8% -5%, rgba(124, 58, 237, 0.16), transparent 60%),
+    radial-gradient(900px 480px at 100% 0%, rgba(99, 102, 241, 0.14), transparent 55%),
+    radial-gradient(1000px 620px at 50% 112%, rgba(6, 182, 212, 0.08), transparent 62%);
+}
+
+/* ── White surfaces → dark card. Exact `bg-white` token only, so low-opacity
+      white overlays (bg-white/5, /10) on the sidebar stay as-is. ── */
+html[data-theme="dark"] [class~="bg-white"] {
+  background-color: var(--iq-dk-surface) !important;
+  background-image: none !important;
+}
+/* Glassy header / footer whites. */
+html[data-theme="dark"] [class~="bg-white/80"],
+html[data-theme="dark"] [class~="bg-white/90"],
+html[data-theme="dark"] [class~="bg-white/70"] { background-color: rgba(21, 19, 38, 0.82) !important; }
+html[data-theme="dark"] [class~="bg-white/60"],
+html[data-theme="dark"] [class~="bg-white/50"] { background-color: rgba(21, 19, 38, 0.6) !important; }
+
+/* ── Tinted/neutral surfaces → one step lighter than the page ── */
+html[data-theme="dark"] [class~="bg-[#F5F3FF]"],
+html[data-theme="dark"] [class~="bg-[#EDE9FE]"],
+html[data-theme="dark"] [class~="bg-[#FCFBFF]"],
+html[data-theme="dark"] [class~="bg-[#FAF9FE]"],
+html[data-theme="dark"] [class~="bg-[#F8F7FD]"],
+html[data-theme="dark"] [class~="bg-[#F9FAFB]"],
+html[data-theme="dark"] [class~="bg-gray-50"],
+html[data-theme="dark"] [class~="bg-gray-100"],
+html[data-theme="dark"] [class~="bg-slate-50"],
+html[data-theme="dark"] [class~="bg-slate-100"] {
+  background-color: var(--iq-dk-surface-2) !important;
+  background-image: none !important;
+}
+
+/* ── Page-canvas near-whites (e.g. the Chat workspace root) → page bg, so the
+      full-height canvas blends with the shell instead of staying a white sheet. ── */
+html[data-theme="dark"] [class~="bg-[#FAFAFE]"],
+html[data-theme="dark"] [class~="bg-[#FAFBFF]"],
+html[data-theme="dark"] [class~="bg-[#FBFBFD]"] {
+  background-color: var(--iq-dk-bg) !important;
+  background-image: none !important;
+}
+
+/* ── Inputs — recessed dark wells, rising a touch on focus ── */
+html[data-theme="dark"] input:not([type="radio"]):not([type="checkbox"]):not([type="range"]):not([type="file"]),
+html[data-theme="dark"] textarea,
+html[data-theme="dark"] select {
+  background-color: var(--iq-dk-input) !important;
+  color: var(--iq-dk-text);
+  border-color: var(--iq-dk-border);
+}
+html[data-theme="dark"] input:not([type="radio"]):not([type="checkbox"]):not([type="range"]):not([type="file"]):focus,
+html[data-theme="dark"] textarea:focus,
+html[data-theme="dark"] select:focus { background-color: #1A1830 !important; }
+html[data-theme="dark"] ::placeholder { color: #6B6788 !important; opacity: 1; }
+html[data-theme="dark"] select option { background-color: var(--iq-dk-surface); color: var(--iq-dk-text); }
+
+/* ── Text ── */
+html[data-theme="dark"] [class~="text-[#1E1B4B]"],
+html[data-theme="dark"] [class~="text-gray-900"],
+html[data-theme="dark"] [class~="text-gray-800"],
+html[data-theme="dark"] [class~="text-gray-700"],
+html[data-theme="dark"] [class~="text-slate-900"],
+html[data-theme="dark"] [class~="text-slate-800"],
+html[data-theme="dark"] [class~="text-slate-700"],
+html[data-theme="dark"] [class~="text-black"] { color: var(--iq-dk-text) !important; }
+
+html[data-theme="dark"] [class~="text-gray-600"],
+html[data-theme="dark"] [class~="text-gray-500"],
+html[data-theme="dark"] [class~="text-[#6B7280]"],
+html[data-theme="dark"] [class~="text-slate-600"],
+html[data-theme="dark"] [class~="text-slate-500"] { color: var(--iq-dk-text-muted) !important; }
+
+html[data-theme="dark"] [class~="text-gray-400"],
+html[data-theme="dark"] [class~="text-gray-300"],
+html[data-theme="dark"] [class~="text-slate-400"] { color: var(--iq-dk-text-faint) !important; }
+
+/* Brand-violet text used on light chips → brighten for dark contrast. */
+html[data-theme="dark"] [class~="text-[#6D28D9]"],
+html[data-theme="dark"] [class~="text-[#7C3AED]"],
+html[data-theme="dark"] [class~="text-violet-700"],
+html[data-theme="dark"] [class~="text-violet-600"],
+html[data-theme="dark"] [class~="text-purple-700"],
+html[data-theme="dark"] [class~="text-indigo-700"],
+html[data-theme="dark"] [class~="text-indigo-600"] { color: #C4B5FD !important; }
+
+/* ── Borders ── */
+html[data-theme="dark"] [class~="border-[#DDD6FE]"],
+html[data-theme="dark"] [class~="border-gray-200"],
+html[data-theme="dark"] [class~="border-gray-100"],
+html[data-theme="dark"] [class~="border-slate-200"],
+html[data-theme="dark"] [class~="border-slate-100"],
+html[data-theme="dark"] [class~="border-[#E7E3F5]"],
+html[data-theme="dark"] [class~="border-[#ECE9F8]"],
+html[data-theme="dark"] [class~="border-[#E4E0F5]"],
+html[data-theme="dark"] [class~="border-[#E9E5FB]"],
+html[data-theme="dark"] [class~="border-[#D9CDF5]"] { border-color: var(--iq-dk-border) !important; }
+
+/* ── Tables ── */
+html[data-theme="dark"] thead:not([data-surface="3d"] *) {
+  background-image: linear-gradient(180deg, #211E36 0%, #1A1729 100%) !important;
+  box-shadow: inset 0 -1px 0 #2A2740, inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+}
+html[data-theme="dark"] tbody tr:hover { background-color: rgba(124, 58, 237, 0.08); }
+
+/* ── Soft-violet gradient strips (modal headers, STRIP) → dark gradient ── */
+html[data-theme="dark"] [class*="from-[#EDE9FE]"],
+html[data-theme="dark"] [class*="from-[#F5F3FF]"] {
+  background-image: linear-gradient(to right, #201D33, #241B3A, #1C2140) !important;
+}
+
+/* ── More light violet / neutral surface tints found across API Studio ── */
+html[data-theme="dark"] [class~="bg-[#FBFAFF]"],
+html[data-theme="dark"] [class~="bg-[#F3F1FB]"],
+html[data-theme="dark"] [class~="bg-[#F1EDFB]"],
+html[data-theme="dark"] [class~="bg-[#EEEBFA]"] {
+  background-color: var(--iq-dk-surface-2) !important;
+  background-image: none !important;
+}
+html[data-theme="dark"] [class~="bg-gray-200"] { background-color: var(--iq-dk-surface-3) !important; }
+
+/* ── Success / warning callout fills (light green / amber) → dark tints ── */
+html[data-theme="dark"] [class~="bg-[#DCFCE7]"],
+html[data-theme="dark"] [class~="bg-[#F0FDF4]"],
+html[data-theme="dark"] [class~="bg-green-100"],
+html[data-theme="dark"] [class~="bg-emerald-100"] { background-color: rgba(16, 185, 129, 0.16) !important; }
+html[data-theme="dark"] [class~="bg-[#FEF3C7]"],
+html[data-theme="dark"] [class~="bg-amber-100"],
+html[data-theme="dark"] [class~="bg-yellow-100"] { background-color: rgba(245, 158, 11, 0.16) !important; }
+
+/* ── Coloured -100 icon tiles / avatars → dark tints (match the -50 chips) ── */
+html[data-theme="dark"] [class~="bg-violet-100"],
+html[data-theme="dark"] [class~="bg-purple-100"] { background-color: rgba(139, 92, 246, 0.2) !important; }
+html[data-theme="dark"] [class~="bg-indigo-100"] { background-color: rgba(99, 102, 241, 0.2) !important; }
+html[data-theme="dark"] [class~="bg-sky-100"]    { background-color: rgba(14, 165, 233, 0.18) !important; }
+html[data-theme="dark"] [class~="bg-blue-100"]   { background-color: rgba(59, 130, 246, 0.18) !important; }
+html[data-theme="dark"] [class~="bg-rose-100"]   { background-color: rgba(244, 63, 94, 0.18) !important; }
+html[data-theme="dark"] [class~="bg-red-100"]    { background-color: rgba(239, 68, 68, 0.18) !important; }
+html[data-theme="dark"] [class~="bg-orange-100"] { background-color: rgba(249, 115, 22, 0.18) !important; }
+
+/* ── Dark-tone text on now-dark surfaces → brighten for contrast ── */
+html[data-theme="dark"] [class~="text-[#5B21B6]"],
+html[data-theme="dark"] [class~="text-[#4C1D95]"] { color: #C4B5FD !important; }
+html[data-theme="dark"] [class~="text-[#4F46E5]"] { color: #A5B4FC !important; }
+html[data-theme="dark"] [class~="text-[#15803D]"] { color: #6EE7B7 !important; }
+html[data-theme="dark"] [class~="text-[#B45309]"] { color: #FCD34D !important; }
+html[data-theme="dark"] [class~="text-[#C32C2C]"] { color: #FCA5A5 !important; }
+html[data-theme="dark"] [class~="text-[#9CA3AF]"] { color: var(--iq-dk-text-faint) !important; }
+
+/* ── Light gradient "squircle" icon tiles (EmptyState and friends use
+      from-white → to-[#F5F3FF]) → dark tile so they don't glow on dark. ── */
+html[data-theme="dark"] [class*="from-white"][class*="to-[#F5F3FF]"],
+html[data-theme="dark"] [class*="from-white"][class*="to-[#EDE9FE]"] {
+  background-image: linear-gradient(135deg, #211E36, #17152A) !important;
+  border-color: var(--iq-dk-border) !important;
+}
+
+/* ── Sidebar — deepen below the page so it reads as the darkest plane ── */
+html[data-theme="dark"] aside[class*="1E1B4B"] {
+  background-image:
+    radial-gradient(420px 260px at 85% -8%, rgba(124, 58, 237, 0.28), transparent 65%),
+    radial-gradient(360px 420px at -20% 105%, rgba(99, 102, 241, 0.18), transparent 60%),
+    linear-gradient(197deg, #171231 0%, #120F28 45%, #0C0A1E 100%);
+}
+
+/* ── Coloured category/method chips — swap glaring -50 fills for dark tints
+      and brighten the -700 text so the palette survives on a dark surface. ── */
+html[data-theme="dark"] [class~="bg-sky-50"]     { background-color: rgba(14, 165, 233, 0.15) !important; }
+html[data-theme="dark"] [class~="bg-emerald-50"] { background-color: rgba(16, 185, 129, 0.15) !important; }
+html[data-theme="dark"] [class~="bg-amber-50"]   { background-color: rgba(245, 158, 11, 0.15) !important; }
+html[data-theme="dark"] [class~="bg-teal-50"]    { background-color: rgba(20, 184, 166, 0.15) !important; }
+html[data-theme="dark"] [class~="bg-rose-50"]    { background-color: rgba(244, 63, 94, 0.15) !important; }
+html[data-theme="dark"] [class~="bg-red-50"]     { background-color: rgba(239, 68, 68, 0.15) !important; }
+html[data-theme="dark"] [class~="bg-green-50"]   { background-color: rgba(34, 197, 94, 0.15) !important; }
+html[data-theme="dark"] [class~="bg-violet-50"]  { background-color: rgba(139, 92, 246, 0.16) !important; }
+html[data-theme="dark"] [class~="bg-fuchsia-50"] { background-color: rgba(217, 70, 239, 0.15) !important; }
+html[data-theme="dark"] [class~="bg-orange-50"]  { background-color: rgba(249, 115, 22, 0.15) !important; }
+html[data-theme="dark"] [class~="bg-indigo-50"]  { background-color: rgba(99, 102, 241, 0.16) !important; }
+html[data-theme="dark"] [class~="bg-blue-50"]    { background-color: rgba(59, 130, 246, 0.15) !important; }
+html[data-theme="dark"] [class~="bg-yellow-50"]  { background-color: rgba(234, 179, 8, 0.15) !important; }
+
+html[data-theme="dark"] [class~="text-sky-700"]     { color: #7DD3FC !important; }
+html[data-theme="dark"] [class~="text-emerald-700"] { color: #6EE7B7 !important; }
+html[data-theme="dark"] [class~="text-amber-700"]   { color: #FCD34D !important; }
+html[data-theme="dark"] [class~="text-teal-700"]    { color: #5EEAD4 !important; }
+html[data-theme="dark"] [class~="text-rose-700"]    { color: #FDA4AF !important; }
+html[data-theme="dark"] [class~="text-red-700"],
+html[data-theme="dark"] [class~="text-red-600"]     { color: #FCA5A5 !important; }
+html[data-theme="dark"] [class~="text-green-700"]   { color: #86EFAC !important; }
+html[data-theme="dark"] [class~="text-emerald-600"] { color: #6EE7B7 !important; }
+html[data-theme="dark"] [class~="text-fuchsia-700"] { color: #F0ABFC !important; }
+html[data-theme="dark"] [class~="text-orange-700"]  { color: #FDBA74 !important; }
+html[data-theme="dark"] [class~="text-blue-700"],
+html[data-theme="dark"] [class~="text-blue-600"]    { color: #93C5FD !important; }
+
+html[data-theme="dark"] [class~="border-sky-200"]     { border-color: rgba(14, 165, 233, 0.3) !important; }
+html[data-theme="dark"] [class~="border-emerald-200"] { border-color: rgba(16, 185, 129, 0.3) !important; }
+html[data-theme="dark"] [class~="border-amber-200"]   { border-color: rgba(245, 158, 11, 0.3) !important; }
+html[data-theme="dark"] [class~="border-teal-200"]    { border-color: rgba(20, 184, 166, 0.3) !important; }
+html[data-theme="dark"] [class~="border-rose-200"]    { border-color: rgba(244, 63, 94, 0.3) !important; }
+html[data-theme="dark"] [class~="border-red-200"]     { border-color: rgba(239, 68, 68, 0.3) !important; }
+html[data-theme="dark"] [class~="border-violet-200"]  { border-color: rgba(139, 92, 246, 0.3) !important; }
+html[data-theme="dark"] [class~="border-fuchsia-200"] { border-color: rgba(217, 70, 239, 0.3) !important; }
+html[data-theme="dark"] [class~="border-orange-200"]  { border-color: rgba(249, 115, 22, 0.3) !important; }
+html[data-theme="dark"] [class~="border-indigo-200"]  { border-color: rgba(99, 102, 241, 0.3) !important; }
+html[data-theme="dark"] [class~="border-blue-200"]    { border-color: rgba(59, 130, 246, 0.3) !important; }
+
+/* ── White / light "keycap" buttons — the 4D skin paints a strong white
+      top-gradient on them (and, via its substring selectors, on any button
+      with a hover:bg-white/F5F3FF class). On dark that washes the face out,
+      so swap it for a faint sheen. The dark surface fill is already handled by
+      the bg-token repaints above. ── */
+html[data-theme="dark"] button.bg-white:not(.rounded-full),
+html[data-theme="dark"] button[class*="bg-gray-100"]:not(.rounded-full),
+html[data-theme="dark"] button[class*="bg-gray-50"]:not(.rounded-full),
+html[data-theme="dark"] button[class*="bg-[#F5F3FF]"]:not(.rounded-full),
+html[data-theme="dark"] button[class*="bg-[#FAF9FE]"]:not(.rounded-full),
+html[data-theme="dark"] button[class*="bg-[#EDE9FE]"]:not(.rounded-full) {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0)) !important;
+}
+
+/* ── Scrollbars — deeper violet thumb on dark ── */
+html[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: linear-gradient(to bottom, #4C3A80, #3A3568);
+  background-clip: padding-box;
+}
+html[data-theme="dark"] * { scrollbar-color: #3A3568 transparent; }
+
+/* ── Dividers that use the background colour as a faux border ── */
+html[data-theme="dark"] [class~="divide-gray-200"] > :not([hidden]) ~ :not([hidden]),
+html[data-theme="dark"] [class~="divide-gray-100"] > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--iq-dk-border) !important;
 }

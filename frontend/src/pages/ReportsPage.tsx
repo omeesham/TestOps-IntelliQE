@@ -12,6 +12,7 @@ import {
 import ErrorAlert from '@/components/feedback/ErrorAlert';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { normalizeError } from '@/utils/apiError';
+import PageHero from '@/components/ui/PageHero';
 
 import Loader from '@/components/feedback/Loader';
 /* ── helpers ── */
@@ -126,6 +127,11 @@ export default function ReportsPage() {
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
   const totalPages = data?.totalPages ?? 1;
+  const apiCount = items.filter((i) => i.kind === 'api').length;
+  const rated = items.filter((i) => i.stats && Number.isFinite(i.stats.passRate));
+  const avgPass = rated.length
+    ? Math.round(rated.reduce((a, i) => a + (i.stats?.passRate || 0), 0) / rated.length)
+    : null;
 
   if (error) {
     return (
@@ -244,6 +250,23 @@ export default function ReportsPage() {
   /* ════════ EXECUTIVE LIST VIEW ════════ */
   return (
     <div className="space-y-4">
+      <PageHero
+        icon={BarChart3}
+        title="Reports"
+        subtitle="Executive view of your latest Web and API automation runs"
+        stats={[
+          { label: 'Reports', value: total || items.length },
+          { label: 'API', value: apiCount },
+          { label: 'Web', value: Math.max(0, items.length - apiCount) },
+          ...(avgPass !== null
+            ? [{
+                label: 'Avg pass',
+                value: `${avgPass}%`,
+                dot: avgPass >= 80 ? 'bg-emerald-400' : avgPass >= 50 ? 'bg-amber-400' : 'bg-red-400',
+              }]
+            : []),
+        ]}
+      />
       {/* Executive table — latest 10 Web AND API reports together, clickable rows */}
       <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-[#DDD6FE]/60 overflow-hidden">
         <div className="overflow-x-auto">

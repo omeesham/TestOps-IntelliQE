@@ -2,6 +2,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import { useRef } from 'react';
 import Sidebar from './Sidebar';
 import Header from './Header';
+import CommandPalette from './CommandPalette';
 import ChatPage from '@/pages/ChatPage';
 import { useFeature } from '@/contexts/FeatureToggleContext';
 import FeatureUnavailable from '@/components/FeatureUnavailable';
@@ -40,6 +41,7 @@ export default function Layout() {
           &copy; 2026 JBS. All Rights Reserved.
         </footer>
       </div>
+      <CommandPalette />
     </div>
   );
 }

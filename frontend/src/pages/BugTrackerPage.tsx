@@ -13,6 +13,7 @@ import {
 } from '@/services/api';
 import { useToast } from '@/components/feedback/ToastProvider';
 import ActionIcon from '@/components/ui/ActionIcon';
+import PageHero from '@/components/ui/PageHero';
 
 interface BugRow {
   id: string;
@@ -597,6 +598,16 @@ export default function BugTrackerPage() {
 
   return (
     <div className="-m-6 p-4 space-y-3">
+      <PageHero
+        icon={Bug}
+        title="Bug Tracker"
+        subtitle="Track, triage and escalate defects to Azure DevOps or JIRA"
+        stats={[
+          { label: 'Total', value: pagination.total },
+          { label: 'Critical', value: bugs.filter((b) => b.severity === 'critical').length, dot: 'bg-red-400' },
+          { label: 'Open', value: bugs.filter((b) => ['open', 'reopened', 'in_progress'].includes(b.status)).length, dot: 'bg-amber-400' },
+        ]}
+      />
       {/* Action bar — the layout header already names the page, so no title here */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         {/* Refresh — kept on the left, away from the primary actions */}

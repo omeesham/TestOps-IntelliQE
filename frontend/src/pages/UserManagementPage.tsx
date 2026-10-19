@@ -10,6 +10,7 @@ import {
 } from '@/services/api';
 import { useToast } from '@/components/feedback/ToastProvider';
 import ActionIcon from '@/components/ui/ActionIcon';
+import PageHero from '@/components/ui/PageHero';
 
 interface TenantUser {
   id: string;
@@ -232,6 +233,16 @@ function UserManagementContent() {
 
   return (
     <div className="-m-6 p-4 space-y-3">
+      <PageHero
+        icon={Users}
+        title="User Management"
+        subtitle="Manage your workspace members, roles and access"
+        stats={[
+          { label: 'Users', value: totalUsers },
+          { label: 'Active', value: activeUsers, dot: 'bg-emerald-400' },
+          { label: 'Admins', value: adminCount },
+        ]}
+      />
       {/* Toolbar: New User (left) + Search (right) */}
       <div className="flex items-center gap-3">
         <button

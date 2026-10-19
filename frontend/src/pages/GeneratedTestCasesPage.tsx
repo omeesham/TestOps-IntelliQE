@@ -12,6 +12,7 @@ import {
 } from '@/services/api';
 import { useToast } from '@/components/feedback/ToastProvider';
 import ActionIcon from '@/components/ui/ActionIcon';
+import PageHero from '@/components/ui/PageHero';
 
 const TAG_VOCAB = ['POSITIVE', 'NEGATIVE', 'E2E', 'UI', 'API', 'SMOKE', 'REGRESSION'] as const;
 type TagName = typeof TAG_VOCAB[number];
@@ -704,6 +705,13 @@ export default function GeneratedTestCasesPage() {
   return (
     <div className="-m-6 p-4 space-y-3">
       <ConfirmModal />
+
+      <PageHero
+        icon={FileText}
+        title="Generated Test Cases"
+        subtitle="Browse, edit and export the test suites your AI pipeline has produced"
+        stats={[{ label: 'Test runs', value: pagination.total }]}
+      />
 
       {/* Unified toolbar: Generate · Module · Submodule · Search */}
       <div className="flex items-center gap-2 flex-wrap">

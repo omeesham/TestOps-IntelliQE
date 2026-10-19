@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { ThemeProvider } from '@/contexts/ThemeContext';
 import { FeatureToggleProvider, useFeature } from '@/contexts/FeatureToggleContext';
 import { ToastProvider } from '@/components/feedback/ToastProvider';
 import ErrorBoundary from '@/components/ErrorBoundary';
@@ -91,17 +92,19 @@ function AppRoutes() {
 export default function App() {
   return (
     <ErrorBoundary>
-      <BrowserRouter>
-        <AuthProvider>
-          <FeatureToggleProvider>
-            <ToastProvider>
-              <RouteBreadcrumbs />
-              <AppRoutes />
-              <DiagnosticsPanel />
-            </ToastProvider>
-          </FeatureToggleProvider>
-        </AuthProvider>
-      </BrowserRouter>
+      <ThemeProvider>
+        <BrowserRouter>
+          <AuthProvider>
+            <FeatureToggleProvider>
+              <ToastProvider>
+                <RouteBreadcrumbs />
+                <AppRoutes />
+                <DiagnosticsPanel />
+              </ToastProvider>
+            </FeatureToggleProvider>
+          </AuthProvider>
+        </BrowserRouter>
+      </ThemeProvider>
     </ErrorBoundary>
   );
 }
