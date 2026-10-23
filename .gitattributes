@@ -7,3 +7,8 @@
 *.docx binary
 *.xlsx binary
 *.pptx binary
+
+# Files that run inside the Linux container: always LF, even on a Windows checkout
+*.sh text eol=lf
+docker/** text eol=lf
+Dockerfile text eol=lf
