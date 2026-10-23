@@ -44,3 +44,24 @@ ADA module.
    - the legacy demo token is accepted;
    - passwords are partly shown in API responses;
    - report links need no login.
+
+## Status at `poc-base-v1.0.0`
+
+| # | Issue | Status |
+| --- | --- | --- |
+| 1 | Windows clone fails | Fixed. Allure results removed from git and ignored |
+| 2 | Container build fails | Fixed. The agents path is corrected and the image builds |
+| 3 | CI never runs | Fixed for POC branches. The root workflow builds, runs the image and runs the smoke suite on `poc/**` |
+| 4 | Vulnerable dependencies | Critical issues: 0 (was 3). Frontend: 0. Backend: 22 high remain, all needing major upgrades or having no fix (see PORT_BACK.md) |
+| 5 | Internal files in the repo root | Removed. JBS demo passwords also removed from the docs and seed files |
+| 6 | Login and security | Fixed: production sign-in rules, credentials encrypted and masked, report links require sign-in |
+
+Found and fixed during the work:
+- **Container runtime:**
+  - test runs could not work inside the container (Playwright 1.48 browsers vs a 1.59+ library, and Edge is not available on Linux);
+  - Node 20 was end-of-life.
+- **Windows-built image would not start:** the container scripts had CRLF line endings.
+- **Production start-up:**
+  - the worker secret silently defaulted to `dev-secret`;
+  - the app now refuses to start without its required secrets.
+- **Client view:** Agent Monitor showed sample data; it is now hidden by default.
