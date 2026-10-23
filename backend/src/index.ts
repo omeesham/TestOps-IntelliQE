@@ -152,10 +152,19 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
 
     const stored = rows[0].password_hash as string;
     const isBcrypt = typeof stored === 'string' && /^\$2[aby]\$/.test(stored);
-    const match = isBcrypt ? await bcrypt.compare(password, stored) : stored === password;
+    // Plain-text passwords (old seed data) are accepted only outside production,
+    // or when ALLOW_PLAINTEXT_PASSWORDS=true during a migration; either way they
+    // are replaced by a bcrypt hash on the first successful sign-in.
+    const plaintextAllowed = process.env.NODE_ENV !== 'production' || process.env.ALLOW_PLAINTEXT_PASSWORDS === 'true';
+    const match = isBcrypt
+      ? await bcrypt.compare(password, stored)
+      : plaintextAllowed && !!stored && stored === password;
     if (!match) {
       res.status(401).json({ success: false, error: 'Invalid credentials' });
       return;
+    }
+    if (!isBcrypt) {
+      await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [await bcrypt.hash(password, 10), rows[0].id]);
     }
 
     const row = rows[0];
@@ -187,6 +196,13 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
 });
 
 app.post('/api/auth/signup', authLimiter, async (req, res) => {
+  // Self-service signup lets the caller pick a role and join a tenant by name,
+  // so it is closed in production unless explicitly enabled; administrators
+  // add users instead.
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_PUBLIC_SIGNUP !== 'true') {
+    res.status(403).json({ success: false, error: 'Sign-up is disabled. Ask your administrator for an account.' });
+    return;
+  }
   try {
     const { username, password: rawPassword, fullName, email, role, tenantName } = req.body;
     const password = decryptField(rawPassword || '');

@@ -738,14 +738,37 @@ export async function initDb(): Promise<void> {
       IF NOT EXISTS (SELECT 1 FROM ${SCHEMA}.tenants WHERE slug = 'jbs')
         INSERT INTO ${SCHEMA}.tenants (name, slug, is_platform)
         VALUES ('Jade Business Solutions', 'jbs', 1)`);
-    await exec(`
-      IF NOT EXISTS (SELECT 1 FROM ${SCHEMA}.users WHERE username = 'jbsadmin')
-        INSERT INTO ${SCHEMA}.users (tenant_id, username, password_hash, full_name, role)
-        VALUES ((SELECT id FROM ${SCHEMA}.tenants WHERE slug = 'jbs'), 'jbsadmin', 'Omeesha@19', 'JBS Admin', 'admin')`);
-    await exec(`
-      IF NOT EXISTS (SELECT 1 FROM ${SCHEMA}.users WHERE username = 'qaengineer')
-        INSERT INTO ${SCHEMA}.users (tenant_id, username, password_hash, full_name, role)
-        VALUES ((SELECT id FROM ${SCHEMA}.tenants WHERE slug = 'jbs'), 'qaengineer', 'Login@2026', 'QA Engineer', 'qa_engineer')`);
+    if (process.env.NODE_ENV !== 'production') {
+      // Development accounts only; never seeded into a production image.
+      await exec(`
+        IF NOT EXISTS (SELECT 1 FROM ${SCHEMA}.users WHERE username = 'jbsadmin')
+          INSERT INTO ${SCHEMA}.users (tenant_id, username, password_hash, full_name, role)
+          VALUES ((SELECT id FROM ${SCHEMA}.tenants WHERE slug = 'jbs'), 'jbsadmin', 'Omeesha@19', 'JBS Admin', 'admin')`);
+      await exec(`
+        IF NOT EXISTS (SELECT 1 FROM ${SCHEMA}.users WHERE username = 'qaengineer')
+          INSERT INTO ${SCHEMA}.users (tenant_id, username, password_hash, full_name, role)
+          VALUES ((SELECT id FROM ${SCHEMA}.tenants WHERE slug = 'jbs'), 'qaengineer', 'Login@2026', 'QA Engineer', 'qa_engineer')`);
+    } else {
+      // Production: one initial administrator from the deployment's secrets
+      // (INITIAL_ADMIN_USERNAME / INITIAL_ADMIN_PASSWORD), created only while the
+      // database has no users. The password is stored as a bcrypt hash.
+      const adminUser = process.env.INITIAL_ADMIN_USERNAME?.trim();
+      const adminPassword = process.env.INITIAL_ADMIN_PASSWORD || '';
+      const { rows } = await query(`SELECT COUNT(*) AS n FROM users`);
+      if (Number(rows[0]?.n) === 0) {
+        if (!adminUser || adminPassword.length < 12) {
+          console.warn('[DB] No users exist. Set INITIAL_ADMIN_USERNAME and INITIAL_ADMIN_PASSWORD (12+ characters) to create the first administrator.');
+        } else {
+          const { default: bcrypt } = await import('bcrypt');
+          await query(
+            `INSERT INTO users (tenant_id, username, password_hash, full_name, role)
+             VALUES ((SELECT id FROM tenants WHERE slug = 'jbs'), $1, $2, $3, 'admin')`,
+            [adminUser, await bcrypt.hash(adminPassword, 10), 'Administrator'],
+          );
+          console.log(`[DB] Created initial administrator "${adminUser}"`);
+        }
+      }
+    }
 
     // ─── 13. Seed: QA agent types ───
     const agentSeeds: Array<[string, string, string, string, string, string, string, number]> = [
