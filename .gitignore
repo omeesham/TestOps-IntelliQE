@@ -38,6 +38,8 @@ client-deliverable/dist/
 # ─────────────────────────────────────────────────────────────
 backend/allure-results/
 backend/allure-reports/
+# Stored Allure results per tenant/run (generated at runtime)
+**/allure-results-store/
 **/allure-results/
 **/allure-reports/
 playwright-report/

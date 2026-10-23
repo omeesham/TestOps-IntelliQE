@@ -4,9 +4,9 @@
  * Reads `Authorization: Bearer <jwt>` and verifies the JWT signature.
  * Attaches a small `AuthUser` to `req.user` for downstream routes.
  *
- * Legacy token format (`intelliqe-demo-token-{ts}:{username}`) is still
- * accepted for one release cycle so existing sessions don't break — the
- * server then does a DB lookup. Disable by setting `LEGACY_TOKEN_AUTH=false`.
+ * Legacy token format (`intelliqe-demo-token-{ts}:{username}`) is unsigned,
+ * so it is OFF by default. It is accepted only when `LEGACY_TOKEN_AUTH=true`
+ * (temporary migration of old sessions); the server then does a DB lookup.
  */
 import type { Request, Response, NextFunction } from 'express';
 import pool from '../db.js';
@@ -71,8 +71,8 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
       }
     }
 
-    // ── Path B: Legacy demo token — DB-backed lookup ──────
-    if (process.env.LEGACY_TOKEN_AUTH === 'false') {
+    // ── Path B: Legacy demo token — DB-backed lookup (opt-in only) ──
+    if (process.env.LEGACY_TOKEN_AUTH !== 'true') {
       res.status(401).json({ error: 'Token format no longer supported — please log in again' });
       return;
     }

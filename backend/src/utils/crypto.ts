@@ -195,49 +195,96 @@ export function decryptBody<T extends Record<string, any>>(body: T): T {
  * Idempotent — values already prefixed with `__AES__` are left alone.
  */
 export function encryptConfigData(configData: Record<string, any>): Record<string, any> {
-  const result: any = { ...configData };
-  for (const key of Object.keys(result)) {
-    if (
-      SENSITIVE_CONFIG_KEYS.has(key) &&
-      typeof result[key] === 'string' &&
-      result[key].length > 0 &&
-      !result[key].startsWith(REST_PREFIX)
-    ) {
-      // First normalize transit-encrypted / legacy values, then re-encrypt at rest.
-      let plain = result[key];
-      if (plain.startsWith(TRANSIT_PREFIX)) plain = decryptStored(plain);
-      result[key] = encryptAtRest(plain);
-    }
-  }
-  return result;
+  return mapSensitive(configData, (value) => {
+    if (!value || value.startsWith(REST_PREFIX)) return value;
+    // First normalize transit-encrypted / legacy values, then re-encrypt at rest.
+    return encryptAtRest(value.startsWith(TRANSIT_PREFIX) ? decryptStored(value) : value);
+  }) as Record<string, any>;
 }
 
 /** Decrypt all sensitive fields in a config object loaded from DB. */
 export function decryptConfigData(configData: Record<string, any>): Record<string, any> {
-  const result: any = { ...configData };
-  for (const key of Object.keys(result)) {
-    if (typeof result[key] === 'string') {
-      if (result[key].startsWith(REST_PREFIX) || result[key].startsWith(TRANSIT_PREFIX)) {
-        result[key] = decryptStored(result[key]);
-      }
-    }
-  }
-  return result;
+  return mapStrings(configData, (value) =>
+    value.startsWith(REST_PREFIX) || value.startsWith(TRANSIT_PREFIX) ? decryptStored(value) : value,
+  ) as Record<string, any>;
 }
 
 /** Mask sensitive fields for safe API responses (never exposes real values). */
 export function maskConfigData(configData: Record<string, any>): Record<string, any> {
-  const masked: any = { ...configData };
-  for (const key of Object.keys(masked)) {
-    if (SENSITIVE_CONFIG_KEYS.has(key) && typeof masked[key] === 'string') {
-      const plain =
-        masked[key].startsWith(REST_PREFIX) || masked[key].startsWith(TRANSIT_PREFIX)
-          ? decryptStored(masked[key])
-          : masked[key];
-      masked[key] = maskSecret(plain);
-    }
+  return mapSensitive(configData, (value, key) => {
+    // Passwords are fully masked; tokens keep a hint (first 3 + last 2) to tell them apart.
+    if (/password/i.test(key)) return value ? '••••••••' : '';
+    return maskSecret(value.startsWith(REST_PREFIX) || value.startsWith(TRANSIT_PREFIX) ? decryptStored(value) : value);
+  }) as Record<string, any>;
+}
+
+// Config objects nest secrets (e.g. an application's roles[].password), so the
+// helpers walk objects and arrays. Depth-limited against odd payloads.
+const MAX_DEPTH = 6;
+
+function mapSensitive(value: any, fn: (v: string, key: string) => string, depth = 0): any {
+  if (depth > MAX_DEPTH || value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map((v) => mapSensitive(v, fn, depth + 1));
+  const out: any = {};
+  for (const [k, v] of Object.entries(value)) {
+    out[k] = SENSITIVE_CONFIG_KEYS.has(k) && typeof v === 'string' ? fn(v, k) : mapSensitive(v, fn, depth + 1);
   }
-  return masked;
+  return out;
+}
+
+function mapStrings(value: any, fn: (v: string) => string, depth = 0): any {
+  if (depth > MAX_DEPTH) return value;
+  if (typeof value === 'string') return fn(value);
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map((v) => mapStrings(v, fn, depth + 1));
+  const out: any = {};
+  for (const [k, v] of Object.entries(value)) out[k] = mapStrings(v, fn, depth + 1);
+  return out;
+}
+
+/**
+ * A value the UI got back masked from GET and returned unchanged on save:
+ * it means "keep the stored secret", never "this is the new secret".
+ * Real secrets are ASCII and never contain '•'.
+ */
+export function isMaskedSecret(value: unknown): boolean {
+  return typeof value === 'string' && value.includes('•');
+}
+
+/** True when any sensitive field, at any depth, came back as a mask. */
+export function hasMaskedSecret(value: any, depth = 0): boolean {
+  if (depth > MAX_DEPTH || value === null || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return value.some((v) => hasMaskedSecret(v, depth + 1));
+  return Object.entries(value).some(([k, v]) =>
+    (SENSITIVE_CONFIG_KEYS.has(k) && isMaskedSecret(v)) || hasMaskedSecret(v, depth + 1));
+}
+
+/**
+ * Replace masked secrets in `next` with the stored values at the same place in
+ * `stored`. Array items are matched by id / name / username / roleName, else by
+ * position. A mask with no stored counterpart is dropped.
+ */
+export function restoreMaskedSecrets(next: any, stored: any, depth = 0): any {
+  if (depth > MAX_DEPTH || next === null || typeof next !== 'object') return next;
+  if (Array.isArray(next)) {
+    const pool = Array.isArray(stored) ? stored : [];
+    const keyOf = (o: any) => (o && typeof o === 'object' ? o.id ?? o.name ?? o.username ?? o.roleName : undefined);
+    return next.map((item, i) => {
+      const k = keyOf(item);
+      const match = (k !== undefined ? pool.find((p) => keyOf(p) === k) : undefined) ?? pool[i];
+      return restoreMaskedSecrets(item, match, depth + 1);
+    });
+  }
+  const out: any = {};
+  for (const [k, v] of Object.entries(next)) {
+    if (SENSITIVE_CONFIG_KEYS.has(k) && isMaskedSecret(v)) {
+      const prev = stored && typeof stored === 'object' ? stored[k] : undefined;
+      if (typeof prev === 'string' && prev) out[k] = prev;
+      continue; // nothing stored — drop the mask
+    }
+    out[k] = restoreMaskedSecrets(v, stored && typeof stored === 'object' ? stored[k] : undefined, depth + 1);
+  }
+  return out;
 }
 
 /** Mask a string for safe display: first 3 + last 2 characters. */

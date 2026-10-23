@@ -8,7 +8,7 @@
 # Build context must be the repo root:  docker build -t intelliqe .
 
 # ── Stage 1: Build React UI (Vite) ────────────────────────────────
-FROM node:20-alpine AS ui-builder
+FROM node:24-alpine AS ui-builder
 
 # Version stamp shown in the sidebar (V<build>-DDMMYY). Passed by CI / compose;
 # Vite exposes VITE_-prefixed env vars to the client at build time.
@@ -24,7 +24,10 @@ RUN npm run build          # -> /ui/dist
 # ── Stage 2: Build Express API (TypeScript -> dist) ───────────────
 # Built on the same glibc/Node base as the runtime so native modules
 # (e.g. bcrypt) keep a compatible ABI.
-FROM mcr.microsoft.com/playwright:v1.48.0-jammy AS api-builder
+# The Playwright image version MUST equal the @playwright/test version in
+# backend/package-lock.json, or the bundled browsers do not match and test runs
+# fail with "Executable doesn't exist". Update both together.
+FROM mcr.microsoft.com/playwright:v1.64.1-noble AS api-builder
 
 WORKDIR /api
 COPY backend/package*.json ./
@@ -34,12 +37,15 @@ RUN npm run build          # tsc -> /api/dist
 RUN npm prune --omit=dev   # strip devDeps (tsx, typescript, @types) for runtime
 
 # ── Stage 3: Final Runtime Image ──────────────────────────────────
-FROM mcr.microsoft.com/playwright:v1.48.0-jammy
+FROM mcr.microsoft.com/playwright:v1.64.1-noble
 
+# PLAYWRIGHT_CHANNEL: the runner defaults to Microsoft Edge (msedge), which is
+# not in the Linux image; use the bundled Chromium (same engine) instead.
 ENV NODE_ENV=production \
     PORT=3001 \
     RUN_WORKER=true \
-    BACKEND_URL=http://127.0.0.1:3001
+    BACKEND_URL=http://127.0.0.1:3001 \
+    PLAYWRIGHT_CHANNEL=chromium
 
 # nginx + supervisor + envsubst (gettext-base) + wget for healthcheck
 RUN apt-get update \
@@ -56,7 +62,7 @@ COPY --from=api-builder /api/package.json  ./backend/package.json
 # Pipeline definition + other runtime config (loaded at ../../config from dist/)
 COPY --from=api-builder /api/config        ./backend/config
 # Agent prompt definitions — worker resolves AGENTS_DIR to backend/.github/agents
-COPY .github/agents                        ./backend/.github/agents
+COPY client-deliverable/.github/agents     ./backend/.github/agents
 
 # Built React UI -> nginx web root
 COPY --from=ui-builder /ui/dist /usr/share/nginx/html

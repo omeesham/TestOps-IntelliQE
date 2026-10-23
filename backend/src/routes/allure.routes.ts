@@ -6,6 +6,7 @@ import fs from 'fs/promises';
 import { getOrGenerateRealReport, getReportStatus } from '../services/allure-report.service.js';
 import { PlaywrightRunError } from '../services/playwright-runner.service.js';
 import { authMiddleware } from '../middleware/auth.middleware.js';
+import { signReportToken, verifyReportToken } from '../utils/jwt.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,6 +32,37 @@ function escapesDir(baseDir: string, target: string): boolean {
   return rel === '' ? false : rel.startsWith('..') || path.isAbsolute(rel);
 }
 
+/*
+ * Report files load in an iframe / download link, which cannot send the
+ * Authorization header. Signed-in calls that hand out a report URL (generate,
+ * status) also set a short-lived, tenant-bound, httpOnly cookie scoped to the
+ * report path; the file routes require it for the tenant in the URL.
+ */
+const REPORT_COOKIE = 'iqe_report';
+const REPORT_COOKIE_PATH = '/api/allure/report';
+
+function setReportCookie(req: Request, res: Response, tenantId: string): void {
+  const secure = req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0]!.trim() === 'https';
+  res.cookie(REPORT_COOKIE, signReportToken(tenantId), {
+    httpOnly: true, sameSite: 'strict', secure, path: REPORT_COOKIE_PATH, maxAge: 12 * 60 * 60 * 1000,
+  });
+}
+
+function readCookie(req: Request, name: string): string {
+  for (const part of String(req.headers.cookie || '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0 && part.slice(0, i).trim() === name) {
+      try { return decodeURIComponent(part.slice(i + 1).trim()); } catch { return ''; }
+    }
+  }
+  return '';
+}
+
+/** True when the request carries a valid report cookie for `tenantId`. */
+function hasReportAccess(req: Request, tenantId: string): boolean {
+  return verifyReportToken(readCookie(req, REPORT_COOKIE)) === tenantId;
+}
+
 /**
  * POST /api/allure/generate  (auth required)
  * Trigger Allure report generation.
@@ -45,6 +77,7 @@ router.post('/generate', authMiddleware, async (req: Request, res: Response) => 
       return;
     }
     const key = `${user.tenantId}:${runId}`;
+    setReportCookie(req, res, user.tenantId);
 
     // Deduplicate concurrent requests
     if (inFlight.has(key)) {
@@ -100,6 +133,7 @@ router.get('/status', authMiddleware, async (req: Request, res: Response) => {
     const user = req.user!;
     const runId = req.query.runId as string | undefined;
     const status = await getReportStatus(user.tenantId, runId);
+    setReportCookie(req, res, user.tenantId);
     res.json(status);
   } catch (err: any) {
     console.error('Allure status error:', err.message);
@@ -108,7 +142,7 @@ router.get('/status', authMiddleware, async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/allure/report/:tenantId/:scope/download  (NO auth — tenant UUID is an opaque token)
+ * GET /api/allure/report/:tenantId/:scope/download  (report cookie required)
  * Download the single self-contained report HTML as a file attachment.
  * Registered BEFORE the wildcard serve route so "download" isn't treated as a filename.
  */
@@ -120,6 +154,10 @@ router.get('/report/:tenantId/:scope/download', async (req: Request, res: Respon
     // tenantId/scope (e.g. "..%2Fother-tenant") escapes into another tenant's dir.
     if (unsafeSegment(tenantId) || unsafeSegment(scope)) {
       res.status(400).json({ error: 'Invalid path' });
+      return;
+    }
+    if (!hasReportAccess(req, tenantId)) {
+      res.status(401).json({ error: 'Sign in to IntelliQE and open the report from the Reports page.' });
       return;
     }
     const baseDir = path.join(BACKEND_ROOT, 'allure-reports', tenantId, scope);
@@ -144,9 +182,9 @@ router.get('/report/:tenantId/:scope/download', async (req: Request, res: Respon
 });
 
 /**
- * GET /api/allure/report/:tenantId/:scope/*  (NO auth — static files for iframe)
+ * GET /api/allure/report/:tenantId/:scope/*  (report cookie required — static files for iframe)
  * Serve static Allure HTML report files.
- * Security: tenant ID in URL acts as an opaque token (UUIDs are unguessable).
+ * Security: a signed, tenant-bound report cookie (set by /generate and /status).
  */
 router.get('/report/:tenantId/:scope/{*filePath}', async (req: Request, res: Response) => {
   try {
@@ -155,6 +193,10 @@ router.get('/report/:tenantId/:scope/{*filePath}', async (req: Request, res: Res
     // Validate the tenant/scope segments before they become trusted path roots.
     if (unsafeSegment(tenantId) || unsafeSegment(scope)) {
       res.status(400).json({ error: 'Invalid path' });
+      return;
+    }
+    if (!hasReportAccess(req, tenantId)) {
+      res.status(401).json({ error: 'Sign in to IntelliQE and open the report from the Reports page.' });
       return;
     }
 
