@@ -56,7 +56,7 @@ COPY --from=api-builder /api/package.json  ./backend/package.json
 # Pipeline definition + other runtime config (loaded at ../../config from dist/)
 COPY --from=api-builder /api/config        ./backend/config
 # Agent prompt definitions — worker resolves AGENTS_DIR to backend/.github/agents
-COPY .github/agents                        ./backend/.github/agents
+COPY client-deliverable/.github/agents     ./backend/.github/agents
 
 # Built React UI -> nginx web root
 COPY --from=ui-builder /ui/dist /usr/share/nginx/html
