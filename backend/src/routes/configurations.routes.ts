@@ -10,6 +10,8 @@ import {
   maskConfigData,
   decryptConfigData,
   encryptConfigData,
+  hasMaskedSecret,
+  restoreMaskedSecrets,
 } from '../utils/crypto.js';
 
 const router = Router();
@@ -59,8 +61,19 @@ router.put('/:integrationId', async (req: Request, res: Response) => {
 
     // Step 1: Decrypt any __ENC__ values from frontend transit encryption
     const decryptedData = decryptConfigData(rawConfigData);
+    // Forms load the masked config from GET; when a user saves without retyping
+    // a secret, the mask comes back here. Persisting it would DESTROY the stored
+    // secret, so a masked value means "keep the existing one" (at any depth,
+    // e.g. an application's roles[].password).
+    let restoredData = decryptedData;
+    if (hasMaskedSecret(decryptedData)) {
+      const existing = (await getConfigsForTenant(user.tenantId))
+        .find((c: any) => c.integrationId === integrationId);
+      const stored = existing ? decryptConfigData(existing.configData || {}) : {};
+      restoredData = restoreMaskedSecrets(decryptedData, stored);
+    }
     // Step 2: Re-encrypt sensitive fields for secure at-rest storage in DB
-    const encryptedData = encryptConfigData(decryptedData);
+    const encryptedData = encryptConfigData(restoredData);
 
     const config = await upsertConfig(
       user.tenantId,
@@ -72,7 +85,7 @@ router.put('/:integrationId', async (req: Request, res: Response) => {
 
     console.log(`Configuration connected: tenant=${user.tenantId}, integration=${integrationId}, by=${user.username}`);
     // Return masked config — never expose real credentials in response
-    res.json({ ok: true, config: { ...config, configData: maskConfigData(decryptedData) } });
+    res.json({ ok: true, config: { ...config, configData: maskConfigData(restoredData) } });
   } catch (err: any) {
     console.error('Connect configuration error:', err.message);
     res.status(500).json({ error: 'Failed to connect integration' });

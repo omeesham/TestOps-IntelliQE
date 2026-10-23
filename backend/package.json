@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=.env src/index.ts",
     "build": "tsc",
+    "test": "node --import tsx --test \"test/*.test.ts\"",
     "start": "node dist/index.js",
     "worker:start": "tsx --env-file-if-exists=.env src/worker/index.ts"
   },
