@@ -51,6 +51,7 @@ import { initDb } from './db.js';
 import pool from './db.js';
 import { decryptField } from './utils/crypto.js';
 import { signToken } from './utils/jwt.js';
+import { missingProductionSettings } from './utils/startup-check.js';
 import { authMiddleware } from './middleware/auth.middleware.js';
 import { requestContext } from './middleware/request-context.middleware.js';
 import { auditMutations } from './middleware/audit.middleware.js';
@@ -297,6 +298,12 @@ app.use('/api', notFoundHandler);
 app.use(errorHandler);
 
 setEventCallback((runId, event) => broadcastSSE(runId, event));
+
+const missingSettings = missingProductionSettings();
+if (missingSettings.length) {
+  logger.error('Refusing to start: required production settings are missing or weak', { settings: missingSettings });
+  process.exit(1);
+}
 
 initDb()
   .then(() => {
