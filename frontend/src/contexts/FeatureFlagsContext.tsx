@@ -24,6 +24,10 @@ interface FeatureFlagsContextType {
 
 const FeatureFlagsContext = createContext<FeatureFlagsContextType | null>(null);
 
+// POC builds: features OFF until a tenant switches them on in Feature Toggles.
+// Agent Monitor still shows sample data, so it is hidden by default.
+const OFF_BY_DEFAULT = new Set(['page.agentMonitor']);
+
 export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
   const { isAuthenticated } = useAuth();
   const [flags, setFlags] = useState<Record<string, boolean>>({});
@@ -46,6 +50,7 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
 
   const isEnabled = useCallback((key?: string) => {
     if (!key) return true;
+    if (OFF_BY_DEFAULT.has(key)) return flags[key] === true;
     return flags[key] !== false;
   }, [flags]);
 
