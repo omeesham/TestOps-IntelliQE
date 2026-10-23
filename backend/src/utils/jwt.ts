@@ -44,3 +44,18 @@ export function signToken(payload: JwtPayload): string {
 export function verifyToken(token: string): JwtPayload {
   return jwt.verify(token, getSecret(), { algorithms: ['HS256'] }) as JwtPayload;
 }
+
+/** Report-viewing token: tenant-bound, purpose-bound, short-lived. */
+export function signReportToken(tenantId: string, expiresIn = '12h'): string {
+  return jwt.sign({ tid: tenantId, pur: 'report' }, getSecret(), { algorithm: 'HS256', expiresIn: expiresIn as any });
+}
+
+/** Tenant id of a valid report token, or null. */
+export function verifyReportToken(token: string): string | null {
+  try {
+    const c = jwt.verify(token, getSecret(), { algorithms: ['HS256'] }) as { tid?: string; pur?: string };
+    return c.pur === 'report' && typeof c.tid === 'string' ? c.tid : null;
+  } catch {
+    return null;
+  }
+}
