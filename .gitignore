@@ -85,3 +85,7 @@ Thumbs.db
 .cache/
 tmp/
 temp/
+
+# Smoke suite output
+backend/smoke/smoke-report/
+backend/smoke/smoke-results/
