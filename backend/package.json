@@ -63,5 +63,8 @@
     "@wdio/json-reporter": "^9.0.0",
     "@wdio/spec-reporter": "^9.0.0",
     "webdriverio": "^9.0.0"
+  },
+  "overrides": {
+    "dompurify": "^3.4.17"
   }
 }
