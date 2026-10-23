@@ -11,11 +11,18 @@ import { test, expect, type Page } from '@playwright/test';
 const USER = process.env.SMOKE_USER || '';
 const PASSWORD = process.env.SMOKE_PASSWORD || '';
 
-async function signIn(page: Page, username: string, password: string) {
+/** Signs in through the UI and returns the HTTP status of the login call. */
+async function signIn(page: Page, username: string, password: string): Promise<number> {
   await page.goto('/login');
   await page.locator('input[type="text"], input[name="username"]').first().fill(username);
   await page.locator('input[type="password"]').first().fill(password);
-  await page.locator('button[type="submit"]').first().click();
+  const [res] = await Promise.all([
+    page.waitForResponse((r) => r.url().includes('/api/auth/login')),
+    page.locator('button[type="submit"]').first().click(),
+  ]);
+  // The login page shows every failure as "Invalid credentials"; say what really happened.
+  expect(res.status(), res.status() === 429 ? 'Rate-limited (5 sign-ins/min): wait a minute and re-run' : '').not.toBe(429);
+  return res.status();
 }
 
 test.describe.configure({ mode: 'serial' });
@@ -38,14 +45,14 @@ test('public sign-up is closed', async ({ request }) => {
 });
 
 test('invalid sign-in shows an error and stays on the login page', async ({ page }) => {
-  await signIn(page, USER, 'definitely-not-the-password');
+  expect(await signIn(page, USER, 'definitely-not-the-password'), 'login API status').toBe(401);
   await expect(page.getByText(/invalid credentials/i)).toBeVisible();
   await expect(page).toHaveURL(/\/login/);
 });
 
 test('signed-in admin: Chat, scope, menu and Reports', async ({ page }) => {
   await test.step('valid sign-in reaches Chat', async () => {
-    await signIn(page, USER, PASSWORD);
+    expect(await signIn(page, USER, PASSWORD), 'login API status').toBe(200);
     await expect(page).toHaveURL(/\/chat/, { timeout: 20_000 });
   });
 

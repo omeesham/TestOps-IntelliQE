@@ -1,7 +1,8 @@
 name: POC build check
 
 # Runs on every PR to a POC branch and on pushes to them: installs, builds the
-# backend and frontend, and builds the container image (not pushed anywhere).
+# backend and frontend, builds the container image (not pushed anywhere), runs
+# it in production mode against a throwaway SQL Server, and runs the smoke suite.
 
 on:
   pull_request:
@@ -17,6 +18,13 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: CiOnly_Throwaway_Pass1
+        ports: [ '1433:1433' ]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -45,3 +53,42 @@ jobs:
 
       - name: Container image build (no push)
         run: docker build -t intelliqe:ci .
+
+      # Throwaway, per-run values; nothing here is a real secret.
+      - name: Run the image in production mode
+        run: |
+          docker run -d --name iqe --network host \
+            -e NODE_ENV=production \
+            -e AZURE_SQL_SERVER=localhost -e AZURE_SQL_PORT=1433 -e AZURE_SQL_USER=sa \
+            -e AZURE_SQL_PASSWORD=CiOnly_Throwaway_Pass1 -e AZURE_SQL_DATABASE=IQE_CI \
+            -e DB_SSL=true -e DB_TRUST_SERVER_CERT=true -e DB_BOOTSTRAP=true \
+            -e JWT_SECRET="$(openssl rand -hex 32)" \
+            -e ENCRYPTION_KEY="$(openssl rand -base64 32)" \
+            -e WORKER_SECRET="$(openssl rand -hex 16)" \
+            -e INITIAL_ADMIN_USERNAME=smoke.admin -e INITIAL_ADMIN_PASSWORD=Smoke-Admin-CI-1 \
+            intelliqe:ci
+          for i in $(seq 1 40); do curl -sf http://localhost/api/health && exit 0; sleep 3; done
+          docker logs iqe; exit 1
+
+      - name: Smoke suite
+        working-directory: backend
+        env:
+          SMOKE_BASE_URL: http://localhost
+          SMOKE_USER: smoke.admin
+          SMOKE_PASSWORD: Smoke-Admin-CI-1
+          PLAYWRIGHT_CHANNEL: chromium
+        run: |
+          npx playwright install --with-deps chromium
+          npm run smoke
+
+      - name: Smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-report
+          path: backend/smoke/smoke-report
+          if-no-files-found: ignore
+
+      - name: Container logs on failure
+        if: failure()
+        run: docker logs iqe || true
