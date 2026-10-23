@@ -1,0 +1,9 @@
+# Binary files: never convert line endings (keeps PDFs and media intact)
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.mp4 binary
+*.docx binary
+*.xlsx binary
+*.pptx binary
