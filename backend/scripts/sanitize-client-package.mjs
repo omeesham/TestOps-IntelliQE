@@ -16,9 +16,10 @@ import path from 'node:path';
 const target = path.resolve(process.argv[2] ?? 'client-deliverable');
 
 const FORBIDDEN = [
-  // Known hardcoded credentials from the internal repo.
-  /Omeesha@19/i,
-  /Login@2026/i,
+  // Known credentials: the local dev passwords (from .env), never written here.
+  ...[process.env.DEV_ADMIN_PASSWORD, process.env.DEV_QA_PASSWORD]
+    .filter(Boolean)
+    .map((p) => new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')),
   /Encore@2026/i,
   // DB connection leaks.
   /JBSTestOpsAI/,

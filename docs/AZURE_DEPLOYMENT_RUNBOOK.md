@@ -92,13 +92,13 @@ All set on `ca-intelliqe` and **persist across deploys** (the workflow uses
 
 - 1 platform tenant — `Jade Business Solutions` (slug `jbs`, `is_platform=1`)
 - Users:
-  - `jbsadmin` / `Omeesha@19` — role `admin`
-  - `qaengineer` / `Login@2026` — role `qa_engineer`
+  - development only: two demo users (`jbsadmin`, `qaengineer`), created only when `DEV_ADMIN_PASSWORD` / `DEV_QA_PASSWORD` are set in `.env`
+  - production (`NODE_ENV=production`): no demo users; the first administrator is created
+    from `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` while the users table is empty
 - 5 `qa_agent_types` rows
 
-> ⚠️ The seed passwords are stored **plaintext** in `db.ts` (the login route at
-> `index.ts` accepts plaintext OR bcrypt). Rotate them to bcrypt hashes before any
-> real production use — see §5.5. Do **not** apply the SQL files in
+> ⚠️ In production, plain-text stored passwords are refused and demo users are never
+> seeded. Do **not** apply the SQL files in
 > `backend/db/seed/*.sql`; those are legacy **PostgreSQL** dialect and will error on
 > Azure SQL. The runtime `initDb()` is the only correct path.
 
@@ -286,7 +286,7 @@ revision/ingress/probe config.**
 - **Find it:** curl the endpoint and read the status:
   ```bash
   curl -sS -X POST https://<fqdn>/api/auth/login -H "Content-Type: application/json" \
-    -d '{"username":"jbsadmin","password":"Omeesha@19"}' -w "\nHTTP %{http_code}\n"
+    -d '{"username":"<admin-user>","password":"<admin-password>"}' -w "\nHTTP %{http_code}\n"
   # 401 = real bad credentials;  500 "Login failed" = server threw (check JWT_SECRET)
   ```
   Confirm the stored value if in doubt — connect to the DB and `SELECT username,

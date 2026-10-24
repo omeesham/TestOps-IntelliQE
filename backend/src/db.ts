@@ -760,15 +760,24 @@ export async function initDb(): Promise<void> {
         INSERT INTO ${SCHEMA}.tenants (name, slug, is_platform)
         VALUES ('Jade Business Solutions', 'jbs', 1)`);
     if (process.env.NODE_ENV !== 'production') {
-      // Development accounts only; never seeded into a production image.
-      await exec(`
-        IF NOT EXISTS (SELECT 1 FROM ${SCHEMA}.users WHERE username = 'jbsadmin')
-          INSERT INTO ${SCHEMA}.users (tenant_id, username, password_hash, full_name, role)
-          VALUES ((SELECT id FROM ${SCHEMA}.tenants WHERE slug = 'jbs'), 'jbsadmin', 'Omeesha@19', 'JBS Admin', 'admin')`);
-      await exec(`
-        IF NOT EXISTS (SELECT 1 FROM ${SCHEMA}.users WHERE username = 'qaengineer')
-          INSERT INTO ${SCHEMA}.users (tenant_id, username, password_hash, full_name, role)
-          VALUES ((SELECT id FROM ${SCHEMA}.tenants WHERE slug = 'jbs'), 'qaengineer', 'Login@2026', 'QA Engineer', 'qa_engineer')`);
+      // Development accounts only; never seeded into a production image. Their
+      // passwords come from the local .env (DEV_ADMIN_PASSWORD / DEV_QA_PASSWORD),
+      // never from the code; an account without a password is not created.
+      const devUsers = [
+        { username: 'jbsadmin', password: process.env.DEV_ADMIN_PASSWORD, fullName: 'JBS Admin', role: 'admin' },
+        { username: 'qaengineer', password: process.env.DEV_QA_PASSWORD, fullName: 'QA Engineer', role: 'qa_engineer' },
+      ];
+      for (const u of devUsers) {
+        if (!u.password) continue;
+        const { rows } = await query(`SELECT 1 AS found FROM users WHERE username = $1`, [u.username]);
+        if (rows.length) continue;
+        const { default: bcrypt } = await import('bcrypt');
+        await query(
+          `INSERT INTO users (tenant_id, username, password_hash, full_name, role)
+           VALUES ((SELECT id FROM tenants WHERE slug = 'jbs'), $1, $2, $3, $4)`,
+          [u.username, await bcrypt.hash(u.password, 10), u.fullName, u.role],
+        );
+      }
     } else {
       // Production: one initial administrator from the deployment's secrets
       // (INITIAL_ADMIN_USERNAME / INITIAL_ADMIN_PASSWORD), created only while the
