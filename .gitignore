@@ -40,6 +40,8 @@ backend/allure-results/
 backend/allure-reports/
 # Stored Allure results per tenant/run (generated at runtime)
 **/allure-results-store/
+# Uploaded test files per application (may contain client documents)
+**/test-data-store/
 **/allure-results/
 **/allure-reports/
 playwright-report/

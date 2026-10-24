@@ -1,13 +1,19 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { runPipeline } from '../agents/pipeline.js';
+import { getConfigsForTenant } from '../services/configurations.service.js';
+import { readOnlyEnvironmentForUrl } from '../services/app-environments.js';
 
 const router = Router();
 
 router.post('/', async (req: Request, res: Response) => {
   const { requirements, targetUrl, appName, environment } = req.body;
+  // A URL that belongs to a read-only environment stays read-only here too.
+  const safety = targetUrl && req.user?.tenantId
+    ? readOnlyEnvironmentForUrl(await getConfigsForTenant(req.user.tenantId), targetUrl)?.safety
+    : undefined;
   const appContext = targetUrl || appName || environment
-    ? { targetUrl, appName, environment }
+    ? { targetUrl, appName, environment, safety }
     : undefined;
 
   const result = await runPipeline(requirements || 'Run standard test suite', appContext);

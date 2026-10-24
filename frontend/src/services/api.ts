@@ -247,6 +247,10 @@ export async function startGeneration(
      * never exposed to the browser. Client-supplied values take precedence.
      */
     appId?: string;
+    /** Environment of that application (Application Setup); defaults to its first environment. */
+    envId?: string;
+    /** Test design depth: essential (smoke), standard (regression, default) or exhaustive (full regression). */
+    coverage?: 'essential' | 'standard' | 'exhaustive';
     /** Mobile Application Automation — native platform + uploaded build metadata. */
     platform?: 'android' | 'ios';
     appMetadata?: {
@@ -268,8 +272,10 @@ export async function startGeneration(
     exploreMode: options?.exploreMode,
     roles: options?.roles,
     appId: options?.appId,
+    envId: options?.envId,
     platform: options?.platform,
     appMetadata: options?.appMetadata,
+    coverage: options?.coverage,
   });
   return data;
 }
@@ -281,6 +287,14 @@ export interface GenerationResult {
   result?: any;
   error?: string;
   code?: string;
+}
+
+export interface PromptSuggestion { title: string; why: string; prompt: string }
+
+/** Up to 3 clearer versions of the user's requirement text (one AI call; may take a while on the CLI transport). */
+export async function suggestPrompts(body: { text: string; appName?: string; environment?: string }): Promise<PromptSuggestion[]> {
+  const { data } = await api.post('/generate/suggest-prompts', body, { timeout: 180_000 });
+  return Array.isArray(data?.suggestions) ? data.suggestions : [];
 }
 
 /** Fetch a generation job's status/result by runId. Returns the 404 body (status:'unknown') rather than throwing if the job has expired. */
@@ -317,6 +331,9 @@ export async function saveTestCases(payload: {
   source?: string;
   columns: string[];
   testCases: any[];
+  /** Application Setup app and environment the cases were generated for (scripts target its URL). */
+  appId?: string;
+  envId?: string;
   /** Mobile Application Automation — marks the run so scripts/execution use Appium. */
   platform?: 'android' | 'ios';
   appMetadata?: {
@@ -752,6 +769,29 @@ export async function connectIntegration(integrationId: string, configData: Reco
 
 export async function disconnectIntegration(integrationId: string) {
   const { data } = await api.delete(`/configurations/${integrationId}`);
+  return data;
+}
+
+/* ── Test files per application (Application Setup) ── */
+export interface TestFile { name: string; size: number; updatedAt: string }
+
+export async function listTestFiles(appId: string): Promise<{ files: TestFile[]; negativeFiles: { name: string; description: string }[] }> {
+  const { data } = await api.get(`/test-data/${appId}`);
+  return { files: data?.files || [], negativeFiles: data?.negativeFiles || [] };
+}
+
+export async function uploadTestFiles(appId: string, files: File[]): Promise<{ saved: string[]; rejected: { name: string; reason: string }[] }> {
+  const form = new FormData();
+  files.forEach((f) => form.append('files', f));
+  const { data } = await api.post(`/test-data/${appId}`, form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120_000,
+  });
+  return { saved: data?.saved || [], rejected: data?.rejected || [] };
+}
+
+export async function deleteTestFile(appId: string, name: string) {
+  const { data } = await api.delete(`/test-data/${appId}/${encodeURIComponent(name)}`);
   return data;
 }
 

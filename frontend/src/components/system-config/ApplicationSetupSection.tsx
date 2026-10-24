@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react';
-import { Plus, Trash2, Eye, EyeOff, Save, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Eye, EyeOff, Save, Loader2, X } from 'lucide-react';
 import { connectIntegration, disconnectIntegration } from '@/services/api';
 import { encryptSensitiveFields } from '@/utils/crypto';
+import TestFilesSection from './TestFilesSection';
 
 interface DbConfig {
   integrationId: string;
@@ -21,17 +22,34 @@ interface Role {
   roleName: string;
   username: string;
   password: string;
+  /** Local key for the row (not saved). */
+  key: string;
+}
+
+/** Read-only protection for a shared environment; lists are comma-separated while editing. */
+interface Safety {
+  readOnly: boolean;
+  allowedPaths: string;
+  allowWrite: string;
+}
+
+interface Environment {
+  id: string;
+  name: string;
+  baseUrl: string;
+  roles: Role[];
+  safety: Safety;
 }
 
 interface AppFormData {
   appName: string;
-  baseUrl: string;
-  environment: string;
-  roles: Role[];
+  environments: Environment[];
 }
 
 const INPUT_CLASS =
   'w-full px-3 py-2.5 rounded-xl border border-[#C5D6FF] bg-[#EEF4FF] text-sm outline-none focus:ring-2 focus:ring-[#3366FF]/20 focus:border-[#3366FF] transition-all';
+
+const ENV_PRESETS = ['QA', 'UAT', 'Staging', 'Development', 'Production'];
 
 function slugify(name: string): string {
   return name
@@ -41,19 +59,55 @@ function slugify(name: string): string {
     .replace(/[^a-z0-9-]/g, '');
 }
 
-const EMPTY_FORM: AppFormData = {
-  appName: '',
-  baseUrl: '',
-  environment: 'staging',
-  roles: [],
-};
+const newKey = () => Math.random().toString(36).slice(2, 10);
+const NO_SAFETY: Safety = { readOnly: false, allowedPaths: '', allowWrite: '' };
+const newEnvironment = (name: string): Environment => ({ id: `env-${newKey()}`, name, baseUrl: '', roles: [], safety: NO_SAFETY });
+
+type Raw = Record<string, unknown>;
+const str = (v: unknown) => (typeof v === 'string' ? v : '');
+const joinList = (v: unknown) => (Array.isArray(v) ? v.map(String).join(', ') : '');
+const splitList = (v: string) => v.split(',').map((s) => s.trim()).filter(Boolean);
+
+function toSafety(v: unknown): Safety {
+  const s = v && typeof v === 'object' ? (v as Raw) : {};
+  return { readOnly: s.readOnly === true, allowedPaths: joinList(s.allowedPaths), allowWrite: joinList(s.allowWrite) };
+}
+
+/** Saved form: only present when read-only is on. Empty sign-in list means the server's defaults. */
+function savedSafety(s: Safety) {
+  return s.readOnly ? { readOnly: true, allowedPaths: splitList(s.allowedPaths), allowWrite: splitList(s.allowWrite) } : undefined;
+}
+
+function toRoles(v: unknown): Role[] {
+  return Array.isArray(v)
+    ? v.filter((r): r is Raw => !!r && typeof r === 'object')
+      .map((r) => ({ roleName: str(r.roleName), username: str(r.username), password: str(r.password), key: newKey() }))
+    : [];
+}
+
+/** Environments of a saved app; apps saved before environments read as one "Default" environment. */
+function environmentsFromConfig(d: Raw): Environment[] {
+  if (Array.isArray(d.environments) && d.environments.length > 0) {
+    return (d.environments as Raw[]).map((e, i) => ({
+      id: String(e.id || `env-${i + 1}`),
+      name: String(e.name || `Environment ${i + 1}`),
+      baseUrl: String(e.baseUrl || ''),
+      roles: toRoles(e.roles),
+      safety: toSafety(e.safety),
+    }));
+  }
+  return [{ id: 'default', name: str(d.environment) || 'Default', baseUrl: str(d.baseUrl), roles: toRoles(d.roles), safety: toSafety(d.safety) }];
+}
+
+const EMPTY_FORM = (): AppFormData => ({ appName: '', environments: [newEnvironment('QA')] });
 
 export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
-  const [formData, setFormData] = useState<AppFormData>({ ...EMPTY_FORM });
+  const [formData, setFormData] = useState<AppFormData>(EMPTY_FORM);
+  const [activeEnv, setActiveEnv] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [visiblePasswords, setVisiblePasswords] = useState<Set<number>>(new Set());
+  const [visiblePasswords, setVisiblePasswords] = useState<Set<string>>(new Set());
   const [isNewApp, setIsNewApp] = useState(false);
 
   // Filter app configs
@@ -67,13 +121,9 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
     setIsNewApp(false);
     setError(null);
     setVisiblePasswords(new Set());
+    setActiveEnv(0);
     const d = cfg.configData || {};
-    setFormData({
-      appName: d.appName || '',
-      baseUrl: d.baseUrl || '',
-      environment: d.environment || 'staging',
-      roles: Array.isArray(d.roles) ? d.roles.map((r: any) => ({ ...r })) : [],
-    });
+    setFormData({ appName: d.appName || '', environments: environmentsFromConfig(d) });
   };
 
   const startNewApp = () => {
@@ -81,76 +131,94 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
     setIsNewApp(true);
     setError(null);
     setVisiblePasswords(new Set());
-    setFormData({ ...EMPTY_FORM, roles: [] });
+    setActiveEnv(0);
+    setFormData(EMPTY_FORM());
   };
 
-  // Role management
-  const addRole = () => {
+  // Environment management
+  const env = formData.environments[activeEnv];
+  const updateEnv = (patch: Partial<Environment>) => {
     setFormData((prev) => ({
       ...prev,
-      roles: [...prev.roles, { roleName: '', username: '', password: '' }],
+      environments: prev.environments.map((e, i) => (i === activeEnv ? { ...e, ...patch } : e)),
     }));
   };
-
-  const updateRole = (index: number, field: keyof Role, value: string) => {
-    setFormData((prev) => {
-      const roles = [...prev.roles];
-      roles[index] = { ...roles[index], [field]: value };
-      return { ...prev, roles };
-    });
+  const addEnvironment = () => {
+    const used = new Set(formData.environments.map((e) => e.name.toLowerCase()));
+    const name = ENV_PRESETS.find((p) => !used.has(p.toLowerCase())) || `Environment ${formData.environments.length + 1}`;
+    setFormData((prev) => ({ ...prev, environments: [...prev.environments, newEnvironment(name)] }));
+    setActiveEnv(formData.environments.length);
+  };
+  const removeEnvironment = (index: number) => {
+    if (formData.environments.length <= 1) return;
+    setFormData((prev) => ({ ...prev, environments: prev.environments.filter((_, i) => i !== index) }));
+    setActiveEnv((cur) => Math.max(0, cur >= index ? cur - 1 : cur));
   };
 
-  const removeRole = (index: number) => {
-    setFormData((prev) => ({
-      ...prev,
-      roles: prev.roles.filter((_, i) => i !== index),
-    }));
-    setVisiblePasswords((prev) => {
-      const next = new Set<number>();
-      prev.forEach((i) => {
-        if (i < index) next.add(i);
-        else if (i > index) next.add(i - 1);
-      });
-      return next;
-    });
-  };
-
-  const togglePasswordVisibility = (index: number) => {
+  // Role management (active environment)
+  const addRole = () => updateEnv({ roles: [...env.roles, { roleName: '', username: '', password: '', key: newKey() }] });
+  const updateRole = (key: string, field: 'roleName' | 'username' | 'password', value: string) =>
+    updateEnv({ roles: env.roles.map((r) => (r.key === key ? { ...r, [field]: value } : r)) });
+  const removeRole = (key: string) => updateEnv({ roles: env.roles.filter((r) => r.key !== key) });
+  const togglePasswordVisibility = (key: string) => {
     setVisiblePasswords((prev) => {
       const next = new Set(prev);
-      next.has(index) ? next.delete(index) : next.add(index);
+      if (next.has(key)) next.delete(key); else next.add(key);
       return next;
     });
+  };
+
+  const validate = (integrationId: string): string | null => {
+    if (!formData.appName.trim()) return 'Application name is required';
+    if (!integrationId.slice(4)) return 'Application name must contain at least one letter or digit';
+    if (isNewApp && appConfigs.some((c) => c.integrationId === integrationId)) {
+      return `An application named "${formData.appName.trim()}" already exists. Open it and add an environment instead.`;
+    }
+    const names = new Set<string>();
+    for (const e of formData.environments) {
+      const name = e.name.trim();
+      if (!name) return 'Every environment needs a name';
+      if (names.has(name.toLowerCase())) return `Two environments are named "${name}"`;
+      names.add(name.toLowerCase());
+      if (!e.baseUrl.trim()) return `Environment "${name}" needs a URL`;
+      if (e.safety.readOnly && splitList(e.safety.allowedPaths).some((p) => !p.startsWith('/'))) {
+        return `Allowed pages of "${name}" must start with "/", e.g. /reports`;
+      }
+    }
+    return null;
   };
 
   // Save
   const handleSave = async () => {
-    if (!formData.appName.trim()) {
-      setError('Application name is required');
-      return;
-    }
-    if (!formData.baseUrl.trim()) {
-      setError('Base URL is required');
+    // Editing keeps the application's id, so renaming never creates a second app.
+    const integrationId = selectedAppId && !isNewApp ? selectedAppId : `app-${slugify(formData.appName)}`;
+    const problem = validate(integrationId);
+    if (problem) {
+      setError(problem);
       return;
     }
 
     setSaving(true);
     setError(null);
     try {
-      const slug = slugify(formData.appName);
-      if (!slug) {
-        throw new Error('Application name must contain at least one alphanumeric character');
-      }
-      const integrationId = `app-${slug}`;
-
-      // Encrypt sensitive role passwords before sending
-      const encryptedRoles = formData.roles.map((r) => encryptSensitiveFields({ ...r }));
-
+      // Encrypt sensitive role passwords before sending; a saved password comes
+      // back masked and is kept by the server.
+      const environments = formData.environments.map((e) => ({
+        id: e.id,
+        name: e.name.trim(),
+        baseUrl: e.baseUrl.trim(),
+        roles: e.roles.map(({ roleName, username, password }) => encryptSensitiveFields({ roleName, username, password })),
+        safety: savedSafety(e.safety),
+      }));
+      const first = environments[0];
       await connectIntegration(integrationId, {
         appName: formData.appName.trim(),
-        baseUrl: formData.baseUrl.trim(),
-        environment: formData.environment,
-        roles: encryptedRoles,
+        environments,
+        // Mirror of the first environment, for readers of the single-URL format.
+        baseUrl: first.baseUrl,
+        environment: first.name,
+        roles: first.roles,
+        safety: first.safety,
       });
 
       setSelectedAppId(integrationId);
@@ -164,13 +232,14 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
   };
 
   // Delete
-  const handleDelete = async (integrationId: string) => {
+  const handleDelete = async (integrationId: string, appName: string) => {
+    if (!window.confirm(`Delete "${appName}" and all its environments?`)) return;
     try {
       await disconnectIntegration(integrationId);
       if (selectedAppId === integrationId) {
         setSelectedAppId(null);
         setIsNewApp(false);
-        setFormData({ ...EMPTY_FORM });
+        setFormData(EMPTY_FORM());
       }
       onRefresh();
     } catch (err: any) {
@@ -185,12 +254,12 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
       <div className="mb-4">
         <h3 className="text-sm font-semibold text-[#1E3A8A] mb-1">Applications Under Test</h3>
         <p className="text-xs text-[#6B7280]">
-          Manage your applications, environments, and test user credentials
+          Manage your applications, their environments (QA, UAT…) and the test users for each
         </p>
       </div>
 
       {error && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200/60 rounded-lg text-xs text-red-600">
+        <div className="mb-4 p-3 bg-red-50 border border-red-200/60 rounded-lg text-xs text-red-600" role="alert">
           {error}
         </div>
       )}
@@ -215,6 +284,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
           ) : (
             appConfigs.map((cfg) => {
               const d = cfg.configData || {};
+              const envs = environmentsFromConfig(d);
               const isSelected = cfg.integrationId === selectedAppId;
               return (
                 <div
@@ -229,24 +299,27 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
                   <div className="flex items-center justify-between">
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-[#1E3A8A] truncate">{d.appName || cfg.integrationId}</p>
-                      <p className="text-xs text-[#6B7280] truncate">{d.baseUrl || 'No URL set'}</p>
+                      <p className="text-xs text-[#6B7280] truncate">{envs[0]?.baseUrl || 'No URL set'}</p>
                     </div>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleDelete(cfg.integrationId);
+                        handleDelete(cfg.integrationId, d.appName || cfg.integrationId);
                       }}
                       className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0"
                       title="Delete application"
+                      aria-label={`Delete ${d.appName || cfg.integrationId}`}
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                  {d.environment && (
-                    <span className="inline-block mt-1.5 px-2 py-0.5 bg-[#DCE7FF] text-[#2143A8] text-[10px] font-medium rounded-full">
-                      {d.environment}
-                    </span>
-                  )}
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    {envs.map((e) => (
+                      <span key={e.id} className="inline-block px-2 py-0.5 bg-[#DCE7FF] text-[#2143A8] text-[10px] font-medium rounded-full">
+                        {e.name}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               );
             })
@@ -255,53 +328,137 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
 
         {/* Right: Form */}
         <div className="lg:col-span-2">
-          {showForm ? (
+          {showForm && env ? (
             <div className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* App Name */}
-                <div>
-                  <label className="block text-sm font-medium text-[#1E3A8A] mb-1">App Name</label>
-                  <input
-                    type="text"
-                    value={formData.appName}
-                    onChange={(e) => setFormData((prev) => ({ ...prev, appName: e.target.value }))}
-                    placeholder="e.g. My Web App"
-                    className={INPUT_CLASS}
-                  />
-                </div>
+              {/* App Name */}
+              <div>
+                <label htmlFor="app-name" className="block text-sm font-medium text-[#1E3A8A] mb-1">App Name</label>
+                <input
+                  id="app-name"
+                  type="text"
+                  value={formData.appName}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, appName: e.target.value }))}
+                  placeholder="e.g. My Web App"
+                  className={INPUT_CLASS}
+                />
+              </div>
 
-                {/* Base URL */}
-                <div>
-                  <label className="block text-sm font-medium text-[#1E3A8A] mb-1">Base URL</label>
-                  <input
-                    type="text"
-                    value={formData.baseUrl}
-                    onChange={(e) => setFormData((prev) => ({ ...prev, baseUrl: e.target.value }))}
-                    placeholder="https://app.example.com"
-                    className={INPUT_CLASS}
-                  />
-                </div>
-
-                {/* Environment */}
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-[#1E3A8A] mb-1">Environment</label>
-                  <select
-                    value={formData.environment}
-                    onChange={(e) => setFormData((prev) => ({ ...prev, environment: e.target.value }))}
-                    className={INPUT_CLASS}
+              {/* Environment tabs */}
+              <div>
+                <p className="text-sm font-medium text-[#1E3A8A] mb-1.5">Environments</p>
+                <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="Environments">
+                  {formData.environments.map((e, i) => (
+                    <span
+                      key={e.id}
+                      className={`inline-flex items-center gap-1 rounded-lg border text-xs font-medium ${
+                        i === activeEnv ? 'border-[#3366FF] bg-[#EEF4FF] text-[#1E3A8A]' : 'border-[#C5D6FF]/60 bg-white text-[#6B7280]'
+                      }`}
+                    >
+                      <button type="button" role="tab" aria-selected={i === activeEnv} onClick={() => setActiveEnv(i)} className="px-2.5 py-1.5">
+                        {e.name || 'Unnamed'}
+                      </button>
+                      {formData.environments.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removeEnvironment(i)}
+                          className="pr-2 text-gray-400 hover:text-red-500"
+                          aria-label={`Remove environment ${e.name || 'Unnamed'}`}
+                          title="Remove environment"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={addEnvironment}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-[#2143A8] bg-[#EEF4FF] hover:bg-[#DCE7FF] rounded-lg border border-[#C5D6FF]/60 transition-colors"
                   >
-                    <option value="dev">Development</option>
-                    <option value="qa">QA</option>
-                    <option value="staging">Staging</option>
-                    <option value="prod">Production</option>
-                  </select>
+                    <Plus className="w-3.5 h-3.5" />
+                    Add environment
+                  </button>
                 </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="env-name" className="block text-sm font-medium text-[#1E3A8A] mb-1">Environment name</label>
+                  <input
+                    id="env-name"
+                    type="text"
+                    list="env-presets"
+                    value={env.name}
+                    onChange={(e) => updateEnv({ name: e.target.value })}
+                    placeholder="e.g. QA"
+                    className={INPUT_CLASS}
+                  />
+                  <datalist id="env-presets">
+                    {ENV_PRESETS.map((p) => <option key={p} value={p} />)}
+                  </datalist>
+                </div>
+                <div>
+                  <label htmlFor="env-url" className="block text-sm font-medium text-[#1E3A8A] mb-1">Base URL</label>
+                  <input
+                    id="env-url"
+                    type="text"
+                    value={env.baseUrl}
+                    onChange={(e) => updateEnv({ baseUrl: e.target.value })}
+                    placeholder="https://qa.app.example.com"
+                    className={INPUT_CLASS}
+                  />
+                </div>
+              </div>
+
+              {/* Read-only protection */}
+              <div className="rounded-xl border border-[#DCE7FF] bg-[#F8FAFF] p-3 space-y-3">
+                <label htmlFor="env-read-only" className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    id="env-read-only"
+                    type="checkbox"
+                    checked={env.safety.readOnly}
+                    onChange={(e) => updateEnv({ safety: { ...env.safety, readOnly: e.target.checked } })}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-[#1E3A8A]">Read-only (shared environment)</span>
+                    <span className="block text-xs text-[#6B7280]">
+                      Explore and test runs cannot create, change or delete data here. Sign-in still works. Tests that need to save data will fail and show what was blocked.
+                    </span>
+                  </span>
+                </label>
+                {env.safety.readOnly && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label htmlFor="env-allowed-paths" className="block text-xs font-medium text-[#1E3A8A] mb-1">Allowed pages (optional)</label>
+                      <input
+                        id="env-allowed-paths"
+                        type="text"
+                        value={env.safety.allowedPaths}
+                        onChange={(e) => updateEnv({ safety: { ...env.safety, allowedPaths: e.target.value } })}
+                        placeholder="All pages, or e.g. /reports, /search"
+                        className={INPUT_CLASS}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="env-allow-write" className="block text-xs font-medium text-[#1E3A8A] mb-1">Sign-in addresses (optional)</label>
+                      <input
+                        id="env-allow-write"
+                        type="text"
+                        value={env.safety.allowWrite}
+                        onChange={(e) => updateEnv({ safety: { ...env.safety, allowWrite: e.target.value } })}
+                        placeholder="Default: login, logout, auth, sso, token…"
+                        className={INPUT_CLASS}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Roles Section */}
               <div className="border-t border-[#DCE7FF] pt-4">
                 <div className="flex items-center justify-between mb-3">
-                  <label className="text-sm font-medium text-[#1E3A8A]">Test User Roles</label>
+                  <p className="text-sm font-medium text-[#1E3A8A]">Test users for {env.name || 'this environment'}</p>
                   <button
                     onClick={addRole}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#2143A8] bg-[#EEF4FF] hover:bg-[#DCE7FF] rounded-lg border border-[#C5D6FF]/60 transition-colors"
@@ -311,67 +468,59 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
                   </button>
                 </div>
 
-                {formData.roles.length === 0 ? (
+                {env.roles.length === 0 ? (
                   <p className="text-xs text-[#6B7280] text-center py-3">
                     No roles defined. Add a role to configure test user credentials.
                   </p>
                 ) : (
                   <div className="space-y-3">
-                    {formData.roles.map((role, idx) => (
+                    {env.roles.map((role) => (
                       <div
-                        key={idx}
+                        key={role.key}
                         className="p-3 bg-[#EEF4FF]/50 border border-[#C5D6FF]/40 rounded-xl"
                       >
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                          {/* Role Name */}
                           <div>
-                            <label className="block text-xs font-medium text-[#6B7280] mb-1">
-                              Role Name
-                            </label>
+                            <label className="block text-xs font-medium text-[#6B7280] mb-1">Role Name</label>
                             <input
                               type="text"
                               value={role.roleName}
-                              onChange={(e) => updateRole(idx, 'roleName', e.target.value)}
+                              onChange={(e) => updateRole(role.key, 'roleName', e.target.value)}
                               placeholder="e.g. Admin"
                               className={INPUT_CLASS}
                             />
                           </div>
-
-                          {/* Username */}
                           <div>
-                            <label className="block text-xs font-medium text-[#6B7280] mb-1">
-                              Username
-                            </label>
+                            <label className="block text-xs font-medium text-[#6B7280] mb-1">Username</label>
                             <input
                               type="text"
                               value={role.username}
-                              onChange={(e) => updateRole(idx, 'username', e.target.value)}
+                              onChange={(e) => updateRole(role.key, 'username', e.target.value)}
                               placeholder="testuser@example.com"
                               className={INPUT_CLASS}
                             />
                           </div>
-
-                          {/* Password + controls */}
                           <div>
-                            <label className="block text-xs font-medium text-[#6B7280] mb-1">
-                              Password
-                            </label>
+                            <label className="block text-xs font-medium text-[#6B7280] mb-1">Password</label>
                             <div className="flex gap-2">
                               <div className="relative flex-1">
                                 <input
-                                  type={visiblePasswords.has(idx) ? 'text' : 'password'}
+                                  type={visiblePasswords.has(role.key) ? 'text' : 'password'}
                                   value={role.password}
-                                  onChange={(e) => updateRole(idx, 'password', e.target.value)}
+                                  onChange={(e) => updateRole(role.key, 'password', e.target.value)}
+                                  onFocus={(e) => { if (role.password.includes('•')) e.target.select(); }}
+                                  title={role.password.includes('•') ? 'Saved password. Type to replace it.' : undefined}
                                   placeholder="Password"
                                   autoComplete="off"
                                   className={`${INPUT_CLASS} pr-9`}
                                 />
                                 <button
                                   type="button"
-                                  onClick={() => togglePasswordVisibility(idx)}
+                                  onClick={() => togglePasswordVisibility(role.key)}
+                                  aria-label={visiblePasswords.has(role.key) ? 'Hide password' : 'Show password'}
                                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#2143A8] transition-colors"
                                 >
-                                  {visiblePasswords.has(idx) ? (
+                                  {visiblePasswords.has(role.key) ? (
                                     <EyeOff className="w-4 h-4" />
                                   ) : (
                                     <Eye className="w-4 h-4" />
@@ -379,9 +528,10 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
                                 </button>
                               </div>
                               <button
-                                onClick={() => removeRole(idx)}
+                                onClick={() => removeRole(role.key)}
                                 className="p-2.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl border border-[#C5D6FF]/60 transition-colors flex-shrink-0"
                                 title="Remove role"
+                                aria-label="Remove role"
                               >
                                 <Trash2 className="w-4 h-4" />
                               </button>
@@ -393,6 +543,9 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
                   </div>
                 )}
               </div>
+
+              {/* Test files: only for a saved application */}
+              {selectedAppId && !isNewApp && <TestFilesSection appId={selectedAppId} />}
 
               {/* Save button */}
               <div className="flex justify-end pt-2">

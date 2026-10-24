@@ -13,6 +13,7 @@ import {
   hasMaskedSecret,
   restoreMaskedSecrets,
 } from '../utils/crypto.js';
+import { deleteAllTestData } from '../services/test-data.service.js';
 
 const router = Router();
 
@@ -105,6 +106,11 @@ router.delete('/:integrationId', async (req: Request, res: Response) => {
     if (!deleted) {
       res.status(404).json({ error: 'Configuration not found' });
       return;
+    }
+
+    if (String(integrationId).startsWith('app-')) {
+      await deleteAllTestData(user.tenantId, integrationId as string).catch((e) =>
+        console.warn(`Test file cleanup failed for ${integrationId}:`, (e as Error).message));
     }
 
     console.log(`Configuration disconnected: tenant=${user.tenantId}, integration=${integrationId}`);

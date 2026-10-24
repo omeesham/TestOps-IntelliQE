@@ -7,7 +7,7 @@ import { scriptAgent } from './scriptAgent.js';
 import { executionAgent } from './executionAgent.js';
 import { healingAgent } from './healingAgent.js';
 import { exploreAgent } from './exploreAgent.js';
-import type { TestOpsState, AppContext } from './state.js';
+import type { TestOpsState, AppContext, CoverageLevel } from './state.js';
 
 /**
  * Decide if the explore agent should run. We trigger it when:
@@ -95,15 +95,26 @@ export type GenProgress = (
   detail: string,
 ) => void;
 
+/** Runs one generation stage and logs how long it took. */
+async function timed<T>(stage: string, run: () => Promise<T>): Promise<T> {
+  const started = Date.now();
+  try {
+    return await run();
+  } finally {
+    console.log(`[generate] ${stage} stage: ${Math.round((Date.now() - started) / 1000)}s`);
+  }
+}
+
 export async function runGenerationOnly(
   requirements: string,
-  options?: { maxTestCases?: number; appContext?: AppContext; onProgress?: GenProgress },
+  options?: { maxTestCases?: number; coverage?: CoverageLevel; appContext?: AppContext; onProgress?: GenProgress },
 ): Promise<TestOpsState> {
   const onProgress: GenProgress = options?.onProgress ?? (() => {});
   let state = createInitialState(requirements, options?.appContext);
-  if (options?.maxTestCases !== undefined) {
-    state.generationOptions = { maxTestCases: options.maxTestCases };
-  }
+  state.generationOptions = {
+    ...(options?.maxTestCases !== undefined ? { maxTestCases: options.maxTestCases } : {}),
+    coverage: options?.coverage || 'standard',
+  };
 
   // ── Requirement Analysis stage ──
   onProgress('requirements', 'running', 'Analyzing requirements…');
@@ -111,11 +122,11 @@ export async function runGenerationOnly(
   // only a URL (no Jira story, no upload, no pasted requirements).
   if (shouldExploreFirst(state)) {
     onProgress('requirements', 'running', 'Exploring the live application…');
-    state = await exploreAgent(state);
+    state = await timed('explore', () => exploreAgent(state));
   }
-  state = await requirementAgent(state);
+  state = await timed('requirements', () => requirementAgent(state));
   onProgress('requirements', 'running', 'Auditing coverage & edge cases…');
-  state = await auditAgent(state);
+  state = await timed('audit', () => auditAgent(state));
   const featureCount = state.parsedRequirements?.features?.length || 0;
   onProgress(
     'requirements',
@@ -125,9 +136,9 @@ export async function runGenerationOnly(
 
   // ── Test Design stage ──
   onProgress('test-design', 'running', 'Planning test strategy…');
-  state = await plannerAgent(state);
+  state = await timed('planner', () => plannerAgent(state));
   onProgress('test-design', 'running', 'Generating test cases…');
-  state = await generatorAgent(state);
+  state = await timed('generator', () => generatorAgent(state));
   onProgress('test-design', 'completed', `${state.testCases.length} test cases generated`);
 
   // NOTE: scriptAgent is intentionally NOT run here. This path backs the chat

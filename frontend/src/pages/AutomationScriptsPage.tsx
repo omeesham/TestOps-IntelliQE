@@ -30,18 +30,22 @@ const STATUS_COLORS: Record<string, string> = {
   failed:    'bg-rose-50 text-rose-700 border border-rose-200',
 };
 
-/* ── Simple syntax highlighting ── */
+/* ── Simple syntax highlighting ──
+   One pass over the raw code (comments, strings, keywords, numbers), so the
+   markup added for one token is never matched again by another rule. */
+const CODE_TOKEN = /(\/\/.*$)|(["'`])(?:\\.|(?!\2)[^\\\n])*\2|\b(import|export|from|const|let|var|function|async|await|return|if|else|new|class|extends|test|describe|expect|page|beforeEach|afterEach)\b|\b\d+\b/gm;
+const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
 function highlightCode(code: string): string {
-  return code
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    // strings
-    .replace(/(["'`])(?:(?=(\\?))\2.)*?\1/g, '<span class="text-emerald-600">$&</span>')
-    // keywords
-    .replace(/\b(import|export|from|const|let|var|function|async|await|return|if|else|new|class|extends|test|describe|expect|page|beforeEach|afterEach)\b/g, '<span class="text-purple-600 font-semibold">$&</span>')
-    // comments
-    .replace(/(\/\/.*$)/gm, '<span class="text-gray-400 italic">$&</span>')
-    // numbers
-    .replace(/\b(\d+)\b/g, '<span class="text-amber-600">$&</span>');
+  let html = '';
+  let last = 0;
+  for (const m of code.matchAll(CODE_TOKEN)) {
+    const at = m.index ?? 0;
+    const cls = m[1] ? 'text-gray-400 italic' : m[2] ? 'text-emerald-600' : m[3] ? 'text-purple-600 font-semibold' : 'text-amber-600';
+    html += `${escapeHtml(code.slice(last, at))}<span class="${cls}">${escapeHtml(m[0])}</span>`;
+    last = at + m[0].length;
+  }
+  return html + escapeHtml(code.slice(last));
 }
 
 export default function AutomationScriptsPage() {

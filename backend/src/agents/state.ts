@@ -1,3 +1,5 @@
+import type { SafetySettings } from '../services/uat-safety.service.js';
+
 export interface TestFieldData {
   id: string;
   field_name: string;
@@ -104,8 +106,13 @@ export interface TestCase {
   severity?: 'Critical' | 'Major' | 'Moderate' | 'Minor';
   /** Free-form tags for filtering (smoke, regression, sanity, etc.) */
   tags?: string[];
+  /** Test-design category (see the test-design skill) */
+  category?: TestCategory;
   status: 'generated' | 'automated' | 'executed' | 'passed' | 'failed';
 }
+
+export const TEST_CATEGORIES = ['positive', 'negative', 'boundary', 'business-rule', 'edge', 'security', 'accessibility'] as const;
+export type TestCategory = typeof TEST_CATEGORIES[number];
 
 export interface AutomationScript {
   testCaseId: string;
@@ -118,6 +125,10 @@ export interface AppContext {
   appName?: string;
   environment?: string;
   roles?: { roleName: string; username: string; password: string }[];
+  /** Names of the test files uploaded for this application (Application Setup). */
+  testDataFiles?: string[];
+  /** Read-only protection of the environment; undefined when off. */
+  safety?: SafetySettings;
   /**
    * Mobile automation context — set ONLY for the Mobile Application path.
    * When absent (web/API), every agent behaves exactly as before.
@@ -133,8 +144,42 @@ export interface AppContext {
   };
 }
 
+/** How deep test design goes: smoke, regression (default) or full regression. */
+export type CoverageLevel = 'essential' | 'standard' | 'exhaustive';
+export const COVERAGE_LEVELS: readonly CoverageLevel[] = ['essential', 'standard', 'exhaustive'];
+
 export interface GenerationOptions {
   maxTestCases?: number;
+  coverage?: CoverageLevel;
+}
+
+/** Where a rule in the coverage model comes from. */
+export type RuleSource = 'observed' | 'stated' | 'assumed';
+
+/** One field rule (FLD-xx): an input and its constraints. */
+export interface FieldRule {
+  id: string;
+  field: string;
+  screen?: string;
+  constraints: string[];
+  source: RuleSource;
+}
+
+/** One business rule (BR-xx): a calculation, condition, permission or state change. */
+export interface BusinessRule {
+  id: string;
+  rule: string;
+  feature?: string;
+  source: RuleSource;
+}
+
+/** How the generated cases cover the coverage model (rules found by the agents). */
+export interface CoverageSummary {
+  level: CoverageLevel;
+  totalRules: number;
+  coveredRules: number;
+  uncovered: { id: string; text: string }[];
+  skills: string[];
 }
 
 /**
@@ -169,6 +214,19 @@ export interface ParsedRequirements {
   businessRisks?: { feature: string; risk: 'High' | 'Medium' | 'Low'; rationale: string }[];
   /** Per-actor permission matrix — which roles can do which features (used for authz negative tests) */
   personaMatrix?: { actor: string; allowedFeatures: string[]; deniedFeatures?: string[] }[];
+  /** Coverage model: every field rule (FLD-xx) and business rule (BR-xx), with its source */
+  fieldRules?: FieldRule[];
+  businessRules?: BusinessRule[];
+}
+
+/** A form field seen by the exploreAgent, with the constraints the page enforces. */
+export interface ExploredField {
+  name: string;
+  type: string;
+  required: boolean;
+  label?: string;
+  constraints?: string[];
+  options?: string[];
 }
 
 /**
@@ -182,7 +240,7 @@ export interface ExploredApp {
     url: string;
     title: string;
     headings: string[];
-    forms: { id?: string; name?: string; action?: string; fields: { name: string; type: string; required: boolean; label?: string }[] }[];
+    forms: { id?: string; name?: string; action?: string; fields: ExploredField[] }[];
     buttons: string[];
     links: { text: string; href: string }[];
     navItems: string[];
@@ -215,6 +273,8 @@ export interface TestOpsState {
    */
   extendedTestPlan?: unknown;
   testCases: TestCase[];
+  /** How the generated cases cover the coverage model (set by generatorAgent) */
+  coverageSummary?: CoverageSummary;
   automationScripts: AutomationScript[];
   executionResults: {
     passed: number;

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
@@ -11,7 +11,9 @@ import {
   generateScriptsForRun, downloadArtifactZip, listTestCaseFacets,
 } from '@/services/api';
 
-const TAG_VOCAB = ['POSITIVE', 'NEGATIVE', 'E2E', 'UI', 'API', 'SMOKE', 'REGRESSION'] as const;
+const TAG_VOCAB = ['POSITIVE', 'NEGATIVE', 'E2E', 'UI', 'API', 'SMOKE', 'REGRESSION', 'SANITY', 'AUTH', 'SECURITY', 'ACCESSIBILITY', 'DATA-VALIDATION'] as const;
+/** Test-design categories, as assigned by the generator (editable). */
+const CATEGORIES = ['positive', 'negative', 'boundary', 'business-rule', 'edge', 'security', 'accessibility'] as const;
 type TagName = typeof TAG_VOCAB[number];
 import { Code2, Loader2, Database, BarChart3 } from 'lucide-react';
 import TestDataTab from '@/components/test-data/TestDataTab';
@@ -24,11 +26,18 @@ interface TestRun {
   module?: string | null; submodule?: string | null;
   test_case_count: number; generated_count: number; approved_count: number; scripted_count: number;
 }
+/** How a suite was created, as users know it from the Chat. */
+const SOURCE_LABELS: Record<string, string> = {
+  explore: 'App exploration', text: 'Pasted text', upload: 'Document',
+  jira: 'Jira', confluence: 'Confluence', sharepoint: 'SharePoint',
+};
+const sourceLabel = (s: string | null) => (s ? SOURCE_LABELS[s] || s.charAt(0).toUpperCase() + s.slice(1) : 'Other');
+
 interface TestCase {
   id: string; test_run_id: string; tc_number: string; title: string; steps: string[];
   expected: string; priority: string; type: string; feature: string; precondition: string;
   status: string; sort_order: number; created_at: string;
-  module?: string | null; submodule?: string | null; tags?: string[];
+  module?: string | null; submodule?: string | null; tags?: string[]; category?: string | null;
 }
 interface Pagination { page: number; limit: number; total: number; totalPages: number; }
 
@@ -70,6 +79,7 @@ export default function GeneratedTestCasesPage() {
   const [tagFilters, setTagFilters] = useState<Set<TagName>>(new Set());
   const [facets, setFacets] = useState<{ modules: string[]; submodules: { module: string; name: string }[]; tags: string[] }>({ modules: [], submodules: [], tags: [] });
   const [detailTagFilters, setDetailTagFilters] = useState<Set<TagName>>(new Set());
+  const [categoryFilter, setCategoryFilter] = useState('');
 
   /* ── Detail view state ── */
   const [selectedRun, setSelectedRun] = useState<TestRun | null>(null);
@@ -224,6 +234,7 @@ export default function GeneratedTestCasesPage() {
         title: editDraft.title, steps: editDraft.steps, expected: editDraft.expected,
         priority: editDraft.priority, type: editDraft.type, feature: editDraft.feature,
         precondition: editDraft.precondition, status: editDraft.status,
+        ...(editDraft.category ? { category: editDraft.category } : {}),
       });
       const res = await getTestRun(selectedRun.id);
       setTestCases(res.testCases || []);
@@ -274,9 +285,19 @@ export default function GeneratedTestCasesPage() {
     } catch (err) { console.error('Export failed:', err); }
   };
 
+  /* ── Shown test cases: category filter, grouped by feature (first-seen order) ── */
+  const featureOrder = new Map<string, number>();
+  testCases.forEach(tc => { if (!featureOrder.has(tc.feature || '')) featureOrder.set(tc.feature || '', featureOrder.size); });
+  const featureCounts = new Map<string, number>();
+  const shownTcs = testCases
+    .filter(tc => !categoryFilter || tc.category === categoryFilter)
+    .map((tc, i) => ({ tc, i }))
+    .sort((a, b) => (featureOrder.get(a.tc.feature || '')! - featureOrder.get(b.tc.feature || '')!) || a.i - b.i)
+    .map(({ tc }) => { featureCounts.set(tc.feature || '', (featureCounts.get(tc.feature || '') || 0) + 1); return tc; });
+
   /* ── Paginated test cases ── */
-  const paginatedTcs = testCases.slice((tcPage - 1) * tcPageSize, tcPage * tcPageSize);
-  const tcTotalPages = Math.ceil(testCases.length / tcPageSize);
+  const paginatedTcs = shownTcs.slice((tcPage - 1) * tcPageSize, tcPage * tcPageSize);
+  const tcTotalPages = Math.ceil(shownTcs.length / tcPageSize);
 
   /* ── Derived counts ── */
   const reviewedCount = testCases.filter(tc => tc.status === 'reviewed' || tc.status === 'approved').length;
@@ -350,7 +371,7 @@ export default function GeneratedTestCasesPage() {
                       {selectedRun.story_key}
                     </span>
                   )}
-                  <h2 className="text-lg font-semibold text-[#1E3A8A]">{selectedRun.story_title || 'Manual Test Suite'}</h2>
+                  <h2 className="text-lg font-semibold text-[#1E3A8A]">{selectedRun.story_title || 'Untitled suite'}</h2>
                 </div>
               </div>
             </div>
@@ -399,6 +420,16 @@ export default function GeneratedTestCasesPage() {
           )}
           <div className="flex items-center gap-2 ml-auto flex-wrap">
             <Filter className="w-4 h-4 text-[#6B7280]" />
+            <label htmlFor="category-filter" className="text-xs font-semibold text-[#6B7280]">Category:</label>
+            <select
+              id="category-filter"
+              value={categoryFilter}
+              onChange={e => { setCategoryFilter(e.target.value); setTcPage(1); }}
+              className="px-2 py-1 text-[11px] border border-[#C5D6FF] rounded-lg capitalize"
+            >
+              <option value="">All</option>
+              {CATEGORIES.map(c => <option key={c} value={c}>{c.replace('-', ' ')}</option>)}
+            </select>
             <span className="text-xs font-semibold text-[#6B7280]">Tags:</span>
             {TAG_VOCAB.map((tag) => {
               const active = detailTagFilters.has(tag);
@@ -548,16 +579,26 @@ export default function GeneratedTestCasesPage() {
                   <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider">Test Scenario</th>
                   <th className="text-center px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap w-16">Priority</th>
                   <th className="text-center px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap w-24">Type</th>
+                  <th className="text-center px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap w-28">Category</th>
                   <th className="text-center px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap w-24">Review</th>
                   <th className="text-center px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap w-24">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {paginatedTcs.map(tc => {
+                {paginatedTcs.map((tc, rowIdx) => {
                   const isReviewed = tc.status === 'reviewed' || tc.status === 'approved';
                   const statusCfg = STATUS_CONFIG[tc.status] || STATUS_CONFIG.generated;
+                  const startsGroup = rowIdx === 0 || (paginatedTcs[rowIdx - 1].feature || '') !== (tc.feature || '');
                   return (
-                    <tr key={tc.id} className={`border-b border-[#EEF4FF] hover:bg-[#EEF4FF]/60 ${isReviewed ? 'bg-emerald-50/30' : ''}`}>
+                    <Fragment key={tc.id}>
+                    {startsGroup && (
+                      <tr className="bg-[#F7F9FF] border-b border-[#DCE7FF]">
+                        <td colSpan={8} className="px-3 py-1 text-[11px] font-semibold text-[#2143A8]">
+                          {tc.feature || 'General'} <span className="font-normal text-[#6B7280]">· {featureCounts.get(tc.feature || '')} case(s)</span>
+                        </td>
+                      </tr>
+                    )}
+                    <tr className={`border-b border-[#EEF4FF] hover:bg-[#EEF4FF]/60 ${isReviewed ? 'bg-emerald-50/30' : ''}`}>
                       <td className="px-3 py-1.5">
                         <input type="checkbox" checked={selectedTcIds.has(tc.id)}
                           onChange={() => {
@@ -570,7 +611,7 @@ export default function GeneratedTestCasesPage() {
                       <td className="px-3 py-1.5 text-sm font-mono text-[#6B7280] whitespace-nowrap">{tc.tc_number}</td>
                       <td className="px-3 py-1.5">
                         <button onClick={() => setExpandedTcId(expandedTcId === tc.id ? null : tc.id)} className="text-left w-full">
-                          <span className="text-sm text-[#1E3A8A]">{tc.title}</span>
+                          <span className="text-sm text-[#1E3A8A] [overflow-wrap:anywhere]">{tc.title}</span>
                         </button>
                         {expandedTcId === tc.id && !editingTc && (
                           <div className="mt-3 space-y-3 text-xs text-[#6B7280] border-t border-[#DCE7FF] pt-3">
@@ -589,12 +630,16 @@ export default function GeneratedTestCasesPage() {
                         {editingTc?.id === tc.id && editDraft && (
                           <div className="mt-3 space-y-2 border-t border-[#C5D6FF] pt-3">
                             <input value={editDraft.title} onChange={e => setEditDraft({ ...editDraft, title: e.target.value })} className="w-full px-2 py-1.5 text-sm border border-[#C5D6FF] rounded-lg" />
-                            <div className="grid grid-cols-3 gap-2">
+                            <div className="grid grid-cols-4 gap-2">
                               <select value={editDraft.priority} onChange={e => setEditDraft({ ...editDraft, priority: e.target.value })} className="px-2 py-1.5 text-xs border border-[#C5D6FF] rounded-lg">
                                 {['P0','P1','P2','P3'].map(p => <option key={p} value={p}>{p}</option>)}
                               </select>
                               <select value={editDraft.type} onChange={e => setEditDraft({ ...editDraft, type: e.target.value })} className="px-2 py-1.5 text-xs border border-[#C5D6FF] rounded-lg">
                                 {['positive','negative','edge','e2e','smoke','regression','security'].map(t => <option key={t} value={t}>{t}</option>)}
+                              </select>
+                              <select value={editDraft.category || ''} onChange={e => setEditDraft({ ...editDraft, category: e.target.value })} aria-label="Category" className="px-2 py-1.5 text-xs border border-[#C5D6FF] rounded-lg">
+                                <option value="">category…</option>
+                                {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                               </select>
                               <select value={editDraft.status} onChange={e => setEditDraft({ ...editDraft, status: e.target.value })} className="px-2 py-1.5 text-xs border border-[#C5D6FF] rounded-lg">
                                 {['generated','reviewed','scripted','executed','failed'].map(s => <option key={s} value={s}>{s}</option>)}
@@ -623,6 +668,7 @@ export default function GeneratedTestCasesPage() {
                       </td>
                       <td className="px-3 py-1.5 text-center"><span className={`px-2 py-0.5 rounded-md text-sm ${PRIORITY_COLORS[tc.priority] || 'bg-gray-100 text-gray-600'}`}>{tc.priority}</span></td>
                       <td className="px-3 py-1.5 text-center"><span className={`px-2 py-0.5 rounded-md text-sm capitalize ${TYPE_COLORS[tc.type] || 'bg-gray-100 text-gray-600'}`}>{tc.type}</span></td>
+                      <td className="px-3 py-1.5 text-center text-xs capitalize text-[#1E3A8A]">{tc.category ? tc.category.replace('-', ' ') : '—'}</td>
                       <td className="px-3 py-1.5 text-center">
                         <button onClick={() => handleToggleReview(tc)} className="flex items-center justify-center mx-auto gap-1 group/rev" title={isReviewed ? 'Mark as pending' : 'Mark as reviewed'}>
                           {isReviewed ? (
@@ -640,13 +686,14 @@ export default function GeneratedTestCasesPage() {
                         <div className="flex items-center justify-center gap-1">
                           <button onClick={() => setExpandedTcId(expandedTcId === tc.id ? null : tc.id)}
                             className="p-1.5 rounded-md hover:bg-[#EEF4FF] text-[#2143A8]" title="View details"><Eye className="w-3.5 h-3.5" /></button>
-                          <button onClick={() => { setEditingTc(tc); setEditDraft({ title: tc.title, steps: tc.steps || [''], expected: tc.expected, priority: tc.priority, type: tc.type, feature: tc.feature, precondition: tc.precondition, status: tc.status }); setExpandedTcId(tc.id); }}
+                          <button onClick={() => { setEditingTc(tc); setEditDraft({ title: tc.title, steps: tc.steps || [''], expected: tc.expected, priority: tc.priority, type: tc.type, category: tc.category || '', feature: tc.feature, precondition: tc.precondition, status: tc.status }); setExpandedTcId(tc.id); }}
                             className="p-1.5 rounded-md hover:bg-amber-50 text-amber-600" title="Edit"><Edit3 className="w-3.5 h-3.5" /></button>
                           <button onClick={() => { setConfirmDelete(tc.id); setConfirmDeleteType('case'); }}
                             className="p-1.5 rounded-md hover:bg-rose-50 text-rose-500" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
                         </div>
                       </td>
                     </tr>
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -662,7 +709,7 @@ export default function GeneratedTestCasesPage() {
                   </select>
                 </div>
                 <div className="flex items-center gap-4">
-                  <span>Showing {(tcPage-1)*tcPageSize+1}–{Math.min(tcPage*tcPageSize, testCases.length)} of {testCases.length}</span>
+                  <span>Showing {shownTcs.length ? (tcPage-1)*tcPageSize+1 : 0}–{Math.min(tcPage*tcPageSize, shownTcs.length)} of {shownTcs.length}{categoryFilter ? ` (filtered)` : ''}</span>
                   <span className="flex items-center gap-1"><Hash className="w-3 h-3 text-[#6B7280]" /> Total: <strong className="text-[#1E3A8A]">{testCases.length}</strong></span>
                   <span className="flex items-center gap-1 text-emerald-600"><CheckCircle2 className="w-3 h-3" /> Reviewed: <strong>{reviewedCount}</strong></span>
                   <span className="flex items-center gap-1 text-amber-600"><Clock className="w-3 h-3" /> Pending: <strong>{testCases.length - reviewedCount}</strong></span>
@@ -746,7 +793,7 @@ export default function GeneratedTestCasesPage() {
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Search by Jira ID, story title, user…"
+            placeholder="Search suites, Jira keys or users…"
             className="w-full h-9 pl-9 pr-3 bg-white border border-[#C5D6FF] rounded-lg text-sm text-[#1E3A8A] placeholder:text-[#6B7280] outline-none hover:border-[#AEC4F5] focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF]/20 transition-colors"
           />
         </div>
@@ -760,8 +807,7 @@ export default function GeneratedTestCasesPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-[#EEF4FF] border-b border-[#DCE7FF]">
-                <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap">Jira ID</th>
-                <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider">Story</th>
+                <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider">Suite</th>
                 <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap">Source</th>
                 <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider">User</th>
                 <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap">Cases</th>
@@ -777,28 +823,22 @@ export default function GeneratedTestCasesPage() {
                 const pct = total > 0 ? Math.round((reviewed / total) * 100) : 0;
                 return (
                   <tr key={run.id} className="border-b border-[#EEF4FF] hover:bg-[#EEF4FF]/60 cursor-pointer transition-colors" onClick={() => openRunDetail(run)}>
-                    <td className="px-3 py-1.5" onClick={e => e.stopPropagation()}>
-                      {run.story_key ? (
+                    <td className="px-3 py-1.5 max-w-md">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {run.story_key && (
+                          <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-[#DCE7FF] text-[#2143A8] text-xs font-mono border border-[#C5D6FF]">{run.story_key}</span>
+                        )}
                         <button
-                          onClick={() => openRunDetail(run)}
-                          className="px-2 py-0.5 rounded-md bg-[#DCE7FF] text-[#2143A8] text-sm font-mono border border-[#C5D6FF] hover:bg-[#C5D6FF] hover:underline transition-colors"
-                          title="Open test suite"
+                          onClick={e => { e.stopPropagation(); openRunDetail(run); }}
+                          className="truncate text-left text-[#1E3A8A] hover:text-[#2143A8] hover:underline"
+                          title={run.story_title || 'Untitled suite'}
                         >
-                          {run.story_key}
+                          {run.story_title || 'Untitled suite'}
                         </button>
-                      ) : (
-                        <button
-                          onClick={() => openRunDetail(run)}
-                          className="text-[#2143A8] hover:underline text-sm"
-                          title="Open test suite"
-                        >
-                          Manual
-                        </button>
-                      )}
+                      </div>
                     </td>
-                    <td className="px-3 py-1.5 text-[#1E3A8A] truncate max-w-xs">{run.story_title || 'Manual Test Suite'}</td>
-                    <td className="px-3 py-1.5">
-                      <span className="px-2 py-0.5 rounded-md bg-[#DCE7FF] text-[#2143A8] text-sm border border-[#C5D6FF] lowercase">{run.source || 'manual'}</span>
+                    <td className="px-3 py-1.5 whitespace-nowrap">
+                      <span className="px-2 py-0.5 rounded-md bg-[#DCE7FF] text-[#2143A8] text-sm border border-[#C5D6FF]">{sourceLabel(run.source)}</span>
                     </td>
                     <td className="px-3 py-1.5 text-[#1E3A8A]">{run.username}</td>
                     <td className="px-3 py-1.5 text-[#1E3A8A]">{total}</td>

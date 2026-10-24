@@ -2,17 +2,13 @@
  * Claude CLI runner — invokes Claude Code to generate AI responses.
  * Falls back to a basic prompt-based approach if CLI is not available.
  *
- * NOTE: Originally used execSync which, on Windows, could orphan child
- * claude.exe processes on timeout (Node can't reliably kill grandchildren
- * without a tree kill). This version keeps the same synchronous API but
- * wraps the call in a manual timeout that issues `taskkill /F /T /PID` on
- * Windows (or `kill -9 -pid` on POSIX) so the whole process tree dies and
- * no orphans can accumulate overnight.
+ * NOTE: CLI calls run asynchronously so the API stays responsive. On timeout
+ * the whole process tree is killed (`taskkill /F /T /PID` on Windows,
+ * `kill -9 -pid` on POSIX) so no orphaned claude processes accumulate.
  */
-import { execSync, spawnSync } from 'child_process';
-import { homedir, tmpdir } from 'os';
+import { execSync, spawn } from 'child_process';
+import { homedir } from 'os';
 import { join } from 'path';
-import { writeFileSync, unlinkSync } from 'fs';
 import Anthropic from '@anthropic-ai/sdk';
 
 let resolvedCliPath: string | null = null;
@@ -56,14 +52,16 @@ function findClaudeCli(): string | null {
  */
 export async function runClaudePrompt(
   prompt: string,
-  options?: { maxTokens?: number; model?: string },
+  options?: { maxTokens?: number; model?: string; system?: string },
 ): Promise<string> {
   // Empty string is intentionally treated as "not set" so a placeholder
   // `ANTHROPIC_API_KEY=` line in .env falls through to the CLI fallback.
   if (process.env.ANTHROPIC_API_KEY) {
     return runViaAnthropicApi(prompt, options);
   }
-  return runViaClaudeCli(prompt, options);
+  // The CLI has no separate system prompt in print mode, so it leads the prompt.
+  const cliPrompt = options?.system ? `${options.system}\n\n---\n\n${prompt}` : prompt;
+  return runViaClaudeCli(cliPrompt, options);
 }
 
 /** Default model for the API path; override with ANTHROPIC_MODEL (e.g. claude-sonnet-4-6 for lower cost). */
@@ -86,7 +84,7 @@ function getAnthropicClient(): Anthropic {
  */
 async function runViaAnthropicApi(
   prompt: string,
-  options?: { maxTokens?: number; model?: string },
+  options?: { maxTokens?: number; model?: string; system?: string },
 ): Promise<string> {
   const client = getAnthropicClient();
   const model = process.env.ANTHROPIC_MODEL || options?.model || DEFAULT_API_MODEL;
@@ -96,6 +94,10 @@ async function runViaAnthropicApi(
     const stream = client.messages.stream({
       model,
       max_tokens: maxTokens,
+      // Skills are the same across calls, so the system block is cached.
+      ...(options?.system
+        ? { system: [{ type: 'text' as const, text: options.system, cache_control: { type: 'ephemeral' as const } }] }
+        : {}),
       messages: [{ role: 'user', content: prompt }],
     });
     const message = await stream.finalMessage();
@@ -123,64 +125,67 @@ async function runViaAnthropicApi(
   }
 }
 
+const CLI_TIMEOUT_MS = 300_000; // 5 minutes
+const CLI_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
+
 /**
  * Run a prompt through the Claude CLI and return the response text.
- * Uses `claude -p` (print mode — non-interactive, returns text).
+ * Uses `claude -p` (print mode — non-interactive, returns text) with the
+ * prompt on stdin.
  *
- * Uses spawnSync (not execSync) because spawnSync gives us the child PID
- * back via its return value — but in practice spawnSync also blocks on
- * the whole tree. To guarantee no orphans on timeout, we pipe through a
- * small shell wrapper on POSIX or use `taskkill /T` on Windows via the
- * timeout-kill helper below.
+ * Asynchronous, so the API keeps serving other requests while a call runs
+ * (a synchronous spawn froze the whole server for the length of each call).
+ * On timeout the whole process tree is killed so no orphans accumulate.
  */
-function runViaClaudeCli(prompt: string, options?: { maxTokens?: number; model?: string }): string {
+function runViaClaudeCli(prompt: string, options?: { maxTokens?: number; model?: string }): Promise<string> {
   const cli = findClaudeCli();
-  if (!cli) throw new Error('Claude CLI not found');
+  if (!cli) return Promise.reject(new Error('Claude CLI not found'));
 
   const args: string[] = ['-p'];
   if (options?.model) args.push('--model', options.model);
   // Note: Claude CLI does not support --max-tokens; use --max-budget-usd for cost control
 
-  // Write prompt to a temp file to avoid shell escaping issues
-  const tmpFile = join(tmpdir(), `claude-prompt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
-  writeFileSync(tmpFile, prompt, 'utf-8');
+  return new Promise((resolve, reject) => {
+    const child = spawn(cli, args, { shell: IS_WINDOWS, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const out: Buffer[] = [];
+    let outBytes = 0;
+    let stderr = '';
+    let settled = false;
+    const finish = (err: Error | null, text?: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err) reject(err); else resolve(text ?? '');
+    };
 
-  try {
-    // spawnSync returns { pid, stdout, stderr, signal, status, error } — with a
-    // hard timeout the child is killed, but on Windows that only kills the
-    // immediate child, not its grandchildren. We manually tree-kill via the
-    // `killSignal` + post-timeout taskkill below as a safety net.
-    const result = spawnSync(cli, args, {
-      timeout: 300000, // 5 minutes
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      maxBuffer: 10 * 1024 * 1024,
-      shell: IS_WINDOWS,
-      windowsHide: true,
-      input: prompt,
-      killSignal: 'SIGKILL',
-    });
+    const timer = setTimeout(() => {
+      if (child.pid) treeKill(child.pid);
+      finish(new Error(`Claude CLI timed out after 5 minutes (tree-killed pid ${child.pid})`));
+    }, CLI_TIMEOUT_MS);
 
-    // If spawnSync reported a timeout, result.error?.code === 'ETIMEDOUT' and
-    // result.pid points at the (now-half-dead) child. Tree-kill to sweep up
-    // any surviving grandchildren on Windows.
-    if (result.error) {
-      const err = result.error as NodeJS.ErrnoException;
-      if (err.code === 'ETIMEDOUT' && result.pid) {
-        treeKill(result.pid);
-        throw new Error(`Claude CLI timed out after 5 minutes (tree-killed pid ${result.pid})`);
+    child.stdout.on('data', (chunk: Buffer) => {
+      outBytes += chunk.length;
+      if (outBytes > CLI_MAX_OUTPUT_BYTES) {
+        if (child.pid) treeKill(child.pid);
+        finish(new Error('Claude CLI output exceeded 10 MB'));
+        return;
       }
-      throw err;
-    }
-
-    if (result.status !== 0) {
-      throw new Error(`Claude CLI exited with code ${result.status}: ${String(result.stderr || '').slice(0, 500)}`);
-    }
-
-    return String(result.stdout || '').trim();
-  } finally {
-    try { unlinkSync(tmpFile); } catch { /* ignore */ }
-  }
+      out.push(chunk);
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      if (stderr.length < 20_000) stderr += chunk.toString('utf-8');
+    });
+    child.on('error', (err) => finish(err));
+    child.on('close', (code) => {
+      if (code !== 0) {
+        finish(new Error(`Claude CLI exited with code ${code}: ${stderr.slice(0, 500)}`));
+        return;
+      }
+      finish(null, Buffer.concat(out).toString('utf-8').trim());
+    });
+    child.stdin.on('error', () => { /* the child exited early; 'close' reports it */ });
+    child.stdin.end(prompt, 'utf-8');
+  });
 }
 
 /**
@@ -212,16 +217,27 @@ export function isClaudeCliAvailable(): boolean {
  * starting a pipeline to fail fast with an actionable message instead of a deep
  * JSON-parse error. An ANTHROPIC_API_KEY in the environment also satisfies auth.
  */
+let authCache: { ok: boolean; at: number } | null = null;
+const AUTH_OK_TTL_MS = 10 * 60_000;
+const AUTH_FAIL_TTL_MS = 30_000;
+
 export function isClaudeCliAuthenticated(): boolean {
   if (process.env.ANTHROPIC_API_KEY) return true;
+  // `claude auth status` takes seconds and can time out under load, so the
+  // answer is cached (a failure only briefly, so signing in takes effect soon).
+  if (authCache && Date.now() - authCache.at < (authCache.ok ? AUTH_OK_TTL_MS : AUTH_FAIL_TTL_MS)) return authCache.ok;
   const cli = findClaudeCli();
-  if (!cli) return false;
-  try {
-    const out = execSync(`"${cli}" auth status`, { timeout: 10000, encoding: 'utf-8', stdio: 'pipe' });
-    return JSON.parse(out.trim()).loggedIn === true;
-  } catch {
-    return false;
+  let ok = false;
+  if (cli) {
+    try {
+      const out = execSync(`"${cli}" auth status`, { timeout: 10000, encoding: 'utf-8', stdio: 'pipe' });
+      ok = JSON.parse(out.trim()).loggedIn === true;
+    } catch {
+      ok = false;
+    }
   }
+  authCache = { ok, at: Date.now() };
+  return ok;
 }
 
 /**

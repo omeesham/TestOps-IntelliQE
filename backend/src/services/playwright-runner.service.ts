@@ -5,6 +5,10 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import pool from '../db.js';
+import { appTestDataDir, materializeTestData, specUsesTestData, TEST_DATA_ENV } from './test-data.service.js';
+import { getConfigsForTenant } from './configurations.service.js';
+import { appEnvironments, pickEnvironment } from './app-environments.js';
+import { errorWithBlocked, prepareGuardedRun, specForRun, type SafetySettings } from './uat-safety.service.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -14,6 +18,51 @@ const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
 
 function sanitizeFileName(raw: string): string {
   return (raw || 'test').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120);
+}
+
+/**
+ * When a run's specs upload test files, copy the application's files (plus the
+ * generated invalid files) into `<workspace>/test-data` and return that folder,
+ * which the runner passes to the specs as IQE_TEST_DATA_DIR. Returns null when
+ * no spec uses test files. Re-runs work the same way: the app comes from the run.
+ */
+async function prepareRunTestData(tenantId: string, runId: string, workspace: string, codes: string[]): Promise<string | null> {
+  if (!codes.some(specUsesTestData)) return null;
+  const dir = path.join(workspace, 'test-data');
+  try {
+    const { rows } = await pool.query(`SELECT app_id FROM test_runs WHERE id = $1`, [runId]);
+    const appId: string | null = rows[0]?.app_id || null;
+    await materializeTestData(appId ? appTestDataDir(tenantId, appId) : path.join(workspace, 'no-app-files'), dir);
+    return dir;
+  } catch (err) {
+    console.warn(`[runner] test files not prepared for run ${runId}: ${(err as Error).message}`);
+    return null;
+  }
+}
+
+/**
+ * Read-only settings for a run: from the run's own environment, else from any
+ * read-only environment whose URL the specs open, so a run without an app link
+ * is still guarded.
+ */
+export async function runSafety(tenantId: string, runId: string, codes: string[]): Promise<{ safety?: SafetySettings; appUrl?: string }> {
+  const { rows } = await pool.query(`SELECT app_id, env_id FROM test_runs WHERE id = $1`, [runId]);
+  const configs = await getConfigsForTenant(tenantId);
+  const appId: string | null = rows[0]?.app_id || null;
+  if (appId) {
+    const cfg = configs.find((c) => c.integrationId === appId);
+    const env = cfg ? pickEnvironment(cfg.configData, rows[0]?.env_id || undefined) : undefined;
+    if (env?.safety) return { safety: env.safety, appUrl: env.baseUrl };
+  }
+  for (const c of configs) {
+    for (const e of appEnvironments(c.configData)) {
+      if (!e.safety || !e.baseUrl) continue;
+      let origin: string;
+      try { origin = new URL(e.baseUrl).origin; } catch { continue; }
+      if (codes.some((code) => code.includes(origin))) return { safety: e.safety, appUrl: e.baseUrl };
+    }
+  }
+  return {};
 }
 
 /**
@@ -247,14 +296,17 @@ export async function runPlaywrightForRun(
   await fs.mkdir(resultsDir, { recursive: true });
 
   // Write each stored spec to the tests dir
+  const guard = await runSafety(tenantId, runId, rows.map((r: any) => String(r.code || '')));
   const written: { scriptId: string; specFile: string }[] = [];
   for (const row of rows) {
     const base = sanitizeFileName(row.file_name || row.tc_number || row.test_case_id || row.id);
     const name = base.endsWith('.spec.ts') ? base : `${base}.spec.ts`;
     const specFile = path.join(testsDir, name);
-    await fs.writeFile(specFile, row.code, 'utf-8');
+    await fs.writeFile(specFile, specForRun(row.code, row.test_case_title || name, guard.safety), 'utf-8');
     written.push({ scriptId: row.id, specFile });
   }
+  const testDataDir = await prepareRunTestData(tenantId, runId, workspace, rows.map((r: any) => String(r.code || '')));
+  const guardEnv = await prepareGuardedRun(workspace, guard.safety, guard.appUrl);
 
   // Minimal Playwright config. The config lives in a temp workspace
   // (no local node_modules), so we write it as CommonJS (.cjs) and set
@@ -299,6 +351,8 @@ module.exports = defineConfig({
     // Let Node fall back to backend/node_modules when resolving reporters or
     // any other module the spec files import.
     NODE_PATH: path.join(BACKEND_ROOT, 'node_modules'),
+    ...(testDataDir ? { [TEST_DATA_ENV]: testDataDir } : {}),
+    ...guardEnv,
   };
 
   let stdout = '';
@@ -320,6 +374,7 @@ module.exports = defineConfig({
     stdout = err.stdout || '';
     stderr = err.stderr || err.message || '';
   }
+  if (testDataDir) await fs.rm(testDataDir, { recursive: true, force: true }).catch(() => {});
   await fs.writeFile(logPath, `STDOUT:\n${stdout}\n\nSTDERR:\n${stderr}`, 'utf-8').catch(() => {});
 
   // Sanity check — if the reporter produced nothing, classify the failure
@@ -400,6 +455,7 @@ export async function executeRunScripts(
   const testsDir = path.join(workspace, 'tests');
   await fs.mkdir(testsDir, { recursive: true });
 
+  const guard = await runSafety(tenantId, runId, rows.map((r: any) => String(r.code || '')));
   // Write each spec (no BOM via Node fs) and map its final file name → DB row.
   const byFile = new Map<string, any>();
   const seen = new Set<string>();
@@ -410,9 +466,11 @@ export async function executeRunScripts(
     let n = 1;
     while (seen.has(candidate)) candidate = base.replace(/\.spec\.ts$/, `-${++n}.spec.ts`);
     seen.add(candidate);
-    await fs.writeFile(path.join(testsDir, candidate), row.code, 'utf-8');
+    await fs.writeFile(path.join(testsDir, candidate), specForRun(row.code, row.test_case_title || candidate, guard.safety), 'utf-8');
     byFile.set(candidate.toLowerCase().replace(/\.spec\.ts$/, ''), row);
   }
+  const testDataDir = await prepareRunTestData(tenantId, runId, workspace, rows.map((r: any) => String(r.code || '')));
+  const guardEnv = await prepareGuardedRun(workspace, guard.safety, guard.appUrl);
 
   const configPath = path.join(workspace, 'playwright.config.cjs');
   const channel = process.env.PLAYWRIGHT_CHANNEL || 'msedge';
@@ -434,6 +492,8 @@ module.exports = defineConfig({
     ...process.env, CI: '1',
     PLAYWRIGHT_JSON_OUTPUT_NAME: path.join(workspace, 'pw-summary.json'),
     NODE_PATH: path.join(BACKEND_ROOT, 'node_modules'),
+    ...(testDataDir ? { [TEST_DATA_ENV]: testDataDir } : {}),
+    ...guardEnv,
   };
   const isWindows = process.platform === 'win32';
   let stdout = '', stderr = '';
@@ -445,6 +505,7 @@ module.exports = defineConfig({
   } catch (err: any) {
     stdout = err.stdout || ''; stderr = err.stderr || err.message || '';
   }
+  if (testDataDir) await fs.rm(testDataDir, { recursive: true, force: true }).catch(() => {});
 
   let summary: PwSummary | null = null;
   try {
@@ -492,7 +553,7 @@ module.exports = defineConfig({
       scenario: spec?.title || row?.test_case_title || '',
       status: passed ? 'passed' : st ? 'failed' : 'not_run',
       durationMs: typeof first?.duration === 'number' ? first.duration : undefined,
-      error: passed ? undefined : first?.error?.message,
+      error: passed ? undefined : errorWithBlocked(first),
     };
   });
 

@@ -2,18 +2,68 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import crypto from 'crypto';
 import { runGenerationOnly } from '../agents/pipeline.js';
+import { COVERAGE_LEVELS } from '../agents/state.js';
+import type { CoverageLevel } from '../agents/state.js';
 import { isClaudeCliAuthenticated } from '../agents/claude-runner.js';
 import { broadcastSSE } from '../services/sse-manager.js';
 import { createJob, updateJob, getJob } from '../services/generation-jobs.js';
 import { getConfigsForTenant } from '../services/configurations.service.js';
-import { decryptStoredDeep } from '../utils/crypto.js';
+import { pickEnvironment, decryptRoles, readOnlyEnvironmentForUrl } from '../services/app-environments.js';
+import type { SafetySettings } from '../services/uat-safety.service.js';
+import { testDataContext } from '../services/test-data.service.js';
+import { suggestPrompts, AssistRateLimit, MAX_PROMPT_CHARS } from '../services/prompt-assist.service.js';
 
 const router = Router();
+
+/* ───────────────────────────────────────────
+   POST /api/generate/suggest-prompts
+   Body: { text, appName?, environment? }
+   Returns up to 3 improved versions of the user's requirement text.
+   ─────────────────────────────────────────── */
+const assistLimit = new AssistRateLimit(10, 60_000);
+
+router.post('/suggest-prompts', async (req: Request, res: Response) => {
+  const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+  if (text.length < 10) {
+    res.status(400).json({ error: 'Write a little more first (at least 10 characters).' });
+    return;
+  }
+  if (text.length > MAX_PROMPT_CHARS) {
+    res.status(400).json({ error: `Suggestions work on up to ${MAX_PROMPT_CHARS} characters. Shorten the text or generate directly.` });
+    return;
+  }
+  if (!assistLimit.allow(req.user!.username)) {
+    res.status(429).json({ error: 'Too many suggestions requested. Try again in a minute.' });
+    return;
+  }
+  if (!isClaudeCliAuthenticated()) {
+    res.status(503).json({ error: 'The AI engine is not connected right now.' });
+    return;
+  }
+  try {
+    const suggestions = await suggestPrompts(text, {
+      appName: typeof req.body?.appName === 'string' ? req.body.appName : undefined,
+      environment: typeof req.body?.environment === 'string' ? req.body.environment : undefined,
+    });
+    if (!suggestions.length) {
+      res.status(502).json({ error: 'No suggestions came back. Please try again.' });
+      return;
+    }
+    res.json({ suggestions });
+  } catch (err) {
+    console.error('[generate/suggest-prompts] failed:', (err as Error).message);
+    res.status(502).json({ error: 'Could not get suggestions right now. Please try again.' });
+  }
+});
 
 const nowIso = () => new Date().toISOString();
 
 interface ResolvedRole { roleName: string; username: string; password: string }
 interface ResolvedAppContext {
+  /** Uploaded test files of the application (names only). */
+  testDataFiles?: string[];
+  /** Read-only protection of the environment; undefined when off. */
+  safety?: SafetySettings;
   targetUrl?: string;
   appName?: string;
   environment?: string;
@@ -42,6 +92,7 @@ interface ResolvedAppContext {
 async function resolveAppContextFromConfig(
   tenantId: string,
   appId: string,
+  envId: string | undefined,
   incoming: ResolvedAppContext | undefined,
 ): Promise<ResolvedAppContext | undefined> {
   const configs = await getConfigsForTenant(tenantId);
@@ -49,17 +100,11 @@ async function resolveAppContextFromConfig(
   if (!cfg) return incoming;
 
   const data = cfg.configData || {};
-  const storedRoles: ResolvedRole[] = Array.isArray(data.roles)
-    ? data.roles
-        .filter((r: any) => r && typeof r === 'object')
-        .map((r: any) => ({
-          roleName: String(r.roleName || 'user'),
-          username: String(r.username || ''),
-          // decryptStoredDeep handles both __AES__ and legacy __ENC__, and peels
-          // any accidental multi-layer encryption from earlier re-saves.
-          password: r.password ? decryptStoredDeep(String(r.password)) : '',
-        }))
-    : [];
+  const env = pickEnvironment(data, envId);
+  if (envId && !env) throw new UnknownEnvironmentError(String(data.appName || appId), envId);
+
+  // decryptStoredDeep handles both __AES__ and legacy __ENC__ values.
+  const storedRoles: ResolvedRole[] = env ? decryptRoles(env.roles) : [];
 
   const incomingRoles = incoming?.roles?.filter((r) => r && r.username) || [];
   let roles: ResolvedRole[];
@@ -67,20 +112,28 @@ async function resolveAppContextFromConfig(
     // Client gave no usable credentials — use the saved roles wholesale.
     roles = storedRoles.filter((r) => r.username);
   } else {
-    // Back-fill missing passwords by matching the username against saved roles.
+    // Back-fill a missing password only from the saved role with the same
+    // username, never from a different user.
     roles = incomingRoles.map((r) => {
       if (r.password) return r;
-      const match = storedRoles.find((s) => s.username === r.username) || storedRoles[0];
+      const match = storedRoles.find((s) => s.username === r.username);
       return { ...r, password: match?.password || '' };
     });
   }
 
   return {
-    targetUrl: incoming?.targetUrl || data.baseUrl || '',
-    appName: incoming?.appName || data.appName || '',
-    environment: incoming?.environment || data.environment || '',
+    targetUrl: incoming?.targetUrl || env?.baseUrl || '',
+    appName: incoming?.appName || String(data.appName || ''),
+    environment: incoming?.environment || env?.name || '',
     roles: roles.length ? roles : undefined,
+    safety: env?.safety,
   };
+}
+
+class UnknownEnvironmentError extends Error {
+  constructor(appName: string, envId: string) {
+    super(`The environment "${envId}" of ${appName} was not found or has no URL. Pick an environment in Application Setup and try again.`);
+  }
 }
 
 /**
@@ -90,6 +143,13 @@ async function resolveAppContextFromConfig(
  */
 function mapGenError(err: unknown): { message: string; code: string } {
   const raw = ((err as Error)?.message || String(err || '')).toLowerCase();
+
+  if (raw.includes('could not open the application')) {
+    return {
+      code: 'APP_UNREACHABLE',
+      message: `IntelliQE could not open the application, so no test cases were generated. Check the URL and that the app is running, then try again. (${(err as Error).message.replace(/^could not open the application at /i, '')})`,
+    };
+  }
 
   if (raw.includes('not authenticated') || raw.includes('claude_not_authenticated') || raw.includes('not logged in')) {
     return {
@@ -147,9 +207,12 @@ router.post('/', async (req: Request, res: Response) => {
     roles,
     exploreMode,
     appId,
+    envId,
     platform,
     appMetadata,
+    coverage,
   } = req.body;
+  const coverageLevel: CoverageLevel = (COVERAGE_LEVELS as readonly string[]).includes(coverage) ? coverage : 'standard';
 
   // Mobile path: only accept the two supported native platforms.
   const mobilePlatform: 'android' | 'ios' | undefined =
@@ -204,18 +267,26 @@ router.post('/', async (req: Request, res: Response) => {
   // browser — it's decrypted here from at-rest storage. Client values win.
   if (appId && req.user?.tenantId) {
     try {
-      appContext = await resolveAppContextFromConfig(req.user.tenantId, String(appId), appContext);
+      appContext = await resolveAppContextFromConfig(req.user.tenantId, String(appId), typeof envId === 'string' && envId ? envId : undefined, appContext);
+      if (appContext) appContext = { ...appContext, ...(await testDataContext(req.user.tenantId, String(appId))) };
     } catch (err) {
+      if (err instanceof UnknownEnvironmentError) {
+        res.status(400).json({ error: err.message, code: 'UNKNOWN_ENVIRONMENT' });
+        return;
+      }
       console.error('[generate] Failed to resolve app config for', appId, '-', (err as Error)?.message || err);
       // Non-fatal: fall through with whatever the client supplied.
     }
   }
 
-  // The Claude CLI ignores maxTokens; bound interactive generation with a sane
-  // default so a single pass completes quickly. Callers wanting exhaustive
-  // coverage can pass an explicit higher maxTestCases.
-  const DEFAULT_MAX_TEST_CASES = 12;
-  const effectiveMax = Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : DEFAULT_MAX_TEST_CASES;
+  // A URL that belongs to a read-only environment stays read-only, however it was entered.
+  if (appContext?.targetUrl && !appContext.safety && req.user?.tenantId) {
+    const env = readOnlyEnvironmentForUrl(await getConfigsForTenant(req.user.tenantId), appContext.targetUrl);
+    if (env) appContext = { ...appContext, safety: env.safety };
+  }
+
+  // Suite size follows the coverage level; an explicit maxTestCases is a hard cap.
+  const effectiveMax = Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : undefined;
 
   const runId = crypto.randomUUID();
   createJob(runId, req.user?.tenantId);
@@ -228,6 +299,7 @@ router.post('/', async (req: Request, res: Response) => {
     try {
       const state = await runGenerationOnly(reqText, {
         maxTestCases: effectiveMax,
+        coverage: coverageLevel,
         appContext,
         onProgress: (stage, status, detail) => {
           updateJob(runId, { stage, detail });
@@ -242,6 +314,7 @@ router.post('/', async (req: Request, res: Response) => {
         extendedTestPlan: state.extendedTestPlan,
         parsedRequirements: state.parsedRequirements,
         exploredApp: state.exploredApp || null,
+        coverage: state.coverageSummary || null,
         summary: {
           totalTestCases: state.testCases.length,
           totalScripts: state.automationScripts.length,
