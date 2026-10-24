@@ -5,10 +5,10 @@ should match it.
 
 | Item | Value |
 | --- | --- |
-| Date | 23-Oct-2026 |
-| Code | `poc/base` (the commit tagged `poc-base-v1.0.0`) |
+| Date | 24-Oct-2026 (first run 23-Oct-2026 on the main-based base; same result) |
+| Code | `poc/base` cut from `integration` (the commit tagged `poc-base-v1.0.0`) |
 | Image | Built locally with `--build-arg APP_VERSION=poc-base-v1.0.0`; version stamp present in the UI bundle |
-| Runtime | `NODE_ENV=production`, fresh SQL Server 2022 database, first admin from `INITIAL_ADMIN_*` |
+| Runtime | `NODE_ENV=production`, fresh SQL Server 2022 database, first admin from `INITIAL_ADMIN_*`; no demo users created |
 | Browser | Microsoft Edge (Windows). The same suite also passed on Chromium in the Playwright 1.64.1 Linux image |
 | Command | `cd backend && SMOKE_BASE_URL=… SMOKE_USER=… SMOKE_PASSWORD=… npm run smoke` |
 
