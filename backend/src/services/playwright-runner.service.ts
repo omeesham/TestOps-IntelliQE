@@ -5,6 +5,7 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import pool from '../db.js';
+import { appTestDataDir, materializeTestData, specUsesTestData, TEST_DATA_ENV } from './test-data.service.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -14,6 +15,26 @@ const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
 
 function sanitizeFileName(raw: string): string {
   return (raw || 'test').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120);
+}
+
+/**
+ * When a run's specs upload test files, copy the application's files (plus the
+ * generated invalid files) into `<workspace>/test-data` and return that folder,
+ * which the runner passes to the specs as IQE_TEST_DATA_DIR. Returns null when
+ * no spec uses test files. Re-runs work the same way: the app comes from the run.
+ */
+async function prepareRunTestData(tenantId: string, runId: string, workspace: string, codes: string[]): Promise<string | null> {
+  if (!codes.some(specUsesTestData)) return null;
+  const dir = path.join(workspace, 'test-data');
+  try {
+    const { rows } = await pool.query(`SELECT app_id FROM test_runs WHERE id = $1`, [runId]);
+    const appId: string | null = rows[0]?.app_id || null;
+    await materializeTestData(appId ? appTestDataDir(tenantId, appId) : path.join(workspace, 'no-app-files'), dir);
+    return dir;
+  } catch (err) {
+    console.warn(`[runner] test files not prepared for run ${runId}: ${(err as Error).message}`);
+    return null;
+  }
 }
 
 /**
@@ -255,6 +276,7 @@ export async function runPlaywrightForRun(
     await fs.writeFile(specFile, row.code, 'utf-8');
     written.push({ scriptId: row.id, specFile });
   }
+  const testDataDir = await prepareRunTestData(tenantId, runId, workspace, rows.map((r: any) => String(r.code || '')));
 
   // Minimal Playwright config. The config lives in a temp workspace
   // (no local node_modules), so we write it as CommonJS (.cjs) and set
@@ -299,6 +321,7 @@ module.exports = defineConfig({
     // Let Node fall back to backend/node_modules when resolving reporters or
     // any other module the spec files import.
     NODE_PATH: path.join(BACKEND_ROOT, 'node_modules'),
+    ...(testDataDir ? { [TEST_DATA_ENV]: testDataDir } : {}),
   };
 
   let stdout = '';
@@ -320,6 +343,7 @@ module.exports = defineConfig({
     stdout = err.stdout || '';
     stderr = err.stderr || err.message || '';
   }
+  if (testDataDir) await fs.rm(testDataDir, { recursive: true, force: true }).catch(() => {});
   await fs.writeFile(logPath, `STDOUT:\n${stdout}\n\nSTDERR:\n${stderr}`, 'utf-8').catch(() => {});
 
   // Sanity check — if the reporter produced nothing, classify the failure
@@ -413,6 +437,7 @@ export async function executeRunScripts(
     await fs.writeFile(path.join(testsDir, candidate), row.code, 'utf-8');
     byFile.set(candidate.toLowerCase().replace(/\.spec\.ts$/, ''), row);
   }
+  const testDataDir = await prepareRunTestData(tenantId, runId, workspace, rows.map((r: any) => String(r.code || '')));
 
   const configPath = path.join(workspace, 'playwright.config.cjs');
   const channel = process.env.PLAYWRIGHT_CHANNEL || 'msedge';
@@ -434,6 +459,7 @@ module.exports = defineConfig({
     ...process.env, CI: '1',
     PLAYWRIGHT_JSON_OUTPUT_NAME: path.join(workspace, 'pw-summary.json'),
     NODE_PATH: path.join(BACKEND_ROOT, 'node_modules'),
+    ...(testDataDir ? { [TEST_DATA_ENV]: testDataDir } : {}),
   };
   const isWindows = process.platform === 'win32';
   let stdout = '', stderr = '';
@@ -445,6 +471,7 @@ module.exports = defineConfig({
   } catch (err: any) {
     stdout = err.stdout || ''; stderr = err.stderr || err.message || '';
   }
+  if (testDataDir) await fs.rm(testDataDir, { recursive: true, force: true }).catch(() => {});
 
   let summary: PwSummary | null = null;
   try {

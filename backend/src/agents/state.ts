@@ -123,6 +123,8 @@ export interface AppContext {
   appName?: string;
   environment?: string;
   roles?: { roleName: string; username: string; password: string }[];
+  /** Names of the test files uploaded for this application (Application Setup). */
+  testDataFiles?: string[];
   /**
    * Mobile automation context — set ONLY for the Mobile Application path.
    * When absent (web/API), every agent behaves exactly as before.

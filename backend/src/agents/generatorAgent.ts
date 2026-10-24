@@ -34,6 +34,7 @@ import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
 import type { ExtendedTestPlan } from './plannerAgent.js';
 import { mobileContextNote } from './mobile-context.js';
 import { selectSkills, skillSystemPrompt } from './skills.js';
+import { testDataPromptBlock } from '../services/test-data.service.js';
 
 let counter = 0;
 function nextId() { return `TC-${String(++counter).padStart(3, '0')}`; }
@@ -163,7 +164,7 @@ function buildPrompt(state: TestOpsState, excludeTitles: string[] = [], gapFocus
   const pr = state.parsedRequirements!;
   const plan = state.extendedTestPlan as ExtendedTestPlan | undefined;
   const appInfo = state.appContext
-    ? `Application: ${state.appContext.appName || 'Web App'}\nURL: ${state.appContext.targetUrl || 'Not specified'}\nEnvironment: ${state.appContext.environment || 'staging'}`
+    ? `Application: ${state.appContext.appName || 'Web App'}\nURL: ${state.appContext.targetUrl || 'Not specified'}\nEnvironment: ${state.appContext.environment || 'staging'}${testDataPromptBlock(state.appContext.testDataFiles, 'cases')}`
     : '';
 
   const coverage = state.generationOptions?.coverage || 'standard';

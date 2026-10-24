@@ -34,6 +34,7 @@ import confluenceRoutes from './routes/confluence.routes.js';
 import sharepointRoutes from './routes/sharepoint.routes.js';
 import testCasesRoutes from './routes/test-cases.routes.js';
 import configurationsRoutes from './routes/configurations.routes.js';
+import testDataRoutes from './routes/test-data.routes.js';
 import reportsRoutes from './routes/reports.routes.js';
 import pipelineRoutes from './routes/pipeline.routes.js';
 import pipelineEventsRoutes from './routes/pipeline-events.routes.js';
@@ -266,6 +267,7 @@ app.use('/api/confluence', authMiddleware, confluenceRoutes);
 app.use('/api/sharepoint', authMiddleware, sharepointRoutes);
 app.use('/api/test-cases', authMiddleware, testCasesRoutes);
 app.use('/api/configurations', authMiddleware, configurationsRoutes);
+app.use('/api/test-data', authMiddleware, testDataRoutes);
 app.use('/api/reports', authMiddleware, reportsRoutes);
 app.use('/api/tenant-settings', authMiddleware, tenantSettingsRoutes);
 

@@ -9,6 +9,7 @@ import { broadcastSSE } from '../services/sse-manager.js';
 import { createJob, updateJob, getJob } from '../services/generation-jobs.js';
 import { getConfigsForTenant } from '../services/configurations.service.js';
 import { pickEnvironment, decryptRoles } from '../services/app-environments.js';
+import { testDataContext } from '../services/test-data.service.js';
 import { suggestPrompts, AssistRateLimit, MAX_PROMPT_CHARS } from '../services/prompt-assist.service.js';
 
 const router = Router();
@@ -58,6 +59,8 @@ const nowIso = () => new Date().toISOString();
 
 interface ResolvedRole { roleName: string; username: string; password: string }
 interface ResolvedAppContext {
+  /** Uploaded test files of the application (names only). */
+  testDataFiles?: string[];
   targetUrl?: string;
   appName?: string;
   environment?: string;
@@ -261,6 +264,7 @@ router.post('/', async (req: Request, res: Response) => {
   if (appId && req.user?.tenantId) {
     try {
       appContext = await resolveAppContextFromConfig(req.user.tenantId, String(appId), typeof envId === 'string' && envId ? envId : undefined, appContext);
+      if (appContext) appContext = { ...appContext, ...(await testDataContext(req.user.tenantId, String(appId))) };
     } catch (err) {
       if (err instanceof UnknownEnvironmentError) {
         res.status(400).json({ error: err.message, code: 'UNKNOWN_ENVIRONMENT' });

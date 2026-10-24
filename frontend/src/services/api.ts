@@ -772,6 +772,29 @@ export async function disconnectIntegration(integrationId: string) {
   return data;
 }
 
+/* ── Test files per application (Application Setup) ── */
+export interface TestFile { name: string; size: number; updatedAt: string }
+
+export async function listTestFiles(appId: string): Promise<{ files: TestFile[]; negativeFiles: { name: string; description: string }[] }> {
+  const { data } = await api.get(`/test-data/${appId}`);
+  return { files: data?.files || [], negativeFiles: data?.negativeFiles || [] };
+}
+
+export async function uploadTestFiles(appId: string, files: File[]): Promise<{ saved: string[]; rejected: { name: string; reason: string }[] }> {
+  const form = new FormData();
+  files.forEach((f) => form.append('files', f));
+  const { data } = await api.post(`/test-data/${appId}`, form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120_000,
+  });
+  return { saved: data?.saved || [], rejected: data?.rejected || [] };
+}
+
+export async function deleteTestFile(appId: string, name: string) {
+  const { data } = await api.delete(`/test-data/${appId}/${encodeURIComponent(name)}`);
+  return data;
+}
+
 export async function testNotificationIntegration(integrationId: string) {
   const { data } = await api.post(`/configurations/${integrationId}/test`);
   return data;

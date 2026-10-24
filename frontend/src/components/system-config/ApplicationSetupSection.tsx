@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { Plus, Trash2, Eye, EyeOff, Save, Loader2, X } from 'lucide-react';
 import { connectIntegration, disconnectIntegration } from '@/services/api';
 import { encryptSensitiveFields } from '@/utils/crypto';
+import TestFilesSection from './TestFilesSection';
 
 interface DbConfig {
   integrationId: string;
@@ -470,6 +471,9 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
                   </div>
                 )}
               </div>
+
+              {/* Test files: only for a saved application */}
+              {selectedAppId && !isNewApp && <TestFilesSection appId={selectedAppId} />}
 
               {/* Save button */}
               <div className="flex justify-end pt-2">

@@ -5,6 +5,7 @@ import { executeRunScripts, PlaywrightRunError } from '../services/playwright-ru
 import { healRunScripts } from '../services/healing.service.js';
 import { executeRunScriptsMobile } from '../services/appium-runner.service.js';
 import { pickEnvironment } from '../services/app-environments.js';
+import { testDataContext, testDataPromptBlock } from '../services/test-data.service.js';
 
 /** Read a run's mobile platform marker ('android' | 'ios') or null for web/API. */
 async function getRunPlatform(testRunId: string, tenantId: string, isPlatform: boolean): Promise<string | null> {
@@ -265,6 +266,9 @@ router.post('/generate/:testRunId', async (req: Request, res: Response) => {
       } catch { /* ignore */ }
     }
 
+    // Uploaded test files of that application, so upload steps use real files.
+    const testFiles = !isMobileRun && run.app_id ? (await testDataContext(tenantId, run.app_id)).testDataFiles : undefined;
+
     const targetUrl = envBaseUrl || appContext?.baseUrl || appContext?.targetUrl || 'https://example.com';
     const appName = (isMobileRun ? (mobileMeta.fileName || mobileMeta.appName) : appContext?.appName)
       || run.story_title || 'Application';
@@ -305,7 +309,7 @@ Story: ${run.story_key || ''} - ${run.story_title || ''}
 
 Test Cases (JSON):
 ${JSON.stringify(tcSummary, null, 2)}
-
+${testDataPromptBlock(testFiles, 'script')}
 ═══════════════════════════════════════════════════════════
 PAGE OBJECT MODEL — MANDATORY STRUCTURE FOR EVERY SPEC
 ═══════════════════════════════════════════════════════════
