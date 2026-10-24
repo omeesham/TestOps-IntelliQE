@@ -22,6 +22,7 @@
  */
 import type { TestOpsState, ExploredApp, ExploredField, AppContext } from './state.js';
 import { runClaudePrompt, parseJsonFromResponse, isClaudeCliAuthenticated } from './claude-runner.js';
+import { applyWriteGuard, guardedContextOptions } from '../services/uat-safety.service.js';
 
 // Lazy import so unit tests that don't touch this agent don't drag in a
 // 100 MB browser binary on require().
@@ -128,7 +129,9 @@ async function crawlApp(
     const context = await browser.newContext({
       ignoreHTTPSErrors: true,
       viewport: { width: 1280, height: 800 },
+      ...guardedContextOptions(appContext?.safety),
     });
+    const blocked = await applyWriteGuard(context, appContext?.safety, startUrl);
     // When the backend runs under tsx (npm run dev), functions passed to
     // page.evaluate reference esbuild's __name helper, which pages don't have.
     await context.addInitScript('window.__name = window.__name || ((fn) => fn);');
@@ -193,6 +196,7 @@ async function crawlApp(
       }
     }
 
+    if (blocked.length) notes.push(`Read-only environment: blocked ${blocked.length} write request(s)`);
     return { snapshots, authDetected, notes };
   } finally {
     await browser.close();

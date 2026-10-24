@@ -27,7 +27,8 @@ import { fileURLToPath } from 'url';
 import pool from '../db.js';
 import { runClaudePrompt, isClaudeCliAuthenticated, parseJsonFromResponse } from '../agents/claude-runner.js';
 import { buildHealingPrompt, type HealingFix } from '../agents/healing-prompt.js';
-import { PlaywrightRunError, classifyPlaywrightFailureExternal, storedAllureResultsDir } from './playwright-runner.service.js';
+import { PlaywrightRunError, classifyPlaywrightFailureExternal, storedAllureResultsDir, runSafety } from './playwright-runner.service.js';
+import { errorWithBlocked, prepareGuardedRun, specForRun, type SafetySettings } from './uat-safety.service.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -102,6 +103,7 @@ async function resolveTargetUrl(tenantId: string): Promise<string | undefined> {
  */
 async function reRunHealedSpecs(
   specs: { testCaseId: string; fileName: string; code: string }[],
+  guard: { safety?: SafetySettings; appUrl?: string },
 ): Promise<Map<string, { status: 'passed' | 'failed' | 'not_run'; durationMs?: number; error?: string }>> {
   const out = new Map<string, { status: 'passed' | 'failed' | 'not_run'; durationMs?: number; error?: string }>();
   for (const s of specs) out.set(s.testCaseId, { status: 'not_run' });
@@ -116,7 +118,7 @@ async function reRunHealedSpecs(
   let i = 0;
   for (const s of specs) {
     const name = `heal-${i++}-${sanitizeFileName(s.testCaseId).slice(0, 24)}.spec.ts`;
-    await fs.writeFile(path.join(testsDir, name), s.code, 'utf-8');
+    await fs.writeFile(path.join(testsDir, name), specForRun(s.code, s.fileName, guard.safety), 'utf-8');
     fileToTc.set(name.toLowerCase().replace(/\.spec\.ts$/, ''), s.testCaseId);
   }
 
@@ -137,6 +139,7 @@ module.exports = defineConfig({
     CI: '1',
     PLAYWRIGHT_JSON_OUTPUT_NAME: path.join(workspace, 'pw-summary.json'),
     NODE_PATH: path.join(BACKEND_ROOT, 'node_modules'),
+    ...(await prepareGuardedRun(workspace, guard.safety, guard.appUrl)),
   };
   const isWindows = process.platform === 'win32';
   let stdout = '';
@@ -186,7 +189,7 @@ module.exports = defineConfig({
     out.set(tcId, {
       status: passed ? 'passed' : st ? 'failed' : 'not_run',
       durationMs: typeof first?.duration === 'number' ? first.duration : undefined,
-      error: passed ? undefined : first?.error?.message,
+      error: passed ? undefined : errorWithBlocked(first),
     });
   }
 
@@ -304,6 +307,7 @@ export async function healRunScripts(
       fileName: h.row.file_name || `${h.row.tc_number || 'test'}.spec.ts`,
       code: h.newCode,
     })),
+    await runSafety(tenantId, runId, healed.map((h) => h.newCode)),
   );
 
   // ── 3. Persist ONLY fixes that actually PASSED the re-run. This guarantees we

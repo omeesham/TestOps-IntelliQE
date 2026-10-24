@@ -16,6 +16,7 @@
  * read as a single environment with id 'default', so no migration is needed.
  */
 import { decryptStoredDeep } from '../utils/crypto.js';
+import { parseSafety, type SafetySettings } from './uat-safety.service.js';
 
 export interface AppRole { roleName: string; username: string; password: string }
 
@@ -26,6 +27,8 @@ export interface AppEnvironment {
   baseUrl: string;
   /** Passwords as stored (encrypted); see decryptRoles. */
   roles: AppRole[];
+  /** Read-only protection for a shared environment; undefined when off. */
+  safety?: SafetySettings;
 }
 
 function cleanRoles(v: unknown): AppRole[] {
@@ -46,6 +49,7 @@ export function appEnvironments(configData: Record<string, unknown> | null | und
         name: String(e.name || `Environment ${i + 1}`),
         baseUrl: String(e.baseUrl || '').trim(),
         roles: cleanRoles(e.roles),
+        safety: parseSafety(e.safety),
       }));
   }
   return [{
@@ -53,6 +57,7 @@ export function appEnvironments(configData: Record<string, unknown> | null | und
     name: String(d.environment || 'Default'),
     baseUrl: String(d.baseUrl || '').trim(),
     roles: cleanRoles(d.roles),
+    safety: parseSafety(d.safety),
   }];
 }
 
@@ -73,4 +78,24 @@ export function pickEnvironment(configData: Record<string, unknown> | null | und
 /** Roles with passwords decrypted, for the agents only. Never send these to the browser. */
 export function decryptRoles(roles: AppRole[]): AppRole[] {
   return roles.map((r) => ({ ...r, password: r.password ? decryptStoredDeep(r.password) : '' }));
+}
+
+/**
+ * The read-only environment, across a tenant's applications, whose URL has the
+ * same origin as `url`. Used so a typed URL cannot bypass an environment's
+ * read-only setting.
+ */
+export function readOnlyEnvironmentForUrl(
+  configs: { configData?: Record<string, unknown> | null }[],
+  url: string | undefined,
+): AppEnvironment | undefined {
+  let origin: string;
+  try { origin = new URL(String(url || '')).origin; } catch { return undefined; }
+  for (const c of configs) {
+    for (const e of appEnvironments(c.configData)) {
+      if (!e.safety?.readOnly || !e.baseUrl) continue;
+      try { if (new URL(e.baseUrl).origin === origin) return e; } catch { /* skip bad URL */ }
+    }
+  }
+  return undefined;
 }

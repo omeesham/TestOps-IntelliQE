@@ -26,11 +26,19 @@ interface Role {
   key: string;
 }
 
+/** Read-only protection for a shared environment; lists are comma-separated while editing. */
+interface Safety {
+  readOnly: boolean;
+  allowedPaths: string;
+  allowWrite: string;
+}
+
 interface Environment {
   id: string;
   name: string;
   baseUrl: string;
   roles: Role[];
+  safety: Safety;
 }
 
 interface AppFormData {
@@ -52,10 +60,23 @@ function slugify(name: string): string {
 }
 
 const newKey = () => Math.random().toString(36).slice(2, 10);
-const newEnvironment = (name: string): Environment => ({ id: `env-${newKey()}`, name, baseUrl: '', roles: [] });
+const NO_SAFETY: Safety = { readOnly: false, allowedPaths: '', allowWrite: '' };
+const newEnvironment = (name: string): Environment => ({ id: `env-${newKey()}`, name, baseUrl: '', roles: [], safety: NO_SAFETY });
 
 type Raw = Record<string, unknown>;
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
+const joinList = (v: unknown) => (Array.isArray(v) ? v.map(String).join(', ') : '');
+const splitList = (v: string) => v.split(',').map((s) => s.trim()).filter(Boolean);
+
+function toSafety(v: unknown): Safety {
+  const s = v && typeof v === 'object' ? (v as Raw) : {};
+  return { readOnly: s.readOnly === true, allowedPaths: joinList(s.allowedPaths), allowWrite: joinList(s.allowWrite) };
+}
+
+/** Saved form: only present when read-only is on. Empty sign-in list means the server's defaults. */
+function savedSafety(s: Safety) {
+  return s.readOnly ? { readOnly: true, allowedPaths: splitList(s.allowedPaths), allowWrite: splitList(s.allowWrite) } : undefined;
+}
 
 function toRoles(v: unknown): Role[] {
   return Array.isArray(v)
@@ -72,9 +93,10 @@ function environmentsFromConfig(d: Raw): Environment[] {
       name: String(e.name || `Environment ${i + 1}`),
       baseUrl: String(e.baseUrl || ''),
       roles: toRoles(e.roles),
+      safety: toSafety(e.safety),
     }));
   }
-  return [{ id: 'default', name: str(d.environment) || 'Default', baseUrl: str(d.baseUrl), roles: toRoles(d.roles) }];
+  return [{ id: 'default', name: str(d.environment) || 'Default', baseUrl: str(d.baseUrl), roles: toRoles(d.roles), safety: toSafety(d.safety) }];
 }
 
 const EMPTY_FORM = (): AppFormData => ({ appName: '', environments: [newEnvironment('QA')] });
@@ -159,6 +181,9 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
       if (names.has(name.toLowerCase())) return `Two environments are named "${name}"`;
       names.add(name.toLowerCase());
       if (!e.baseUrl.trim()) return `Environment "${name}" needs a URL`;
+      if (e.safety.readOnly && splitList(e.safety.allowedPaths).some((p) => !p.startsWith('/'))) {
+        return `Allowed pages of "${name}" must start with "/", e.g. /reports`;
+      }
     }
     return null;
   };
@@ -183,6 +208,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
         name: e.name.trim(),
         baseUrl: e.baseUrl.trim(),
         roles: e.roles.map(({ roleName, username, password }) => encryptSensitiveFields({ roleName, username, password })),
+        safety: savedSafety(e.safety),
       }));
       const first = environments[0];
       await connectIntegration(integrationId, {
@@ -192,6 +218,7 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
         baseUrl: first.baseUrl,
         environment: first.name,
         roles: first.roles,
+        safety: first.safety,
       });
 
       setSelectedAppId(integrationId);
@@ -381,6 +408,51 @@ export default function ApplicationSetupSection({ configs, onRefresh }: Props) {
                     className={INPUT_CLASS}
                   />
                 </div>
+              </div>
+
+              {/* Read-only protection */}
+              <div className="rounded-xl border border-[#DCE7FF] bg-[#F8FAFF] p-3 space-y-3">
+                <label htmlFor="env-read-only" className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    id="env-read-only"
+                    type="checkbox"
+                    checked={env.safety.readOnly}
+                    onChange={(e) => updateEnv({ safety: { ...env.safety, readOnly: e.target.checked } })}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-[#1E3A8A]">Read-only (shared environment)</span>
+                    <span className="block text-xs text-[#6B7280]">
+                      Explore and test runs cannot create, change or delete data here. Sign-in still works. Tests that need to save data will fail and show what was blocked.
+                    </span>
+                  </span>
+                </label>
+                {env.safety.readOnly && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label htmlFor="env-allowed-paths" className="block text-xs font-medium text-[#1E3A8A] mb-1">Allowed pages (optional)</label>
+                      <input
+                        id="env-allowed-paths"
+                        type="text"
+                        value={env.safety.allowedPaths}
+                        onChange={(e) => updateEnv({ safety: { ...env.safety, allowedPaths: e.target.value } })}
+                        placeholder="All pages, or e.g. /reports, /search"
+                        className={INPUT_CLASS}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="env-allow-write" className="block text-xs font-medium text-[#1E3A8A] mb-1">Sign-in addresses (optional)</label>
+                      <input
+                        id="env-allow-write"
+                        type="text"
+                        value={env.safety.allowWrite}
+                        onChange={(e) => updateEnv({ safety: { ...env.safety, allowWrite: e.target.value } })}
+                        placeholder="Default: login, logout, auth, sso, token…"
+                        className={INPUT_CLASS}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Roles Section */}

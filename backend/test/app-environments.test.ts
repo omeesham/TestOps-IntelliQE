@@ -20,7 +20,7 @@ const multi = {
 test('apps saved before environments read as one "default" environment', () => {
   const envs = appEnvironments({ appName: 'Old', baseUrl: ' https://old.test ', environment: 'staging', roles: [{ username: 'u', password: 'x' }] });
   assert.equal(envs.length, 1);
-  assert.deepEqual(envs[0], { id: 'default', name: 'staging', baseUrl: 'https://old.test', roles: [{ roleName: 'user', username: 'u', password: 'x' }] });
+  assert.deepEqual(envs[0], { id: 'default', name: 'staging', baseUrl: 'https://old.test', roles: [{ roleName: 'user', username: 'u', password: 'x' }], safety: undefined });
 });
 
 test('multi-environment apps list every environment', () => {

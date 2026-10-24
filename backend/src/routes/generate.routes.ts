@@ -8,7 +8,8 @@ import { isClaudeCliAuthenticated } from '../agents/claude-runner.js';
 import { broadcastSSE } from '../services/sse-manager.js';
 import { createJob, updateJob, getJob } from '../services/generation-jobs.js';
 import { getConfigsForTenant } from '../services/configurations.service.js';
-import { pickEnvironment, decryptRoles } from '../services/app-environments.js';
+import { pickEnvironment, decryptRoles, readOnlyEnvironmentForUrl } from '../services/app-environments.js';
+import type { SafetySettings } from '../services/uat-safety.service.js';
 import { testDataContext } from '../services/test-data.service.js';
 import { suggestPrompts, AssistRateLimit, MAX_PROMPT_CHARS } from '../services/prompt-assist.service.js';
 
@@ -61,6 +62,8 @@ interface ResolvedRole { roleName: string; username: string; password: string }
 interface ResolvedAppContext {
   /** Uploaded test files of the application (names only). */
   testDataFiles?: string[];
+  /** Read-only protection of the environment; undefined when off. */
+  safety?: SafetySettings;
   targetUrl?: string;
   appName?: string;
   environment?: string;
@@ -123,6 +126,7 @@ async function resolveAppContextFromConfig(
     appName: incoming?.appName || String(data.appName || ''),
     environment: incoming?.environment || env?.name || '',
     roles: roles.length ? roles : undefined,
+    safety: env?.safety,
   };
 }
 
@@ -273,6 +277,12 @@ router.post('/', async (req: Request, res: Response) => {
       console.error('[generate] Failed to resolve app config for', appId, '-', (err as Error)?.message || err);
       // Non-fatal: fall through with whatever the client supplied.
     }
+  }
+
+  // A URL that belongs to a read-only environment stays read-only, however it was entered.
+  if (appContext?.targetUrl && !appContext.safety && req.user?.tenantId) {
+    const env = readOnlyEnvironmentForUrl(await getConfigsForTenant(req.user.tenantId), appContext.targetUrl);
+    if (env) appContext = { ...appContext, safety: env.safety };
   }
 
   // Suite size follows the coverage level; an explicit maxTestCases is a hard cap.

@@ -5,6 +5,7 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import type { TestOpsState, TestCase } from './state.js';
+import { errorWithBlocked, prepareGuardedRun, specForRun, type SafetySettings } from '../services/uat-safety.service.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -56,7 +57,7 @@ function summarizeSpecs(summary: PwSummary): SpecResult[] {
     const firstResult = spec.tests?.[0]?.results?.[0];
     const status = firstResult?.status ?? 'failed';
     const passed = status === 'passed' || status === 'expected';
-    const errorMessage = passed ? undefined : firstResult?.error?.message;
+    const errorMessage = passed ? undefined : errorWithBlocked(firstResult);
     // Duration comes back in milliseconds from Playwright's JSON reporter.
     const durationMs = typeof firstResult?.duration === 'number' ? firstResult.duration : undefined;
     results.push({ scenario: spec.title || '', passed, durationMs, errorMessage });
@@ -78,6 +79,7 @@ function summarizeSpecs(summary: PwSummary): SpecResult[] {
 async function runPlaywrightInMemory(
   scripts: { fileName: string; code: string; testCaseId: string }[],
   targetUrl: string | undefined,
+  safety: SafetySettings | undefined,
 ): Promise<{ specResults: SpecResult[]; summary: PwSummary | null }> {
   const workspace = path.join(os.tmpdir(), `jbs-pw-sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const testsDir = path.join(workspace, 'tests');
@@ -95,7 +97,7 @@ async function runPlaywrightInMemory(
       candidate = base.replace(/\.spec\.ts$/, `-${++suffix}.spec.ts`);
     }
     seen.add(candidate);
-    await fs.writeFile(path.join(testsDir, candidate), s.code, 'utf-8');
+    await fs.writeFile(path.join(testsDir, candidate), specForRun(s.code, candidate, safety), 'utf-8');
   }
 
   const configPath = path.join(workspace, 'playwright.config.cjs');
@@ -124,6 +126,7 @@ ${baseUrlLine}    trace: 'retain-on-failure',
     CI: '1',
     PLAYWRIGHT_JSON_OUTPUT_NAME: path.join(workspace, 'pw-summary.json'),
     NODE_PATH: path.join(BACKEND_ROOT, 'node_modules'),
+    ...(await prepareGuardedRun(workspace, safety, targetUrl)),
   };
 
   const isWindows = process.platform === 'win32';
@@ -191,7 +194,7 @@ export async function executionAgent(state: TestOpsState): Promise<TestOpsState>
   }
 
   try {
-    const { specResults } = await runPlaywrightInMemory(scripts, targetUrl);
+    const { specResults } = await runPlaywrightInMemory(scripts, targetUrl, state.appContext?.safety);
 
     const resultByScenario = new Map<string, SpecResult>();
     for (const r of specResults) resultByScenario.set(r.scenario, r);

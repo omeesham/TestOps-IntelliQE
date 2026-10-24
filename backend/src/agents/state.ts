@@ -1,3 +1,5 @@
+import type { SafetySettings } from '../services/uat-safety.service.js';
+
 export interface TestFieldData {
   id: string;
   field_name: string;
@@ -125,6 +127,8 @@ export interface AppContext {
   roles?: { roleName: string; username: string; password: string }[];
   /** Names of the test files uploaded for this application (Application Setup). */
   testDataFiles?: string[];
+  /** Read-only protection of the environment; undefined when off. */
+  safety?: SafetySettings;
   /**
    * Mobile automation context — set ONLY for the Mobile Application path.
    * When absent (web/API), every agent behaves exactly as before.
