@@ -4,6 +4,7 @@ import { runClaudePrompt, isClaudeCliAuthenticated, parseJsonFromResponse } from
 import { executeRunScripts, PlaywrightRunError } from '../services/playwright-runner.service.js';
 import { healRunScripts } from '../services/healing.service.js';
 import { executeRunScriptsMobile } from '../services/appium-runner.service.js';
+import { pickEnvironment } from '../services/app-environments.js';
 
 /** Read a run's mobile platform marker ('android' | 'ios') or null for web/API. */
 async function getRunPlatform(testRunId: string, tenantId: string, isPlatform: boolean): Promise<string | null> {
@@ -242,21 +243,30 @@ router.post('/generate/:testRunId', async (req: Request, res: Response) => {
       ? (mobilePlatform === 'ios' ? (mobileMeta.bundleId || '') : (mobileMeta.packageName || ''))
       : '';
 
-    // Get app context for target URL (web runs only)
+    // Target URL (web runs only): the app and environment the suite was
+    // generated for; suites saved before that was recorded fall back to the
+    // most recently updated application.
     let appContext: any = null;
+    let envBaseUrl = '';
     if (!isMobileRun) {
       try {
-        const appRes = await pool.query(
-          `SELECT config_data FROM ${SCHEMA}.client_configurations
-           WHERE tenant_id = $1 AND integration_id LIKE 'app-%' AND status = 'connected'
-           ORDER BY updated_at DESC LIMIT 1`, [tenantId]
-        );
-        if (appRes.rows.length > 0) appContext = appRes.rows[0].config_data;
+        const appRes = run.app_id
+          ? await pool.query(
+            `SELECT config_data FROM ${SCHEMA}.client_configurations
+             WHERE tenant_id = $1 AND integration_id = $2`, [tenantId, run.app_id])
+          : await pool.query(
+            `SELECT config_data FROM ${SCHEMA}.client_configurations
+             WHERE tenant_id = $1 AND integration_id LIKE 'app-%' AND status = 'connected'
+             ORDER BY updated_at DESC LIMIT 1`, [tenantId]);
+        if (appRes.rows.length > 0) {
+          appContext = appRes.rows[0].config_data;
+          envBaseUrl = pickEnvironment(appContext, run.env_id || undefined)?.baseUrl || '';
+        }
       } catch { /* ignore */ }
     }
 
-    const targetUrl = appContext?.baseUrl || appContext?.targetUrl || 'https://example.com';
-    const appName = (isMobileRun ? (mobileMeta.fileName || mobileMeta.appName) : appContext?.name)
+    const targetUrl = envBaseUrl || appContext?.baseUrl || appContext?.targetUrl || 'https://example.com';
+    const appName = (isMobileRun ? (mobileMeta.fileName || mobileMeta.appName) : appContext?.appName)
       || run.story_title || 'Application';
 
     // Generate scripts using Claude CLI or fallback

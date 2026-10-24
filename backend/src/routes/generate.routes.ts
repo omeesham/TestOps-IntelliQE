@@ -8,7 +8,7 @@ import { isClaudeCliAuthenticated } from '../agents/claude-runner.js';
 import { broadcastSSE } from '../services/sse-manager.js';
 import { createJob, updateJob, getJob } from '../services/generation-jobs.js';
 import { getConfigsForTenant } from '../services/configurations.service.js';
-import { decryptStoredDeep } from '../utils/crypto.js';
+import { pickEnvironment, decryptRoles } from '../services/app-environments.js';
 import { suggestPrompts, AssistRateLimit, MAX_PROMPT_CHARS } from '../services/prompt-assist.service.js';
 
 const router = Router();
@@ -86,6 +86,7 @@ interface ResolvedAppContext {
 async function resolveAppContextFromConfig(
   tenantId: string,
   appId: string,
+  envId: string | undefined,
   incoming: ResolvedAppContext | undefined,
 ): Promise<ResolvedAppContext | undefined> {
   const configs = await getConfigsForTenant(tenantId);
@@ -93,17 +94,11 @@ async function resolveAppContextFromConfig(
   if (!cfg) return incoming;
 
   const data = cfg.configData || {};
-  const storedRoles: ResolvedRole[] = Array.isArray(data.roles)
-    ? data.roles
-        .filter((r: any) => r && typeof r === 'object')
-        .map((r: any) => ({
-          roleName: String(r.roleName || 'user'),
-          username: String(r.username || ''),
-          // decryptStoredDeep handles both __AES__ and legacy __ENC__, and peels
-          // any accidental multi-layer encryption from earlier re-saves.
-          password: r.password ? decryptStoredDeep(String(r.password)) : '',
-        }))
-    : [];
+  const env = pickEnvironment(data, envId);
+  if (envId && !env) throw new UnknownEnvironmentError(String(data.appName || appId), envId);
+
+  // decryptStoredDeep handles both __AES__ and legacy __ENC__ values.
+  const storedRoles: ResolvedRole[] = env ? decryptRoles(env.roles) : [];
 
   const incomingRoles = incoming?.roles?.filter((r) => r && r.username) || [];
   let roles: ResolvedRole[];
@@ -111,20 +106,27 @@ async function resolveAppContextFromConfig(
     // Client gave no usable credentials — use the saved roles wholesale.
     roles = storedRoles.filter((r) => r.username);
   } else {
-    // Back-fill missing passwords by matching the username against saved roles.
+    // Back-fill a missing password only from the saved role with the same
+    // username, never from a different user.
     roles = incomingRoles.map((r) => {
       if (r.password) return r;
-      const match = storedRoles.find((s) => s.username === r.username) || storedRoles[0];
+      const match = storedRoles.find((s) => s.username === r.username);
       return { ...r, password: match?.password || '' };
     });
   }
 
   return {
-    targetUrl: incoming?.targetUrl || data.baseUrl || '',
-    appName: incoming?.appName || data.appName || '',
-    environment: incoming?.environment || data.environment || '',
+    targetUrl: incoming?.targetUrl || env?.baseUrl || '',
+    appName: incoming?.appName || String(data.appName || ''),
+    environment: incoming?.environment || env?.name || '',
     roles: roles.length ? roles : undefined,
   };
+}
+
+class UnknownEnvironmentError extends Error {
+  constructor(appName: string, envId: string) {
+    super(`The environment "${envId}" of ${appName} was not found or has no URL. Pick an environment in Application Setup and try again.`);
+  }
 }
 
 /**
@@ -198,6 +200,7 @@ router.post('/', async (req: Request, res: Response) => {
     roles,
     exploreMode,
     appId,
+    envId,
     platform,
     appMetadata,
     coverage,
@@ -257,8 +260,12 @@ router.post('/', async (req: Request, res: Response) => {
   // browser — it's decrypted here from at-rest storage. Client values win.
   if (appId && req.user?.tenantId) {
     try {
-      appContext = await resolveAppContextFromConfig(req.user.tenantId, String(appId), appContext);
+      appContext = await resolveAppContextFromConfig(req.user.tenantId, String(appId), typeof envId === 'string' && envId ? envId : undefined, appContext);
     } catch (err) {
+      if (err instanceof UnknownEnvironmentError) {
+        res.status(400).json({ error: err.message, code: 'UNKNOWN_ENVIRONMENT' });
+        return;
+      }
       console.error('[generate] Failed to resolve app config for', appId, '-', (err as Error)?.message || err);
       // Non-fatal: fall through with whatever the client supplied.
     }

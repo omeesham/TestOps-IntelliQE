@@ -247,6 +247,8 @@ export async function startGeneration(
      * never exposed to the browser. Client-supplied values take precedence.
      */
     appId?: string;
+    /** Environment of that application (Application Setup); defaults to its first environment. */
+    envId?: string;
     /** Test design depth: essential (smoke), standard (regression, default) or exhaustive (full regression). */
     coverage?: 'essential' | 'standard' | 'exhaustive';
     /** Mobile Application Automation — native platform + uploaded build metadata. */
@@ -270,6 +272,7 @@ export async function startGeneration(
     exploreMode: options?.exploreMode,
     roles: options?.roles,
     appId: options?.appId,
+    envId: options?.envId,
     platform: options?.platform,
     appMetadata: options?.appMetadata,
     coverage: options?.coverage,
@@ -328,6 +331,9 @@ export async function saveTestCases(payload: {
   source?: string;
   columns: string[];
   testCases: any[];
+  /** Application Setup app and environment the cases were generated for (scripts target its URL). */
+  appId?: string;
+  envId?: string;
   /** Mobile Application Automation — marks the run so scripts/execution use Appium. */
   platform?: 'android' | 'ios';
   appMetadata?: {

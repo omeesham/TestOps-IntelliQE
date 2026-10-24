@@ -12,7 +12,7 @@ const router = Router();
 router.post('/save', async (req: Request, res: Response) => {
   try {
     const user = req.user!;
-    const { storyKey, storyTitle, source, columns, testCases, module, submodule, platform, appMetadata } = req.body;
+    const { storyKey, storyTitle, source, columns, testCases, module, submodule, platform, appMetadata, appId, envId } = req.body;
     if (!Array.isArray(testCases) || testCases.length === 0) {
       res.status(400).json({ error: 'testCases[] are required' });
       return;
@@ -26,9 +26,11 @@ router.post('/save', async (req: Request, res: Response) => {
 
     // Create test_run record with tenant_id
     const runResult = await pool.query(
-      `INSERT INTO test_runs (username, story_key, story_title, source, columns, tenant_id, module, submodule, platform, mobile_context)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-      [user.username, storyKey || null, storyTitle || null, source || null, JSON.stringify(columns || []), user.tenantId, module || null, submodule || null, mobilePlatform, mobileContext]
+      `INSERT INTO test_runs (username, story_key, story_title, source, columns, tenant_id, module, submodule, platform, mobile_context, app_id, env_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+      [user.username, storyKey || null, storyTitle || null, source || null, JSON.stringify(columns || []), user.tenantId, module || null, submodule || null, mobilePlatform, mobileContext,
+        typeof appId === 'string' && appId.startsWith('app-') ? fit(appId, 200) : null,
+        typeof envId === 'string' && envId ? fit(envId, 100) : null]
     );
     const testRunId: string = runResult.rows[0].id;
 

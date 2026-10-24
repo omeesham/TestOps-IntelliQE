@@ -110,6 +110,21 @@ const CATEGORIES: { id: Category; title: string; icon: React.ElementType; desc: 
   { id: 'api',         title: 'API Automation',     icon: Plug,        desc: 'Test REST services, endpoints, and system integrations.', comingSoon: true },
 ];
 
+/** Environments of a saved application; apps saved before environments read as one. */
+type SavedRole = { username?: string; password?: string };
+function appEnvironments(d: Record<string, unknown>): { id: string; name: string; baseUrl: string; roles: SavedRole[] }[] {
+  const roles = (v: unknown): SavedRole[] => (Array.isArray(v) ? v.filter((r) => r && typeof r === 'object') : []);
+  if (Array.isArray(d.environments) && d.environments.length > 0) {
+    return (d.environments as Record<string, unknown>[]).map((e, i) => ({
+      id: String(e?.id || `env-${i + 1}`),
+      name: String(e?.name || `Environment ${i + 1}`),
+      baseUrl: String(e?.baseUrl || ''),
+      roles: roles(e?.roles),
+    }));
+  }
+  return [{ id: 'default', name: String(d.environment || 'Default'), baseUrl: String(d.baseUrl || ''), roles: roles(d.roles) }];
+}
+
 type CoverageLevel = 'essential' | 'standard' | 'exhaustive';
 const COVERAGE_OPTIONS: { id: CoverageLevel; label: string; hint: string }[] = [
   { id: 'essential', label: 'Smoke', hint: 'Happy paths and each rule once' },
@@ -233,6 +248,7 @@ export default function ChatPage() {
   // selected we send its id and let the backend back-fill the credential.
   const [exploreApps, setExploreApps] = useState<{ integrationId: string; configData: any }[]>([]);
   const [exploreAppId, setExploreAppId] = useState<string | null>(null);
+  const [exploreEnvId, setExploreEnvId] = useState<string | null>(null);
   const [exploreHasSavedPassword, setExploreHasSavedPassword] = useState(false);
   const [exploreLoadingApps, setExploreLoadingApps] = useState(false);
 
@@ -498,6 +514,7 @@ export default function ChatPage() {
     } else if (s === 'explore') {
       // Reset any prior prefill, then auto-fill from Application Setup.
       setExploreAppId(null);
+      setExploreEnvId(null);
       setExploreApps([]);
       setExploreHasSavedPassword(false);
       setExploreUrl('');
@@ -713,12 +730,15 @@ export default function ChatPage() {
      password. URL, app name and username are non-sensitive and shown directly;
      the password stays encrypted server-side and is resolved at generation time
      via exploreAppId, so here we only flag whether a saved password exists. */
-  const applyExploreApp = (cfg: { integrationId: string; configData: any }) => {
+  const applyExploreApp = (cfg: { integrationId: string; configData: any }, envId?: string) => {
     const d = cfg.configData || {};
+    const envs = appEnvironments(d);
+    const env = envs.find((e) => e.id === envId) || envs.find((e) => e.baseUrl) || envs[0];
     setExploreAppId(cfg.integrationId);
-    setExploreUrl(d.baseUrl || '');
+    setExploreEnvId(env?.id || null);
+    setExploreUrl(env?.baseUrl || '');
     setExploreAppName(d.appName || '');
-    const firstRole = Array.isArray(d.roles) ? d.roles.find((r: any) => r?.username) : null;
+    const firstRole = env?.roles.find((r) => r.username) || null;
     setExploreUsername(firstRole?.username || '');
     // Never prefill the password field with stored ciphertext — the backend
     // uses the saved credential automatically when the field is left blank.
@@ -735,7 +755,7 @@ export default function ChatPage() {
         (c: any) =>
           typeof c.integrationId === 'string' &&
           c.integrationId.startsWith('app-') &&
-          c.configData?.baseUrl,
+          appEnvironments(c.configData || {}).some((e) => e.baseUrl),
       );
       setExploreApps(apps);
       if (apps.length > 0) {
@@ -931,6 +951,7 @@ export default function ChatPage() {
           appName: exploreAppName || undefined,
           roles,
           appId: exploreAppId || undefined,
+          envId: exploreEnvId || undefined,
         });
         runId = started?.runId || '';
       } else if (category === 'mobile') {
@@ -1039,6 +1060,8 @@ export default function ChatPage() {
         source: source || undefined,
         columns: selectedColumns,
         testCases: results.testCases,
+        // Explore runs remember the app and environment, so scripts target the same URL.
+        ...(source === 'explore' && exploreAppId ? { appId: exploreAppId, envId: exploreEnvId || undefined } : {}),
         // Mark mobile runs so script generation emits Appium and execution
         // dispatches to the (gated) mobile runner.
         platform: category === 'mobile' ? (mobilePlatform || undefined) : undefined,
@@ -2018,6 +2041,25 @@ export default function ChatPage() {
                   <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 </div>
               </div>
+
+              {selectedApp && appEnvironments(selectedApp.configData || {}).length > 1 && (
+                <div>
+                  <label htmlFor="explore-env" className="block text-xs font-medium text-gray-600 mb-1">Environment</label>
+                  <div className="relative">
+                    <select
+                      id="explore-env"
+                      value={exploreEnvId || ''}
+                      onChange={(e) => applyExploreApp(selectedApp, e.target.value)}
+                      className={inputCls + ' appearance-none pr-9'}
+                    >
+                      {appEnvironments(selectedApp.configData || {}).filter((e) => e.baseUrl).map((e) => (
+                        <option key={e.id} value={e.id}>{e.name} — {e.baseUrl}</option>
+                      ))}
+                    </select>
+                    <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  </div>
+                </div>
+              )}
 
               <p className="text-[11px] text-violet-500 flex items-center gap-1">
                 <CheckCircle className="w-3 h-3" />

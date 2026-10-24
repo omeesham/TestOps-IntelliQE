@@ -423,6 +423,10 @@ export async function initDb(): Promise<void> {
     // Mobile Application Automation (additive; NULL = web/API run)
     await addColumn('test_runs', 'platform', 'NVARCHAR(20)');
     await addColumn('test_runs', 'mobile_context', 'NVARCHAR(MAX)');
+    // Application Setup app and environment the suite was generated for, so
+    // script generation targets the same URL.
+    await addColumn('test_runs', 'app_id', 'NVARCHAR(200)');
+    await addColumn('test_runs', 'env_id', 'NVARCHAR(100)');
 
     await createTable('test_cases', `
       CREATE TABLE ${SCHEMA}.test_cases (
