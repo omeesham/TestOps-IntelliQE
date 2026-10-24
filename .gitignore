@@ -46,6 +46,8 @@ backend/allure-reports/
 **/allure-reports/
 playwright-report/
 test-results/
+**/regression-report/
+**/regression-results/
 coverage/
 # Execution Recordings feature — captured videos + manifests
 backend/recordings-store/
