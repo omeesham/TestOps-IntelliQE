@@ -1,0 +1,483 @@
+{
+  "/api/health": {
+    "status": 200,
+    "shape": {
+      "status": "string",
+      "timestamp": "string",
+      "version": "string"
+    }
+  },
+  "/api/agents/status": {
+    "status": 200,
+    "shape": {
+      "agents": [
+        {
+          "agentFile": "string",
+          "capabilities": [],
+          "description": "string",
+          "enabled": "boolean",
+          "icon": "string",
+          "id": "string",
+          "maxTurns": "number",
+          "model": "string",
+          "name": "string",
+          "pipelineOrder": "number",
+          "queueSize": "number",
+          "status": "string",
+          "timeoutSeconds": "number"
+        }
+      ],
+      "pipelineConfig": {
+        "agentRunner": "string",
+        "autoInvoke": {
+          "enabled": "boolean"
+        },
+        "workerConnected": "boolean"
+      },
+      "summary": {
+        "active": "number",
+        "idle": "number",
+        "total": "number"
+      }
+    }
+  },
+  "/api/agents/queue": {
+    "status": 200,
+    "shape": {
+      "config": {
+        "autoHealOnFailure": "boolean",
+        "maxRetries": "number"
+      },
+      "queue": []
+    }
+  },
+  "/api/chat/conversations": {
+    "status": 200,
+    "shape": []
+  },
+  "/api/jira/status": {
+    "status": 200,
+    "shape": {
+      "connected": "boolean"
+    }
+  },
+  "/api/testrail/status": {
+    "status": 200,
+    "shape": {
+      "baseUrl": "null",
+      "connected": "boolean",
+      "email": "null",
+      "lastSyncedAt": "null",
+      "projectsCount": "number",
+      "runsCount": "number",
+      "syncStatus": "null"
+    }
+  },
+  "/api/confluence/status": {
+    "status": 200,
+    "shape": {
+      "connected": "boolean"
+    }
+  },
+  "/api/sharepoint/status": {
+    "status": 200,
+    "shape": {
+      "connected": "boolean"
+    }
+  },
+  "/api/test-cases": {
+    "status": 200,
+    "shape": {
+      "pagination": {
+        "limit": "number",
+        "page": "number",
+        "total": "number",
+        "totalPages": "number"
+      },
+      "runs": [
+        {
+          "approved_count": "number",
+          "columns": [
+            "string"
+          ],
+          "created_at": "string",
+          "generated_count": "number",
+          "id": "string",
+          "mobile_context": "null",
+          "module": "null",
+          "platform": "null",
+          "scripted_count": "number",
+          "source": "string",
+          "story_key": "null",
+          "story_title": "string",
+          "submodule": "null",
+          "tenant_id": "string",
+          "test_case_count": "number",
+          "username": "string"
+        }
+      ]
+    }
+  },
+  "/api/test-cases/facets": {
+    "status": 500,
+    "shape": {
+      "error": "string"
+    }
+  },
+  "/api/configurations": {
+    "status": 200,
+    "shape": {
+      "configs": [
+        {
+          "configData": "object",
+          "connectedAt": "string",
+          "connectedBy": "string",
+          "createdAt": "string",
+          "id": "string",
+          "integrationId": "string",
+          "lastSyncAt": "string",
+          "status": "string",
+          "tenantId": "string",
+          "updatedAt": "string"
+        }
+      ]
+    }
+  },
+  "/api/reports/summary": {
+    "status": 200,
+    "shape": {
+      "connectedSources": "number",
+      "passRate": "number",
+      "priorityDistribution": [
+        {
+          "name": "string",
+          "value": "number"
+        }
+      ],
+      "recentRuns": [
+        {
+          "caseCount": "number",
+          "createdAt": "string",
+          "id": "string",
+          "source": "string",
+          "storyKey": "null",
+          "storyTitle": "string"
+        }
+      ],
+      "statusDistribution": [
+        {
+          "name": "string",
+          "value": "number"
+        }
+      ],
+      "totalTestCases": "number",
+      "totalTestRuns": "number",
+      "trends": [
+        {
+          "date": "string",
+          "passRate": "number",
+          "passed": "number",
+          "total": "number"
+        }
+      ],
+      "typeDistribution": [
+        {
+          "name": "string",
+          "value": "number"
+        }
+      ]
+    }
+  },
+  "/api/reports/coverage": {
+    "status": 200,
+    "shape": {
+      "byFeature": [
+        {
+          "name": "string",
+          "value": "number"
+        }
+      ],
+      "byPriority": [
+        {
+          "name": "string",
+          "value": "number"
+        }
+      ],
+      "byStatus": [
+        {
+          "name": "string",
+          "value": "number"
+        }
+      ],
+      "byType": [
+        {
+          "name": "string",
+          "value": "number"
+        }
+      ],
+      "range": {
+        "from": "null",
+        "granularity": "string",
+        "to": "null"
+      },
+      "runs": [
+        {
+          "createdAt": "string",
+          "failed": "number",
+          "id": "string",
+          "notRun": "number",
+          "passed": "number",
+          "platform": "null",
+          "source": "string",
+          "storyKey": "null",
+          "storyTitle": "string",
+          "total": "number"
+        }
+      ],
+      "summary": {
+        "automationCoverage": "number",
+        "executed": "number",
+        "failed": "number",
+        "notRun": "number",
+        "passRate": "number",
+        "passed": "number",
+        "scripted": "number",
+        "total": "number",
+        "totalRuns": "number"
+      },
+      "trend": [
+        {
+          "bucket": "string",
+          "failed": "number",
+          "passed": "number",
+          "total": "number"
+        }
+      ]
+    }
+  },
+  "/api/tenant-settings/anthropic-key": {
+    "status": 200,
+    "shape": {
+      "configured": "boolean"
+    }
+  },
+  "/api/pipeline/list": {
+    "status": 200,
+    "shape": []
+  },
+  "/api/pipeline-pages": {
+    "status": 200,
+    "shape": []
+  },
+  "/api/pipeline-pages/tree": {
+    "status": 200,
+    "shape": []
+  },
+  "/api/pipeline-admin/pipeline-definition": {
+    "status": 200,
+    "shape": {
+      "convergenceGuards": {
+        "budgetExhausted": {
+          "action": "string",
+          "enabled": "boolean"
+        },
+        "enabled": "boolean",
+        "maxIterations": {
+          "action": "string",
+          "enabled": "boolean",
+          "limit": "number"
+        },
+        "notDecreasing": {
+          "action": "string",
+          "enabled": "boolean",
+          "windowSize": "number"
+        },
+        "sameFindings": {
+          "action": "string",
+          "enabled": "boolean"
+        }
+      },
+      "defaults": {
+        "agentRunner": "string",
+        "autoInvoke": "boolean",
+        "budgetPerRunUsd": "number",
+        "budgetPerStageUsd": "number",
+        "cliOutputFormat": "string",
+        "cliPath": "string",
+        "maxTurnsPerStage": "number",
+        "model": "string",
+        "workerHeartbeatIntervalMs": "number",
+        "workerPollIntervalMs": "number"
+      },
+      "models": {
+        "available": [
+          "string"
+        ],
+        "costPerMTokenInput": {
+          "haiku": "number",
+          "opus": "number",
+          "sonnet": "number"
+        },
+        "costPerMTokenOutput": {
+          "haiku": "number",
+          "opus": "number",
+          "sonnet": "number"
+        }
+      },
+      "stages": [
+        {
+          "agent": "string",
+          "agentFile": "string",
+          "approvalMode": "string",
+          "budgetCap": "number",
+          "description": "string",
+          "enabled": "boolean",
+          "id": "string",
+          "maxTurns": "number",
+          "mcpConfig": "string",
+          "model": "string",
+          "name": "string",
+          "next": "object",
+          "postCompleteGate": "string",
+          "preRunGate": "string",
+          "retries": "number",
+          "timeoutSeconds": "number"
+        }
+      ],
+      "terminalStates": [
+        "string"
+      ],
+      "version": "string"
+    }
+  },
+  "/api/pipeline-admin/agent-types": {
+    "status": 200,
+    "shape": [
+      {
+        "agent_file": "string",
+        "capabilities": "null",
+        "category": "string",
+        "created_at": "string",
+        "default_model": "string",
+        "description": "string",
+        "enabled": "boolean",
+        "icon": "string",
+        "id": "string",
+        "name": "string",
+        "sort_order": "number"
+      }
+    ]
+  },
+  "/api/pipeline-admin/usage": {
+    "status": 200,
+    "shape": {
+      "avgCostPerRun": "number",
+      "completedRuns": "number",
+      "totalCost": "number",
+      "totalRuns": "number"
+    }
+  },
+  "/api/pipeline-admin/worker-status": {
+    "status": 200,
+    "shape": {
+      "connected": "boolean",
+      "currentTask": "null",
+      "lastHeartbeat": "null"
+    }
+  },
+  "/api/pipeline-admin/ai-config": {
+    "status": 200,
+    "shape": {
+      "apiKey": "null",
+      "hasApiKey": "boolean",
+      "model": "null",
+      "pipelineMode": "string",
+      "provider": "null"
+    }
+  },
+  "/api/pipeline-worker/next-task": {
+    "status": 401,
+    "shape": {
+      "error": "string"
+    }
+  },
+  "/api/automation-scripts": {
+    "status": 200,
+    "shape": {
+      "pagination": {
+        "limit": "number",
+        "page": "number",
+        "total": "number",
+        "totalPages": "number"
+      },
+      "scripts": []
+    }
+  },
+  "/api/users": {
+    "status": 200,
+    "shape": {
+      "users": [
+        {
+          "created_at": "string",
+          "email": "null",
+          "full_name": "string",
+          "id": "string",
+          "is_active": "boolean",
+          "role": "string",
+          "tenant_name": "string",
+          "tenant_slug": "string",
+          "updated_at": "string",
+          "username": "string"
+        }
+      ]
+    }
+  },
+  "/api/users/menu-config": {
+    "status": 200,
+    "shape": {
+      "allowedPaths": "null"
+    }
+  },
+  "/api/users/feature-flags": {
+    "status": 200,
+    "shape": {
+      "flags": {}
+    }
+  },
+  "/api/users/tenants": {
+    "status": 200,
+    "shape": {
+      "tenants": [
+        {
+          "id": "string",
+          "is_platform": "boolean",
+          "name": "string",
+          "slug": "string"
+        }
+      ]
+    }
+  },
+  "/api/allure/status": {
+    "status": 200,
+    "shape": {
+      "exists": "boolean"
+    }
+  },
+  "/api/recordings/runs": {
+    "status": 200,
+    "shape": {
+      "runs": [
+        {
+          "createdAt": "string",
+          "hasRecording": "boolean",
+          "id": "string",
+          "recordedAt": "null",
+          "scriptCount": "number",
+          "source": "string",
+          "storyKey": "null",
+          "storyTitle": "string"
+        }
+      ]
+    }
+  }
+}
