@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useFeatureFlags } from '@/contexts/FeatureFlagsContext';
 import {
@@ -12,6 +13,7 @@ import {
   healScriptsForRun,
   generateAllureReport,
   saveTestCases,
+  getTestRun,
   exportTestCases,
   createChatConversation,
   saveChatMessage,
@@ -123,6 +125,38 @@ function appEnvironments(d: Record<string, unknown>): { id: string; name: string
     }));
   }
   return [{ id: 'default', name: String(d.environment || 'Default'), baseUrl: String(d.baseUrl || ''), roles: roles(d.roles) }];
+}
+
+/** A saved test case row (GET /test-cases/:runId) in the shape the chat shows. */
+function rowToChatCase(row: Record<string, unknown>) {
+  const text = (v: unknown, fallback = '') => (v == null || v === '' ? fallback : String(v));
+  const parse = (v: unknown): unknown => {
+    if (typeof v !== 'string') return v;
+    try { return JSON.parse(v); } catch { return undefined; }
+  };
+  const list = (v: unknown) => { const p = parse(v); return Array.isArray(p) ? p : []; };
+  const testData = parse(row.test_data);
+  return {
+    id: text(row.tc_number) || text(row.id),
+    traceabilityId: text(row.traceability_id),
+    module: text(row.module),
+    submodule: text(row.submodule),
+    feature: text(row.feature),
+    title: text(row.title, 'Test scenario'),
+    scenario: text(row.title, 'Test scenario'),
+    description: text(row.description),
+    precondition: text(row.precondition),
+    testData: testData && typeof testData === 'object' ? testData : {},
+    testSteps: list(row.test_steps),
+    steps: list(row.steps),
+    expectedResult: text(row.expected),
+    type: text(row.type, 'positive'),
+    category: text(row.category),
+    priority: text(row.priority, 'P1'),
+    severity: text(row.severity),
+    tags: list(row.tags),
+    status: text(row.status, 'generated'),
+  };
 }
 
 type CoverageLevel = 'essential' | 'standard' | 'exhaustive';
@@ -377,6 +411,16 @@ export default function ChatPage() {
       if (s.healingAttempt)         setHealingAttempt(s.healingAttempt);
       if (s.savedTestRunId)         setSavedTestRunId(s.savedTestRunId);
       if (s.pipelineStages)         setPipelineStages(s.pipelineStages);
+      // The flow's application and environment (never passwords), so returning
+      // from another page keeps working against the same app.
+      if (s.exploreAppId)           setExploreAppId(s.exploreAppId);
+      if (s.exploreEnvId)           setExploreEnvId(s.exploreEnvId);
+      if (s.exploreAppName)         setExploreAppName(s.exploreAppName);
+      if (s.exploreUrl)             setExploreUrl(s.exploreUrl);
+      if (s.exploreUsername)        setExploreUsername(s.exploreUsername);
+      if (s.coverageLevel)          setCoverageLevel(s.coverageLevel);
+      // The app list itself is not stored; reload it without changing the restored pick.
+      if (s.source === 'explore')   loadExploreApps().catch(() => { /* the typed values still work */ });
       setSessionRestored(true);
       // Auto-hide after 4 seconds
       setTimeout(() => setSessionRestored(false), 4000);
@@ -408,6 +452,12 @@ export default function ChatPage() {
         healingAttempt,
         savedTestRunId,
         pipelineStages,
+        exploreAppId,
+        exploreEnvId,
+        exploreAppName,
+        exploreUrl,
+        exploreUsername,
+        coverageLevel,
       }));
     } catch { /* ignore quota errors */ }
   }, [
@@ -416,6 +466,7 @@ export default function ChatPage() {
     selectedColumns, results, generatedScripts, executionResults,
     executionSummary, reportData, healingLog, healingAttempt,
     savedTestRunId, pipelineStages, SESSION_KEY,
+    exploreAppId, exploreEnvId, exploreAppName, exploreUrl, exploreUsername, coverageLevel,
   ]);
 
   // Clear session when user explicitly resets/starts over
@@ -746,18 +797,23 @@ export default function ChatPage() {
     setExploreHasSavedPassword(Boolean(firstRole?.password));
   };
 
+  /** Applications from Application Setup that have at least one environment URL. */
+  const loadExploreApps = async () => {
+    const result = await getConfigurations();
+    const apps = (result.configs || []).filter(
+      (c: any) =>
+        typeof c.integrationId === 'string' &&
+        c.integrationId.startsWith('app-') &&
+        appEnvironments(c.configData || {}).some((e) => e.baseUrl),
+    );
+    setExploreApps(apps);
+    return apps;
+  };
+
   const prefillExploreFromConfig = async () => {
     setExploreLoadingApps(true);
     try {
-      const result = await getConfigurations();
-      const configs = result.configs || [];
-      const apps = configs.filter(
-        (c: any) =>
-          typeof c.integrationId === 'string' &&
-          c.integrationId.startsWith('app-') &&
-          appEnvironments(c.configData || {}).some((e) => e.baseUrl),
-      );
-      setExploreApps(apps);
+      const apps = await loadExploreApps();
       if (apps.length > 0) {
         applyExploreApp(apps[0]);
         const name = apps[0].configData?.appName || apps[0].integrationId.replace(/^app-/, '');
@@ -864,7 +920,7 @@ export default function ChatPage() {
 
     /* Apply a successful result: map backend test cases (IEEE-829 shape, with
        legacy aliases preserved) into the wizard and advance to results. */
-    const applyGenerationResult = (res: any) => {
+    const applyGenerationResult = async (res: any) => {
       let testCases: any[] = [];
       if (res?.testCases?.length) {
         testCases = res.testCases.map((tc: any, i: number) => ({
@@ -913,13 +969,26 @@ export default function ChatPage() {
       setSelectedTcIds(new Set());
       setEditingTcId(null);
       updatePipeline('test-design', 'completed', `${testCases.length} test cases generated`);
-      push('tessa', `Generated ${testCases.length} test cases from the AI pipeline. Review, edit, or delete as needed. Click Save when satisfied.`);
+
+      // Save straight away so the suite is never lost and can be reviewed on
+      // Generated Test Cases. If saving fails, the in-chat list keeps its Save button.
+      const name = suiteName(testCases);
+      let savedRunId: string | null = null;
+      try {
+        savedRunId = (await saveTestCases(saveRequest(testCases, name))).testRunId;
+      } catch (err) {
+        console.error('Auto-save failed:', err);
+      }
+      push('tessa', savedRunId
+        ? `Generated ${testCases.length} test cases and saved them as "${name}". Review or edit them on Generated Test Cases, then generate the automation scripts.`
+        : `Generated ${testCases.length} test cases. Review, edit, or delete as needed. Click Save when satisfied.`);
       const cov = res?.coverage;
       if (cov?.totalRules) {
         const missing = (cov.uncovered || []).map((u: { text: string }) => `• ${u.text}`).join('\n');
         push('tessa', `Coverage: ${cov.coveredRules} of ${cov.totalRules} identified rules have at least one test case.${missing ? `\nNot covered yet:\n${missing}` : ''}`);
       }
-      setStep('results');
+      if (savedRunId) setSavedTestRunId(savedRunId);
+      setStep(savedRunId ? 'saved' : 'results');
     };
 
     /* Friendly failure — never surface raw error text in the chat. */
@@ -1004,7 +1073,7 @@ export default function ChatPage() {
       handled = true;
       cleanup();
       if (job.status === 'done' && job.result) {
-        applyGenerationResult(job.result);
+        void applyGenerationResult(job.result);
       } else {
         failGeneration(job.error || 'Generation did not complete. Please try again.');
       }
@@ -1048,34 +1117,63 @@ export default function ChatPage() {
     }, 4000);
   };
 
+  /* --- Suite name ---
+     Jira/ADO stories keep their own title. Everything else gets
+     "<App> (<Env>) – <Scope> <Depth> Suite – 24 Oct 2026, 14:05". */
+  const suiteName = (cases: { feature?: string }[]): string => {
+    if (storyMeta.title) return storyMeta.title;
+    let label = '';
+    if (source === 'explore') {
+      const app = exploreApps.find((a) => a.integrationId === exploreAppId);
+      const env = app ? appEnvironments(app.configData || {}).find((e) => e.id === exploreEnvId) : undefined;
+      label = String(app?.configData?.appName || exploreAppName || '');
+      if (!label) { try { label = new URL(exploreUrl).hostname; } catch { /* not a URL */ } }
+      if (label && env && env.name !== 'Default') label += ` (${env.name})`;
+    }
+    if (!label) label = category === 'mobile' ? (mobileMeta?.fileName || 'Mobile App') : 'Requirements';
+    // Scope: the main feature (at least half the cases), up to two features, or "Functional".
+    const counts = new Map<string, number>();
+    for (const c of cases) if (c.feature) counts.set(c.feature, (counts.get(c.feature) || 0) + 1);
+    const features = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+    const scope = !features.length ? 'Functional'
+      : features[0][1] * 2 >= cases.length ? features[0][0]
+      : features.length <= 2 ? features.map(([f]) => f).join(' & ')
+      : 'Functional';
+    const depth = { essential: 'Smoke', standard: 'Regression', exhaustive: 'Full Regression' }[coverageLevel];
+    const when = new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return `${label} – ${scope} ${depth} Suite – ${when}`.slice(0, 250);
+  };
+
   /* --- Save test cases to DB --- */
+  const saveRequest = (testCases: object[], storyTitle: string) => ({
+    username: user?.username || 'admin',
+    storyKey: storyMeta.key,
+    storyTitle,
+    source: source || undefined,
+    columns: selectedColumns,
+    testCases,
+    // Explore runs remember the app and environment, so scripts target the same URL.
+    ...(source === 'explore' && exploreAppId ? { appId: exploreAppId, envId: exploreEnvId || undefined } : {}),
+    // Mark mobile runs so script generation emits Appium and execution
+    // dispatches to the (gated) mobile runner.
+    platform: category === 'mobile' ? (mobilePlatform || undefined) : undefined,
+    appMetadata: category === 'mobile' && mobileMeta
+      ? {
+          packageName: mobileMeta.packageName,
+          bundleId: mobileMeta.bundleId,
+          mainActivity: mobileMeta.mainActivity,
+          versionName: mobileMeta.versionName,
+          permissions: mobileMeta.permissions,
+          fileName: mobileMeta.fileName,
+        }
+      : undefined,
+  });
+
   const handleSaveTestCases = async () => {
     if (!results?.testCases?.length) return;
     setIsSaving(true);
     try {
-      const res = await saveTestCases({
-        username: user?.username || 'admin',
-        storyKey: storyMeta.key,
-        storyTitle: storyMeta.title,
-        source: source || undefined,
-        columns: selectedColumns,
-        testCases: results.testCases,
-        // Explore runs remember the app and environment, so scripts target the same URL.
-        ...(source === 'explore' && exploreAppId ? { appId: exploreAppId, envId: exploreEnvId || undefined } : {}),
-        // Mark mobile runs so script generation emits Appium and execution
-        // dispatches to the (gated) mobile runner.
-        platform: category === 'mobile' ? (mobilePlatform || undefined) : undefined,
-        appMetadata: category === 'mobile' && mobileMeta
-          ? {
-              packageName: mobileMeta.packageName,
-              bundleId: mobileMeta.bundleId,
-              mainActivity: mobileMeta.mainActivity,
-              versionName: mobileMeta.versionName,
-              permissions: mobileMeta.permissions,
-              fileName: mobileMeta.fileName,
-            }
-          : undefined,
-      });
+      const res = await saveTestCases(saveRequest(results.testCases, suiteName(results.testCases)));
       setSavedTestRunId(res.testRunId);
       push('tessa', `${results.testCases.length} test cases saved successfully! You can now export them or proceed to automation script generation.`);
       setStep('saved');
@@ -1113,7 +1211,22 @@ export default function ChatPage() {
 
   /* --- Script generation (Stage 3 ONLY) --- */
   const handleScriptGeneration = async () => {
-    const testCases = results?.testCases || [];
+    let testCases = results?.testCases || [];
+    // Reviewers may have edited, added or deleted cases on Generated Test Cases:
+    // show the saved version (the server scripts that version too).
+    if (savedTestRunId) {
+      try {
+        const rows: Record<string, unknown>[] = (await getTestRun(savedTestRunId))?.testCases || [];
+        testCases = rows.map(rowToChatCase);
+        setResults({ testCases });
+      } catch (err) {
+        console.warn('Could not reload the saved test cases; using the chat copy:', err);
+      }
+      if (testCases.length === 0) {
+        push('tessa', 'This suite has no test cases left. Add test cases on Generated Test Cases, or start a new generation.');
+        return;
+      }
+    }
     if (testCases.length === 0) return;
 
     push('tessa', `Generating automation scripts for ${testCases.length} test cases...`);
@@ -1157,7 +1270,7 @@ export default function ChatPage() {
       push('tessa', `⚠️ ${scriptErr || 'The backend returned no scripts. Ensure the AI engine is connected and try again.'}`);
       updatePipeline('script-gen', 'skipped', 'No scripts generated');
       setAgentSteps([{ name: 'Script Writer', status: 'completed', detail: 'No scripts produced' }]);
-      setStep('results');
+      setStep('saved');
       return;
     }
 
@@ -2475,6 +2588,9 @@ export default function ChatPage() {
                 <p className="text-xs text-gray-500">{results?.testCases?.length || 0} test cases saved to database.</p>
               </div>
             </div>
+            <Link to="/generated-tests" className="inline-flex items-center gap-1 text-xs font-medium text-violet-600 hover:text-violet-700">
+              Review on Generated Test Cases <ArrowRight className="w-3 h-3" />
+            </Link>
           </div>
 
           {/* Export Section */}

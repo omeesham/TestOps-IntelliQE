@@ -221,6 +221,8 @@ router.put('/:testRunId/cases/:caseId', async (req: Request, res: Response) => {
     if (category !== undefined)     { updates.push(`category = $${idx++}`); vals.push(normaliseCategory(category)); }
 
     if (updates.length === 0) { res.status(400).json({ error: 'No fields to update' }); return; }
+    // Changes to what a script is written from make its existing script stale.
+    if ([title, steps, expected, precondition, type, feature].some((v) => v !== undefined)) updates.push('updated_at = now()');
 
     vals.push(caseId, testRunId);
     const result = await pool.query(

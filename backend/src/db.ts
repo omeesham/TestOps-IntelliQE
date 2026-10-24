@@ -458,6 +458,8 @@ export async function initDb(): Promise<void> {
     // A case can trace to several rules (FLD-01, BR-02…), longer than the original 100.
     await widenColumn('test_cases', 'traceability_id', 1000);
     await addColumn('test_cases', 'category', 'NVARCHAR(30)');
+    // Last edit of the case's content; a script older than this is re-generated.
+    await addColumn('test_cases', 'updated_at', 'DATETIMEOFFSET');
 
     // ─── 7. Automation scripts ───
     await createTable('automation_scripts', `
