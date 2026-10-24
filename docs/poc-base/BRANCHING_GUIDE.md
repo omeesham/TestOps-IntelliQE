@@ -6,18 +6,18 @@ How IntelliQE client POC branches are created, kept up to date and upgraded.
 
 ```
 main (f639160)
- ├── hardening/v1    fixes that are right for every customer (security, build, dependencies)
- │                     → merged into poc/base now; offered to main as one PR (see PORT_BACK.md)
- └── poc/base        hardening/v1 + POC-only changes (scope, docs, smoke suite, CI)
-       tag poc-base-v1.0.0
-        ├── poc/ges-us     GES US   (client contact: Ashok)
-        └── poc/ges-emea   GES EMEA (client contacts: Ajay, Liberty)
+ └── integration       reviewed changes for every customer, merged by PR
+       │                 (PR #3 hardening/v1: security, build, dependencies; PR #4 product improvements)
+       └── poc/base    integration + POC-only changes (scope, docs, smoke suite, CI)
+             tag poc-base-v1.0.0
+              ├── poc/ges-us     GES US   (client contact: Ashok)
+              └── poc/ges-emea   GES EMEA (client contacts: Ajay, Liberty)
 ```
 
 | Branch | Holds | Never holds |
 | --- | --- | --- |
-| `hardening/vN` | Product fixes, each a small commit with proof | Client names, client config, POC-only hiding |
-| `poc/base` | Merges of `hardening/vN`; POC-only commits (feature defaults, docs, smoke suite, CI) | Client-specific values |
+| `hardening/vN`, feature branches | Changes for every customer, each a small commit with proof, merged into `integration` by PR | Client names, client config, POC-only hiding |
+| `poc/base` | Merges of `integration`; POC-only commits (feature defaults, docs, smoke suite, CI) | Client-specific values |
 | `poc/<client>-<region>` | Region configuration; client-specific features (see "Features" below) | Fixes that every client needs; those go to `hardening` |
 
 **Naming:**
@@ -29,7 +29,7 @@ main (f639160)
 
 | Change | Branch | Then |
 | --- | --- | --- |
-| Bug or security fix for everyone | `hardening/vN` | Merge into `poc/base` → tag a new base → merge the tag into each client branch |
+| Bug, security fix or feature for everyone | `hardening/vN` or a feature branch → PR into `integration` | Merge `integration` into `poc/base` → tag a new base → merge the tag into each client branch |
 | POC-only behaviour (hide a screen, docs, CI) | `poc/base` | Tag a new base → merge into the client branches |
 | One client's configuration | `poc/<client>-<region>` | Tag that client branch |
 | One client's feature (e.g. OCR document checks for GES US) | `poc/<client>-<region>`, ported as small commits with tests | Move it to `hardening` if a second client needs it |

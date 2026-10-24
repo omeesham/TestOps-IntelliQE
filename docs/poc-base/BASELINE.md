@@ -1,18 +1,20 @@
 # POC base: baseline record
 
-The `poc/base` branch is the starting point for every client POC branch. It is cut from the
-released product and carries only hardening, build fixes and client-safe configuration.
+The `poc/base` branch is the starting point for every client POC branch. It is cut from
+`integration` (reviewed product changes) and adds only POC-only changes: scope defaults, docs,
+the smoke suite and CI.
 
 ## Starting point
 
 | Item | Value |
 | --- | --- |
 | Branch | `poc/base` |
-| Cut from | `main` @ `f6391601de17937e51fb9fa3b5e9c1f9ffb76e80` ("ux changes", 27-Jun-2026) |
-| Not included | `develop` commits 4316e79 and 175a6ee (unreviewed; can be added in a later base version) |
-| Recorded | 23-Oct-2026 |
+| Cut from | `integration` @ `9674b97eac92a8b92ae06400f716799f42c40502` (24-Oct-2026) |
+| `integration` holds | `main` @ `f639160` ("ux changes", 27-Jun-2026) + PR #3 (`hardening/v1`: security, build, dependencies) + PR #4 (product improvements: coverage engine, environments, test files, read-only environments, review flow) |
+| Not included | `develop` commits 4316e79 and 175a6ee; the API automation branch (unreviewed; can be added in a later base version) |
+| Recorded | 24-Oct-2026 |
 | Build check | Fresh clone: backend and frontend `npm ci` + `npm run build` pass (Node 24.21.0, npm 11.19.0) |
-| Container base images | `node:20-alpine` (UI build), `mcr.microsoft.com/playwright:v1.48.0-jammy` (API build and runtime) |
+| Container base images | `node:24-alpine` (UI build), `mcr.microsoft.com/playwright:v1.64.1-noble` (API build and runtime) |
 
 ## Product scope at the starting point
 
@@ -28,7 +30,7 @@ released product and carries only hardening, build fixes and client-safe configu
 "Accessibility" appears only as a test-case type that the AI agents can generate. It is not the
 ADA module.
 
-## Known issues found at the starting point (fixed on this branch)
+## Known issues found in `main` @ f639160 (fixed by `hardening/v1`, now in `integration`)
 
 1. A Windows clone fails with "Filename too long": 235 Allure result files are committed under `backend/allure-results-store/`.
 2. The container build fails: the `Dockerfile` copies `.github/agents`, but the agent files are in `client-deliverable/.github/agents`.

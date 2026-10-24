@@ -1,8 +1,8 @@
 # Port-back log: fixes for `main`
 
-The fixes below were made on `hardening/v1` (cut from `main` @ f639160) and merged into `poc/base`.
-They apply to the product as well. To offer them to `main`, raise one PR from `hardening/v1`.
-Because the branch was cut from `main`, its commits apply cleanly; no cherry-picks are needed.
+The fixes below were made on `hardening/v1` (cut from `main` @ f639160) and merged into `integration`
+by PR #3. `poc/base` is cut from `integration`, so it has them too. They reach `main` when
+`integration` is merged into `main`.
 
 ## Commits on hardening/v1
 
