@@ -56,14 +56,16 @@ function findClaudeCli(): string | null {
  */
 export async function runClaudePrompt(
   prompt: string,
-  options?: { maxTokens?: number; model?: string },
+  options?: { maxTokens?: number; model?: string; system?: string },
 ): Promise<string> {
   // Empty string is intentionally treated as "not set" so a placeholder
   // `ANTHROPIC_API_KEY=` line in .env falls through to the CLI fallback.
   if (process.env.ANTHROPIC_API_KEY) {
     return runViaAnthropicApi(prompt, options);
   }
-  return runViaClaudeCli(prompt, options);
+  // The CLI has no separate system prompt in print mode, so it leads the prompt.
+  const cliPrompt = options?.system ? `${options.system}\n\n---\n\n${prompt}` : prompt;
+  return runViaClaudeCli(cliPrompt, options);
 }
 
 /** Default model for the API path; override with ANTHROPIC_MODEL (e.g. claude-sonnet-4-6 for lower cost). */
@@ -86,7 +88,7 @@ function getAnthropicClient(): Anthropic {
  */
 async function runViaAnthropicApi(
   prompt: string,
-  options?: { maxTokens?: number; model?: string },
+  options?: { maxTokens?: number; model?: string; system?: string },
 ): Promise<string> {
   const client = getAnthropicClient();
   const model = process.env.ANTHROPIC_MODEL || options?.model || DEFAULT_API_MODEL;
@@ -96,6 +98,10 @@ async function runViaAnthropicApi(
     const stream = client.messages.stream({
       model,
       max_tokens: maxTokens,
+      // Skills are the same across calls, so the system block is cached.
+      ...(options?.system
+        ? { system: [{ type: 'text' as const, text: options.system, cache_control: { type: 'ephemeral' as const } }] }
+        : {}),
       messages: [{ role: 'user', content: prompt }],
     });
     const message = await stream.finalMessage();

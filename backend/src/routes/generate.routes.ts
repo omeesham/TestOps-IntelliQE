@@ -2,6 +2,8 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import crypto from 'crypto';
 import { runGenerationOnly } from '../agents/pipeline.js';
+import { COVERAGE_LEVELS } from '../agents/state.js';
+import type { CoverageLevel } from '../agents/state.js';
 import { isClaudeCliAuthenticated } from '../agents/claude-runner.js';
 import { broadcastSSE } from '../services/sse-manager.js';
 import { createJob, updateJob, getJob } from '../services/generation-jobs.js';
@@ -91,6 +93,13 @@ async function resolveAppContextFromConfig(
 function mapGenError(err: unknown): { message: string; code: string } {
   const raw = ((err as Error)?.message || String(err || '')).toLowerCase();
 
+  if (raw.includes('could not open the application')) {
+    return {
+      code: 'APP_UNREACHABLE',
+      message: `IntelliQE could not open the application, so no test cases were generated. Check the URL and that the app is running, then try again. (${(err as Error).message.replace(/^could not open the application at /i, '')})`,
+    };
+  }
+
   if (raw.includes('not authenticated') || raw.includes('claude_not_authenticated') || raw.includes('not logged in')) {
     return {
       code: 'CLAUDE_NOT_AUTHENTICATED',
@@ -149,7 +158,9 @@ router.post('/', async (req: Request, res: Response) => {
     appId,
     platform,
     appMetadata,
+    coverage,
   } = req.body;
+  const coverageLevel: CoverageLevel = (COVERAGE_LEVELS as readonly string[]).includes(coverage) ? coverage : 'standard';
 
   // Mobile path: only accept the two supported native platforms.
   const mobilePlatform: 'android' | 'ios' | undefined =
@@ -211,11 +222,8 @@ router.post('/', async (req: Request, res: Response) => {
     }
   }
 
-  // The Claude CLI ignores maxTokens; bound interactive generation with a sane
-  // default so a single pass completes quickly. Callers wanting exhaustive
-  // coverage can pass an explicit higher maxTestCases.
-  const DEFAULT_MAX_TEST_CASES = 12;
-  const effectiveMax = Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : DEFAULT_MAX_TEST_CASES;
+  // Suite size follows the coverage level; an explicit maxTestCases is a hard cap.
+  const effectiveMax = Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : undefined;
 
   const runId = crypto.randomUUID();
   createJob(runId, req.user?.tenantId);
@@ -228,6 +236,7 @@ router.post('/', async (req: Request, res: Response) => {
     try {
       const state = await runGenerationOnly(reqText, {
         maxTestCases: effectiveMax,
+        coverage: coverageLevel,
         appContext,
         onProgress: (stage, status, detail) => {
           updateJob(runId, { stage, detail });
@@ -242,6 +251,7 @@ router.post('/', async (req: Request, res: Response) => {
         extendedTestPlan: state.extendedTestPlan,
         parsedRequirements: state.parsedRequirements,
         exploredApp: state.exploredApp || null,
+        coverage: state.coverageSummary || null,
         summary: {
           totalTestCases: state.testCases.length,
           totalScripts: state.automationScripts.length,

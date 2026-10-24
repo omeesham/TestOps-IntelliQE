@@ -20,7 +20,7 @@
  *  • Returns an ExploredApp object and ALSO a markdown-style requirements
  *    string that requirementAgent treats as if it were a functional spec.
  */
-import type { TestOpsState, ExploredApp, AppContext } from './state.js';
+import type { TestOpsState, ExploredApp, ExploredField, AppContext } from './state.js';
 import { runClaudePrompt, parseJsonFromResponse, isClaudeCliAuthenticated } from './claude-runner.js';
 
 // Lazy import so unit tests that don't touch this agent don't drag in a
@@ -47,7 +47,7 @@ interface PageSnapshot {
     id?: string;
     name?: string;
     action?: string;
-    fields: { name: string; type: string; required: boolean; label?: string }[];
+    fields: ExploredField[];
   }[];
   buttons: string[];
   links: { text: string; href: string }[];
@@ -82,13 +82,8 @@ export async function exploreAgent(state: TestOpsState): Promise<TestOpsState> {
     const msg = (err as Error).message || String(err);
     // eslint-disable-next-line no-console
     console.error('[exploreAgent] crawl failed:', msg);
-    // Still return state with a one-page placeholder so requirementAgent
-    // can at least produce a smoke-level test of the URL itself.
-    snapshots = [{
-      url: targetUrl, title: 'Unreachable', headings: [],
-      forms: [], buttons: [], links: [], navItems: [],
-    }];
-    notes = [`Crawler error: ${msg}`];
+    // Stop here: generating from a page we never saw produces invented tests.
+    throw new Error(`Could not open the application at ${targetUrl}: ${msg.split('\n')[0]}`);
   }
 
   const exploredApp: ExploredApp = {
@@ -134,6 +129,9 @@ async function crawlApp(
       ignoreHTTPSErrors: true,
       viewport: { width: 1280, height: 800 },
     });
+    // When the backend runs under tsx (npm run dev), functions passed to
+    // page.evaluate reference esbuild's __name helper, which pages don't have.
+    await context.addInitScript('window.__name = window.__name || ((fn) => fn);');
     const page = await context.newPage();
 
     // Same-origin gate
@@ -216,28 +214,58 @@ async function snapshotPage(page: import('@playwright/test').Page): Promise<Page
     const headings = Array.from(document.querySelectorAll('h1, h2, h3'))
       .map((h) => text(h)).filter(Boolean).slice(0, 30);
 
-    const forms = Array.from(document.querySelectorAll('form')).slice(0, 10).map((f) => {
-      const fields = Array.from(f.querySelectorAll('input, select, textarea')).map((el) => {
-        const input = el as HTMLInputElement;
-        const name = input.name || input.id || input.getAttribute('aria-label') || '';
-        const type = input.type || el.tagName.toLowerCase();
-        const required = input.required || input.getAttribute('aria-required') === 'true';
-        // Try to find the label
-        let label = '';
-        if (input.id) {
-          const lbl = document.querySelector(`label[for="${input.id}"]`);
-          if (lbl) label = text(lbl);
-        }
-        if (!label && input.placeholder) label = input.placeholder;
-        return { name: name || '(unnamed)', type, required, label };
-      }).filter((f) => f.name !== '(unnamed)' || f.type === 'submit');
-      return {
+    const FIELD_SELECTOR = 'input:not([type="hidden"]):not([type="submit"]):not([type="button"]), select, textarea';
+
+    // A field with the rules the browser enforces on it (what boundary and
+    // invalid-input tests are built from).
+    const describeField = (el: Element) => {
+      const input = el as HTMLInputElement;
+      let label = '';
+      if (input.id) {
+        const lbl = document.querySelector(`label[for="${CSS.escape(input.id)}"]`);
+        if (lbl) label = text(lbl);
+      }
+      if (!label) label = text(input.closest('label')) || input.getAttribute('aria-label') || input.placeholder || '';
+      const name = input.name || input.id || label;
+      const type = el.tagName === 'SELECT' ? 'select' : el.tagName === 'TEXTAREA' ? 'textarea' : (input.type || 'text');
+      const required = input.required || input.getAttribute('aria-required') === 'true';
+      const constraints: string[] = [];
+      const attr = (a: string) => input.getAttribute(a);
+      if (attr('minlength')) constraints.push(`min length ${attr('minlength')}`);
+      if (attr('maxlength')) constraints.push(`max length ${attr('maxlength')}`);
+      if (attr('min')) constraints.push(`min ${attr('min')}`);
+      if (attr('max')) constraints.push(`max ${attr('max')}`);
+      if (attr('step')) constraints.push(`step ${attr('step')}`);
+      if (attr('pattern')) constraints.push(`pattern ${attr('pattern')}`);
+      if (attr('accept')) constraints.push(`accepts ${attr('accept')}`);
+      if (input.multiple) constraints.push('multiple');
+      if (input.readOnly) constraints.push('read-only');
+      if (input.disabled) constraints.push('disabled');
+      if (input.placeholder && input.placeholder !== label) constraints.push(`placeholder "${input.placeholder}"`);
+      let options: string[] | undefined;
+      if (el.tagName === 'SELECT') {
+        const all = Array.from((el as HTMLSelectElement).options).map((o) => text(o)).filter(Boolean);
+        options = all.slice(0, 15);
+        if (all.length > 15) options.push(`(+${all.length - 15} more)`);
+      }
+      return { name: name || '(unnamed)', type, required, label, constraints, options };
+    };
+
+    const forms: { id?: string; name?: string; action?: string; fields: ReturnType<typeof describeField>[] }[] =
+      Array.from(document.querySelectorAll('form')).slice(0, 10).map((f) => ({
         id: (f as HTMLFormElement).id || undefined,
         name: (f as HTMLFormElement).name || undefined,
         action: (f as HTMLFormElement).action || undefined,
-        fields,
-      };
-    });
+        fields: Array.from(f.querySelectorAll(FIELD_SELECTOR)).map(describeField).filter((fd) => fd.name !== '(unnamed)'),
+      }));
+
+    // Single-page apps often render inputs without a <form> element.
+    const loose = Array.from(document.querySelectorAll(FIELD_SELECTOR))
+      .filter((el) => !el.closest('form'))
+      .slice(0, 40)
+      .map(describeField)
+      .filter((fd) => fd.name !== '(unnamed)');
+    if (loose.length) forms.push({ name: '(fields outside a form)', fields: loose });
 
     const buttons = Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]'))
       .map((b) => text(b) || (b as HTMLInputElement).value || '')
@@ -348,7 +376,8 @@ async function synthesizeRequirements(app: ExploredApp): Promise<string> {
         title: p.title,
         headings: p.headings.slice(0, 8),
         forms: p.forms.map((f) => ({
-          fields: f.fields.map((fd) => `${fd.name}:${fd.type}${fd.required ? '(req)' : ''}`).join(', '),
+          ...(f.name ? { name: f.name } : {}),
+          fields: f.fields.map(describeForPrompt),
         })),
         buttons: p.buttons.slice(0, 15),
         navItems: p.navItems.slice(0, 12),
@@ -371,7 +400,7 @@ Write the specification in markdown, with these sections:
 3. **Functional Modules** — group the observed pages into modules and submodules
 4. **Features per Module** — bullet list of features. Each feature: name + 1-sentence description + the URL it lives on.
 5. **User Flows** — 5-10 end-to-end flows a real user would perform (e.g., "Customer searches for product, adds to cart, checks out")
-6. **Data Validation Rules** — for every form field observed, infer the validation likely needed (required, format, length, etc.)
+6. **Data Validation Rules** — one line per form field: its label, then the OBSERVED constraints copied exactly from the inventory (required, min/max length, min/max value, pattern, accepted file types, options). Add likely-but-unobserved rules only when the field clearly implies them, marked "(assumed)".
 7. **Edge Cases & Error Scenarios** — boundary conditions, failure modes, security concerns
 8. **Acceptance Criteria** — 3-5 Given/When/Then statements per major feature
 
@@ -389,6 +418,13 @@ Rules:
     console.warn('[exploreAgent] Claude synthesis failed, falling back to naive description:', (err as Error).message);
     return naiveRequirementsFromMap(app);
   }
+}
+
+/** One field as text: "Age (number, required; min 18; max 99)". */
+function describeForPrompt(fd: ExploredField): string {
+  const details = [fd.type, fd.required ? 'required' : '', ...(fd.constraints || [])].filter(Boolean);
+  if (fd.options?.length) details.push(`options: ${fd.options.join(' | ')}`);
+  return `${fd.label || fd.name} (${details.join('; ')})`;
 }
 
 /**
@@ -409,7 +445,7 @@ function naiveRequirementsFromMap(app: ExploredApp): string {
     if (p.headings.length) lines.push(`- Headings: ${p.headings.slice(0, 5).join(' | ')}`);
     if (p.forms.length) {
       for (const f of p.forms) {
-        lines.push(`- Form with fields: ${f.fields.map((fd) => `${fd.name} (${fd.type}${fd.required ? ', required' : ''})`).join(', ')}`);
+        lines.push(`- Form with fields: ${f.fields.map(describeForPrompt).join('; ')}`);
       }
     }
     if (p.buttons.length) lines.push(`- Buttons: ${p.buttons.slice(0, 8).join(', ')}`);

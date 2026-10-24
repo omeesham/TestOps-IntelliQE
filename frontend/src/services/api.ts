@@ -247,6 +247,8 @@ export async function startGeneration(
      * never exposed to the browser. Client-supplied values take precedence.
      */
     appId?: string;
+    /** Test design depth: essential (smoke), standard (regression, default) or exhaustive (full regression). */
+    coverage?: 'essential' | 'standard' | 'exhaustive';
     /** Mobile Application Automation — native platform + uploaded build metadata. */
     platform?: 'android' | 'ios';
     appMetadata?: {
@@ -270,6 +272,7 @@ export async function startGeneration(
     appId: options?.appId,
     platform: options?.platform,
     appMetadata: options?.appMetadata,
+    coverage: options?.coverage,
   });
   return data;
 }

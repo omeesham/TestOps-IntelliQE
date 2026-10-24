@@ -13,6 +13,7 @@
  */
 import type { TestOpsState } from './state.js';
 import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
+import { skillSystemPrompt } from './skills.js';
 
 export interface ExtendedTestPlan {
   /** Headline counts — used by the generator as soft targets */
@@ -74,7 +75,8 @@ ${JSON.stringify(pr, null, 2)}
 
 CONTEXT:
 ${appInfo}
-Raw requirements summary: ${state.requirements.slice(0, 1500)}${state.requirements.length > 1500 ? '…' : ''}
+Raw requirements summary: ${state.requirements.slice(0, 6000)}${state.requirements.length > 6000 ? '…' : ''}
+Coverage level: ${state.generationOptions?.coverage || 'standard'} (see the skill, section 4)
 
 Return ONLY valid JSON (no markdown, no commentary):
 
@@ -128,11 +130,15 @@ RULES:
 4. testStrategy must mention: the riskiest module, the testing approach (manual vs automated split), and what is excluded.
 5. If non-functional requirements were captured (perf, security, a11y), allocate non-zero counts to those categories.
 6. entryCriteria and exitCriteria must be objectively verifiable — no vague language ("system is stable" is not acceptable).
-7. Do NOT pad numbers. Do NOT under-count either. Use the parsed features × flows × actors × edge cases as the math base.`;
+7. Do NOT pad numbers. Do NOT under-count either. Use the parsed features × flows × actors × edge cases as the math base.
+8. Size the counts with the test-design techniques for the coverage level: boundary and invalid cases per field rule (FLD-xx), decision-table cases per business rule (BR-xx), state transitions, and role × action only where roles differ.`;
 
   let parsed: Partial<ExtendedTestPlan>;
   try {
-    const response = await runClaudePrompt(prompt, { maxTokens: 4000 });
+    const response = await runClaudePrompt(prompt, {
+      maxTokens: 4000,
+      system: skillSystemPrompt('You are a senior test architect planning coverage with the test-design skill below.', ['test-design']),
+    });
     parsed = parseJsonFromResponse<ExtendedTestPlan>(response);
   } catch (err) {
     // eslint-disable-next-line no-console

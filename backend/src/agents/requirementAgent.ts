@@ -20,8 +20,9 @@
  * The prompt is deliberately strict: if the source text is ambiguous,
  * the agent must mark assumptions instead of inventing facts.
  */
-import type { TestOpsState, ParsedRequirements } from './state.js';
+import type { TestOpsState, ParsedRequirements, RuleSource } from './state.js';
 import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
+import { selectSkills, skillSystemPrompt } from './skills.js';
 import { mobileContextNote } from './mobile-context.js';
 
 export async function requirementAgent(state: TestOpsState): Promise<TestOpsState> {
@@ -76,11 +77,19 @@ Return ONLY valid JSON (no markdown, no commentary, no explanation) matching thi
   "personaMatrix": [
     { "actor": "Administrator", "allowedFeatures": ["User Management", "Reports"], "deniedFeatures": [] },
     { "actor": "End User", "allowedFeatures": ["Search", "Checkout"], "deniedFeatures": ["User Management"] }
+  ],
+  "fieldRules": [
+    { "id": "FLD-01", "field": "Email", "screen": "Registration", "constraints": ["required", "valid email format", "max 100 characters"], "source": "observed" },
+    { "id": "FLD-02", "field": "Quantity", "screen": "Cart", "constraints": ["whole number", "min 1", "max 10"], "source": "stated" }
+  ],
+  "businessRules": [
+    { "id": "BR-01", "rule": "Order total = sum of line totals minus discount, never negative", "feature": "Checkout", "source": "stated" },
+    { "id": "BR-02", "rule": "A coupon can be used once per customer", "feature": "Checkout", "source": "assumed" }
   ]
 }
 
 EXTRACTION RULES (read carefully):
-1. Be exhaustive on FEATURES — every distinct capability the user mentions counts as one feature.
+1. Be exhaustive on FEATURES — every distinct user capability counts as one feature (for example "Registration", "Ticket booking", "Search"). A single input field is NOT a feature: field rules go in fieldRules.
 2. Be specific on FLOWS — each flow is a complete journey with an actor, sequence, and outcome. No generic placeholders.
 3. EDGE CASES must cover: empty/null/whitespace input, boundary values (min, max, off-by-one), invalid format, concurrency (two users editing the same record), session/auth expiry, network failure, partial writes, role-permission violations.
 4. DATA RULES must be field-specific. "Email is required" — good. "Inputs must be valid" — useless.
@@ -89,9 +98,14 @@ EXTRACTION RULES (read carefully):
 7. BUSINESS RISKS — rate each feature High / Medium / Low based on impact-on-revenue, regulatory exposure, user trust, and data sensitivity. Provide a one-line rationale.
 8. PERSONA MATRIX — for every actor + feature pair where authorisation matters, list whether the actor is allowed or denied. This drives RBAC negative tests.
 9. If the source text is sparse, INFER reasonable extensions based on the application domain — but mark inferences with " (inferred)" in the relevant field.
-10. NEVER return empty arrays for features / actors / flows — at minimum return one entry each based on what you can deduce.`;
+10. NEVER return empty arrays for features / actors / flows — at minimum return one entry each based on what you can deduce.
+11. FIELD RULES — one entry per real input field, id FLD-01, FLD-02… Constraints must be concrete and testable ("max 50 characters", "digits only", "values: Yes | No", "pdf, png only"). Copy constraints observed on the page exactly. source: "observed" (seen on the page), "stated" (in the requirements text) or "assumed" (neither; keep these few).
+12. BUSINESS RULES — every calculation, condition, cross-field check, permission or status rule the source states or the page clearly enforces, id BR-01, BR-02… One rule per entry, testable as written, with its source as above.`;
 
-  const response = await runClaudePrompt(prompt, { maxTokens: 8000 });
+  const response = await runClaudePrompt(prompt, {
+    maxTokens: 14000,
+    system: skillSystemPrompt('You are a senior QA requirements analyst. Build the coverage model from section 1 of the skill.', selectSkills(state)),
+  });
   const parsed = parseJsonFromResponse<ParsedRequirements>(response);
 
   // Defensive normalisation — Claude may omit some optional sections.
@@ -106,7 +120,45 @@ EXTRACTION RULES (read carefully):
     nonFunctionalRequirements: parsed.nonFunctionalRequirements || {},
     businessRisks: parsed.businessRisks || [],
     personaMatrix: parsed.personaMatrix || [],
+    fieldRules: withIds<RawRule>(parsed.fieldRules, 'FLD', (r) => !!r.field).map((r) => ({
+      id: r.id,
+      field: String(r.field),
+      screen: r.screen,
+      constraints: (Array.isArray(r.constraints) ? r.constraints : r.constraints ? [r.constraints] : [])
+        .map((c) => String(c ?? '').trim()).filter(Boolean),
+      source: sourceOf(r.source),
+    })),
+    businessRules: withIds<RawRule>(parsed.businessRules, 'BR', (r) => !!r.rule).map((r) => ({
+      id: r.id,
+      rule: String(r.rule),
+      feature: r.feature,
+      source: sourceOf(r.source),
+    })),
   };
 
   return { ...state, parsedRequirements };
+}
+
+/** A rule as the model returns it, before normalisation. */
+type RawRule = { id?: string; field?: unknown; screen?: string; constraints?: unknown; rule?: unknown; feature?: string; source?: unknown };
+
+const RULE_SOURCES: RuleSource[] = ['observed', 'stated', 'assumed'];
+const sourceOf = (v: unknown): RuleSource => (RULE_SOURCES.includes(v as RuleSource) ? v as RuleSource : 'assumed');
+
+/**
+ * Drop malformed entries and give every rule a unique id (PREFIX-01…): the model
+ * sometimes omits ids or repeats them, and coverage tracking depends on them.
+ */
+export function withIds<T extends { id?: string }>(list: unknown, prefix: string, valid: (r: T) => boolean): (T & { id: string })[] {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set<string>();
+  let n = 0;
+  return (list.filter((r) => r && typeof r === 'object') as T[]).filter(valid).map((r) => {
+    let id = String(r.id || '').toUpperCase().trim();
+    if (!new RegExp(`^${prefix}-\\d+$`).test(id) || seen.has(id)) {
+      do { id = `${prefix}-${String(++n).padStart(2, '0')}`; } while (seen.has(id));
+    }
+    seen.add(id);
+    return { ...r, id };
+  });
 }

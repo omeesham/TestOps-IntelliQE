@@ -28,10 +28,12 @@
  *   2. Test data must be CONCRETE (real values, not "<email>" placeholders).
  *   3. Titles must be unique and follow the "Verify …" convention.
  */
-import type { TestOpsState, TestCase, TestStep } from './state.js';
+import { TEST_CATEGORIES } from './state.js';
+import type { TestOpsState, TestCase, TestStep, TestCategory, CoverageLevel, CoverageSummary } from './state.js';
 import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
 import type { ExtendedTestPlan } from './plannerAgent.js';
 import { mobileContextNote } from './mobile-context.js';
+import { selectSkills, skillSystemPrompt } from './skills.js';
 
 let counter = 0;
 function nextId() { return `TC-${String(++counter).padStart(3, '0')}`; }
@@ -54,6 +56,7 @@ type RawTestCase = {
   priority: string;
   severity?: string;
   tags?: string[];
+  category?: string;
 };
 
 const VALID_TYPES: TestCase['type'][] = [
@@ -107,21 +110,67 @@ function coerceTestCase(raw: RawTestCase): TestCase {
     priority,
     severity,
     tags: Array.isArray(raw.tags) ? raw.tags : undefined,
+    category: categoryFor(raw.category, type),
     status: 'generated',
   };
 }
 
-function buildPrompt(state: TestOpsState, excludeTitles: string[] = []): string {
+/** Category from the model, else derived from the type. */
+export function categoryFor(raw: string | undefined, type: TestCase['type']): TestCategory {
+  const v = String(raw || '').toLowerCase().trim().replace(/[\s_]+/g, '-');
+  const alias: Record<string, TestCategory> = {
+    business: 'business-rule', 'business-rules': 'business-rule', rule: 'business-rule',
+    boundaries: 'boundary', 'boundary-value': 'boundary', 'edge-case': 'edge', a11y: 'accessibility',
+  };
+  if ((TEST_CATEGORIES as readonly string[]).includes(v)) return v as TestCategory;
+  if (alias[v]) return alias[v];
+  if (type === 'negative' || type === 'edge' || type === 'security' || type === 'accessibility') return type;
+  return 'positive';
+}
+
+/** What each coverage level asks for (test-design skill, section 4). */
+const COVERAGE_INSTRUCTIONS: Record<CoverageLevel, string> = {
+  essential: 'COVERAGE LEVEL: essential (smoke). One happy path per feature, one negative case per validation rule, and every business rule (BR-xx) once. Budget: about 1 case per rule plus 1 happy path per feature.',
+  standard: 'COVERAGE LEVEL: standard (regression). Everything in essential, plus: boundary values (min, max, just below, just above) for every constrained field (FLD-xx); one case per meaningful condition combination of multi-condition business rules; each valid state transition and at least one blocked transition; error guessing for each form (empty submit, leading/trailing spaces, special characters, duplicate submit); and at most one baseline security check per form, only for what the app really has. Budget: at most 3 cases per field or business rule; combine valid boundaries of independent fields into one case.',
+  exhaustive: 'COVERAGE LEVEL: exhaustive (full regression). Everything in standard, plus: every invalid equivalence class per field, pairwise combinations of independent options, extended error guessing (interruptions, back button after submit, session expiry where the app has sessions), role × action for every role, and baseline accessibility checks per screen. Budget: at most 6 cases per field or business rule.',
+};
+
+/** Rules handled per generation call, so each response stays within output and time limits. */
+const RULES_PER_BATCH = 8;
+
+/** Rule ids (FLD-xx, BR-xx) that the cases trace to. */
+export function coveredIds(cases: { traceabilityId?: string }[]): Set<string> {
+  const ids = new Set<string>();
+  for (const c of cases) {
+    for (const m of String(c.traceabilityId || '').toUpperCase().matchAll(/\b(?:FLD|BR)-\d+\b/g)) ids.add(m[0]);
+  }
+  return ids;
+}
+
+/** Every rule in the coverage model, as "id — text" for prompts and the coverage summary. */
+function ruleItems(state: TestOpsState): { id: string; text: string }[] {
+  const pr = state.parsedRequirements!;
+  return [
+    ...(pr.fieldRules || []).map((f) => ({
+      id: f.id.toUpperCase(),
+      text: `${f.id} — ${f.field}${f.screen ? ` (${f.screen})` : ''}: ${f.constraints.join('; ')}`,
+    })),
+    ...(pr.businessRules || []).map((b) => ({ id: b.id.toUpperCase(), text: `${b.id} — ${b.rule}` })),
+  ];
+}
+
+function buildPrompt(state: TestOpsState, excludeTitles: string[] = [], gapFocus = ''): string {
   const pr = state.parsedRequirements!;
   const plan = state.extendedTestPlan as ExtendedTestPlan | undefined;
   const appInfo = state.appContext
     ? `Application: ${state.appContext.appName || 'Web App'}\nURL: ${state.appContext.targetUrl || 'Not specified'}\nEnvironment: ${state.appContext.environment || 'staging'}`
     : '';
 
+  const coverage = state.generationOptions?.coverage || 'standard';
   const requestedMax = state.generationOptions?.maxTestCases;
   const countInstruction = requestedMax && requestedMax > 0
     ? `- Generate AT MOST ${requestedMax} test cases — this is a HARD CEILING, do not exceed it. Spend the budget on the HIGHEST-VALUE cases: prioritise by business risk (happy path, then the most likely failure modes, then critical edge/security cases). Return ONLY the most important ${requestedMax}.`
-    : `- There is NO ceiling on test count. Generate every case needed to fully certify the functionality. Stopping early because the list is long is unacceptable.`;
+    : `- The number of cases follows from the coverage model and the coverage level: as many as the techniques require, no padding.`;
 
   const exclusionBlock = excludeTitles.length > 0
     ? `\n\nALREADY GENERATED — DO NOT REPEAT THESE TITLES (case-insensitive):\n${excludeTitles.map((s) => `- ${s}`).join('\n')}\nGenerate only NEW scenarios not in the above list.`
@@ -146,14 +195,14 @@ ${planSummary}
 
 CONTEXT:
 ${appInfo}${mobileContextNote(state.appContext)}
-Source requirements: ${state.requirements.slice(0, 1500)}${state.requirements.length > 1500 ? '…' : ''}
+Source requirements: ${state.requirements.slice(0, 8000)}${state.requirements.length > 8000 ? '…' : ''}
 
 ═══════════════════════════════════════════════════════════════
 OUTPUT — Return ONLY a valid JSON array (no markdown, no commentary):
 ═══════════════════════════════════════════════════════════════
 [
   {
-    "traceabilityId": "REQ-LOGIN-01 or story key — the requirement this test covers",
+    "traceabilityId": "The coverage-model ids this case tests (FLD-01, BR-02), else a story key or REQ-<MODULE>-<NN>. Comma-separate several.",
     "module": "Authentication",
     "submodule": "Login",
     "feature": "User Login",
@@ -174,21 +223,25 @@ OUTPUT — Return ONLY a valid JSON array (no markdown, no commentary):
     "type": "positive",
     "priority": "P0",
     "severity": "Critical",
-    "tags": ["smoke", "regression", "auth"]
+    "tags": ["smoke", "regression", "auth"],
+    "category": "positive"
   }
 ]
 
 ═══════════════════════════════════════════════════════════════
 COVERAGE MANDATE (NON-NEGOTIABLE):
 ═══════════════════════════════════════════════════════════════
+${COVERAGE_INSTRUCTIONS[coverage]}
 ${countInstruction}
+- Every field rule (FLD-xx) and business rule (BR-xx) in STRUCTURED REQUIREMENTS gets at least one case, with its id in traceabilityId.
+- Ground every case in the requirements or the observed application. Never invent pages, fields, roles or protections; state assumptions in the description.
 - Cover EVERY feature in parsedRequirements.features.
 - For EACH feature, generate at minimum: 1 happy-path test, 1 alternate-path test, 2-4 negative tests (one per realistic failure mode), 1-2 edge case tests, 1 authorization test per relevant actor, and (where relevant) 1 accessibility and 1 security test.
 - For EACH user flow in parsedRequirements.flows: at least one full end-to-end test (type: "e2e") that walks the flow start to finish.
 - For EACH edge case listed: at least one dedicated test.
 - For EACH non-functional requirement (security, accessibility, performance): at least one test that explicitly verifies it.
 - For EVERY persona x feature pair in personaMatrix where the actor is DENIED: a negative authorization test confirming the denial is enforced.
-- Do NOT merge multiple scenarios into one case. Each test verifies ONE behaviour.${exclusionBlock}
+- Do NOT merge multiple scenarios into one case. Each test verifies ONE behaviour.${gapFocus}${exclusionBlock}
 
 ═══════════════════════════════════════════════════════════════
 QUALITY RULES (every case must satisfy these — incomplete cases will be rejected):
@@ -205,10 +258,11 @@ QUALITY RULES (every case must satisfy these — incomplete cases will be reject
    • 3-12 steps total per case (most cases land at 4-7)
 6. EXPECTED RESULT: A short overall summary (1-2 sentences) of the end-state. Per-step expectations live inside testSteps.
 7. TYPE: positive | negative | edge | e2e | api | data | smoke | security | accessibility | performance — pick the most accurate single value.
+7b. CATEGORY: positive | negative | boundary | business-rule | edge | security | accessibility — the test-design category (skill section 3). Exactly one per case.
 8. PRIORITY: P0 = blocks release, P1 = important, P2 = should-have, P3 = nice-to-have. Drive priority from businessRisks: High → P0/P1, Medium → P1/P2, Low → P2/P3.
 9. SEVERITY: Critical | Major | Moderate | Minor — describes the impact IF this test failed in production.
 10. TAGS: Pick from {smoke, regression, sanity, auth, ui, api, security, accessibility, e2e, data-validation} — at least one tag per case.
-11. TRACEABILITY: If a story key or REQ-ID is present in the source, use it. Otherwise fabricate one of the form REQ-<MODULE>-<NN>.
+11. TRACEABILITY: Use the FLD-xx / BR-xx ids the case tests. Otherwise use a story key or REQ-ID from the source, or one of the form REQ-<MODULE>-<NN>.
 
 GENERATE NOW. Return the JSON array directly.`;
 }
@@ -219,16 +273,50 @@ export async function generatorAgent(state: TestOpsState): Promise<TestOpsState>
 
   const pr = state.parsedRequirements;
   const plan = state.extendedTestPlan as ExtendedTestPlan | undefined;
+  const skills = selectSkills(state);
+  const system = skillSystemPrompt('You are a senior test architect. Design test cases with the skills below.', skills);
 
-  // First pass.
-  const firstResponse = await runClaudePrompt(buildPrompt(state), { maxTokens: 16384 });
-  const firstParsed = parseJsonFromResponse<RawTestCase[]>(firstResponse);
+  const requestedMax = state.generationOptions?.maxTestCases;
+  const items = ruleItems(state);
+  // One retry when the answer is not a JSON array (a prose reply or a cut-off
+  // response), so a single bad answer does not fail the whole generation.
+  const generate = async (gapFocus = '', exclude: string[] = []): Promise<TestCase[]> => {
+    const prompt = buildPrompt(state, exclude, gapFocus);
+    for (let attempt = 1; ; attempt++) {
+      const response = await runClaudePrompt(prompt, { maxTokens: 16384, system });
+      try {
+        const parsed = parseJsonFromResponse<RawTestCase[]>(response);
+        return Array.isArray(parsed) ? parsed.map(coerceTestCase) : [];
+      } catch (err) {
+        console.warn(`[generatorAgent] unreadable answer (attempt ${attempt}): ${response.slice(0, 200).replace(/\s+/g, ' ')}`);
+        if (attempt >= 2) throw err;
+      }
+    }
+  };
+  const addNew = (base: TestCase[], extra: TestCase[]) => {
+    const seen = new Set(base.map((tc) => tc.title.toLowerCase().trim()));
+    return [...base, ...extra.filter((tc) => !seen.has(tc.title.toLowerCase().trim()))];
+  };
 
-  if (!Array.isArray(firstParsed) || firstParsed.length === 0) {
-    throw new Error('Claude returned no test cases in first pass');
+  let testCases: TestCase[];
+  if (items.length > RULES_PER_BATCH && !(requestedMax && requestedMax > 0)) {
+    // Large coverage model: one call for journeys, then one call per batch of
+    // rules, so no single response grows past the model's output or time limits.
+    testCases = await generate(`\n\nTHIS PASS: happy paths per feature, end-to-end flows, and role or security cases. Field rules and business rules are covered in separate passes, so do not write boundary, invalid-input or rule cases here.`);
+    if (testCases.length === 0) throw new Error('Claude returned no test cases in first pass');
+    for (let i = 0; i < items.length; i += RULES_PER_BATCH) {
+      const batch = items.slice(i, i + RULES_PER_BATCH);
+      try {
+        const extra = await generate(`\n\nTHIS PASS: write cases ONLY for these rules, applying the techniques for the coverage level, with each rule id in traceabilityId. Do not add security, accessibility, end-to-end or happy-path cases in this pass; the journeys pass covers them:\n${batch.map((b) => `- ${b.text}`).join('\n')}`, testCases.map((tc) => tc.title));
+        testCases = addNew(testCases, extra);
+      } catch (err) {
+        console.warn(`[generatorAgent] rule batch ${i / RULES_PER_BATCH + 1} failed: ${(err as Error).message}`);
+      }
+    }
+  } else {
+    testCases = await generate();
+    if (testCases.length === 0) throw new Error('Claude returned no test cases in first pass');
   }
-
-  let testCases = firstParsed.map(coerceTestCase);
 
   // Retry pass — sparse coverage. Drive the floor from the plan if we have one.
   const plannedTotal = plan
@@ -243,12 +331,23 @@ export async function generatorAgent(state: TestOpsState): Promise<TestOpsState>
   // When the caller asked for a specific count (the chat wizard always does),
   // treat it as the floor. Otherwise a small request like "3 cases" still drags
   // in a second full 16k-token generation pass and blows the request timeout.
-  const requestedMax = state.generationOptions?.maxTestCases;
   if (requestedMax && requestedMax > 0) {
     minimumExpected = Math.min(minimumExpected, requestedMax);
   }
 
-  if (testCases.length < minimumExpected) {
+  const room = requestedMax && requestedMax > 0 ? requestedMax - testCases.length : Infinity;
+  const uncovered = items.filter((it) => !coveredIds(testCases).has(it.id));
+
+  if (items.length > 0 && uncovered.length > 0 && room > 0) {
+    // Gap fill: one extra pass for exactly the rules no case traces to.
+    const gapFocus = `\n\nGAP FILL: the cases already written do not cover the rules below. Write cases ONLY for these rules, applying the techniques for the coverage level, with each rule id in traceabilityId:\n${uncovered.slice(0, RULES_PER_BATCH * 2).map((m) => `- ${m.text}`).join('\n')}`;
+    try {
+      testCases = addNew(testCases, await generate(gapFocus, testCases.map((tc) => tc.title)));
+    } catch (err) {
+      console.warn(`[generatorAgent] gap fill failed (${uncovered.length} rule(s) uncovered): ${(err as Error).message}`);
+    }
+  } else if (items.length === 0 && testCases.length < minimumExpected) {
+    // No rules were extracted: fall back to topping up by count.
     const existingTitles = testCases.map((tc) => tc.title);
     const needed = minimumExpected - testCases.length;
 
@@ -257,7 +356,7 @@ export async function generatorAgent(state: TestOpsState): Promise<TestOpsState>
 You returned only ${testCases.length} test cases. With ${pr.features.length} features, ${pr.flows.length} flows, ${pr.actors.length} actors, and ${pr.edgeCases.length} edge cases, the plan calls for at least ${minimumExpected} cases. Generate the missing ${needed}+ test cases for scenarios you have NOT yet covered.`;
 
     try {
-      const retryResponse = await runClaudePrompt(retryPrompt, { maxTokens: 16384 });
+      const retryResponse = await runClaudePrompt(retryPrompt, { maxTokens: 16384, system });
       const retryParsed = parseJsonFromResponse<RawTestCase[]>(retryResponse);
       if (Array.isArray(retryParsed) && retryParsed.length > 0) {
         const existingSet = new Set(existingTitles.map((s) => s.toLowerCase().trim()));
@@ -271,5 +370,15 @@ You returned only ${testCases.length} test cases. With ${pr.features.length} fea
     }
   }
 
-  return { ...state, testCases };
+  if (requestedMax && requestedMax > 0) testCases = testCases.slice(0, requestedMax);
+
+  const covered = coveredIds(testCases);
+  const coverageSummary: CoverageSummary = {
+    level: state.generationOptions?.coverage || 'standard',
+    totalRules: items.length,
+    coveredRules: items.filter((it) => covered.has(it.id)).length,
+    uncovered: items.filter((it) => !covered.has(it.id)),
+    skills,
+  };
+  return { ...state, testCases, coverageSummary };
 }

@@ -109,6 +109,13 @@ const CATEGORIES: { id: Category; title: string; icon: React.ElementType; desc: 
   { id: 'api',         title: 'API Automation',     icon: Plug,        desc: 'Test REST services, endpoints, and system integrations.', comingSoon: true },
 ];
 
+type CoverageLevel = 'essential' | 'standard' | 'exhaustive';
+const COVERAGE_OPTIONS: { id: CoverageLevel; label: string; hint: string }[] = [
+  { id: 'essential', label: 'Smoke', hint: 'Happy paths and each rule once' },
+  { id: 'standard', label: 'Regression', hint: 'Adds boundaries, rule combinations, error cases' },
+  { id: 'exhaustive', label: 'Full regression', hint: 'Adds every invalid input, option pairs, roles' },
+];
+
 const REQ_SOURCES: { id: ReqSource; title: string; icon: React.ElementType; desc: string }[] = [
   { id: 'jira', title: 'JIRA', icon: Link2, desc: 'Import from JIRA stories' },
   { id: 'confluence', title: 'Confluence', icon: FileText, desc: 'Import from Confluence' },
@@ -200,6 +207,7 @@ export default function ChatPage() {
   const [category, setCategory] = useState<Category | null>(null);
   const [subCategory, setSubCategory] = useState<string | null>(null);
   const [source, setSource] = useState<ReqSource | null>(null);
+  const [coverageLevel, setCoverageLevel] = useState<CoverageLevel>('standard');
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectError, setConnectError] = useState('');
@@ -858,7 +866,8 @@ export default function ChatPage() {
                   `${s.step ?? idx + 1}. ${s.action}${s.expected ? ` → Expected: ${s.expected}` : ''}`)
               : [],
           expectedResult: tc.expectedResult || tc.expected || '',
-          type: tc.type || tc.category || 'positive',
+          type: tc.type || 'positive',
+          category: tc.category || '',
           priority: tc.priority || 'P1',
           severity: tc.severity || '',
           tags: Array.isArray(tc.tags) ? tc.tags : [],
@@ -884,6 +893,11 @@ export default function ChatPage() {
       setEditingTcId(null);
       updatePipeline('test-design', 'completed', `${testCases.length} test cases generated`);
       push('tessa', `Generated ${testCases.length} test cases from the AI pipeline. Review, edit, or delete as needed. Click Save when satisfied.`);
+      const cov = res?.coverage;
+      if (cov?.totalRules) {
+        const missing = (cov.uncovered || []).map((u: { text: string }) => `• ${u.text}`).join('\n');
+        push('tessa', `Coverage: ${cov.coveredRules} of ${cov.totalRules} identified rules have at least one test case.${missing ? `\nNot covered yet:\n${missing}` : ''}`);
+      }
       setStep('results');
     };
 
@@ -911,6 +925,7 @@ export default function ChatPage() {
           : undefined;
         const started = await startGeneration('', subCategory || undefined, {
           exploreMode: true,
+          coverage: coverageLevel,
           targetUrl: exploreUrl,
           appName: exploreAppName || undefined,
           roles,
@@ -921,6 +936,7 @@ export default function ChatPage() {
         // Mobile path: requirements come from the chosen source; the uploaded
         // app's metadata + platform steer native-mobile test generation.
         const started = await startGeneration(requirements, subCategory || undefined, {
+          coverage: coverageLevel,
           platform: mobilePlatform || undefined,
           appMetadata: mobileMeta
             ? {
@@ -935,7 +951,7 @@ export default function ChatPage() {
         });
         runId = started?.runId || '';
       } else {
-        const started = await startGeneration(requirements, subCategory || undefined);
+        const started = await startGeneration(requirements, subCategory || undefined, { coverage: coverageLevel });
         runId = started?.runId || '';
       }
     } catch (err: any) {
@@ -2108,6 +2124,24 @@ export default function ChatPage() {
                 {col.default && <span className="text-[10px] text-gray-400 ml-auto">(default)</span>}
               </label>
             ))}
+          </div>
+          <div className="mt-4">
+            <p id="coverage-label" className="text-xs font-semibold text-gray-700 mb-1.5">Test depth</p>
+            <div role="radiogroup" aria-labelledby="coverage-label" className="grid grid-cols-3 gap-1.5">
+              {COVERAGE_OPTIONS.map(opt => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={coverageLevel === opt.id}
+                  onClick={() => setCoverageLevel(opt.id)}
+                  className={`rounded-lg border px-2 py-1.5 text-left transition-colors ${coverageLevel === opt.id ? 'border-violet-500 bg-violet-50' : 'border-gray-200 hover:border-violet-300'}`}
+                >
+                  <span className="block text-xs font-medium text-gray-800">{opt.label}</span>
+                  <span className="block text-[10px] leading-tight text-gray-500">{opt.hint}</span>
+                </button>
+              ))}
+            </div>
           </div>
           <button
             onClick={() => { setStep('generating'); runGeneration(pendingRequirements); }}
