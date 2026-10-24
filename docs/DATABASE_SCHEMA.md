@@ -65,7 +65,7 @@ Login accounts scoped to a tenant. Roles control what the user can see and do.
 
 **Retention:** Soft-deleted by setting `is_active=false`. Hard-delete only on tenant termination.
 
-> **Security note:** The seed file `03_seed_data.sql` ships with plaintext placeholder passwords (`Omeesha@19`, `Login@2026`) that match dev defaults. Replace them with bcrypt hashes before going to production — see [Rotating the default users](#rotating-the-default-users) below.
+> **Security note:** The seed file `03_seed_data.sql` ships with plaintext placeholder passwords (`CHANGE_ME_DEV_ONLY`). Replace them with bcrypt hashes before going to production — see [Rotating the default users](#rotating-the-default-users) below.
 
 ---
 

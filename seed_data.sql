@@ -24,12 +24,12 @@ IF NOT EXISTS (SELECT 1 FROM dbo.tenants WHERE slug = 'jbs')
 IF NOT EXISTS (SELECT 1 FROM dbo.users WHERE username = 'jbsadmin')
     INSERT INTO dbo.users (tenant_id, username, password_hash, full_name, role)
     VALUES ((SELECT id FROM dbo.tenants WHERE slug = 'jbs'),
-            'jbsadmin', 'Omeesha@19', 'JBS Admin', 'admin');
+            'jbsadmin', 'CHANGE_ME_DEV_ONLY', 'JBS Admin', 'admin');
 
 IF NOT EXISTS (SELECT 1 FROM dbo.users WHERE username = 'qaengineer')
     INSERT INTO dbo.users (tenant_id, username, password_hash, full_name, role)
     VALUES ((SELECT id FROM dbo.tenants WHERE slug = 'jbs'),
-            'qaengineer', 'Login@2026', 'QA Engineer', 'qa_engineer');
+            'qaengineer', 'CHANGE_ME_DEV_ONLY', 'QA Engineer', 'qa_engineer');
 
 -- ─── QA agent types ───
 MERGE INTO dbo.qa_agent_types AS t

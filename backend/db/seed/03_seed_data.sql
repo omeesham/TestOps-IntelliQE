@@ -34,9 +34,9 @@ ON CONFLICT (slug) DO NOTHING;
 INSERT INTO "JBSTestOpsAI".users (tenant_id, username, password_hash, full_name, role)
 VALUES
     ((SELECT id FROM "JBSTestOpsAI".tenants WHERE slug = 'jbs'),
-        'jbsadmin',   'Omeesha@19', 'JBS Admin',   'admin'),
+        'jbsadmin',   'CHANGE_ME_DEV_ONLY', 'JBS Admin',   'admin'),
     ((SELECT id FROM "JBSTestOpsAI".tenants WHERE slug = 'jbs'),
-        'qaengineer', 'Login@2026', 'QA Engineer', 'qa_engineer')
+        'qaengineer', 'CHANGE_ME_DEV_ONLY', 'QA Engineer', 'qa_engineer')
 ON CONFLICT (username) DO NOTHING;
 
 -- ─── Agent types ─────────────────────────────────────────────────────

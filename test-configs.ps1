@@ -1,5 +1,5 @@
 # Login as jbsadmin
-$body = @{username='jbsadmin'; password='Omeesha@19'} | ConvertTo-Json
+$body = @{username='jbsadmin'; password=$env:DEV_ADMIN_PASSWORD} | ConvertTo-Json
 $loginResp = Invoke-RestMethod -Uri 'http://localhost:3001/api/auth/login' -Method POST -Body $body -ContentType 'application/json'
 $token = $loginResp.token
 
