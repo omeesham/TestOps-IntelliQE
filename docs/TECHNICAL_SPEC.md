@@ -1464,7 +1464,7 @@ cd frontend && npm run dev
 ### 11.4 Seed users
 
 `initDb()` seeds:
-- development only: `jbsadmin` (admin) and `qaengineer` (qa_engineer), JBS platform tenant
+- development only: `jbsadmin` (admin) and `qaengineer` (qa_engineer), JBS platform tenant, with the passwords set in `DEV_ADMIN_PASSWORD` / `DEV_QA_PASSWORD` (`.env`); not created when unset
 - production: none; the first admin comes from `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD`
 
 ### 11.5 Customizing the pipeline

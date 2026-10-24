@@ -92,7 +92,7 @@ All set on `ca-intelliqe` and **persist across deploys** (the workflow uses
 
 - 1 platform tenant — `Jade Business Solutions` (slug `jbs`, `is_platform=1`)
 - Users:
-  - development only: two demo users (`jbsadmin`, `qaengineer`; passwords in `db.ts`)
+  - development only: two demo users (`jbsadmin`, `qaengineer`), created only when `DEV_ADMIN_PASSWORD` / `DEV_QA_PASSWORD` are set in `.env`
   - production (`NODE_ENV=production`): no demo users; the first administrator is created
     from `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` while the users table is empty
 - 5 `qa_agent_types` rows
