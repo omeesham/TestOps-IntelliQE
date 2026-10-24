@@ -273,6 +273,18 @@ async function addColumn(table: string, column: string, definition: string): Pro
   );
 }
 
+/**
+ * Widen a nullable NVARCHAR column to `chars` when it is currently shorter.
+ * Never shrinks a column (or touches NVARCHAR(MAX)), so existing data is kept.
+ * COL_LENGTH reports bytes: two per NVARCHAR character, -1 for MAX.
+ */
+async function widenColumn(table: string, column: string, chars: number): Promise<void> {
+  await exec(
+    `IF COL_LENGTH(N'${SCHEMA}.${table}', N'${column}') BETWEEN 1 AND ${chars * 2 - 1}\n` +
+    `  ALTER TABLE ${SCHEMA}.${table} ALTER COLUMN ${column} NVARCHAR(${chars}) NULL`,
+  );
+}
+
 /** CREATE INDEX only when it does not already exist. */
 async function createIndex(name: string, table: string, spec: string): Promise<void> {
   await exec(
@@ -438,7 +450,10 @@ export async function initDb(): Promise<void> {
     await addColumn('test_cases', 'test_steps', "NVARCHAR(MAX) DEFAULT '[]'");
     await addColumn('test_cases', 'test_data', "NVARCHAR(MAX) DEFAULT '{}'");
     await addColumn('test_cases', 'severity', 'NVARCHAR(20)');
-    await addColumn('test_cases', 'traceability_id', 'NVARCHAR(100)');
+    await addColumn('test_cases', 'traceability_id', 'NVARCHAR(1000)');
+    // A case can trace to several rules (FLD-01, BR-02…), longer than the original 100.
+    await widenColumn('test_cases', 'traceability_id', 1000);
+    await addColumn('test_cases', 'category', 'NVARCHAR(30)');
 
     // ─── 7. Automation scripts ───
     await createTable('automation_scripts', `

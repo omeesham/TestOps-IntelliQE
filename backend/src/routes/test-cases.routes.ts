@@ -1,15 +1,9 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import pool from '../db.js';
+import { fit, normaliseTags, normaliseCategory, TEST_CASE_LIMITS as L } from '../utils/test-case-fields.js';
 
 const router = Router();
-
-const TAG_VOCAB = ['POSITIVE', 'NEGATIVE', 'E2E', 'UI', 'API', 'SMOKE', 'REGRESSION'];
-function normaliseTags(input: unknown): string[] {
-  if (!input) return [];
-  const arr = Array.isArray(input) ? input : String(input).split(/[\s,;|\[\]]+/);
-  return Array.from(new Set(arr.map((t) => String(t).toUpperCase().trim()).filter((t) => TAG_VOCAB.includes(t))));
-}
 
 /* ───────────────────────────────────────────
    POST /api/test-cases/save
@@ -45,30 +39,31 @@ router.post('/save', async (req: Request, res: Response) => {
       await pool.query(
         `INSERT INTO test_cases
          (test_run_id, tc_number, title, steps, expected, priority, type, feature, precondition, status, sort_order, module, submodule, tags,
-          description, test_steps, test_data, severity, traceability_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+          description, test_steps, test_data, severity, traceability_id, category)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
         [
           testRunId,
-          tc.id || `TC-${String(i + 1).padStart(3, '0')}`,
+          fit(tc.id || `TC-${String(i + 1).padStart(3, '0')}`, L.tc_number),
           // Title first, fall back to scenario, then legacy `title` key — keeps backward compat
-          tc.title || tc.scenario || '',
+          fit(tc.title || tc.scenario || '', L.title),
           JSON.stringify(tc.steps || []),
           tc.expectedResult || tc.expected || '',
-          tc.priority || 'P1',
-          tc.type || 'positive',
-          tc.feature || '',
+          fit(tc.priority || 'P1', L.priority),
+          fit(tc.type || 'positive', L.type),
+          fit(tc.feature || '', L.feature),
           tc.precondition || '',
-          tc.status || 'generated',
+          fit(tc.status || 'generated', L.status),
           i,
-          tc.module || module || null,
-          tc.submodule || submodule || null,
+          fit(tc.module || module || null, L.module),
+          fit(tc.submodule || submodule || null, L.submodule),
           tags,
           // New IEEE-829 fields — null-safe so the row still saves if the LLM omits them
           tc.description || null,
           JSON.stringify(tc.testSteps || []),
           JSON.stringify(tc.testData || {}),
-          tc.severity || null,
-          tc.traceabilityId || null,
+          fit(tc.severity || null, L.severity),
+          fit(tc.traceabilityId || null, L.traceability_id),
+          normaliseCategory(tc.category),
         ]
       );
     }
@@ -202,7 +197,7 @@ router.put('/:testRunId/cases/:caseId', async (req: Request, res: Response) => {
   try {
     const user = req.user!;
     const { testRunId, caseId } = req.params;
-    const { title, steps, expected, priority, type, feature, precondition, status, tags } = req.body;
+    const { title, steps, expected, priority, type, feature, precondition, status, tags, category } = req.body;
 
     // Verify ownership
     const runRes = await pool.query(`SELECT id FROM test_runs WHERE id = $1 AND tenant_id = $2`, [testRunId, user.tenantId]);
@@ -212,15 +207,16 @@ router.put('/:testRunId/cases/:caseId', async (req: Request, res: Response) => {
     const vals: any[] = [];
     let idx = 1;
 
-    if (title !== undefined)        { updates.push(`title = $${idx++}`); vals.push(title); }
+    if (title !== undefined)        { updates.push(`title = $${idx++}`); vals.push(fit(title, L.title)); }
     if (steps !== undefined)        { updates.push(`steps = $${idx++}`); vals.push(JSON.stringify(steps)); }
     if (expected !== undefined)     { updates.push(`expected = $${idx++}`); vals.push(expected); }
-    if (priority !== undefined)     { updates.push(`priority = $${idx++}`); vals.push(priority); }
-    if (type !== undefined)         { updates.push(`type = $${idx++}`); vals.push(type); }
-    if (feature !== undefined)      { updates.push(`feature = $${idx++}`); vals.push(feature); }
+    if (priority !== undefined)     { updates.push(`priority = $${idx++}`); vals.push(fit(priority, L.priority)); }
+    if (type !== undefined)         { updates.push(`type = $${idx++}`); vals.push(fit(type, L.type)); }
+    if (feature !== undefined)      { updates.push(`feature = $${idx++}`); vals.push(fit(feature, L.feature)); }
     if (precondition !== undefined) { updates.push(`precondition = $${idx++}`); vals.push(precondition); }
-    if (status !== undefined)       { updates.push(`status = $${idx++}`); vals.push(status); }
+    if (status !== undefined)       { updates.push(`status = $${idx++}`); vals.push(fit(status, L.status)); }
     if (tags !== undefined)         { updates.push(`tags = $${idx++}`); vals.push(normaliseTags(tags)); }
+    if (category !== undefined)     { updates.push(`category = $${idx++}`); vals.push(normaliseCategory(category)); }
 
     if (updates.length === 0) { res.status(400).json({ error: 'No fields to update' }); return; }
 
@@ -246,7 +242,7 @@ router.post('/:testRunId/cases', async (req: Request, res: Response) => {
   try {
     const user = req.user!;
     const { testRunId } = req.params;
-    const { title, steps, expected, priority, type, feature, precondition, tags: rawTags } = req.body;
+    const { title, steps, expected, priority, type, feature, precondition, tags: rawTags, category } = req.body;
 
     // Verify ownership
     const runRes = await pool.query(`SELECT id, module, submodule FROM test_runs WHERE id = $1 AND tenant_id = $2`, [testRunId, user.tenantId]);
@@ -260,9 +256,9 @@ router.post('/:testRunId/cases', async (req: Request, res: Response) => {
     const tags = normaliseTags(rawTags);
 
     const result = await pool.query(
-      `INSERT INTO test_cases (test_run_id, tc_number, title, steps, expected, priority, type, feature, precondition, status, sort_order, module, submodule, tags)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'generated', $10, $11, $12, $13) RETURNING *`,
-      [testRunId, nextNum, title || '', JSON.stringify(steps || []), expected || '', priority || 'P1', type || 'positive', feature || '', precondition || '', nextSort, runRow.module, runRow.submodule, tags]
+      `INSERT INTO test_cases (test_run_id, tc_number, title, steps, expected, priority, type, feature, precondition, status, sort_order, module, submodule, tags, category)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'generated', $10, $11, $12, $13, $14) RETURNING *`,
+      [testRunId, nextNum, fit(title || '', L.title), JSON.stringify(steps || []), expected || '', fit(priority || 'P1', L.priority), fit(type || 'positive', L.type), fit(feature || '', L.feature), precondition || '', nextSort, runRow.module, runRow.submodule, tags, normaliseCategory(category)]
     );
 
     res.json({ ok: true, testCase: result.rows[0] });
