@@ -26,6 +26,13 @@ interface TestRun {
   module?: string | null; submodule?: string | null;
   test_case_count: number; generated_count: number; approved_count: number; scripted_count: number;
 }
+/** How a suite was created, as users know it from the Chat. */
+const SOURCE_LABELS: Record<string, string> = {
+  explore: 'App exploration', text: 'Pasted text', upload: 'Document',
+  jira: 'Jira', confluence: 'Confluence', sharepoint: 'SharePoint',
+};
+const sourceLabel = (s: string | null) => (s ? SOURCE_LABELS[s] || s.charAt(0).toUpperCase() + s.slice(1) : 'Other');
+
 interface TestCase {
   id: string; test_run_id: string; tc_number: string; title: string; steps: string[];
   expected: string; priority: string; type: string; feature: string; precondition: string;
@@ -364,7 +371,7 @@ export default function GeneratedTestCasesPage() {
                       {selectedRun.story_key}
                     </span>
                   )}
-                  <h2 className="text-lg font-semibold text-[#1E3A8A]">{selectedRun.story_title || 'Manual Test Suite'}</h2>
+                  <h2 className="text-lg font-semibold text-[#1E3A8A]">{selectedRun.story_title || 'Untitled suite'}</h2>
                 </div>
               </div>
             </div>
@@ -786,7 +793,7 @@ export default function GeneratedTestCasesPage() {
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Search by Jira ID, story title, user…"
+            placeholder="Search suites, Jira keys or users…"
             className="w-full h-9 pl-9 pr-3 bg-white border border-[#C5D6FF] rounded-lg text-sm text-[#1E3A8A] placeholder:text-[#6B7280] outline-none hover:border-[#AEC4F5] focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF]/20 transition-colors"
           />
         </div>
@@ -800,8 +807,7 @@ export default function GeneratedTestCasesPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-[#EEF4FF] border-b border-[#DCE7FF]">
-                <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap">Jira ID</th>
-                <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider">Story</th>
+                <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider">Suite</th>
                 <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap">Source</th>
                 <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider">User</th>
                 <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-violet-700 uppercase tracking-wider whitespace-nowrap">Cases</th>
@@ -817,28 +823,22 @@ export default function GeneratedTestCasesPage() {
                 const pct = total > 0 ? Math.round((reviewed / total) * 100) : 0;
                 return (
                   <tr key={run.id} className="border-b border-[#EEF4FF] hover:bg-[#EEF4FF]/60 cursor-pointer transition-colors" onClick={() => openRunDetail(run)}>
-                    <td className="px-3 py-1.5" onClick={e => e.stopPropagation()}>
-                      {run.story_key ? (
+                    <td className="px-3 py-1.5 max-w-md">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {run.story_key && (
+                          <span className="shrink-0 px-1.5 py-0.5 rounded-md bg-[#DCE7FF] text-[#2143A8] text-xs font-mono border border-[#C5D6FF]">{run.story_key}</span>
+                        )}
                         <button
-                          onClick={() => openRunDetail(run)}
-                          className="px-2 py-0.5 rounded-md bg-[#DCE7FF] text-[#2143A8] text-sm font-mono border border-[#C5D6FF] hover:bg-[#C5D6FF] hover:underline transition-colors"
-                          title="Open test suite"
+                          onClick={e => { e.stopPropagation(); openRunDetail(run); }}
+                          className="truncate text-left text-[#1E3A8A] hover:text-[#2143A8] hover:underline"
+                          title={run.story_title || 'Untitled suite'}
                         >
-                          {run.story_key}
+                          {run.story_title || 'Untitled suite'}
                         </button>
-                      ) : (
-                        <button
-                          onClick={() => openRunDetail(run)}
-                          className="text-[#2143A8] hover:underline text-sm"
-                          title="Open test suite"
-                        >
-                          Manual
-                        </button>
-                      )}
+                      </div>
                     </td>
-                    <td className="px-3 py-1.5 text-[#1E3A8A] truncate max-w-xs">{run.story_title || 'Manual Test Suite'}</td>
-                    <td className="px-3 py-1.5">
-                      <span className="px-2 py-0.5 rounded-md bg-[#DCE7FF] text-[#2143A8] text-sm border border-[#C5D6FF] lowercase">{run.source || 'manual'}</span>
+                    <td className="px-3 py-1.5 whitespace-nowrap">
+                      <span className="px-2 py-0.5 rounded-md bg-[#DCE7FF] text-[#2143A8] text-sm border border-[#C5D6FF]">{sourceLabel(run.source)}</span>
                     </td>
                     <td className="px-3 py-1.5 text-[#1E3A8A]">{run.username}</td>
                     <td className="px-3 py-1.5 text-[#1E3A8A]">{total}</td>
