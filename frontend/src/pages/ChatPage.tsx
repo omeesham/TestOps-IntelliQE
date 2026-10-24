@@ -26,6 +26,7 @@ import {
   extractMobileAppMetadata,
 } from '@/services/api';
 import { normalizeError } from '@/utils/apiError';
+import PromptSuggestions from '@/components/chat/PromptSuggestions';
 import {
   Send, Bot, Loader2, CheckCircle, Monitor, Plug, Smartphone,
   Globe, Layers, Shield, FileText, Upload, Type, Link2,
@@ -1944,6 +1945,9 @@ export default function ChatPage() {
       return (
         <div className="max-w-md ml-11 bg-white border border-gray-100 rounded-xl p-5 shadow-sm">
           <textarea value={pasteText} onChange={e => setPasteText(e.target.value)} placeholder="Paste your requirements, user stories, or acceptance criteria here..." rows={6} className={inputCls + ' resize-none'} />
+          <div className="mt-2">
+            <PromptSuggestions value={pasteText} onApply={setPasteText} />
+          </div>
           <button onClick={handleTextSubmit} disabled={!pasteText.trim()} className="mt-3 w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2">
             <Send className="w-4 h-4" />Submit Requirements
           </button>

@@ -9,8 +9,50 @@ import { broadcastSSE } from '../services/sse-manager.js';
 import { createJob, updateJob, getJob } from '../services/generation-jobs.js';
 import { getConfigsForTenant } from '../services/configurations.service.js';
 import { decryptStoredDeep } from '../utils/crypto.js';
+import { suggestPrompts, AssistRateLimit, MAX_PROMPT_CHARS } from '../services/prompt-assist.service.js';
 
 const router = Router();
+
+/* ───────────────────────────────────────────
+   POST /api/generate/suggest-prompts
+   Body: { text, appName?, environment? }
+   Returns up to 3 improved versions of the user's requirement text.
+   ─────────────────────────────────────────── */
+const assistLimit = new AssistRateLimit(10, 60_000);
+
+router.post('/suggest-prompts', async (req: Request, res: Response) => {
+  const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+  if (text.length < 10) {
+    res.status(400).json({ error: 'Write a little more first (at least 10 characters).' });
+    return;
+  }
+  if (text.length > MAX_PROMPT_CHARS) {
+    res.status(400).json({ error: `Suggestions work on up to ${MAX_PROMPT_CHARS} characters. Shorten the text or generate directly.` });
+    return;
+  }
+  if (!assistLimit.allow(req.user!.username)) {
+    res.status(429).json({ error: 'Too many suggestions requested. Try again in a minute.' });
+    return;
+  }
+  if (!isClaudeCliAuthenticated()) {
+    res.status(503).json({ error: 'The AI engine is not connected right now.' });
+    return;
+  }
+  try {
+    const suggestions = await suggestPrompts(text, {
+      appName: typeof req.body?.appName === 'string' ? req.body.appName : undefined,
+      environment: typeof req.body?.environment === 'string' ? req.body.environment : undefined,
+    });
+    if (!suggestions.length) {
+      res.status(502).json({ error: 'No suggestions came back. Please try again.' });
+      return;
+    }
+    res.json({ suggestions });
+  } catch (err) {
+    console.error('[generate/suggest-prompts] failed:', (err as Error).message);
+    res.status(502).json({ error: 'Could not get suggestions right now. Please try again.' });
+  }
+});
 
 const nowIso = () => new Date().toISOString();
 

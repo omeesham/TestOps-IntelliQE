@@ -286,6 +286,14 @@ export interface GenerationResult {
   code?: string;
 }
 
+export interface PromptSuggestion { title: string; why: string; prompt: string }
+
+/** Up to 3 clearer versions of the user's requirement text (one AI call; may take a while on the CLI transport). */
+export async function suggestPrompts(body: { text: string; appName?: string; environment?: string }): Promise<PromptSuggestion[]> {
+  const { data } = await api.post('/generate/suggest-prompts', body, { timeout: 180_000 });
+  return Array.isArray(data?.suggestions) ? data.suggestions : [];
+}
+
 /** Fetch a generation job's status/result by runId. Returns the 404 body (status:'unknown') rather than throwing if the job has expired. */
 export async function getGenerationResult(runId: string): Promise<GenerationResult> {
   try {
