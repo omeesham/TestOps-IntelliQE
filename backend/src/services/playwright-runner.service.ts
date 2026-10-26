@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import pool from '../db.js';
 import { appTestDataDir, installDocumentHelper, materializeTestData, specUsesDocumentHelper, specUsesTestData, TEST_DATA_ENV } from './test-data.service.js';
 import { getConfigsForTenant } from './configurations.service.js';
+import { accuracySettings, collectDocumentChecks, summariseDocumentChecks, writeAllureScorecard, type AccuracyScorecard } from './document-accuracy.service.js';
 import { appEnvironments, pickEnvironment } from './app-environments.js';
 import { errorWithBlocked, prepareGuardedRun, specForRun, type SafetySettings } from './uat-safety.service.js';
 
@@ -28,7 +29,7 @@ function sanitizeFileName(raw: string): string {
  * which the runner passes to the specs as IQE_TEST_DATA_DIR. Returns null when
  * no spec uses test files. Re-runs work the same way: the app comes from the run.
  */
-async function prepareRunTestData(tenantId: string, runId: string, workspace: string, codes: string[]): Promise<string | null> {
+export async function prepareRunTestData(tenantId: string, runId: string, workspace: string, codes: string[]): Promise<string | null> {
   if (!codes.some(specUsesTestData)) return null;
   const dir = path.join(workspace, 'test-data');
   try {
@@ -435,7 +436,7 @@ export async function executeRunScripts(
   tenantId: string,
   isPlatform: boolean,
   runId: string,
-): Promise<{ details: RunSpecResult[]; passed: number; failed: number }> {
+): Promise<{ details: RunSpecResult[]; passed: number; failed: number; documentAccuracy: AccuracyScorecard | null }> {
   if (!runId) throw new Error('runId is required to execute Playwright tests');
 
   const query = isPlatform
@@ -520,11 +521,14 @@ module.exports = defineConfig({
     throw classifyPlaywrightFailure(stdout, stderr, logPath);
   }
 
+  const documentAccuracy = summariseDocumentChecks(collectDocumentChecks(summary), accuracySettings());
+
   // Persist the real allure-results for this run so the Reports page can build
   // the Allure report from this SAME execution (no slow re-run). Best-effort —
   // a copy failure must never fail the execution itself.
   try {
     const srcAllure = path.join(workspace, 'allure-results');
+    if (documentAccuracy) await writeAllureScorecard(srcAllure, documentAccuracy);
     const files = await fs.readdir(srcAllure).catch(() => [] as string[]);
     if (files.length > 0) {
       const dest = storedAllureResultsDir(tenantId, runId);
@@ -573,5 +577,5 @@ module.exports = defineConfig({
     );
   } catch { /* ignore */ }
 
-  return { details, passed, failed };
+  return { details, passed, failed, documentAccuracy };
 }

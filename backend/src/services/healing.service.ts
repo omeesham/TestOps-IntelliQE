@@ -27,7 +27,9 @@ import { fileURLToPath } from 'url';
 import pool from '../db.js';
 import { runClaudePrompt, isClaudeCliAuthenticated, parseJsonFromResponse } from '../agents/claude-runner.js';
 import { buildHealingPrompt, type HealingFix } from '../agents/healing-prompt.js';
-import { PlaywrightRunError, classifyPlaywrightFailureExternal, storedAllureResultsDir, runSafety } from './playwright-runner.service.js';
+import { PlaywrightRunError, classifyPlaywrightFailureExternal, prepareRunTestData, storedAllureResultsDir, runSafety } from './playwright-runner.service.js';
+import { isDocumentFinding } from './document-accuracy.service.js';
+import { TEST_DATA_ENV } from './test-data.service.js';
 import { errorWithBlocked, prepareGuardedRun, specForRun, type SafetySettings } from './uat-safety.service.js';
 
 const execFileAsync = promisify(execFile);
@@ -102,6 +104,8 @@ async function resolveTargetUrl(tenantId: string): Promise<string | undefined> {
  * map each spec result straight back to its test_case_id.
  */
 async function reRunHealedSpecs(
+  tenantId: string,
+  runId: string,
   specs: { testCaseId: string; fileName: string; code: string }[],
   guard: { safety?: SafetySettings; appUrl?: string },
 ): Promise<Map<string, { status: 'passed' | 'failed' | 'not_run'; durationMs?: number; error?: string }>> {
@@ -134,11 +138,13 @@ module.exports = defineConfig({
 });
 `, 'utf-8');
 
+  const testDataDir = await prepareRunTestData(tenantId, runId, workspace, specs.map((s) => s.code));
   const env = {
     ...process.env,
     CI: '1',
     PLAYWRIGHT_JSON_OUTPUT_NAME: path.join(workspace, 'pw-summary.json'),
     NODE_PATH: path.join(BACKEND_ROOT, 'node_modules'),
+    ...(testDataDir ? { [TEST_DATA_ENV]: testDataDir } : {}),
     ...(await prepareGuardedRun(workspace, guard.safety, guard.appUrl)),
   };
   const isWindows = process.platform === 'win32';
@@ -186,6 +192,8 @@ module.exports = defineConfig({
     const first = spec?.tests?.[0]?.results?.[0];
     const st: string | undefined = first?.status;
     const passed = st === 'passed' || st === 'expected';
+    // A spec can hold several tests (one per test document): keep the first failure.
+    if (out.get(tcId)?.status === 'failed') continue;
     out.set(tcId, {
       status: passed ? 'passed' : st ? 'failed' : 'not_run',
       durationMs: typeof first?.duration === 'number' ? first.duration : undefined,
@@ -263,6 +271,10 @@ export async function healRunScripts(
       if (!canUseAi) {
         return { row, newCode: row.code, healFix: 'AI engine not connected — could not generate a fix.', healed: false };
       }
+      // A value that differs from the answer key is a finding about the app; changing the script would hide it.
+      if (isDocumentFinding(realError)) {
+        return { row, newCode: row.code, healFix: 'the screen shows values that differ from the answer key — a finding about the app, not a script fault.', healed: false };
+      }
 
       try {
         const prompt = buildHealingPrompt({
@@ -289,6 +301,9 @@ export async function healRunScripts(
         if (!newCode || newCode === row.code.trim()) {
           return { row, newCode: row.code, healFix: fix?.diagnosis || 'AI did not produce a different script.', healed: false };
         }
+        if (row.code.includes('checkDocument(') && !newCode.includes('checkDocument(')) {
+          return { row, newCode: row.code, healFix: 'AI fix dropped the answer-key check, so it was not applied.', healed: false };
+        }
         const summary = [fix?.diagnosis, fix?.fix].filter(Boolean).join(' → ') || 'Applied an AI fix to the failing script.';
         return { row, newCode, healFix: summary, healed: true };
       } catch (err: any) {
@@ -302,6 +317,8 @@ export async function healRunScripts(
   // — the saved suite is never overwritten with unverified (possibly
   // non-compiling) AI code. ──
   const reRun = await reRunHealedSpecs(
+    tenantId,
+    runId,
     healed.map((h) => ({
       testCaseId: h.row.test_case_id,
       fileName: h.row.file_name || `${h.row.tc_number || 'test'}.spec.ts`,

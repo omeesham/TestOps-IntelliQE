@@ -1356,7 +1356,12 @@ export default function ChatPage() {
     // run, we show "not_run" — we do NOT pretend it passed.
     // ─────────────────────────────────────────────────────────────
     const backendDetails: any[] = Array.isArray(execRes?.executionDetails) ? execRes.executionDetails : [];
-    const detailByTcId = new Map<string, any>(backendDetails.map((d) => [d.testCaseId, d]));
+    // A script can hold several tests (one per test document): any failure fails the test case.
+    const detailByTcId = new Map<string, any>();
+    for (const d of backendDetails) {
+      const prev = detailByTcId.get(d.testCaseId);
+      if (!prev || (prev.status !== 'failed' && d.status === 'failed')) detailByTcId.set(d.testCaseId, d);
+    }
 
     let passed = 0;
     let failed = 0;
@@ -1399,6 +1404,10 @@ export default function ChatPage() {
       push('tessa', `Execution complete: ${passed} passed, ${failed} failed out of ${finalResults.length} tests. You can auto-heal failing tests or skip to report.`);
     } else {
       push('tessa', `All ${passed} tests passed! Proceed to generate the execution report.`);
+    }
+    const accuracy = execRes?.documentAccuracy;
+    if (accuracy) {
+      push('tessa', `Document accuracy: ${accuracy.accuracy}% of ${accuracy.checked} values correct across ${accuracy.documents} documents — ${accuracy.meetsThreshold ? 'every field meets' : 'some fields are below'} the ${accuracy.settings.threshold}% threshold. ${accuracy.flags.length} read(s) flagged for review; the full scorecard is in the report.`);
     }
     setStep('execution-results');
   };

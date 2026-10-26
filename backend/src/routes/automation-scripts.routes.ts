@@ -546,10 +546,11 @@ router.post('/execute/:testRunId', async (req: Request, res: Response) => {
       return;
     }
 
-    const { details, passed, failed } = await executeRunScripts(tenantId, isPlatform, testRunId);
+    const { details, passed, failed, documentAccuracy } = await executeRunScripts(tenantId, isPlatform, testRunId);
     res.json({
       runId: testRunId,
       executionDetails: details,
+      documentAccuracy,
       summary: { totalTests: details.length, passed, failed, executed: true },
     });
   } catch (err: any) {
