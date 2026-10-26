@@ -28,8 +28,8 @@
  *   2. Test data must be CONCRETE (real values, not "<email>" placeholders).
  *   3. Titles must be unique and follow the "Verify …" convention.
  */
-import { TEST_CATEGORIES } from './state.js';
-import type { TestOpsState, TestCase, TestStep, TestCategory, CoverageLevel, CoverageSummary } from './state.js';
+import { TEST_CATEGORIES, ORACLES } from './state.js';
+import type { TestOpsState, TestCase, TestStep, TestCategory, CoverageLevel, CoverageSummary, DataDrivenCheck, DocumentExtraction, Oracle } from './state.js';
 import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
 import type { ExtendedTestPlan } from './plannerAgent.js';
 import { mobileContextNote } from './mobile-context.js';
@@ -58,7 +58,25 @@ type RawTestCase = {
   severity?: string;
   tags?: string[];
   category?: string;
+  dataDriven?: { oracle?: unknown; documentClasses?: unknown; fields?: unknown };
 };
+
+const ORACLE_LABELS: Record<Oracle, string> = {
+  'answer-key': 'answer key of the generated test documents',
+  'business-rule': 'stated business rules (no answer key needed)',
+  baseline: 'approved baseline of an earlier run',
+};
+
+/** A document check's data set (document-verification skill §6); undefined for ordinary cases. */
+export function coerceDataDriven(raw: RawTestCase['dataDriven']): DataDrivenCheck | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const list = (v: unknown): string[] => (Array.isArray(v) ? v : v ? [v] : []).map((x) => String(x).trim()).filter(Boolean);
+  const documentClasses = list(raw.documentClasses);
+  const fields = list(raw.fields);
+  if (!documentClasses.length && !fields.length) return undefined;
+  const oracle: Oracle = (ORACLES as readonly unknown[]).includes(raw.oracle) ? raw.oracle as Oracle : 'answer-key';
+  return { oracle, documentClasses, fields };
+}
 
 const VALID_TYPES: TestCase['type'][] = [
   'positive', 'negative', 'edge', 'e2e', 'api', 'data', 'smoke', 'security', 'accessibility', 'performance',
@@ -92,6 +110,17 @@ function coerceTestCase(raw: RawTestCase): TestCase {
   const severity: TestCase['severity'] | undefined = raw.severity && (VALID_SEVERITIES as string[]).includes(raw.severity)
     ? raw.severity as TestCase['severity']
     : undefined;
+  // A document check also lists its data set in Test Data, so reviewers see which
+  // documents and fields it runs on, and the saved case keeps it.
+  const dataDriven = coerceDataDriven(raw.dataDriven);
+  const testData = dataDriven
+    ? {
+        ...(raw.testData || {}),
+        Documents: dataDriven.documentClasses.join('; '),
+        'Fields checked': dataDriven.fields.join(', '),
+        'Expected values from': ORACLE_LABELS[dataDriven.oracle],
+      }
+    : raw.testData;
 
   return {
     id: nextId(),
@@ -103,7 +132,7 @@ function coerceTestCase(raw: RawTestCase): TestCase {
     scenario: title,              // back-compat alias
     description: raw.description,
     precondition: raw.precondition,
-    testData: raw.testData,
+    testData,
     testSteps,
     steps: stringSteps,
     expectedResult: raw.expectedResult || 'Test passes successfully',
@@ -112,6 +141,7 @@ function coerceTestCase(raw: RawTestCase): TestCase {
     severity,
     tags: Array.isArray(raw.tags) ? raw.tags : undefined,
     category: categoryFor(raw.category, type),
+    ...(dataDriven ? { dataDriven } : {}),
     status: 'generated',
   };
 }
@@ -139,11 +169,11 @@ const COVERAGE_INSTRUCTIONS: Record<CoverageLevel, string> = {
 /** Rules handled per generation call, so each response stays within output and time limits. */
 const RULES_PER_BATCH = 8;
 
-/** Rule ids (FLD-xx, BR-xx) that the cases trace to. */
+/** Coverage-model ids (FLD-xx, BR-xx, EXT-xx) that the cases trace to. */
 export function coveredIds(cases: { traceabilityId?: string }[]): Set<string> {
   const ids = new Set<string>();
   for (const c of cases) {
-    for (const m of String(c.traceabilityId || '').toUpperCase().matchAll(/\b(?:FLD|BR)-\d+\b/g)) ids.add(m[0]);
+    for (const m of String(c.traceabilityId || '').toUpperCase().matchAll(/\b(?:FLD|BR|EXT)-\d+\b/g)) ids.add(m[0]);
   }
   return ids;
 }
@@ -158,6 +188,130 @@ function ruleItems(state: TestOpsState): { id: string; text: string }[] {
     })),
     ...(pr.businessRules || []).map((b) => ({ id: b.id.toUpperCase(), text: `${b.id} — ${b.rule}` })),
   ];
+}
+
+/**
+ * What each coverage level asks of a document feature (document-verification
+ * skill §7), with a case budget: one case runs on many documents, so the
+ * budget stays small and each answer fits the model's time limit.
+ */
+const DOCUMENT_COVERAGE: Record<CoverageLevel, string> = {
+  essential: 'COVERAGE LEVEL: essential (skill §7). Upload happy path, one accuracy case per field group on clean documents, High-risk fields on neat handwriting, unreadable required values once, one confidence-trust case, wrong-type and blank document. Budget: at most 10 cases.',
+  standard: 'COVERAGE LEVEL: standard (skill §7). Every suite in skill §5; accuracy per field group across the content, handwriting and notation classes; each stated rule with a passing and a violating document; every bad-document class. Budget: at most 24 cases.',
+  exhaustive: 'COVERAGE LEVEL: exhaustive (skill §7). Standard, plus every scan-quality class for every field group, several documents per upload combined with variations, and release regression per field group. Budget: at most 40 cases.',
+};
+
+/**
+ * A shared environment marked read-only: the guard blocks every write during
+ * runs, so no case may depend on saving. The same instruction goes to every pass.
+ */
+function readOnlyNote(ctx: TestOpsState['appContext']): string {
+  return ctx?.safety?.readOnly
+    ? '\nREAD-ONLY ENVIRONMENT: writes are blocked during test runs. Cases may navigate, upload files, start extraction, read results and check validation messages, but must never depend on completing a save, submit or delete: no case may expect data to be saved, changed or removed.'
+    : '';
+}
+
+/** Document features get their own pass, so the main pass leaves their extraction checks to it. */
+function documentScope(docs: DocumentExtraction[] | undefined): string {
+  if (!docs?.length) return '';
+  return `\n- DOCUMENT FEATURES (${docs.map((d) => d.feature).join(', ')}) are designed in a separate pass: do NOT write extraction-accuracy, confidence (including how confidence is shown), unreadable or illegible value, extracted-value rule, upload or bad-document cases for them here. Cover the rest of the application, plus end-to-end journeys that pass through them.`;
+}
+
+/** Prompt for one document feature: its extraction model in, data-driven cases out. */
+function buildDocumentPrompt(state: TestOpsState, doc: DocumentExtraction, excludeTitles: string[] = [], gapFocus = ''): string {
+  const pr = state.parsedRequirements!;
+  const rules = (pr.businessRules || []).filter((b) => doc.ruleIds.includes(b.id) || b.feature === doc.feature);
+  const ctx = state.appContext;
+  const coverage = state.generationOptions?.coverage || 'standard';
+  const exclusion = excludeTitles.length ? `\n\nALREADY GENERATED — do not repeat these titles:\n${excludeTitles.map((t) => `- ${t}`).join('\n')}` : '';
+
+  return `Design the test suite for the document feature below, following the document-verification skill. Use the test-design skill for the upload screen itself.
+
+APPLICATION: ${ctx?.appName || 'Web App'}${ctx?.environment ? ` (${ctx.environment})` : ''}${ctx?.targetUrl ? ` — ${ctx.targetUrl}` : ''}${readOnlyNote(ctx)}
+
+DOCUMENT FEATURE (extraction model):
+${JSON.stringify(doc, null, 2)}
+
+RULES ON EXTRACTED VALUES:
+${rules.length ? rules.map((r) => `- ${r.id}: ${r.rule}`).join('\n') : '- none stated: write no rule cases'}
+
+SOURCE REQUIREMENTS (context):
+${state.requirements.slice(0, 6000)}${state.requirements.length > 6000 ? '…' : ''}${testDataPromptBlock(ctx?.testDataFiles, 'cases')}
+
+${DOCUMENT_COVERAGE[coverage]}
+- Every EXT field id appears in the traceabilityId of at least one accuracy case; every rule id in a business-rule case.
+- High-risk fields: priority P0, tested on handwritten and degraded documents.
+- Required fields: at least one case where the value is unreadable or only implied, expecting an empty field and the missing-value message.
+- NEVER write an extracted value as expected data. Expected values come from the oracle named in dataDriven.${gapFocus}${exclusion}
+
+OUTPUT — ONLY a JSON array. Same fields as any test case, plus "dataDriven" on every accuracy, confidence, rule and regression case:
+[
+  {
+    "traceabilityId": "EXT-01, EXT-03",
+    "module": "${doc.feature}",
+    "submodule": "Field Accuracy",
+    "feature": "${doc.feature}",
+    "title": "Verify header fields are extracted correctly from neat handwritten documents",
+    "description": "High-risk header fields decide which record the document is booked against.",
+    "precondition": "User is signed in; the documents listed in Test Data are available.",
+    "testData": { "Upload": "one document per run" },
+    "dataDriven": { "oracle": "answer-key", "documentClasses": ["neat handwriting, single row", "neat handwriting, multi-row"], "fields": ["${doc.fields[0]?.name || 'Field 1'}", "${doc.fields[1]?.name || 'Field 2'}"] },
+    "testSteps": [
+      { "step": 1, "action": "Open the ${doc.screen || 'document'} screen", "expected": "Upload control and ${doc.trigger || 'extraction'} button are shown; output fields are empty" },
+      { "step": 2, "action": "Choose the document for this data row", "expected": "The file name is shown" },
+      { "step": 3, "action": "Click '${doc.trigger || 'Scan'}'", "expected": "Extraction completes and every listed field shows a value and a confidence score" },
+      { "step": 4, "action": "Compare each listed field with the oracle value for this document", "expected": "Every value matches after format normalisation; no wrong value is shown with high confidence" }
+    ],
+    "expectedResult": "All listed fields match the oracle for every document in the data set.",
+    "type": "positive",
+    "category": "accuracy",
+    "priority": "P0",
+    "severity": "Critical",
+    "tags": ["regression", "data-validation"]
+  }
+]
+
+Categories: accuracy (values read correctly), confidence (confidence can be trusted), business-rule, positive, negative, boundary, edge. Submodule = the suite name from skill §5. Titles start with "Verify " and are unique.`;
+}
+
+/**
+ * Test cases for one document feature: a main call, then one gap-fill call for
+ * EXT fields and rules no case traces to. Cases are grouped under the feature
+ * by suite ("Labor Ticket Scanning – Field Accuracy").
+ */
+async function generateDocumentCases(state: TestOpsState, doc: DocumentExtraction): Promise<TestCase[]> {
+  const system = skillSystemPrompt('You are a senior test architect specialised in document extraction (OCR / AI) testing.', ['document-verification', 'test-design']);
+  const ask = async (excludeTitles: string[] = [], gapFocus = ''): Promise<TestCase[]> => {
+    const prompt = buildDocumentPrompt(state, doc, excludeTitles, gapFocus);
+    for (let attempt = 1; ; attempt++) {
+      const response = await runClaudePrompt(prompt, { maxTokens: 16384, system });
+      try {
+        const parsed = parseJsonFromResponse<RawTestCase[]>(response);
+        return Array.isArray(parsed) ? parsed.map(coerceTestCase) : [];
+      } catch (err) {
+        console.warn(`[generatorAgent] unreadable document answer (attempt ${attempt}): ${response.slice(0, 200).replace(/\s+/g, ' ')}`);
+        if (attempt >= 2) throw err;
+      }
+    }
+  };
+
+  let cases = await ask();
+  const wanted = [...doc.fields.map((f) => ({ id: f.id.toUpperCase(), text: `${f.id} — ${f.name}${f.group ? ` (${f.group})` : ''}` })),
+    ...doc.ruleIds.map((id) => ({ id: id.toUpperCase(), text: id }))];
+  const covered = coveredIds(cases);
+  const missing = wanted.filter((w) => !covered.has(w.id));
+  if (cases.length && missing.length) {
+    try {
+      const gap = `\n\nGAP FILL: write cases ONLY for these uncovered items, with their ids in traceabilityId:\n${missing.map((m) => `- ${m.text}`).join('\n')}`;
+      const seen = new Set(cases.map((c) => c.title.toLowerCase().trim()));
+      const extra = (await ask(cases.map((c) => c.title), gap)).filter((c) => !seen.has(c.title.toLowerCase().trim()));
+      console.log(`[generatorAgent] document gap fill (${doc.feature}): ${missing.length} uncovered → ${extra.length} new case(s)`);
+      cases = cases.concat(extra);
+    } catch (err) {
+      console.warn(`[generatorAgent] document gap fill failed for ${doc.feature}: ${(err as Error).message}`);
+    }
+  }
+  return cases.map((c) => ({ ...c, module: doc.feature, feature: c.submodule ? `${doc.feature} – ${c.submodule}` : doc.feature }));
 }
 
 function buildPrompt(state: TestOpsState, excludeTitles: string[] = [], gapFocus = ''): string {
@@ -195,7 +349,7 @@ ${JSON.stringify(pr, null, 2)}
 ${planSummary}
 
 CONTEXT:
-${appInfo}${mobileContextNote(state.appContext)}
+${appInfo}${readOnlyNote(state.appContext)}${mobileContextNote(state.appContext)}
 Source requirements: ${state.requirements.slice(0, 8000)}${state.requirements.length > 8000 ? '…' : ''}
 
 ═══════════════════════════════════════════════════════════════
@@ -242,7 +396,7 @@ ${countInstruction}
 - For EACH edge case listed: at least one dedicated test.
 - For EACH non-functional requirement (security, accessibility, performance): at least one test that explicitly verifies it.
 - For EVERY persona x feature pair in personaMatrix where the actor is DENIED: a negative authorization test confirming the denial is enforced.
-- Do NOT merge multiple scenarios into one case. Each test verifies ONE behaviour.${gapFocus}${exclusionBlock}
+- Do NOT merge multiple scenarios into one case. Each test verifies ONE behaviour.${documentScope(pr.documentExtraction)}${gapFocus}${exclusionBlock}
 
 ═══════════════════════════════════════════════════════════════
 QUALITY RULES (every case must satisfy these — incomplete cases will be rejected):
@@ -279,6 +433,13 @@ export async function generatorAgent(state: TestOpsState): Promise<TestOpsState>
 
   const requestedMax = state.generationOptions?.maxTestCases;
   const items = ruleItems(state);
+  // Document features get their own pass (own prompt and skill), run alongside
+  // the main pass. A failed document pass leaves the rest of the suite intact.
+  const docs = pr.documentExtraction || [];
+  const documentPass = Promise.all(docs.map((d) => generateDocumentCases(state, d).catch((err: Error) => {
+    console.warn(`[generatorAgent] document pass failed for ${d.feature}: ${err.message}`);
+    return [] as TestCase[];
+  })));
   // One retry when the answer is not a JSON array (a prose reply or a cut-off
   // response), so a single bad answer does not fail the whole generation.
   const generate = async (gapFocus = '', exclude: string[] = []): Promise<TestCase[]> => {
@@ -304,7 +465,7 @@ export async function generatorAgent(state: TestOpsState): Promise<TestOpsState>
     // Large coverage model: one call for journeys, then one call per batch of
     // rules, so no single response grows past the model's output or time limits.
     testCases = await generate(`\n\nTHIS PASS: happy paths per feature, end-to-end flows, and role or security cases. Field rules and business rules are covered in separate passes, so do not write boundary, invalid-input or rule cases here.`);
-    if (testCases.length === 0) throw new Error('Claude returned no test cases in first pass');
+    if (testCases.length === 0 && !docs.length) throw new Error('Claude returned no test cases in first pass');
     for (let i = 0; i < items.length; i += RULES_PER_BATCH) {
       const batch = items.slice(i, i + RULES_PER_BATCH);
       try {
@@ -316,7 +477,7 @@ export async function generatorAgent(state: TestOpsState): Promise<TestOpsState>
     }
   } else {
     testCases = await generate();
-    if (testCases.length === 0) throw new Error('Claude returned no test cases in first pass');
+    if (testCases.length === 0 && !docs.length) throw new Error('Claude returned no test cases in first pass');
   }
 
   // Retry pass — sparse coverage. Drive the floor from the plan if we have one.
@@ -371,14 +532,18 @@ You returned only ${testCases.length} test cases. With ${pr.features.length} fea
     }
   }
 
+  testCases = addNew(testCases, (await documentPass).flat());
+  if (!testCases.length) throw new Error('Claude returned no test cases in first pass');
   if (requestedMax && requestedMax > 0) testCases = testCases.slice(0, requestedMax);
 
+  // Coverage counts every rule and every extracted field (EXT-xx).
+  const modelItems = [...items, ...docs.flatMap((d) => d.fields.map((fd) => ({ id: fd.id.toUpperCase(), text: `${fd.id} — ${fd.name}${fd.group ? ` (${fd.group})` : ''}` })))];
   const covered = coveredIds(testCases);
   const coverageSummary: CoverageSummary = {
     level: state.generationOptions?.coverage || 'standard',
-    totalRules: items.length,
-    coveredRules: items.filter((it) => covered.has(it.id)).length,
-    uncovered: items.filter((it) => !covered.has(it.id)),
+    totalRules: modelItems.length,
+    coveredRules: modelItems.filter((it) => covered.has(it.id)).length,
+    uncovered: modelItems.filter((it) => !covered.has(it.id)),
     skills,
   };
   return { ...state, testCases, coverageSummary };

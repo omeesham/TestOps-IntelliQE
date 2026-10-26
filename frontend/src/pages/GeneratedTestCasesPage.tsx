@@ -13,7 +13,7 @@ import {
 
 const TAG_VOCAB = ['POSITIVE', 'NEGATIVE', 'E2E', 'UI', 'API', 'SMOKE', 'REGRESSION', 'SANITY', 'AUTH', 'SECURITY', 'ACCESSIBILITY', 'DATA-VALIDATION'] as const;
 /** Test-design categories, as assigned by the generator (editable). */
-const CATEGORIES = ['positive', 'negative', 'boundary', 'business-rule', 'edge', 'security', 'accessibility'] as const;
+const CATEGORIES = ['positive', 'negative', 'boundary', 'business-rule', 'edge', 'security', 'accessibility', 'accuracy', 'confidence'] as const;
 type TagName = typeof TAG_VOCAB[number];
 import { Code2, Loader2, Database, BarChart3 } from 'lucide-react';
 import TestDataTab from '@/components/test-data/TestDataTab';

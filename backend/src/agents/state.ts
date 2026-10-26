@@ -108,10 +108,24 @@ export interface TestCase {
   tags?: string[];
   /** Test-design category (see the test-design skill) */
   category?: TestCategory;
+  /** A document check that runs once per listed document (document-verification skill §6). */
+  dataDriven?: DataDrivenCheck;
   status: 'generated' | 'automated' | 'executed' | 'passed' | 'failed';
 }
 
-export const TEST_CATEGORIES = ['positive', 'negative', 'boundary', 'business-rule', 'edge', 'security', 'accessibility'] as const;
+/** Where a document check's expected values come from. */
+export const ORACLES = ['answer-key', 'business-rule', 'baseline'] as const;
+export type Oracle = typeof ORACLES[number];
+
+export interface DataDrivenCheck {
+  oracle: Oracle;
+  /** Document classes the check runs on, e.g. "neat handwriting, multi-row". */
+  documentClasses: string[];
+  /** Extracted fields the check compares. */
+  fields: string[];
+}
+
+export const TEST_CATEGORIES = ['positive', 'negative', 'boundary', 'business-rule', 'edge', 'security', 'accessibility', 'accuracy', 'confidence'] as const;
 export type TestCategory = typeof TEST_CATEGORIES[number];
 
 export interface AutomationScript {
