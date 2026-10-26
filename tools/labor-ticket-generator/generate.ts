@@ -307,16 +307,15 @@ async function main(): Promise<void> {
       await page.pdf({ path: path.join(OUT, ticket.fileName), format: 'A4', printBackground: true, margin: { top: '0', right: '0', bottom: '0', left: '0' } });
 
       answerKey[ticket.fileName] = {
-        quality: ticket.quality,
+        tags: [ticket.quality, ...challenges],
         handwriting: font,
-        header: ticket.header,
+        fields: ticket.header,
         rows: ticket.rows.map((r) => ({
           expected: r.expected,
           ...(Object.keys(r.emptyBecause).length ? { emptyBecause: r.emptyBecause } : {}),
           ...(Object.keys(r.corrections).length ? { crossedOutBeforeCorrection: r.corrections } : {}),
         })),
         ignore: ticket.noise,
-        challenges,
       };
       console.log(`${ticket.fileName}  ${ticket.quality.padEnd(7)} ${font.padEnd(18)} ${challenges.join('; ') || '-'}`);
     }

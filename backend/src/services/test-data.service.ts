@@ -164,7 +164,43 @@ export function testDataPromptBlock(files: string[] | undefined, mode: 'cases' |
   return `\nTEST FILES (upload them with setInputFiles; use ONLY these file names, never invent files or paths):\n${list}\nUpload pattern (exactly this — the folder is resolved at run time):\nimport path from 'path';\n${TEST_DATA_DIR_DECL}\nawait <file input locator>.setInputFiles(path.join(TEST_DATA_DIR, '<file name>'));\n- File inputs are often hidden behind a styled button: target the <input type="file"> itself; setInputFiles works on hidden inputs.\n`;
 }
 
+/** Helper module for answer-key document checks, copied into the workspace when a spec imports it. */
+export const DOCUMENT_HELPER_FILE = 'iqe-documents.ts';
+export const ANSWER_KEY_FILE = 'answer-key.json';
+
+export function specUsesDocumentHelper(code: string): boolean {
+  return code.includes(DOCUMENT_HELPER_FILE.replace(/\.ts$/, ''));
+}
+
 /** True when a spec reads the test-data folder. */
 export function specUsesTestData(code: string): boolean {
-  return code.includes(TEST_DATA_ENV) || code.includes('TEST_DATA_DIR');
+  return code.includes(TEST_DATA_ENV) || code.includes('TEST_DATA_DIR') || specUsesDocumentHelper(code);
+}
+
+export async function installDocumentHelper(workspace: string): Promise<void> {
+  await fs.copyFile(path.join(BACKEND_ROOT, 'config', 'playwright', DOCUMENT_HELPER_FILE), path.join(workspace, DOCUMENT_HELPER_FILE));
+}
+
+/**
+ * Prompt block for specs that check extracted values against the answer key
+ * ('' unless the app's test files include answer-key.json).
+ */
+export function documentCheckPromptBlock(files: string[] | undefined): string {
+  if (!files?.includes(ANSWER_KEY_FILE)) return '';
+  const helper = `../${DOCUMENT_HELPER_FILE.replace(/\.ts$/, '')}`;
+  return `
+ANSWER-KEY DOCUMENT CHECKS — for test cases whose testData says "Expected values from: answer key…":
+Never hard-code document names or expected values. Use the helper module (it reads ${ANSWER_KEY_FILE} beside the test files):
+import { documents, checkDocument, fieldByLabel, readFields, readTable } from '${helper}';
+- One test per document, created at the top level of the describe block:
+  for (const doc of documents([<each class from testData "Documents", as strings>])) {
+    test(\`<scenario title> — \${doc.file}\`, async ({ page }) => { ... });
+  }
+- In each test: test.setTimeout(180_000); open the screen; upload doc.path with setInputFiles; start the extraction (e.g. the Scan button); wait with a web-first assertion until the extracted values are shown (timeout 120_000).
+- Read the screen with the helpers: readFields(page, [<single-field labels from "Fields checked">]) and, when checked fields are table columns, readTable(page).
+- Locate an extracted field for any other step with fieldByLabel(page, '<label>') — it also works where labels are not linked to their inputs, which getByLabel misses.
+- Finish with: await checkDocument(doc, { fields, rows }, [<every name from "Fields checked">]);
+  checkDocument does every comparison and assertion — add no expect() of your own on extracted values.
+- Never save, submit or approve the extracted data.
+`;
 }

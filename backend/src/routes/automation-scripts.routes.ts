@@ -5,7 +5,7 @@ import { executeRunScripts, PlaywrightRunError } from '../services/playwright-ru
 import { healRunScripts } from '../services/healing.service.js';
 import { executeRunScriptsMobile } from '../services/appium-runner.service.js';
 import { pickEnvironment } from '../services/app-environments.js';
-import { testDataContext, testDataPromptBlock } from '../services/test-data.service.js';
+import { documentCheckPromptBlock, testDataContext, testDataPromptBlock } from '../services/test-data.service.js';
 
 /** Read a run's mobile platform marker ('android' | 'ios') or null for web/API. */
 async function getRunPlatform(testRunId: string, tenantId: string, isPlatform: boolean): Promise<string | null> {
@@ -316,7 +316,7 @@ Story: ${run.story_key || ''} - ${run.story_title || ''}
 
 Test Cases (JSON):
 ${JSON.stringify(tcSummary, null, 2)}
-${testDataPromptBlock(testFiles, 'script')}
+${testDataPromptBlock(testFiles, 'script')}${documentCheckPromptBlock(testFiles)}
 ═══════════════════════════════════════════════════════════
 PAGE OBJECT MODEL — MANDATORY STRUCTURE FOR EVERY SPEC
 ═══════════════════════════════════════════════════════════

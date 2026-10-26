@@ -5,7 +5,7 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import pool from '../db.js';
-import { appTestDataDir, materializeTestData, specUsesTestData, TEST_DATA_ENV } from './test-data.service.js';
+import { appTestDataDir, installDocumentHelper, materializeTestData, specUsesDocumentHelper, specUsesTestData, TEST_DATA_ENV } from './test-data.service.js';
 import { getConfigsForTenant } from './configurations.service.js';
 import { appEnvironments, pickEnvironment } from './app-environments.js';
 import { errorWithBlocked, prepareGuardedRun, specForRun, type SafetySettings } from './uat-safety.service.js';
@@ -15,6 +15,8 @@ const execFileAsync = promisify(execFile);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
+/** Limit for one whole Playwright run; document checks over many test documents need more than the default. */
+const RUN_TIMEOUT_MS = Number(process.env.PLAYWRIGHT_RUN_TIMEOUT_MS) || 600_000;
 
 function sanitizeFileName(raw: string): string {
   return (raw || 'test').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120);
@@ -33,6 +35,7 @@ async function prepareRunTestData(tenantId: string, runId: string, workspace: st
     const { rows } = await pool.query(`SELECT app_id FROM test_runs WHERE id = $1`, [runId]);
     const appId: string | null = rows[0]?.app_id || null;
     await materializeTestData(appId ? appTestDataDir(tenantId, appId) : path.join(workspace, 'no-app-files'), dir);
+    if (codes.some(specUsesDocumentHelper)) await installDocumentHelper(workspace);
     return dir;
   } catch (err) {
     console.warn(`[runner] test files not prepared for run ${runId}: ${(err as Error).message}`);
@@ -365,7 +368,7 @@ module.exports = defineConfig({
     const result = await execFileAsync(
       isWindows ? 'npx.cmd' : 'npx',
       ['playwright', 'test', '--config', configPath],
-      { cwd: BACKEND_ROOT, env, timeout: 600_000, maxBuffer: 50 * 1024 * 1024, shell: isWindows },
+      { cwd: BACKEND_ROOT, env, timeout: RUN_TIMEOUT_MS, maxBuffer: 50 * 1024 * 1024, shell: isWindows },
     );
     stdout = result.stdout;
     stderr = result.stderr;
@@ -500,7 +503,7 @@ module.exports = defineConfig({
   try {
     const r = await execFileAsync(isWindows ? 'npx.cmd' : 'npx',
       ['playwright', 'test', '--config', configPath],
-      { cwd: BACKEND_ROOT, env, timeout: 600_000, maxBuffer: 50 * 1024 * 1024, shell: isWindows });
+      { cwd: BACKEND_ROOT, env, timeout: RUN_TIMEOUT_MS, maxBuffer: 50 * 1024 * 1024, shell: isWindows });
     stdout = r.stdout; stderr = r.stderr;
   } catch (err: any) {
     stdout = err.stdout || ''; stderr = err.stderr || err.message || '';
