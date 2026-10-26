@@ -20,7 +20,7 @@
  *  • Returns an ExploredApp object and ALSO a markdown-style requirements
  *    string that requirementAgent treats as if it were a functional spec.
  */
-import type { TestOpsState, ExploredApp, ExploredField, AppContext, DocumentFeatureSignal } from './state.js';
+import type { TestOpsState, ExploredApp, ExploredField, AppContext, DocumentFeatureSignal, PageTable } from './state.js';
 import { runClaudePrompt, parseJsonFromResponse, isClaudeCliAuthenticated } from './claude-runner.js';
 import { applyWriteGuard, guardedContextOptions } from '../services/uat-safety.service.js';
 
@@ -53,7 +53,7 @@ interface PageSnapshot {
   buttons: string[];
   links: { text: string; href: string }[];
   navItems: string[];
-  tables?: { title?: string; headers: string[] }[];
+  tables?: PageTable[];
   confidenceLabels?: string[];
 }
 
@@ -301,15 +301,18 @@ async function snapshotPage(page: import('@playwright/test').Page): Promise<Page
     // Tables and ARIA grids: their column headers tell the test designer what a
     // results table holds, e.g. the rows a document scan extracts.
     const tables = Array.from(document.querySelectorAll('table, [role="grid"], [role="table"]')).slice(0, 8).map((t) => {
-      const headers = Array.from(t.querySelectorAll('th, [role="columnheader"]'))
-        .map((h) => text(h).replace(/\s*\*\s*/g, ' ').trim()).filter((h) => h && h.length < 40);
+      const raw = Array.from(t.querySelectorAll('th, [role="columnheader"]')).map((h) => text(h)).filter((h) => h && h.length < 40);
+      const clean = (h: string) => h.replace(/\s*\*\s*/g, ' ').trim();
+      const headers = raw.map(clean);
+      // Columns marked "*" are mandatory, like starred field labels.
+      const required = Array.from(new Set(raw.filter((h) => h.includes('*')).map(clean)));
       let title = text(t.querySelector('caption'));
       let prev = t.previousElementSibling;
       for (let i = 0; i < 3 && prev && !title; i++, prev = prev.previousElementSibling) {
         const tx = text(prev);
         if (tx && tx.length < 60) title = tx;
       }
-      return { title: title || undefined, headers: Array.from(new Set(headers)).slice(0, 25) };
+      return { title: title || undefined, headers: Array.from(new Set(headers)).slice(0, 25), ...(required.length ? { required } : {}) };
     }).filter((t) => t.headers.length > 0);
 
     // Fields shown with a confidence indicator ("Confidence: 92%", "Confidence: N/A"):

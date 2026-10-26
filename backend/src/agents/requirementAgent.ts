@@ -20,7 +20,8 @@
  * The prompt is deliberately strict: if the source text is ambiguous,
  * the agent must mark assumptions instead of inventing facts.
  */
-import type { TestOpsState, ParsedRequirements, RuleSource } from './state.js';
+import { EXTRACTED_DATA_TYPES } from './state.js';
+import type { TestOpsState, ParsedRequirements, RuleSource, DocumentExtraction, ExtractedField, ExtractedDataType, RiskLevel } from './state.js';
 import { runClaudePrompt, parseJsonFromResponse } from './claude-runner.js';
 import { selectSkills, skillSystemPrompt } from './skills.js';
 import { mobileContextNote } from './mobile-context.js';
@@ -37,11 +38,16 @@ export async function requirementAgent(state: TestOpsState): Promise<TestOpsStat
     ? `\n\nNote: This requirements text was synthesized from a live crawl of the application. The following pages were observed during exploration: ${state.exploredApp.pages.map((p) => p.title || p.url).slice(0, 8).join(' | ')}. Detected features: ${state.exploredApp.detectedFeatures.join(', ')}.`
     : '';
 
+  // Screens the crawler identified as reading documents (exploreAgent.detectDocumentFeatures).
+  const docSignals = state.exploredApp?.documentFeatures?.length
+    ? `\n\nDOCUMENT FEATURES OBSERVED (fill documentExtraction from these; every listed field and table column is an extracted field):\n${JSON.stringify(state.exploredApp.documentFeatures, null, 2)}`
+    : '';
+
   const prompt = `You are a Senior QA Requirements Analyst with 15+ years of experience writing test plans for enterprise software. Read the requirements below and extract a structured analysis that a test designer can convert directly into IEEE-829-style test cases.
 
 REQUIREMENTS:
 ${state.requirements}
-${appInfo}${exploredHint}${mobileNote}
+${appInfo}${exploredHint}${docSignals}${mobileNote}
 
 Return ONLY valid JSON (no markdown, no commentary, no explanation) matching this exact schema:
 
@@ -85,6 +91,21 @@ Return ONLY valid JSON (no markdown, no commentary, no explanation) matching thi
   "businessRules": [
     { "id": "BR-01", "rule": "Order total = sum of line totals minus discount, never negative", "feature": "Checkout", "source": "stated" },
     { "id": "BR-02", "rule": "A coupon can be used once per customer", "feature": "Checkout", "source": "assumed" }
+  ],
+  "documentExtraction": [
+    {
+      "feature": "Timesheet Scanning",
+      "screen": "/scan",
+      "documentType": "Handwritten timesheet (PDF)",
+      "inputs": ["pdf", "multiple files"],
+      "trigger": "Scan",
+      "fields": [
+        { "id": "EXT-01", "name": "Timesheet Number", "group": "Header", "dataType": "code", "risk": "High", "required": true, "showsConfidence": true },
+        { "id": "EXT-02", "name": "Hours Worked", "group": "Hours table", "dataType": "duration", "risk": "High", "required": false, "showsConfidence": true }
+      ],
+      "variations": ["neat handwriting", "messy handwriting", "crossed-out values", "faint scan", "rotated page", "multi-row", "several documents in one upload"],
+      "ruleIds": []
+    }
   ]
 }
 
@@ -100,7 +121,11 @@ EXTRACTION RULES (read carefully):
 9. If the source text is sparse, INFER reasonable extensions based on the application domain — but mark inferences with " (inferred)" in the relevant field.
 10. NEVER return empty arrays for features / actors / flows — at minimum return one entry each based on what you can deduce.
 11. FIELD RULES — one entry per real input field, id FLD-01, FLD-02… Constraints must be concrete and testable ("max 50 characters", "digits only", "values: Yes | No", "pdf, png only"). Copy constraints observed on the page exactly. source: "observed" (seen on the page), "stated" (in the requirements text) or "assumed" (neither; keep these few).
-12. BUSINESS RULES — every calculation, condition, cross-field check, permission or status rule the source states or the page clearly enforces, id BR-01, BR-02… One rule per entry, testable as written, with its source as above.`;
+12. BUSINESS RULES — every calculation, condition, cross-field check, permission or status rule the source states or the page clearly enforces, id BR-01, BR-02… One rule per entry, testable as written, with its source as above.
+13. DOCUMENT EXTRACTION — only for features that read documents (upload a PDF or image, then OCR or AI extraction fills fields, often with a confidence score); otherwise an empty array. For each such feature:
+    • fields: EVERY extracted output field (header fields AND every column of result tables), id EXT-01, EXT-02… unique across features, with group, dataType (text | name | number | money | date | time | duration | code | list), required (the screen marks it mandatory), showsConfidence, and risk: record-linking IDs (ticket, order, project, account numbers), hours, money and quantities are High; dates and names Medium; free text Low.
+    • rules on extracted values go into businessRules ONLY when the requirements state them or the page enforces them; list their ids in ruleIds. Do not assume arithmetic between fields (totals, time differences) that nobody stated.
+    • variations: the document variation classes that apply to this document type (handwriting, notation, scan quality, structure).`;
 
   const response = await runClaudePrompt(prompt, {
     maxTokens: 14000,
@@ -134,9 +159,57 @@ EXTRACTION RULES (read carefully):
       feature: r.feature,
       source: sourceOf(r.source),
     })),
+    documentExtraction: normaliseDocumentExtraction(parsed.documentExtraction),
   };
 
   return { ...state, parsedRequirements };
+}
+
+/** A document feature as the model returns it, before normalisation. */
+type RawDocument = { feature?: unknown; screen?: unknown; documentType?: unknown; inputs?: unknown; trigger?: unknown; fields?: unknown; variations?: unknown; ruleIds?: unknown };
+type RawExtractedField = { id?: string; name?: unknown; group?: unknown; dataType?: unknown; risk?: unknown; required?: unknown; showsConfidence?: unknown };
+
+const RISKS: RiskLevel[] = ['High', 'Medium', 'Low'];
+const strings = (v: unknown): string[] => (Array.isArray(v) ? v.map((s) => String(s ?? '').trim()).filter(Boolean) : []);
+const optionalText = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+
+/**
+ * Well-formed document features only, every field typed and every EXT id unique
+ * across features. Values the model gets wrong fall back to safe defaults
+ * (unknown type → text; unknown risk → Medium).
+ */
+export function normaliseDocumentExtraction(input: unknown): DocumentExtraction[] {
+  if (!Array.isArray(input)) return [];
+  const docs = input.filter((d): d is RawDocument => !!d && typeof d === 'object' && typeof (d as RawDocument).feature === 'string');
+  const isField = (f: unknown): f is RawExtractedField =>
+    !!f && typeof f === 'object' && typeof (f as RawExtractedField).name === 'string' && !!String((f as RawExtractedField).name).trim();
+  const fieldsPerDoc = docs.map((d) => (Array.isArray(d.fields) ? d.fields.filter(isField) : []));
+  // EXT ids are unique across all features, so every field is numbered in one pass.
+  const numbered = withIds<RawExtractedField>(fieldsPerDoc.flat(), 'EXT', () => true);
+  let at = 0;
+  return docs.map((d, i) => {
+    const count = fieldsPerDoc[i].length;
+    const fields: ExtractedField[] = numbered.slice(at, at + count).map((f) => ({
+      id: f.id,
+      name: String(f.name).trim(),
+      group: optionalText(f.group),
+      dataType: EXTRACTED_DATA_TYPES.includes(f.dataType as ExtractedDataType) ? f.dataType as ExtractedDataType : 'text',
+      risk: RISKS.includes(f.risk as RiskLevel) ? f.risk as RiskLevel : 'Medium',
+      required: f.required === true,
+      showsConfidence: f.showsConfidence === true,
+    }));
+    at += count;
+    return {
+      feature: String(d.feature).trim(),
+      screen: optionalText(d.screen),
+      documentType: optionalText(d.documentType) || 'Document',
+      inputs: strings(d.inputs),
+      trigger: optionalText(d.trigger),
+      fields,
+      variations: strings(d.variations),
+      ruleIds: strings(d.ruleIds),
+    };
+  }).filter((d) => d.fields.length > 0);
 }
 
 /** A rule as the model returns it, before normalisation. */

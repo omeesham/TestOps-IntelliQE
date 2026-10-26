@@ -217,6 +217,43 @@ export interface ParsedRequirements {
   /** Coverage model: every field rule (FLD-xx) and business rule (BR-xx), with its source */
   fieldRules?: FieldRule[];
   businessRules?: BusinessRule[];
+  /** Features that read documents (upload, then extract fields), with every extracted field */
+  documentExtraction?: DocumentExtraction[];
+}
+
+export const EXTRACTED_DATA_TYPES = ['text', 'name', 'number', 'money', 'date', 'time', 'duration', 'code', 'list'] as const;
+export type ExtractedDataType = typeof EXTRACTED_DATA_TYPES[number];
+export type RiskLevel = 'High' | 'Medium' | 'Low';
+
+/** One field a document feature extracts (EXT-xx). */
+export interface ExtractedField {
+  id: string;
+  name: string;
+  /** Screen grouping, e.g. "Header" or a table name. */
+  group?: string;
+  dataType: ExtractedDataType;
+  /** High: record-linking IDs, hours, money, quantities; Medium: dates, names; Low: free text. */
+  risk: RiskLevel;
+  /** The screen marks the field mandatory: an unreadable value must leave it empty and be flagged. */
+  required: boolean;
+  showsConfidence: boolean;
+}
+
+/** A document-reading feature: what goes in, what comes out, which rules apply. */
+export interface DocumentExtraction {
+  feature: string;
+  screen?: string;
+  /** e.g. "Handwritten labor ticket (PDF)". */
+  documentType: string;
+  /** Accepted files and limits: "pdf", "multiple files", "max 10 MB"… */
+  inputs: string[];
+  /** The action that starts extraction, e.g. "Scan". */
+  trigger?: string;
+  fields: ExtractedField[];
+  /** Document variation classes that apply (handwriting, notation, scan quality, structure). */
+  variations: string[];
+  /** BR-xx ids of the stated rules on extracted values. */
+  ruleIds: string[];
 }
 
 /** A form field seen by the exploreAgent, with the constraints the page enforces. */
@@ -227,6 +264,13 @@ export interface ExploredField {
   label?: string;
   constraints?: string[];
   options?: string[];
+}
+
+/** A table or grid on an explored page: its title, column headers and mandatory ("*") columns. */
+export interface PageTable {
+  title?: string;
+  headers: string[];
+  required?: string[];
 }
 
 /**
@@ -243,7 +287,7 @@ export interface DocumentFeatureSignal {
   /** Field labels shown with a confidence indicator. */
   confidenceFields: string[];
   /** Result tables: title and column headers. */
-  tables: { title?: string; headers: string[] }[];
+  tables: PageTable[];
   /** Read-only or disabled fields: likely extracted output. */
   outputFields: string[];
 }
@@ -263,7 +307,7 @@ export interface ExploredApp {
     buttons: string[];
     links: { text: string; href: string }[];
     navItems: string[];
-    tables?: { title?: string; headers: string[] }[];
+    tables?: PageTable[];
     confidenceLabels?: string[];
   }[];
   detectedFeatures: string[];     // Heuristic feature names ("Login Page", "Search", "Cart")

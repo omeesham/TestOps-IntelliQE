@@ -8,6 +8,7 @@
  *   forms-validation   picked when the app has data-entry fields
  *   file-upload        picked when the app has a file input
  *   login-auth         picked when the app has a sign-in (login screen or sign-in text)
+ *   document-verification  picked when the app reads documents (scan/OCR screen, or such requirements)
  *
  * Only the skills that match what the application has are loaded, so prompts
  * stay small.
@@ -21,7 +22,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // src/agents and dist/agents both resolve to backend/config/skills.
 const SKILLS_DIR = process.env.SKILLS_DIR || path.resolve(__dirname, '..', '..', 'config', 'skills');
 
-export type SkillName = 'test-design' | 'forms-validation' | 'file-upload' | 'login-auth';
+export type SkillName = 'test-design' | 'forms-validation' | 'file-upload' | 'login-auth' | 'document-verification';
 
 const cache = new Map<SkillName, string>();
 
@@ -53,6 +54,13 @@ export function selectSkills(state: Pick<TestOpsState, 'exploredApp' | 'requirem
   const hasEntryFields = fields.length > 0 || /\b(required|max(imum)? \d+|min(imum)? \d+|characters|digits|format)\b/.test(text);
   if (hasEntryFields) picked.push('forms-validation');
   if (/type=file|\bfile\b.*\b(upload|attach)|\bupload\b/.test(text)) picked.push('file-upload');
+  // Explored: decide from the screens Explore recognised. Pasted requirements:
+  // extraction wording together with a document.
+  const readsDocuments = state.exploredApp
+    ? (state.exploredApp.documentFeatures?.length ?? 0) > 0
+    : /\b(ocr|extract(s|ed|ion)?|scann(ed|ing)|confidence score)\b/.test(text)
+      && /\b(pdf|document|ticket|invoice|receipt|timesheet|form|image)s?\b/.test(text);
+  if (readsDocuments) picked.push('document-verification');
   // A password field alone (e.g. on a registration form) is not a sign-in. When
   // the app was explored, decide from the pages: the synthesized requirement
   // text may mention sign-in only to say it is not needed.
