@@ -61,6 +61,15 @@ test('a struck-out row may be left off the screen; extra rows count as invented'
   ] }, ['Worker Name', 'Date']);
   assert.ok(dropped.every((r) => r.outcome === 'correct'));
 
+  // Struck row left off and a totals row added: same row count, rows must still line up.
+  const withTotal = compareDocument(key, { rows: [
+    { 'Worker Name': 'Victor Dalton', Date: '01/12/2026' },
+    { 'Worker Name': 'Victor Jensen', Date: '' },
+    { 'Worker Name': 'Carlos Moreno', Date: '01/14/2026' },
+    { 'Worker Name': 'Total', Date: '' },
+  ] }, ['Worker Name', 'Date']);
+  assert.deepEqual(withTotal.filter((r) => r.outcome !== 'correct').map((r) => [r.field, r.row, r.outcome]), [['Worker Name', 4, 'invented']]);
+
   const extra = compareDocument({ rows: [{ expected: { 'Worker Name': 'Ana Ortiz' } }] }, { rows: [{ 'Worker Name': 'Ana Ortiz' }, { 'Worker Name': 'Total' }] });
   assert.deepEqual(extra[1], { field: 'Worker Name', row: 2, expected: '', actual: 'Total', outcome: 'invented', note: 'row not on the document' });
 });

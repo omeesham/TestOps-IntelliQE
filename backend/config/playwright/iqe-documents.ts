@@ -114,20 +114,20 @@ export function compareDocument(key: KeyEntry, readings: Readings, only: string[
   for (const [field, expected] of Object.entries(key.fields || {})) {
     if (wanted(field)) out.push(result(field, expected, find(readings.fields, field)));
   }
-  const keyRows = key.rows || [];
   const screen = readings.rows || [];
-  // A row left empty on purpose (e.g. struck out) may be left off the screen rather than shown empty.
-  const expectedRows = screen.length < keyRows.length
-    ? keyRows.filter((r) => Object.values(r.expected).some((v) => norm(v)))
-    : keyRows;
-  expectedRows.forEach((r, i) => {
+  const blank = (row: Record<string, Reading>): boolean => !Object.values(row).some((v) => norm(valueOf(v)));
+  let s = 0; // next screen row
+  for (const r of key.rows || []) {
+    // A row left empty on purpose (e.g. struck out) may be shown empty or left off the screen.
+    if (!Object.values(r.expected).some((v) => norm(v)) && !(screen[s] && blank(screen[s]))) continue;
     for (const [field, expected] of Object.entries(r.expected)) {
-      if (wanted(field)) out.push(result(field, expected, find(screen[i], field), i + 1, r.emptyBecause?.[field]));
+      if (wanted(field)) out.push(result(field, expected, find(screen[s], field), s + 1, r.emptyBecause?.[field]));
     }
-  });
-  screen.slice(expectedRows.length).forEach((extra, j) => {
+    s++;
+  }
+  screen.slice(s).forEach((extra, j) => {
     for (const [field, reading] of Object.entries(extra)) {
-      if (wanted(field) && norm(valueOf(reading))) out.push(result(field, '', reading, expectedRows.length + j + 1, 'row not on the document'));
+      if (wanted(field) && norm(valueOf(reading))) out.push(result(field, '', reading, s + j + 1, 'row not on the document'));
     }
   });
   return out;
