@@ -20,7 +20,7 @@
  *  • Returns an ExploredApp object and ALSO a markdown-style requirements
  *    string that requirementAgent treats as if it were a functional spec.
  */
-import type { TestOpsState, ExploredApp, ExploredField, AppContext } from './state.js';
+import type { TestOpsState, ExploredApp, ExploredField, AppContext, DocumentFeatureSignal } from './state.js';
 import { runClaudePrompt, parseJsonFromResponse, isClaudeCliAuthenticated } from './claude-runner.js';
 import { applyWriteGuard, guardedContextOptions } from '../services/uat-safety.service.js';
 
@@ -53,6 +53,8 @@ interface PageSnapshot {
   buttons: string[];
   links: { text: string; href: string }[];
   navItems: string[];
+  tables?: { title?: string; headers: string[] }[];
+  confidenceLabels?: string[];
 }
 
 /**
@@ -92,6 +94,7 @@ export async function exploreAgent(state: TestOpsState): Promise<TestOpsState> {
     baseUrl: targetUrl,
     pages: snapshots,
     detectedFeatures: deriveFeatures(snapshots),
+    documentFeatures: detectDocumentFeatures(snapshots),
     authDetected,
     notes,
   };
@@ -229,10 +232,19 @@ async function snapshotPage(page: import('@playwright/test').Page): Promise<Page
         const lbl = document.querySelector(`label[for="${CSS.escape(input.id)}"]`);
         if (lbl) label = text(lbl);
       }
-      if (!label) label = text(input.closest('label')) || input.getAttribute('aria-label') || input.placeholder || '';
+      if (!label) label = text(input.closest('label')) || input.getAttribute('aria-label') || '';
+      if (!label) {
+        // A label beside the field, not linked to it: the only label in its container.
+        const near = input.parentElement?.querySelectorAll('label');
+        if (near?.length === 1) label = text(near[0]);
+      }
+      if (!label) label = input.placeholder || '';
+      // "*" in a label is the usual mark of a mandatory field, often with no `required` attribute.
+      const starred = /\*/.test(label);
+      label = label.replace(/\s*\*\s*/g, ' ').trim();
       const name = input.name || input.id || label;
       const type = el.tagName === 'SELECT' ? 'select' : el.tagName === 'TEXTAREA' ? 'textarea' : (input.type || 'text');
-      const required = input.required || input.getAttribute('aria-required') === 'true';
+      const required = input.required || input.getAttribute('aria-required') === 'true' || starred;
       const constraints: string[] = [];
       const attr = (a: string) => input.getAttribute(a);
       if (attr('minlength')) constraints.push(`min length ${attr('minlength')}`);
@@ -286,7 +298,45 @@ async function snapshotPage(page: import('@playwright/test').Page): Promise<Page
       .filter(Boolean)
       .slice(0, 30);
 
-    return { headings, forms, buttons, links, navItems };
+    // Tables and ARIA grids: their column headers tell the test designer what a
+    // results table holds, e.g. the rows a document scan extracts.
+    const tables = Array.from(document.querySelectorAll('table, [role="grid"], [role="table"]')).slice(0, 8).map((t) => {
+      const headers = Array.from(t.querySelectorAll('th, [role="columnheader"]'))
+        .map((h) => text(h).replace(/\s*\*\s*/g, ' ').trim()).filter((h) => h && h.length < 40);
+      let title = text(t.querySelector('caption'));
+      let prev = t.previousElementSibling;
+      for (let i = 0; i < 3 && prev && !title; i++, prev = prev.previousElementSibling) {
+        const tx = text(prev);
+        if (tx && tx.length < 60) title = tx;
+      }
+      return { title: title || undefined, headers: Array.from(new Set(headers)).slice(0, 25) };
+    }).filter((t) => t.headers.length > 0);
+
+    // Fields shown with a confidence indicator ("Confidence: 92%", "Confidence: N/A"):
+    // the output fields of a document scan, visible before anything is uploaded.
+    const CONF = /^confidence\b/i;
+    const confidenceLabels: string[] = [];
+    const leaves = Array.from(document.querySelectorAll('body *')).filter((el) => el.children.length === 0);
+    for (const el of leaves) {
+      const tx = text(el);
+      if (!CONF.test(tx) || tx.length > 40) continue;
+      let label = '';
+      let box: Element | null = el.parentElement;
+      for (let i = 0; i < 3 && box && !label; i++, box = box.parentElement) {
+        const lbl = box.querySelector('label');
+        if (lbl && !CONF.test(text(lbl))) label = text(lbl);
+        else {
+          const field = box.querySelector('input, select, textarea');
+          if (field) label = field.getAttribute('aria-label') || (field as HTMLInputElement).placeholder || field.getAttribute('name') || '';
+        }
+      }
+      if (!label) label = text(el.parentElement).replace(tx, '').trim();
+      label = label.replace(/\s*\*\s*/g, ' ').trim();
+      if (label && label.length < 60 && !confidenceLabels.includes(label)) confidenceLabels.push(label);
+      if (confidenceLabels.length >= 60) break;
+    }
+
+    return { headings, forms, buttons, links, navItems, tables, confidenceLabels };
   });
 
   return { url, title, ...data };
@@ -355,11 +405,49 @@ function deriveFeatures(snaps: PageSnapshot[]): string[] {
     if (/dashboard|home/i.test(s.title)) features.add('Dashboard');
     if (/profile|account|settings/i.test(s.title)) features.add('User Profile');
     if (/admin/i.test(s.url)) features.add('Admin');
+    if (detectDocumentFeatures([s]).length) features.add('Document Extraction');
     if (s.forms.length > 0 && !features.has('Authentication')) features.add('Form Submission');
     // Use page title as a feature when nothing else fits
     if (s.title && features.size < 3) features.add(s.title.split('|')[0].split('-')[0].trim());
   }
   return Array.from(features).filter(Boolean);
+}
+
+/** Buttons that start a document read: Scan, Extract, Process, OCR… */
+const TRIGGER_RE = /\b(scan|extract|process|ocr|read(?!-only)|recogni[sz]e|digiti[sz]e|analy[sz]e|parse|import)\b/i;
+
+/**
+ * Screens that read documents: a file input, plus a trigger button or visible
+ * outputs (fields with a confidence indicator, a results table, or several
+ * read-only fields). A plain upload (a profile photo) is not one.
+ */
+export function detectDocumentFeatures(snaps: PageSnapshot[]): DocumentFeatureSignal[] {
+  const out: DocumentFeatureSignal[] = [];
+  for (const s of snaps) {
+    const fields = s.forms.flatMap((f) => f.fields);
+    const files = fields.filter((f) => f.type === 'file');
+    if (!files.length) continue;
+    const triggers = s.buttons.filter((b) => TRIGGER_RE.test(b));
+    const confidenceFields = s.confidenceLabels || [];
+    const tables = s.tables || [];
+    const outputFields = [...new Set(fields
+      .filter((f) => f.type !== 'file' && (f.constraints || []).some((c) => c === 'read-only' || c === 'disabled'))
+      .map((f) => f.label || f.name)
+      .filter(Boolean))].slice(0, 40);
+    // A table alone is common (any list page); it counts only beside a read trigger.
+    const hasOutput = confidenceFields.length > 0 || outputFields.length >= 3;
+    if (!triggers.length && !hasOutput) continue;
+    out.push({
+      url: s.url,
+      title: s.title || s.headings[0] || s.url,
+      upload: Array.from(new Set(files.flatMap((f) => f.constraints || []))),
+      triggers,
+      confidenceFields,
+      tables,
+      outputFields,
+    });
+  }
+  return out;
 }
 
 /* ───────────────────────────────────────────────────────────────────
@@ -385,7 +473,10 @@ async function synthesizeRequirements(app: ExploredApp): Promise<string> {
         })),
         buttons: p.buttons.slice(0, 15),
         navItems: p.navItems.slice(0, 12),
+        ...(p.tables?.length ? { tables: p.tables } : {}),
+        ...(p.confidenceLabels?.length ? { fieldsWithConfidence: p.confidenceLabels } : {}),
       })),
+      ...(app.documentFeatures?.length ? { documentFeatures: app.documentFeatures } : {}),
       authDetected: app.authDetected,
       notes: app.notes,
     },
@@ -407,6 +498,7 @@ Write the specification in markdown, with these sections:
 6. **Data Validation Rules** — one line per form field: its label, then the OBSERVED constraints copied exactly from the inventory (required, min/max length, min/max value, pattern, accepted file types, options). Add likely-but-unobserved rules only when the field clearly implies them, marked "(assumed)".
 7. **Edge Cases & Error Scenarios** — boundary conditions, failure modes, security concerns
 8. **Acceptance Criteria** — 3-5 Given/When/Then statements per major feature
+9. **Document Extraction** — ONLY when the inventory lists documentFeatures. For each: the document it reads (infer the type from page title, headings and field names, e.g. a labor ticket), accepted files and limits, the trigger button, EVERY output field (header fields and every table column, by group) with its likely data type, whether it is required, and whether a confidence score is shown. Mark rules not observed on the page "(assumed)".
 
 Rules:
 - ONLY describe features supported by evidence in the UI inventory. Do not invent functionality.

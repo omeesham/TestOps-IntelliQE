@@ -230,6 +230,25 @@ export interface ExploredField {
 }
 
 /**
+ * A screen that reads documents (upload, then extract fields), found from the
+ * page as rendered: nothing is uploaded while exploring.
+ */
+export interface DocumentFeatureSignal {
+  url: string;
+  title: string;
+  /** File input constraints, e.g. ["accepts .pdf", "multiple"]. */
+  upload: string[];
+  /** Buttons that look like the extraction trigger (Scan, Extract…). */
+  triggers: string[];
+  /** Field labels shown with a confidence indicator. */
+  confidenceFields: string[];
+  /** Result tables: title and column headers. */
+  tables: { title?: string; headers: string[] }[];
+  /** Read-only or disabled fields: likely extracted output. */
+  outputFields: string[];
+}
+
+/**
  * Output of the exploreAgent — a structured snapshot of the live AUT.
  * The requirementAgent later turns this into a ParsedRequirements.
  */
@@ -244,8 +263,11 @@ export interface ExploredApp {
     buttons: string[];
     links: { text: string; href: string }[];
     navItems: string[];
+    tables?: { title?: string; headers: string[] }[];
+    confidenceLabels?: string[];
   }[];
   detectedFeatures: string[];     // Heuristic feature names ("Login Page", "Search", "Cart")
+  documentFeatures?: DocumentFeatureSignal[];
   authDetected: boolean;
   notes: string[];                // Anything unusual the crawler observed
 }
