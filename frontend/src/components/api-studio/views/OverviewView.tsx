@@ -12,6 +12,7 @@ import { Activity, AlertTriangle, ArrowRight, Clock, RefreshCw, Layers, Upload, 
 import { getApiOverview } from '@/services/api';
 import { CARD, CARD_HOVER, THEAD, BRAND_CHIP, MUTED_CHIP, relativeTime, formatDuration, IMPORT_METHOD_LABELS, methodColor } from '../format';
 import { StatusPill, PassRing } from '../primitives';
+import GettingStartedGuide from './GettingStartedGuide';
 import type { ApiOverview, NavView } from '../types';
 import type { Catalog } from '../hooks/useCatalog';
 
@@ -119,6 +120,10 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
             </button>
           </div>
         </div>
+
+        {/* Beginner roadmap — plain-language path from "I have an API" to a report.
+            Collapses to a one-line progress strip once the user knows the flow. */}
+        <GettingStartedGuide catalog={catalog} kpis={k} onNavigate={onNavigate} />
 
         {error && <div className="flex items-center gap-2 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg text-[12px] text-red-700"><AlertTriangle className="w-4 h-4" />{error}<button type="button" onClick={() => load(true)} className="ml-auto underline">Retry</button></div>}
 

@@ -1,0 +1,64 @@
+// Paste this whole file into the Bruno Collection method (Text tab).
+// It bundles the environment + collection.bru + 3 requests, all against the live httpbin.org.
+
+vars {
+  baseUrl: https://httpbin.org
+  token: demo-token-123
+}
+
+auth {
+  mode: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Accept: application/json
+}
+
+meta {
+  name: Get with query
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/get
+  auth: inherit
+}
+
+params:query {
+  q: hello
+}
+
+meta {
+  name: Post JSON
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/post
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "name": "Jane",
+    "role": "qa"
+  }
+}
+
+meta {
+  name: Bearer check
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/bearer
+  auth: inherit
+}

@@ -1,0 +1,29 @@
+<section id="build1" data-section="How to build it, and the Definition of Done mapping" data-transition="fade" style="background:#FBFBF8;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:36px">
+<p style="font-family:'Space Grotesk', Arial, sans-serif;font-size:24px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#6D28D9">Steps 1–2 · Make the agent endpoint-aware</p>
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:56px;font-weight:600;line-height:1.1">One requirement object per endpoint</h2>
+<div style="display:flex;gap:40px;align-items:stretch">
+<div style="flex:1;background:#14213D;border-radius:14px;padding:36px 40px;display:flex;flex-direction:column;gap:6px">
+<p style="font-family:'JetBrains Mono', monospace;font-size:24px;color:#8EA0BD">// state.ts — new type</p>
+<p style="font-family:'JetBrains Mono', monospace;font-size:26px;color:#E7ECF4">ApiEndpointRequirement {</p>
+<p style="font-family:'JetBrains Mono', monospace;font-size:26px;color:#BFD8D5">&#160;&#160;endpointRef,</p>
+<p style="font-family:'JetBrains Mono', monospace;font-size:26px;color:#BFD8D5">&#160;&#160;purpose,</p>
+<p style="font-family:'JetBrains Mono', monospace;font-size:26px;color:#BFD8D5">&#160;&#160;inputs,</p>
+<p style="font-family:'JetBrains Mono', monospace;font-size:26px;color:#BFD8D5">&#160;&#160;expectedResponse,</p>
+<p style="font-family:'JetBrains Mono', monospace;font-size:26px;color:#BFD8D5">&#160;&#160;errorCases,</p>
+<p style="font-family:'JetBrains Mono', monospace;font-size:26px;color:#BBA6F0">&#160;&#160;source: &#123; type, ref, section &#125;</p>
+<p style="font-family:'JetBrains Mono', monospace;font-size:26px;color:#E7ECF4">&#125;</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:18px">
+<div style="background:#FFFFFF;border:1px solid #E3E6E4;border-radius:14px;padding:26px 30px">
+<p style="font-size:25px;line-height:1.35;color:#14213D"><b>Branch the agent:</b> when the state carries an imported catalogue, feed endpoints + Jira/ADO story into the LLM.</p>
+</div>
+<div style="background:#FFFFFF;border:1px solid #E3E6E4;border-radius:14px;padding:26px 30px">
+<p style="font-size:25px;line-height:1.35;color:#14213D"><b>Ask for one entry per endpoint</b> — keep the “ground in evidence, don’t invent” rules already in the prompt.</p>
+</div>
+<div style="background:#FFFFFF;border:1px solid #E3E6E4;border-radius:14px;padding:26px 30px">
+<p style="font-size:25px;line-height:1.35;color:#14213D"><b>source field</b> is what satisfies traceability (item 2) — every entry cites where it came from.</p>
+</div>
+</div>
+</div>
+<aside>Reuse claude-runner and the existing extraction discipline. The source object — type (jira/ado/brd/frd), ref, section — is the backbone of items 1 and 2. Don't fork the whole file; add a conditional branch.</aside>
+</section>

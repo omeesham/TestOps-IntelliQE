@@ -1,0 +1,18 @@
+meta {
+  name: Post JSON
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/post
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "name": "Jane",
+    "role": "qa"
+  }
+}

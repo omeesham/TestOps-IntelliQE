@@ -6,10 +6,11 @@
  * analysis, scenario design, execution, healing, reporting) never has to know
  * where an endpoint came from.
  *
- * Twelve intake methods are supported:
+ * Thirteen intake methods are supported:
  *
  *   openapi     OpenAPI 3.x / Swagger 2.0 — JSON or YAML, file, URL or paste
- *   postman     Postman collection v2.0 / v2.1 (+ Bruno `.bru`, HAR recordings)
+ *   postman     Postman collection v2.0 / v2.1 (+ HAR recordings)
+ *   bruno       Bruno `.bru` — one request or a whole collection folder
  *   endpoint    A bare API URL — probed live, with OpenAPI auto-discovery on the origin
  *   curl        One or many cURL commands
  *   docs-url    An API documentation web page — fetched, stripped, understood by the LLM
@@ -39,7 +40,7 @@ import { cleanAuthValue, isPlaceholderSecret } from '../utils/api-auth.js';
    ──────────────────────────────────────────────────────────────── */
 
 export type ImportMethod =
-  | 'openapi' | 'postman' | 'endpoint' | 'curl' | 'docs-url' | 'connector'
+  | 'openapi' | 'postman' | 'bruno' | 'endpoint' | 'curl' | 'docs-url' | 'connector'
   | 'sdk' | 'webhook' | 'graphql' | 'mcp' | 'middleware' | 'manual' | 'file';
 
 export type ApiStyle = 'rest' | 'graphql' | 'soap' | 'jsonrpc' | 'webhook' | 'mcp';
@@ -732,42 +733,176 @@ export function parseHar(doc: any, sourceName = 'HAR recording'): ImportResult {
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Bruno `.bru`
+   Bruno `.bru` — one request or a whole collection
+   ──────────────────────────────────────────────────────────────────
+   A Bruno collection is a folder of `.bru` files: one per request, plus an
+   optional `collection.bru` (folder-level auth/headers/vars), `environments/*`
+   files (`{{variable}}` values) and a `bruno.json` manifest. Pasting the files
+   together — or dropping them as a multi-file upload — brings the whole suite
+   in. Collection-level auth/headers are inherited; environment `vars` resolve
+   the `{{placeholders}}` in each request.
    ──────────────────────────────────────────────────────────────── */
 
-export function parseBruno(text: string, sourceName = 'Bruno request'): ImportResult {
+const BRUNO_METHODS = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'connect', 'trace'];
+
+/** Parse one `.bru` document into its named blocks ("meta", "get", "headers", …). */
+function brunoBlocks(text: string): Record<string, string> {
   const blocks: Record<string, string> = {};
-  const re = /^([a-z:]+)\s*\{\s*\n([\s\S]*?)\n\}/gm;
+  const re = /^([a-z][a-z0-9:_-]*)[ \t]*\{[ \t]*\r?\n([\s\S]*?)\r?\n\}/gm;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) blocks[m[1]!] = m[2]!;
-  const kv = (block?: string): Record<string, string> => {
-    const out: Record<string, string> = {};
-    for (const line of (block || '').split('\n')) {
-      const mm = /^\s*~?([^:]+?)\s*:\s*(.*)$/.exec(line);
-      if (mm) out[mm[1]!.trim()] = mm[2]!.trim();
+  while ((m = re.exec(text)) !== null) {
+    if (blocks[m[1]!] === undefined) blocks[m[1]!] = m[2]!; // first occurrence wins within a doc
+  }
+  return blocks;
+}
+
+/** `key: value` lines inside a block → an object. Disabled (`~key`) lines are skipped. */
+function brunoKv(block?: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of (block || '').split('\n')) {
+    if (/^\s*~/.test(line)) continue;
+    const mm = /^\s*([^:]+?)\s*:\s*(.*)$/.exec(line);
+    if (mm) out[mm[1]!.trim()] = mm[2]!.trim();
+  }
+  return out;
+}
+
+/** Split concatenated `.bru` files into per-document chunks (each request begins `meta {`). */
+function splitBrunoDocs(text: string): string[] {
+  return text.split(/(?=^meta[ \t]*\{)/m).map((p) => p.trim()).filter(Boolean);
+}
+
+/** Pull `{{variable}}` values out of any vars/environment blocks in a document. */
+function brunoVars(blocks: Record<string, string>): Record<string, string> {
+  const vars: Record<string, string> = {};
+  for (const [name, body] of Object.entries(blocks)) {
+    if (name === 'vars' || (name.startsWith('vars:') && name !== 'vars:post-response')) {
+      for (const [k, v] of Object.entries(brunoKv(body))) if (vars[k] === undefined) vars[k] = v;
     }
-    return out;
+  }
+  return vars;
+}
+
+/** Request- or collection-level auth block → our auth shape (null when none declared). */
+function brunoAuth(blocks: Record<string, string>): { type: ParsedApiSpec['auth']['type']; value?: string; headerName?: string } | null {
+  if (blocks['auth:bearer']) return { type: 'bearer', value: brunoKv(blocks['auth:bearer']).token };
+  if (blocks['auth:basic']) { const b = brunoKv(blocks['auth:basic']); return { type: 'basic', value: `${b.username || ''}:${b.password || ''}` }; }
+  if (blocks['auth:apikey']) { const a = brunoKv(blocks['auth:apikey']); return { type: 'apikey', value: a.value, headerName: a.key || 'X-API-Key' }; }
+  return null;
+}
+
+/**
+ * Parse a Bruno request, a `bruno.json` manifest, or a whole concatenated
+ * collection (many `.bru` files + `collection.bru` + environment files).
+ */
+export function parseBrunoCollection(text: string, opts: { variables?: Record<string, string>; sourceName?: string } = {}): ImportResult {
+  const sourceName = opts.sourceName || 'Bruno collection';
+  const warnings: string[] = [];
+
+  // A `bruno.json` collection manifest carries the collection's name but no requests.
+  const trimmed = text.trim();
+  if (trimmed.startsWith('{')) {
+    try {
+      const j = JSON.parse(trimmed);
+      if (isObj(j) && (j.version || j.type === 'collection') && !j.openapi && !j.swagger && !j.info && !j.item) {
+        const nm = String(j.name || '');
+        return { endpoints: [], parser: 'bruno', format: 'Bruno collection', warnings: [`Read the Bruno collection manifest${nm ? ` "${nm}"` : ''}. Add the request .bru files (or drop the whole folder) to import endpoints.`] };
+      }
+    } catch { /* not a bruno.json — fall through to .bru parsing */ }
+  }
+
+  const docs = splitBrunoDocs(text);
+  // Pass 1 — gather variables (from every doc) and collection-level defaults
+  // (docs that carry no request block: collection.bru / environment files).
+  const vars: Record<string, string> = { ...(opts.variables || {}) };
+  let collAuth: ReturnType<typeof brunoAuth> = null;
+  const collHeaders: { key: string; value: string }[] = [];
+  const reqDocs: Record<string, string>[] = [];
+  for (const doc of docs) {
+    const blocks = brunoBlocks(doc);
+    for (const [k, v] of Object.entries(brunoVars(blocks))) if (vars[k] === undefined) vars[k] = v;
+    if (Object.keys(blocks).some((k) => BRUNO_METHODS.includes(k))) { reqDocs.push(blocks); continue; }
+    if (!collAuth) collAuth = brunoAuth(blocks);
+    for (const [k, v] of Object.entries(brunoKv(blocks.headers))) collHeaders.push({ key: k, value: v });
+  }
+
+  // Pass 2 — build an endpoint per request document.
+  const endpoints: ImportedEndpoint[] = [];
+  const source: ImportedEndpoint['source'] = { method: 'bruno', name: sourceName };
+  let unresolved = 0;
+  for (const blocks of reqDocs) {
+    if (endpoints.length >= MAX_BULK_ENDPOINTS) break;
+    const methodKey = Object.keys(blocks).find((k) => BRUNO_METHODS.includes(k))!;
+    const req = brunoKv(blocks[methodKey]);
+    const meta = brunoKv(blocks.meta);
+
+    const headers = collHeaders.map((h) => ({ key: h.key, value: fillVars(h.value, vars) }));
+    for (const [k, v] of Object.entries(brunoKv(blocks.headers))) headers.push({ key: k, value: fillVars(v, vars) });
+
+    // Query params (`params:query`, or the legacy `query` block).
+    const queryParams: NonNullable<ImportedEndpoint['queryParams']> = [];
+    const query: string[] = [];
+    for (const [k, v] of Object.entries(brunoKv(blocks['params:query'] ?? blocks.query))) {
+      const val = fillVars(v, vars);
+      queryParams.push({ name: k, example: val, required: false });
+      query.push(`${encodeURIComponent(k)}=${encodeURIComponent(val)}`);
+    }
+    // Path params (`params:path`) → `:name` substitution values.
+    const pathVals: Record<string, string> = {};
+    for (const [k, v] of Object.entries(brunoKv(blocks['params:path']))) pathVals[k] = fillVars(v, vars);
+
+    // Auth: request-level wins, else the collection's.
+    const a = brunoAuth(blocks) || collAuth || { type: 'none' as const };
+    const auth = a.value !== undefined ? { ...a, value: fillVars(a.value, vars) } : a;
+
+    // Body (`body:json`, `body:text`, `body:xml`, `body:graphql`, …) — Bruno indents it two spaces.
+    const bodyKey = Object.keys(blocks).find((k) => k === 'body' || k.startsWith('body:'));
+    let body: string | undefined;
+    if (bodyKey) {
+      body = blocks[bodyKey]!.split('\n').map((l) => l.replace(/^ {2}/, '')).join('\n').trim();
+      if (body) body = fillVars(body, vars);
+    }
+
+    // URL — resolve vars, substitute :path params, attach query when the URL carries none.
+    let url = fillVars(String(req.url || ''), vars);
+    url = url.replace(/:([A-Za-z_][A-Za-z0-9_]*)/g, (_m, k) => encodeURIComponent(pathVals[k] ?? exampleForParam(k)));
+    const hasInlineQuery = url.includes('?');
+    if (/\{\{/.test(url)) {
+      unresolved++;
+      url = url.replace(/^\{\{[^}]+\}\}/, PLACEHOLDER_HOST).replace(/\{\{[^}]+\}\}/g, 'example');
+    }
+    if (query.length && !hasInlineQuery) url += `?${query.join('&')}`;
+    if (!isAbsolute(url)) url = joinUrl(PLACEHOLDER_HOST, url);
+
+    const isGraphql = bodyKey === 'body:graphql' || /graphql/i.test(url);
+    const ep = finalizeEndpoint({
+      title: `${methodKey.toUpperCase()} ${meta.name || url}`.slice(0, 160),
+      method: methodKey.toUpperCase(),
+      url,
+      headers,
+      auth: auth as any,
+      body,
+      queryParams: queryParams.length ? queryParams : undefined,
+      style: isGraphql ? 'graphql' : 'rest',
+    }, source);
+    if (ep) endpoints.push(ep);
+  }
+
+  if (!endpoints.length) warnings.push('No Bruno request (a get/post/… block) was found. Paste the request .bru file(s), or drop the whole collection folder.');
+  if (unresolved) warnings.push(`${unresolved} request${unresolved === 1 ? '' : 's'} used {{variables}} with no value — placeholders were substituted. Add the collection's environment file, or define the variables in an Environment, before running.`);
+  const many = endpoints.length > 1 || reqDocs.length > 1;
+  return {
+    endpoints: dedupeEndpoints(endpoints),
+    parser: 'bruno',
+    format: many ? 'Bruno collection' : 'Bruno',
+    warnings,
+    notice: endpoints.length ? `${endpoints.length} request${endpoints.length === 1 ? '' : 's'} read from the Bruno ${many ? 'collection' : 'file'}.` : undefined,
   };
-  const methodKey = Object.keys(blocks).find((k) => ['get', 'post', 'put', 'patch', 'delete', 'head', 'options'].includes(k));
-  if (!methodKey) return { endpoints: [], parser: 'bruno', format: 'Bruno', warnings: ['No request block (get/post/…) found in the .bru file.'] };
-  const reqBlock = kv(blocks[methodKey]);
-  const meta = kv(blocks.meta);
-  const headers = Object.entries(kv(blocks.headers)).map(([key, value]) => ({ key, value }));
-  let auth: any = { type: 'none' };
-  if (blocks['auth:bearer']) auth = { type: 'bearer', value: kv(blocks['auth:bearer']).token };
-  else if (blocks['auth:basic']) { const b = kv(blocks['auth:basic']); auth = { type: 'basic', value: `${b.username || ''}:${b.password || ''}` }; }
-  else if (blocks['auth:apikey']) { const a = kv(blocks['auth:apikey']); auth = { type: 'apikey', value: a.value, headerName: a.key }; }
-  const bodyKey = Object.keys(blocks).find((k) => k.startsWith('body'));
-  const body = bodyKey ? blocks[bodyKey]!.split('\n').map((l) => l.replace(/^ {2}/, '')).join('\n').trim() : undefined;
-  let url = fillVars(String(reqBlock.url || ''), {});
-  if (/\{\{/.test(url)) url = url.replace(/^\{\{[^}]+\}\}/, PLACEHOLDER_HOST);
-  if (!isAbsolute(url)) url = joinUrl(PLACEHOLDER_HOST, url);
-  const ep = finalizeEndpoint({
-    title: `${methodKey.toUpperCase()} ${meta.name || url}`,
-    method: methodKey.toUpperCase(),
-    url, headers, auth, body,
-  }, { method: 'postman', name: sourceName });
-  return { endpoints: ep ? [ep] : [], parser: 'bruno', format: 'Bruno', warnings: [] };
+}
+
+/** Back-compat single-entry wrapper; delegates to the collection parser. */
+export function parseBruno(text: string, sourceName = 'Bruno request'): ImportResult {
+  return parseBrunoCollection(text, { sourceName });
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -1340,7 +1475,7 @@ export async function importFromText(text: string, opts: TextImportOptions = {})
   } else if (sniffed === 'curl' || hint === 'curl') {
     result = parseCurlCommands(text, name);
   } else if (sniffed === 'bruno' || hint === 'bruno') {
-    result = parseBruno(text, name);
+    result = parseBrunoCollection(text, { variables: opts.variables, sourceName: name });
   }
 
   if (result && result.endpoints.length) {

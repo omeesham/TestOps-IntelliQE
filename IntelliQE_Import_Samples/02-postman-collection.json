@@ -1,0 +1,50 @@
+{
+  "info": {
+    "name": "JSONPlaceholder (live)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "https://jsonplaceholder.typicode.com" }
+  ],
+  "item": [
+    {
+      "name": "Posts",
+      "item": [
+        {
+          "name": "Get post",
+          "request": { "method": "GET", "url": "{{baseUrl}}/posts/1" },
+          "response": [{ "code": 200, "body": "{ \"id\": 1 }" }]
+        },
+        {
+          "name": "Create post",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"title\": \"hello\",\n  \"body\": \"from IntelliQE\",\n  \"userId\": 1\n}" },
+            "url": "{{baseUrl}}/posts"
+          },
+          "response": [{ "code": 201 }]
+        }
+      ]
+    },
+    {
+      "name": "Comments",
+      "item": [
+        {
+          "name": "List comments for a post",
+          "request": { "method": "GET", "url": "{{baseUrl}}/comments?postId=1" }
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "Get user",
+          "request": { "method": "GET", "url": "{{baseUrl}}/users/1" },
+          "response": [{ "code": 200 }]
+        }
+      ]
+    }
+  ]
+}

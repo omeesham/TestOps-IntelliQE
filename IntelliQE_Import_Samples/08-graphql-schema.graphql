@@ -1,0 +1,38 @@
+# Paste this SDL into the GraphQL method (Text tab) — the fallback for hosts that
+# block live introspection. It mirrors the live https://countries.trevorblades.com/ API.
+# Preferred: just give the endpoint URL below and let IntelliQE introspect it.
+#   Live endpoint (introspection works): https://graphqlzero.almansi.me/api
+#   Countries endpoint (introspection sometimes 413-blocked): https://countries.trevorblades.com/
+
+type Query {
+  continents: [Continent!]!
+  continent(code: ID!): Continent
+  countries: [Country!]!
+  country(code: ID!): Country
+  languages: [Language!]!
+  language(code: ID!): Language
+}
+
+type Continent {
+  code: ID!
+  name: String!
+  countries: [Country!]!
+}
+
+type Country {
+  code: ID!
+  name: String!
+  native: String!
+  capital: String
+  currency: String
+  emoji: String!
+  languages: [Language!]!
+  continent: Continent!
+}
+
+type Language {
+  code: ID!
+  name: String!
+  native: String!
+  rtl: Boolean!
+}

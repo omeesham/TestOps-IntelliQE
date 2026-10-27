@@ -1,0 +1,28 @@
+<section id="build2" data-transition="fade" style="background:#FBFBF8;color:#14213D;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:40px">
+<p style="font-family:'Space Grotesk', Arial, sans-serif;font-size:24px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#6D28D9">Steps 3–5 · Traceability, sources, sign-off</p>
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:56px;font-weight:600;line-height:1.1">From agent output to a signed-off matrix</h2>
+<div style="display:flex;flex-direction:column;gap:22px">
+<div style="background:#FFFFFF;border:1px solid #E3E6E4;border-radius:14px;padding:32px 38px;display:flex;gap:30px;align-items:flex-start">
+<p style="font-family:'Space Grotesk', Arial, sans-serif;font-size:34px;font-weight:700;color:#6D28D9;width:48px">3</p>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px">
+<p style="font-size:30px;font-weight:600;color:#14213D">Auto-populate the traceability matrix</p>
+<p style="font-size:26px;line-height:1.35;color:#4A5568">The output maps onto the records Traceability.tsx already renders (reqKey, title, source, linkedEndpoints). Persist them → reviewer sees requirement → endpoint → case coverage. <b>Satisfies items 2 &amp; 3.</b></p>
+</div>
+</div>
+<div style="background:#FFFFFF;border:1px solid #E3E6E4;border-radius:14px;padding:32px 38px;display:flex;gap:30px;align-items:flex-start">
+<p style="font-family:'Space Grotesk', Arial, sans-serif;font-size:34px;font-weight:700;color:#6D28D9;width:48px">4</p>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px">
+<p style="font-size:30px;font-weight:600;color:#14213D">Wire JIRA / ADO / BRD / FRD ingestion</p>
+<p style="font-size:26px;line-height:1.35;color:#4A5568">Jira connect exists (System Config → Requirement Sources). Confirm story text reaches state.requirements; add ADO / BRD / FRD as source types so source.type is set correctly.</p>
+</div>
+</div>
+<div style="background:#FFFFFF;border:1px solid #E3E6E4;border-radius:14px;padding:32px 38px;display:flex;gap:30px;align-items:flex-start">
+<p style="font-family:'Space Grotesk', Arial, sans-serif;font-size:34px;font-weight:700;color:#6D28D9;width:48px">5</p>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px">
+<p style="font-size:30px;font-weight:600;color:#14213D">Run end-to-end &amp; sign off</p>
+<p style="font-size:26px;line-height:1.35;color:#4A5568">On the local / staging stack: import a real API + Jira story, verify every endpoint produced a traceable requirement, then check the 4 boxes. <b>Satisfies item 4.</b></p>
+</div>
+</div>
+</div>
+<aside>Item 3 (reviewable) is met the moment the matrix is auto-filled and a human can scan it for gaps. Item 4 (sign-off) is the customer-similar environment run.</aside>
+</section>

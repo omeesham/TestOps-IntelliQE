@@ -1,0 +1,16 @@
+=== 13. Manual HTTP Request — "Build one request by hand" ===
+
+Type these into the Manual HTTP Request form. Both hit live httpbin.org.
+
+Example A (GET):
+  Method:    GET
+  URL:       https://httpbin.org/status/200
+  Header:    Accept: application/json
+  Expected:  200
+
+Example B (POST):
+  Method:    POST
+  URL:       https://httpbin.org/post
+  Header:    Content-Type: application/json
+  Body:      {"name":"Jane","role":"qa"}
+  Expected:  200

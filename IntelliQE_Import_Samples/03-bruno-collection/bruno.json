@@ -1,0 +1,6 @@
+{
+  "version": "1",
+  "name": "httpbin (live)",
+  "type": "collection",
+  "ignore": ["node_modules", ".git"]
+}

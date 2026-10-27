@@ -15,7 +15,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   RotateCcw, AlertTriangle, X, ListChecks, ArrowRight, Upload,
-  LayoutDashboard, Layers, FileCheck2, PlayCircle, BarChart3, Server, RefreshCw, Wrench,
+  LayoutDashboard, Layers, FileCheck2, PlayCircle, BarChart3, Server, RefreshCw, Wrench, Workflow,
 } from 'lucide-react';
 import { useCatalog } from './hooks/useCatalog';
 import { useApiRun } from './hooks/useApiRun';
@@ -26,6 +26,7 @@ import ReportTab from './ReportTab';
 import OverviewView from './views/OverviewView';
 import ImportView from './views/ImportView';
 import EndpointsView from './views/EndpointsView';
+import IntegrationTestsView from './views/IntegrationTestsView';
 import RunsView from './views/RunsView';
 import EnvironmentsView from './views/EnvironmentsView';
 import EnvironmentPicker from './views/EnvironmentPicker';
@@ -37,7 +38,7 @@ import Loader from '@/components/feedback/Loader';
 import type { NavView, Phase } from './types';
 
 /** The tabs, left to right, in the order you walk the workflow. */
-const TAB_IDS = new Set<NavView>(['overview', 'endpoints', 'scenarios', 'runs', 'report', 'environments', 'tools']);
+const TAB_IDS = new Set<NavView>(['overview', 'endpoints', 'scenarios', 'integration-tests', 'runs', 'report', 'environments', 'tools']);
 
 export default function ApiStudio() {
   const catalog = useCatalog();
@@ -95,6 +96,7 @@ export default function ApiStudio() {
     { id: 'overview', label: 'Overview', icon: LayoutDashboard },
     { id: 'endpoints', label: 'Endpoints', icon: Layers, count: catalog.endpoints.length || undefined },
     { id: 'scenarios', label: 'Scenarios', icon: FileCheck2, count: run.scenarios.length || undefined },
+    { id: 'integration-tests', label: 'Integration', icon: Workflow },
     { id: 'runs', label: 'Runs', icon: PlayCircle },
     { id: 'report', label: 'Reports', icon: BarChart3 },
     { id: 'environments', label: 'Environments', icon: Server },
@@ -176,6 +178,7 @@ export default function ApiStudio() {
             <ScenariosTab scenarios={run.scenarios} selected={run.selected} editable={run.phase === 'review' || run.finished} onToggle={run.toggleScenario} onSelectAll={run.selectScenarios} onClearAll={run.clearScenarios} />
           )
         )}
+        {view === 'integration-tests' && <IntegrationTestsView endpoints={catalog.endpoints} onOpenCatalogue={() => setView('endpoints')} />}
         {view === 'runs' && <RunsView run={run} openRunId={openRunId} onOpenRun={setOpenRunId} onShowReport={() => navigate('report')} />}
         {view === 'report' && (
           <ReportTab report={run.report} rows={run.rows} scenarios={run.scenarios} onExport={run.handleExport} exporting={run.exporting} canExport={!!run.testRunId} onPushToRepo={run.handlePushToRepo} pushState={run.pushState} canPush={run.specs.length > 0 && run.selected.size > 0} />

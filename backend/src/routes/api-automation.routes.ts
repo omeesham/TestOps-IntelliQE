@@ -65,7 +65,10 @@ import { analyzeCoverageGaps } from '../services/api-coverage-gaps.service.js';
 import { runSemanticAssertion } from '../services/api-semantic.service.js';
 import { analyzeFailureClusters } from '../services/api-failure-clusters.service.js';
 import { listListeners, createListener, deleteListener, getEvents } from '../services/api-callback.service.js';
-import { runFlow, listFlows, getFlow, saveFlow, deleteFlow, listStepGroups, saveStepGroup, deleteStepGroup, getStepGroupMap } from '../services/api-flow.service.js';
+import { runFlow, runSuite, runFlowDataset, listFlows, getFlow, saveFlow, deleteFlow, listStepGroups, saveStepGroup, deleteStepGroup, getStepGroupMap, type FlowStep } from '../services/api-flow.service.js';
+import { toJUnit } from '../utils/junit.js';
+import { maskResult } from '../utils/secret-mask.js';
+import { suggestIntegrationFlows } from '../services/api-flow-bridge.service.js';
 import { chatRefineTest } from '../services/api-chat-test.service.js';
 import { generateSyntheticData } from '../services/api-synth-data.service.js';
 import { planMaintenance } from '../services/api-maintenance.service.js';
@@ -250,7 +253,37 @@ router.post('/import/files', upload.array('files', 20), async (req: Request, res
   const all: ImportedEndpoint[] = [];
   const warnings: string[] = [];
   const notices: string[] = [];
-  for (const f of files) {
+
+  // A dropped Bruno collection arrives as many `.bru` files — the request
+  // files plus an optional `collection.bru` (folder-level auth/headers) and
+  // `environments/*.bru` (variable values). Parse them TOGETHER, once, so
+  // collection-level auth is inherited and {{variables}} resolve — exactly as
+  // pasting the collection does. Every other file keeps per-file handling.
+  const brunoFiles = files.filter((f) => /\.bru$/i.test(f.originalname));
+  const otherFiles = files.filter((f) => !/\.bru$/i.test(f.originalname));
+
+  if (brunoFiles.length) {
+    const names = brunoFiles.map((f) => f.originalname);
+    const label = brunoFiles.length === 1 ? names[0]! : `Bruno collection (${brunoFiles.length} files)`;
+    try {
+      const texts: string[] = [];
+      for (const f of brunoFiles) {
+        const parsed = await parseDocument(f.buffer, f.mimetype, f.originalname);
+        if (parsed.text?.trim()) texts.push(parsed.text);
+      }
+      if (!texts.length) throw new Error('No extractable text in the .bru file(s).');
+      const result = await importFromText(texts.join('\n\n'), { fileName: label, formatHint: 'bruno', llm, sourceMethod: 'file' });
+      all.push(...result.endpoints);
+      perFile.push({ fileName: brunoFiles.length === 1 ? names[0]! : `${label}: ${names.join(', ')}`.slice(0, 300), count: result.endpoints.length, parser: result.parser, format: result.format, warnings: result.warnings });
+      warnings.push(...result.warnings.map((w) => `${label}: ${w}`));
+      if (result.notice) notices.push(result.notice);
+      await recordImport(req.user!.tenantId, req.user!.username, { method: 'file', name: label, format: result.format, parser: result.parser, endpointCount: result.endpoints.length, warnings: result.warnings });
+    } catch (err) {
+      perFile.push({ fileName: label, count: 0, error: (err as Error).message, warnings: [] });
+    }
+  }
+
+  for (const f of otherFiles) {
     try {
       const parsed = await parseDocument(f.buffer, f.mimetype, f.originalname);
       if (!parsed.text?.trim()) throw new Error('No extractable text (image-only or password-protected?)');
@@ -282,7 +315,7 @@ router.post('/import/text', async (req: Request, res: Response) => {
     const text = String(req.body?.text || '');
     if (text.trim().length < 5) { res.status(400).json({ error: 'Paste an API description first.' }); return; }
     const llm = (await getTenantLlm(req.user!.tenantId)) || undefined;
-    const method = (['sdk', 'middleware', 'connector', 'curl', 'openapi', 'postman'].includes(String(req.body?.method)) ? req.body.method : 'manual') as ImportMethod;
+    const method = (['sdk', 'middleware', 'connector', 'curl', 'openapi', 'postman', 'bruno'].includes(String(req.body?.method)) ? req.body.method : 'manual') as ImportMethod;
     const result = await importFromText(text, { fileName: String(req.body?.name || 'pasted text').slice(0, 200), formatHint: String(req.body?.format || 'auto'), llm, sourceMethod: method, variables: req.body?.variables });
     await respondImport(req, res, method, String(req.body?.name || 'pasted text').slice(0, 200), result);
   } catch (err) { fail(res, err); }
@@ -1085,11 +1118,88 @@ router.delete('/flows/:id', async (req: Request, res: Response) => {
     res.json({ ok: true });
   } catch (err) { fail(res, err); }
 });
+// Send a run result either as JSON or, when `format:'junit'` was requested, as a
+// JUnit XML document a CI job can publish directly (curl the run, get the report).
+function sendRun(req: Request, res: Response, kind: 'flow' | 'suite' | 'dataset', result: unknown): void {
+  // Redact credential-like captures (tokens, passwords, …) before the result
+  // leaves the API — the engine ran with the real values, this masks the copy
+  // we return so secrets never land in the UI, the JSON, or a CI JUnit report.
+  const safe = maskResult(kind, result);
+  if (req.body?.format === 'junit') {
+    res.type('application/xml').send(toJUnit(kind, String(req.body?.name || ''), safe));
+  } else {
+    res.json(safe);
+  }
+}
 router.post('/flows/run', async (req: Request, res: Response) => {
   try {
     // Resolve the tenant's reusable step groups so `group` steps can expand.
     const groups = await getStepGroupMap(req.user!.tenantId).catch(() => ({}));
-    res.json(await runFlow({ steps: req.body?.steps, variables: req.body?.variables, allowWrites: !!req.body?.allowWrites, groups }));
+    sendRun(req, res, 'flow', await runFlow({ steps: req.body?.steps, variables: req.body?.variables, allowWrites: !!req.body?.allowWrites, groups }));
+  } catch (err) { fail(res, err); }
+});
+// Suggest runnable integration flows from the catalogue: the analyzer's detected
+// create→read→update→delete / list→read journeys, turned into FlowSteps the
+// engine runs. Deterministic (no LLM); the client saves the ones it wants.
+router.post('/flows/suggest', async (req: Request, res: Response) => {
+  try {
+    const endpoints = Array.isArray(req.body?.endpoints) ? req.body.endpoints : [];
+    res.json({ flows: suggestIntegrationFlows(endpoints) });
+  } catch (err) { fail(res, err); }
+});
+// Convert an ImportedEndpoint (from the cURL parser) into a runnable FlowStep.
+function endpointToFlowStep(e: ImportedEndpoint): FlowStep {
+  const method = (e.method || 'GET').toUpperCase();
+  let pathname = e.url;
+  try { pathname = new URL(e.url).pathname; } catch { /* keep the raw url */ }
+  const step: FlowStep = {
+    name: `${method} ${pathname}`.slice(0, 80),
+    method,
+    url: e.url,
+    headers: (e.headers || []).map((h) => ({ key: h.key, value: h.value })),
+  };
+  if (e.auth && e.auth.type && e.auth.type !== 'none') step.auth = e.auth;
+  if (e.body) step.body = e.body;
+  return step;
+}
+// Paste a cURL command (or several) and get runnable FlowStep(s) — the fastest
+// way to author a real request (browser devtools / Postman "Copy as cURL", docs).
+// Reuses the catalogue cURL parser (headers, data/json/form, basic/bearer/apikey).
+router.post('/flows/import-curl', async (req: Request, res: Response) => {
+  try {
+    const curl = String(req.body?.curl || '');
+    if (!curl.trim()) { res.status(400).json({ error: 'Paste a cURL command.' }); return; }
+    const parsed = parseCurlCommands(curl);
+    res.json({ steps: (parsed.endpoints || []).map(endpointToFlowStep), warnings: parsed.warnings || [] });
+  } catch (err) { fail(res, err); }
+});
+// Run several flows in order as a suite, threading each flow's captured variables
+// into the next (suite-level shared fixtures — e.g. a login flow seeds the token).
+router.post('/flows/run-suite', async (req: Request, res: Response) => {
+  try {
+    const groups = await getStepGroupMap(req.user!.tenantId).catch(() => ({}));
+    const flows = Array.isArray(req.body?.flows) ? req.body.flows : [];
+    sendRun(req, res, 'suite', await runSuite({ flows, setup: req.body?.setup, teardown: req.body?.teardown, variables: req.body?.variables, allowWrites: !!req.body?.allowWrites, groups, stopOnFailure: !!req.body?.stopOnFailure }));
+  } catch (err) { fail(res, err); }
+});
+// Run one flow across a dataset: the flow is executed once per row, each row's
+// key/value pairs seeding that run's variables — one authored flow becomes a
+// parameterised test matrix. Rows are independent (captures don't cross rows).
+router.post('/flows/run-dataset', async (req: Request, res: Response) => {
+  try {
+    const groups = await getStepGroupMap(req.user!.tenantId).catch(() => ({}));
+    const dataset = Array.isArray(req.body?.dataset) ? req.body.dataset : [];
+    sendRun(req, res, 'dataset', await runFlowDataset({ steps: req.body?.steps, variables: req.body?.variables, allowWrites: !!req.body?.allowWrites, groups, dataset, stopOnFailure: !!req.body?.stopOnFailure }));
+  } catch (err) { fail(res, err); }
+});
+// Convert an already-computed run result to JUnit XML without re-running — used by
+// the UI's "Download JUnit" button (CI can instead pass format:'junit' on a run).
+router.post('/flows/export-junit', async (req: Request, res: Response) => {
+  try {
+    const kind = (['flow', 'suite', 'dataset'] as const).includes(req.body?.kind) ? req.body.kind : 'flow';
+    // Mask again here (idempotent) so a CI job that posts a raw result to this
+    // converter still gets a redacted report.
+    res.type('application/xml').send(toJUnit(kind, String(req.body?.name || ''), maskResult(kind, req.body?.result)));
   } catch (err) { fail(res, err); }
 });
 

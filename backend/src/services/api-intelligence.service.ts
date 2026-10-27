@@ -54,6 +54,22 @@ export interface ApiDependency {
   reason: string;
 }
 
+/**
+ * One data hand-off inside a flow: a value the create step mints, injected into
+ * a later step. Present on cross-service flows so the runnable-flow bridge knows
+ * exactly what to carry where, instead of re-deriving it.
+ */
+export interface ApiFlowBinding {
+  /** Variable bound from the create step's response and injected downstream. */
+  var: string;
+  /** Which later step consumes it (index into `steps`). */
+  toStep: number;
+  /** Where in that step the value goes. */
+  into: 'path' | 'query' | 'body';
+  /** The path placeholder, query param, or body field to set to the variable. */
+  target: string;
+}
+
 export interface ApiFlow {
   id: string;
   name: string;
@@ -61,6 +77,10 @@ export interface ApiFlow {
   /** Ordered endpoint indices. */
   steps: number[];
   description: string;
+  /** True when the journey spans more than one resource/service. */
+  crossService?: boolean;
+  /** Data hand-offs between steps (cross-service flows only). */
+  bindings?: ApiFlowBinding[];
 }
 
 export interface ApiRisk {
@@ -145,6 +165,64 @@ function splitUrl(url: string): { host: string; path: string; query: URLSearchPa
 
 const PAGINATION_PARAMS = ['page', 'limit', 'offset', 'per_page', 'perpage', 'pagesize', 'page_size', 'cursor', 'after', 'before', 'next', 'skip', 'top', '$top', '$skip', 'start', 'size', 'pagetoken', 'page_token'];
 const FILTER_PARAMS = ['sort', 'order', 'orderby', 'order_by', 'filter', 'q', 'query', 'search', 'fields', 'include', 'expand', 'status', 'type', 'from', 'to', 'since', 'until'];
+
+/** Crude singular of a resource name: users→user, categories→category, bus→bus. */
+function singularize(name: string): string {
+  const n = (name || '').toLowerCase();
+  if (/ies$/.test(n)) return n.replace(/ies$/, 'y');
+  if (/(ses|xes|zes|ches|shes)$/.test(n)) return n.replace(/es$/, '');
+  if (/s$/.test(n) && !/ss$/.test(n)) return n.replace(/s$/, '');
+  return n;
+}
+
+/** A safe {{variable}} identifier from a param / field name. */
+function sanitizeVar(name: string): string {
+  return (name || 'id').replace(/[^A-Za-z0-9_]/g, '') || 'id';
+}
+
+/** The pathname of a URL, or the URL itself when it doesn't parse. */
+function safePath(url: string): string {
+  try { return new URL(url).pathname || url; } catch { return url; }
+}
+
+/** Where (if anywhere) an endpoint references one of `fkNames`. */
+function findForeignKeyRef(e: ImportedEndpoint, fkNames: Set<string>): { into: 'path' | 'query' | 'body'; target: string } | null {
+  const has = (s: string) => fkNames.has((s || '').toLowerCase());
+  // Path params — explicit list, then placeholders in the template.
+  for (const p of e.pathParams || []) if (has(p.name)) return { into: 'path', target: p.name };
+  const template = e.pathTemplate || safePath(e.url);
+  for (const m of template.matchAll(/\{([^}]+)\}|:([A-Za-z_][A-Za-z0-9_]*)/g)) {
+    const ph = m[1] || m[2] || '';
+    if (has(ph)) return { into: 'path', target: ph };
+  }
+  // Request body — a JSON key naming the foreign resource's id.
+  const bodyKey = findBodyKey(e.body, fkNames);
+  if (bodyKey) return { into: 'body', target: bodyKey };
+  // Query params.
+  for (const q of e.queryParams || []) if (has(q.name)) return { into: 'query', target: q.name };
+  return null;
+}
+
+/** The actual-case key in a JSON (or raw) body matching one of `fkNames`. */
+function findBodyKey(body: string | undefined, fkNames: Set<string>): string | null {
+  if (!body) return null;
+  try {
+    const doc = JSON.parse(body);
+    const scan = (o: any, depth: number): string | null => {
+      if (!o || typeof o !== 'object' || depth > 2) return null;
+      for (const k of Object.keys(o)) if (fkNames.has(k.toLowerCase())) return k;
+      for (const k of Object.keys(o)) { const r = scan(o[k], depth + 1); if (r) return r; }
+      return null;
+    };
+    return scan(doc, 0);
+  } catch {
+    for (const fk of fkNames) {
+      const m = body.match(new RegExp(`"(${fk})"\\s*:`, 'i'));
+      if (m) return m[1]!;
+    }
+    return null;
+  }
+}
 
 export function analyzeApiSurface(endpoints: ImportedEndpoint[]): ApiProfile {
   const n = endpoints.length;
@@ -278,6 +356,50 @@ export function analyzeApiSurface(endpoints: ImportedEndpoint[]): ApiProfile {
       });
     }
   }
+
+  /* ── Cross-service journeys ──
+     A value one resource mints (the id its create returns) that ANOTHER resource
+     consumes — named in a path param, query param or request-body field. That is
+     the signal of a journey spanning services: create A, then act on B with A's
+     id. Each becomes a two-step flow carrying an explicit binding, so the
+     runnable-flow bridge knows exactly what to hand from the first step to the
+     second (including a body foreign key, which the single-resource path never
+     handles). Cross-host pairs are allowed — that is the whole point. */
+  const MAX_XSERVICE_FLOWS = 8;
+  const xFlows: ApiFlow[] = [];
+  const seenX = new Set<string>();
+  for (const r of resources) {
+    const createIdx = r.operations.create;
+    if (createIdx === undefined) continue;
+    const sing = singularize(r.name);
+    // The names r's id plausibly travels under inside another resource.
+    const fkNames = new Set<string>([`${sing}id`, `${sing}_id`]);
+    if (r.idParam && r.idParam.toLowerCase() !== 'id') fkNames.add(r.idParam.toLowerCase());
+    for (const s of resources) {
+      if (s === r) continue;
+      // Prefer the dependent resource's create, then an update, then a read.
+      const toIdx = s.operations.create ?? s.operations.update ?? s.operations.read;
+      if (toIdx === undefined) continue;
+      const ref = findForeignKeyRef(endpoints[toIdx]!, fkNames);
+      if (!ref) continue;
+      const key = `${createIdx}->${toIdx}:${ref.into}:${ref.target}`;
+      if (seenX.has(key)) continue;
+      seenX.add(key);
+      const toEp = endpoints[toIdx]!;
+      const toMethod = (toEp.method || 'GET').toUpperCase();
+      xFlows.push({
+        id: `flow-xservice-${r.name}-${s.name}`,
+        name: `${r.name} → ${s.name} journey`,
+        resource: r.name,
+        steps: [createIdx, toIdx],
+        description: `cross-service: create a ${sing}, then use its id as "${ref.target}" in ${toMethod} ${safePath(toEp.url)}.`,
+        crossService: true,
+        bindings: [{ var: sanitizeVar(ref.target), toStep: 1, into: ref.into, target: ref.target }],
+      });
+      dependencies.push({ from: createIdx, to: toIdx, kind: 'creates-id', reason: `${s.name} ${toMethod} consumes the ${sing} id (via ${ref.into} "${ref.target}")` });
+    }
+  }
+  flows.push(...xFlows.slice(0, MAX_XSERVICE_FLOWS));
 
   /* ── Risks ── */
   const risks: ApiRisk[] = [];

@@ -1,0 +1,57 @@
+{
+  "name": "Post lifecycle (live integration)",
+  "variables": {
+    "baseUrl": "https://jsonplaceholder.typicode.com"
+  },
+  "steps": [
+    {
+      "name": "Create a post",
+      "type": "request",
+      "phase": "main",
+      "method": "POST",
+      "url": "{{baseUrl}}/posts",
+      "headers": [{ "key": "Content-Type", "value": "application/json" }],
+      "bodyMode": "json",
+      "body": "{ \"title\": \"IntelliQE flow\", \"body\": \"created in step 1\", \"userId\": 1 }",
+      "extract": [
+        { "name": "newId", "from": "body", "path": "id" }
+      ],
+      "checks": [
+        { "kind": "status", "equals": 201 },
+        { "kind": "jsonPathExists", "path": "id" }
+      ]
+    },
+    {
+      "name": "Read it back (carries the id)",
+      "type": "request",
+      "phase": "main",
+      "method": "GET",
+      "url": "{{baseUrl}}/posts/{{newId}}",
+      "checks": [
+        { "kind": "expr", "expr": "status >= 200 && status < 300" },
+        { "kind": "responseTimeUnderMs", "ms": 3000 }
+      ]
+    },
+    {
+      "name": "List comments for post 1",
+      "type": "request",
+      "phase": "main",
+      "method": "GET",
+      "url": "{{baseUrl}}/comments?postId=1",
+      "checks": [
+        { "kind": "status", "equals": 200 },
+        { "kind": "jsonPathExists", "path": "0.email" }
+      ]
+    },
+    {
+      "name": "Delete the post (teardown)",
+      "type": "request",
+      "phase": "teardown",
+      "method": "DELETE",
+      "url": "{{baseUrl}}/posts/{{newId}}",
+      "checks": [
+        { "kind": "status", "oneOf": [200, 204] }
+      ]
+    }
+  ]
+}

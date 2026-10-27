@@ -1,0 +1,27 @@
+{
+  "v": 4,
+  "createdOnFiles": { "v": 1, "at": "2026-10-26T00:00:00Z" },
+  "lists": "css",
+  "title": "Requirement Agent — Approach",
+  "order": ["cover", "ticket", "gap", "approach", "build1", "build2", "dod"],
+  "sections": {
+    "s1": { "description": "What the Sprint 1 ticket asks of the Requirement Agent", "start": "cover" },
+    "s2": { "description": "The gap today and the five-step approach", "start": "gap" },
+    "s3": { "description": "How to build it, and the Definition of Done mapping", "start": "build1" }
+  },
+  "faces": {
+    "space-grotesk": {
+      "family": "Space Grotesk",
+      "href": "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap"
+    },
+    "ibm-plex-sans": {
+      "family": "IBM Plex Sans",
+      "href": "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+    },
+    "jetbrains-mono": {
+      "family": "JetBrains Mono",
+      "href": "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap"
+    }
+  },
+  "designSystems": []
+}

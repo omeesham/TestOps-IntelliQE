@@ -1,0 +1,58 @@
+===============================================================================
+ IntelliQE — paste-in values for the methods that take a URL / fields (not a file)
+ All targets are live public APIs you can call in real time.
+===============================================================================
+
+--- 01. OpenAPI / Swagger -----------------------------------------------------
+Either import the file  01-openapi-httpbin.json  (self-contained, live httpbin),
+or paste this live spec URL into the "URL" tab:
+    https://petstore3.swagger.io/api/v3/openapi.json
+(Petstore declares a relative server — after import, set the base URL to
+ https://petstore3.swagger.io/api/v3 in an Environment to run it live.)
+
+--- 04. API URL / Endpoint ----------------------------------------------------
+Paste one live URL; it is probed and the origin is searched for a spec:
+    https://jsonplaceholder.typicode.com/users/1
+Other good ones:
+    https://httpbin.org/uuid
+    https://api.github.com/repos/microsoft/vscode
+
+--- 06. API Documentation URL (AI-read; needs a tenant LLM key) ----------------
+A reference page the AI reads; it first follows any spec link it advertises:
+    https://petstore3.swagger.io/
+    https://docs.github.com/en/rest/users/users
+Tip: if a docs page is JavaScript-rendered and comes back empty, paste the
+reference text (or use the OpenAPI method with the spec URL) instead.
+
+--- 09. MCP Server ------------------------------------------------------------
+Paste a live Streamable-HTTP MCP server URL:
+    https://mcp.deepwiki.com/mcp
+(Some servers also need a token.)
+
+--- 10. Manual HTTP Request (type these into the form) ------------------------
+    Method:   GET
+    URL:      https://httpbin.org/status/200
+    Header:   Accept: application/json
+    Expected: 200
+Second example (POST):
+    Method:   POST
+    URL:      https://httpbin.org/post
+    Header:   Content-Type: application/json
+    Body:     {"name":"Jane","role":"qa"}
+    Expected: 200
+
+--- 08. GraphQL ---------------------------------------------------------------
+Preferred — paste this endpoint (live introspection works):
+    https://graphqlzero.almansi.me/api
+Fallback — paste the SDL file  08-graphql-schema.graphql  (for hosts that block
+introspection with HTTP 413, e.g. https://countries.trevorblades.com/).
+
+--- 13. Webhook ---------------------------------------------------------------
+This method registers YOUR consumer endpoint and sends HMAC-signed sample events.
+    Consumer endpoint (example): https://httpbin.org/post
+    Secret:                      whsec_demo_123
+    Sample event payloads:
+      {"event":"order.created","id":"ord_1001","amount":4200,"currency":"USD"}
+      {"event":"order.refunded","id":"ord_1001","amount":4200,"currency":"USD"}
+Deliveries are signed with the secret; httpbin.org/post will echo them back.
+===============================================================================

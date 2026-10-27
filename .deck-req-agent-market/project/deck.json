@@ -1,0 +1,27 @@
+{
+  "v": 4,
+  "createdOnFiles": { "v": 1, "at": "2026-10-26T00:00:00Z" },
+  "lists": "css",
+  "title": "Requirement Agent for API Automation",
+  "order": ["cover", "market", "pain", "gap", "whatis", "features", "approach", "diff", "outcomes"],
+  "sections": {
+    "s1": { "description": "Market context and the pain in API test automation today", "start": "cover" },
+    "s2": { "description": "What the Requirement Agent is and the features it needs", "start": "whatis" },
+    "s3": { "description": "The approach for API automation and how it wins", "start": "approach" }
+  },
+  "faces": {
+    "space-grotesk": {
+      "family": "Space Grotesk",
+      "href": "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap"
+    },
+    "ibm-plex-sans": {
+      "family": "IBM Plex Sans",
+      "href": "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+    },
+    "jetbrains-mono": {
+      "family": "JetBrains Mono",
+      "href": "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap"
+    }
+  },
+  "designSystems": []
+}

@@ -1,0 +1,12 @@
+{
+  "name": "httpbin connector",
+  "baseUrl": "https://httpbin.org",
+  "headers": { "Accept": "application/json" },
+  "endpoints": [
+    { "name": "Origin IP", "method": "GET", "path": "/ip", "expectedStatus": 200 },
+    { "name": "Random UUID", "method": "GET", "path": "/uuid", "expectedStatus": 200 },
+    { "name": "Echo headers", "method": "GET", "path": "/headers", "expectedStatus": 200 },
+    { "name": "GET with query", "method": "GET", "path": "/get", "query": { "q": "hello" }, "expectedStatus": 200 },
+    { "name": "POST JSON", "method": "POST", "path": "/post", "body": { "name": "Jane", "role": "qa" }, "expectedStatus": 200 }
+  ]
+}

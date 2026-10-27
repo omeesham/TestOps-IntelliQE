@@ -1,5 +1,5 @@
 /**
- * API Automation — the twelve intake methods.
+ * API Automation — the thirteen intake methods.
  *
  * One entry per way an API can arrive in the workspace. `inputs` says which
  * form the Import hub renders for it; `ai` marks the methods where the
@@ -7,7 +7,7 @@
  * deterministic parser.
  */
 import {
-  FileJson, Package, Link2, Terminal, BookOpen, Puzzle, Code2, Webhook, Braces, Bot, Route, Send,
+  FileJson, Package, PackageOpen, Link2, Terminal, BookOpen, Puzzle, Code2, Webhook, Braces, Bot, Route, Send,
 } from 'lucide-react';
 import type { ImportMethod } from './types';
 
@@ -35,7 +35,8 @@ export interface ImportMethodDef {
 
 export const IMPORT_METHODS: ImportMethodDef[] = [
   { id: 'openapi', label: 'OpenAPI / Swagger', short: 'OpenAPI', desc: 'A spec file or its URL', detail: 'OpenAPI 3.x or Swagger 2.0 — JSON or YAML. Every path × method, with bodies and responses built from the schemas.', icon: FileJson, accent: '#10B981', inputs: ['files', 'url', 'text'], accept: '.json,.yaml,.yml', format: 'openapi', placeholder: 'Paste the OpenAPI / Swagger document (JSON or YAML)…' },
-  { id: 'postman', label: 'Postman Collection', short: 'Postman', desc: 'A collection, Bruno or HAR export', detail: 'Postman v2.0 / v2.1 exports, Bruno .bru files and HAR recordings. Folders become resources; saved responses become the expected contract.', icon: Package, accent: '#F97316', inputs: ['files', 'text'], accept: '.json,.bru,.har', format: 'postman', placeholder: 'Paste the exported collection JSON…' },
+  { id: 'postman', label: 'Postman Collection', short: 'Postman', desc: 'A collection or HAR export', detail: 'Postman v2.0 / v2.1 exports and HAR recordings. Folders become resources; saved responses become the expected contract.', icon: Package, accent: '#F97316', inputs: ['files', 'text'], accept: '.json,.har', format: 'postman', placeholder: 'Paste the exported collection JSON…' },
+  { id: 'bruno', label: 'Bruno Collection', short: 'Bruno', desc: 'A .bru file or whole collection', detail: 'Bruno `.bru` requests — one file or a whole collection. Drop the request files (with the optional collection.bru and environment files), or paste them together: collection-level auth and headers are inherited and {{variables}} resolve from the environment.', icon: PackageOpen, accent: '#EAB308', inputs: ['files', 'text'], accept: '.bru,.json', format: 'bruno', placeholder: 'Paste one or more .bru requests (optionally with collection.bru / environment files)…' },
   { id: 'endpoint', label: 'API URL / Endpoint', short: 'API URL', desc: 'One live URL, probed', detail: 'Give one live URL. It is probed for its real status and body, and the origin is searched for an OpenAPI document — when one is found the whole API comes in.', icon: Link2, accent: '#0EA5E9', inputs: ['probe'] },
   { id: 'curl', label: 'cURL', short: 'cURL', desc: 'Paste a command', detail: 'One command or a whole script of them — method, headers, auth and payload are parsed exactly.', icon: Terminal, accent: '#6366F1', inputs: ['text'], format: 'curl', placeholder: "curl -X POST https://api.acme.com/v1/orders \\\n  -H 'Content-Type: application/json' \\\n  -H 'Authorization: Bearer <token>' \\\n  -d '{\"sku\":\"A1\",\"qty\":2}'" },
   { id: 'docs-url', label: 'API Documentation URL', short: 'Docs URL', desc: 'A reference page, read by AI', detail: 'A reference page. Any spec it links to is used directly; otherwise the page text is read and every documented endpoint extracted.', icon: BookOpen, accent: '#F59E0B', inputs: ['url'], ai: true },

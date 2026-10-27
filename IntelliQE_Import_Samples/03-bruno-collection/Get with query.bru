@@ -1,0 +1,14 @@
+meta {
+  name: Get with query
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/get
+  auth: inherit
+}
+
+params:query {
+  q: hello
+}

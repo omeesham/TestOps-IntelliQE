@@ -1,0 +1,8 @@
+=== 11. MCP Server — "A server's tools, imported" ===
+
+Paste a live Streamable-HTTP MCP server URL into the MCP Server tab:
+
+  https://mcp.deepwiki.com/mcp
+
+IntelliQE performs the handshake, lists the tools (tools/list), and imports each one.
+DeepWiki exposes ~5 tools. Some MCP servers also require a token — add it if prompted.

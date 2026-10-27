@@ -8,10 +8,10 @@
  * the API, touches no pipeline.
  */
 import { useEffect, useRef, useState } from 'react';
-import { Workflow, X, Play, Plus, Trash2, ChevronUp, ChevronDown, ChevronRight, Save, AlertTriangle, CheckCircle2, XCircle, Check } from 'lucide-react';
+import { Workflow, X, Play, Plus, Trash2, ChevronUp, ChevronDown, ChevronRight, Save, AlertTriangle, CheckCircle2, XCircle, Check, Copy, Download } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import { useToast } from '@/components/feedback/ToastProvider';
-import { listApiFlows, saveApiFlow, deleteApiFlow, runApiFlow, type SavedApiFlow, type FlowStep, type FlowCheck, type FlowRunResult } from '@/services/api';
+import { listApiFlows, saveApiFlow, deleteApiFlow, runApiFlow, importCurlSteps, exportFlowJUnit, type SavedApiFlow, type FlowStep, type FlowCheck, type FlowRunResult, type StepPhase } from '@/services/api';
 import { MethodBadge } from './primitives';
 import { CARD, STRIP, INPUT, FIELD, LABEL, PRIMARY_BTN, SECONDARY_BTN, formatDuration } from './format';
 import type { CatalogEndpoint } from './types';
@@ -24,8 +24,9 @@ import type { Catalog } from './hooks/useCatalog';
 
 type ExtractRow = NonNullable<FlowStep['extract']>[number];
 
-interface EditExtract { _k: string; name: string; from: ExtractRow['from']; path: string }
-interface EditCheck { _k: string; kind: FlowCheck['kind']; oneOf: string; path: string; value: string; text: string; ms: string; name: string; op: string; compareMode: string }
+interface EditExtract { _k: string; name: string; from: ExtractRow['from']; path: string; regex: string }
+interface VarRow { _k: string; key: string; value: string }
+interface EditCheck { _k: string; kind: FlowCheck['kind']; oneOf: string; path: string; value: string; text: string; ms: string; name: string; op: string; compareMode: string; ignore: string; expr: string; schema: string }
 interface EditStep {
   id: string;
   name: string;
@@ -34,6 +35,15 @@ interface EditStep {
   headers: { key: string; value: string }[];
   auth?: { type: string; value?: string; headerName?: string };
   body: string;
+  phase: StepPhase;
+  /** Per-request timeout in ms (blank ⇒ default 15000). */
+  timeout: string;
+  // Poll/retry: when enabled, the request is wrapped in a retry that re-runs it
+  // until `pollUntil` holds (eventual consistency). Empty ⇒ a plain request.
+  pollEnabled: boolean;
+  pollUntil: string;
+  pollAttempts: string;
+  pollDelayMs: string;
   extract: EditExtract[];
   checks: EditCheck[];
   open: boolean;
@@ -52,10 +62,35 @@ const CHECK_LABELS: Record<FlowCheck['kind'], string> = {
   header: 'Header',
   bodyMatches: 'Body matches (compare)',
   xpath: 'XPath (XML/SOAP)',
+  expr: 'Expression',
+  schema: 'JSON Schema (contract)',
+  graphql: 'GraphQL (no errors)',
 };
 
 const clip = (s: string, n = 48) => (s.length > n ? `${s.slice(0, n)}…` : s);
 const parseNums = (s: string): number[] => s.split(',').map((x) => Number(x.trim())).filter((n) => Number.isFinite(n));
+
+// Render a step as a copy-pasteable cURL command (the inverse of Import cURL).
+// Templates ({{var}}) are kept verbatim — the command mirrors the authored step,
+// so cross-step captures stay visible as placeholders to fill. An encrypted
+// (__ENC__) secret is never emitted; it shows as <secret> instead.
+const sqEsc = (v: string) => `'${String(v).replace(/'/g, "'\\''")}'`;   // safe single-quoting for a shell
+const safeSecret = (v: string) => (v.startsWith('__ENC__') ? '<secret>' : v);
+function stepToCurl(s: EditStep): string {
+  const method = (s.method || 'GET').toUpperCase();
+  const parts: string[] = [`curl -X ${method} ${sqEsc(s.url || '')}`];
+  for (const h of s.headers) if (h.key.trim()) parts.push(`-H ${sqEsc(`${h.key}: ${h.value}`)}`);
+  const a = s.auth;
+  if (a && a.type && a.type !== 'none' && a.value) {
+    const v = safeSecret(a.value);
+    if (a.type === 'bearer') parts.push(`-H ${sqEsc(`Authorization: Bearer ${v}`)}`);
+    else if (a.type === 'basic') parts.push(`-u ${sqEsc(v)}`);
+    else if (a.type === 'apikey') parts.push(`-H ${sqEsc(`${a.headerName || 'X-API-Key'}: ${v}`)}`);
+    else if (a.type === 'header' && a.headerName) parts.push(`-H ${sqEsc(`${a.headerName}: ${v}`)}`);
+  }
+  if (s.body.trim() && method !== 'GET' && method !== 'HEAD') parts.push(`--data ${sqEsc(s.body)}`);
+  return parts.join(' \\\n  ');
+}
 
 function editCheckToApi(c: EditCheck): FlowCheck {
   switch (c.kind) {
@@ -65,25 +100,44 @@ function editCheckToApi(c: EditCheck): FlowCheck {
     case 'bodyContains': return { kind: 'bodyContains', text: c.text };
     case 'responseTimeUnderMs': return { kind: 'responseTimeUnderMs', ms: Number(c.ms) || 0 };
     case 'header': return { kind: 'header', name: c.name, op: (c.op || 'exists') as FlowCheck['op'], value: c.value };
-    case 'bodyMatches': return { kind: 'bodyMatches', value: c.value, compareMode: (c.compareMode || 'lenient') as FlowCheck['compareMode'] };
+    case 'bodyMatches': return { kind: 'bodyMatches', value: c.value, compareMode: (c.compareMode || 'lenient') as FlowCheck['compareMode'], ...(c.ignore.trim() ? { ignore: c.ignore.split(',').map((p) => p.trim()).filter(Boolean) } : {}) };
     case 'xpath': return { kind: 'xpath', path: c.path, op: (c.op || 'exists') as FlowCheck['op'], value: c.value };
+    case 'expr': return { kind: 'expr', expr: c.expr };
+    case 'schema': return { kind: 'schema', schema: c.schema, ...(c.path.trim() ? { path: c.path } : {}) };
+    case 'graphql': return { kind: 'graphql' };
   }
 }
 
 function editStepToApi(s: EditStep): FlowStep {
-  const step: FlowStep = { id: s.id, method: s.method, url: s.url };
-  if (s.name.trim()) step.name = s.name.trim();
+  // Build the plain request first (phase/poll handled below).
+  const req: FlowStep = { id: s.id, method: s.method, url: s.url };
+  if (s.name.trim()) req.name = s.name.trim();
   const hdrs = s.headers.filter((h) => h.key.trim());
-  if (hdrs.length) step.headers = hdrs;
-  if (s.auth && s.auth.type && s.auth.type !== 'none') step.auth = s.auth;
-  if (isWrite(s.method) && s.body.trim()) step.body = s.body;
+  if (hdrs.length) req.headers = hdrs;
+  if (s.auth && s.auth.type && s.auth.type !== 'none') req.auth = s.auth;
+  if (isWrite(s.method) && s.body.trim()) req.body = s.body;
+  if (Number(s.timeout) > 0) req.timeoutMs = Number(s.timeout);
   const ex: ExtractRow[] = s.extract
     .filter((x) => x.name.trim())
-    .map((x) => ({ name: x.name.trim(), from: x.from, ...(x.path.trim() ? { path: x.path.trim() } : {}) }));
-  if (ex.length) step.extract = ex;
+    .map((x) => ({ name: x.name.trim(), from: x.from, ...(x.path.trim() ? { path: x.path.trim() } : {}), ...(x.regex.trim() ? { regex: x.regex.trim() } : {}) }));
+  if (ex.length) req.extract = ex;
   const ck = s.checks.map(editCheckToApi);
-  if (ck.length) step.checks = ck;
-  return step;
+  if (ck.length) req.checks = ck;
+
+  // Poll enabled ⇒ wrap the request in a retry (the wrapper carries the phase).
+  if (s.pollEnabled && s.pollUntil.trim()) {
+    const wrapper: FlowStep = {
+      id: s.id,
+      type: 'retry',
+      ...(req.name ? { name: req.name } : {}),
+      retry: { until: { expr: s.pollUntil.trim() }, attempts: Number(s.pollAttempts) || 5, delayMs: Number(s.pollDelayMs) || 0 },
+      steps: [req],
+    };
+    if (s.phase && s.phase !== 'main') wrapper.phase = s.phase;
+    return wrapper;
+  }
+  if (s.phase && s.phase !== 'main') req.phase = s.phase;
+  return req;
 }
 
 /* ── One step result card (own collapse state for the body preview) ── */
@@ -132,10 +186,14 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
 
   const [name, setName] = useState('');
   const [steps, setSteps] = useState<EditStep[]>([]);
+  const [vars, setVars] = useState<VarRow[]>([]);
   const [saved, setSaved] = useState<SavedApiFlow[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [seedSel, setSeedSel] = useState('');
   const [allowWrites, setAllowWrites] = useState(false);
+  const [curlOpen, setCurlOpen] = useState(false);
+  const [curlText, setCurlText] = useState('');
+  const [importing, setImporting] = useState(false);
   const [result, setResult] = useState<FlowRunResult | null>(null);
   const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -144,7 +202,7 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
   const hasWrites = steps.some((s) => isWrite(s.method));
 
   /* ── Builders ── */
-  const blankStep = (): EditStep => ({ id: nextId('s'), name: '', method: 'GET', url: '', headers: [], body: '', extract: [], checks: [], open: true });
+  const blankStep = (): EditStep => ({ id: nextId('s'), name: '', method: 'GET', url: '', headers: [], body: '', phase: 'main', timeout: '', pollEnabled: false, pollUntil: '', pollAttempts: '', pollDelayMs: '', extract: [], checks: [], open: true });
   const seedStep = (ep: CatalogEndpoint): EditStep => ({
     id: nextId('s'),
     name: ep.title || '',
@@ -153,20 +211,35 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
     headers: (ep.headers || []).map((h) => ({ key: h.key, value: h.value })),
     auth: ep.auth ? { type: ep.auth.type, value: ep.auth.value, headerName: ep.auth.headerName } : undefined,
     body: ep.body || '',
+    phase: 'main',
+    timeout: '',
+    pollEnabled: false, pollUntil: '', pollAttempts: '', pollDelayMs: '',
     extract: [],
     checks: [],
     open: true,
   });
-  const apiStepToEdit = (s: FlowStep): EditStep => ({
+  const apiStepToEdit = (s: FlowStep): EditStep => {
+    // A retry wrapper edits as its inner request + the poll settings; a plain
+    // step edits as itself. (Wrapper carries the phase; the inner carries the request.)
+    const isRetry = s.type === 'retry';
+    const req: FlowStep = (isRetry ? (s.steps && s.steps[0]) : s) || {};
+    const poll = isRetry ? s.retry : undefined;
+    return {
     id: s.id || nextId('s'),
-    name: s.name || '',
-    method: s.method || 'GET',
-    url: s.url || '',
-    headers: (s.headers || []).map((h) => ({ key: h.key, value: h.value })),
-    auth: s.auth,
-    body: s.body || '',
-    extract: (s.extract || []).map((x) => ({ _k: nextId('k'), name: x.name, from: x.from, path: x.path || '' })),
-    checks: (s.checks || []).map((c) => ({
+    name: (isRetry ? (s.name || req.name) : s.name) || '',
+    method: req.method || 'GET',
+    url: req.url || '',
+    headers: (req.headers || []).map((h) => ({ key: h.key, value: h.value })),
+    auth: req.auth,
+    body: req.body || '',
+    phase: s.phase || req.phase || 'main',
+    timeout: req.timeoutMs != null ? String(req.timeoutMs) : '',
+    pollEnabled: isRetry,
+    pollUntil: poll?.until?.expr || '',
+    pollAttempts: poll?.attempts != null ? String(poll.attempts) : '',
+    pollDelayMs: poll?.delayMs != null ? String(poll.delayMs) : '',
+    extract: (req.extract || []).map((x) => ({ _k: nextId('k'), name: x.name, from: x.from, path: x.path || '', regex: x.regex || '' })),
+    checks: (req.checks || []).map((c) => ({
       _k: nextId('k'),
       kind: c.kind,
       oneOf: (c.oneOf || []).join(', '),
@@ -177,9 +250,31 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
       name: c.name || '',
       op: c.op || 'exists',
       compareMode: c.compareMode || 'lenient',
+      ignore: (c.ignore || []).join(', '),
+      expr: c.expr || '',
+      schema: c.schema || '',
     })),
     open: false,
-  });
+    };
+  };
+
+  /* ── Import a cURL command (or several) as step(s) ── */
+  const importCurl = async () => {
+    if (!curlText.trim() || importing) return;
+    setImporting(true);
+    try {
+      const { steps: parsed, warnings } = await importCurlSteps(curlText);
+      if (!parsed.length) { toast.error('No request found', warnings[0] || 'That cURL had no http(s) URL.'); return; }
+      setSteps((prev) => [...prev, ...parsed.map(apiStepToEdit)]);
+      setCurlText('');
+      setCurlOpen(false);
+      toast.success(`Added ${parsed.length} step${parsed.length === 1 ? '' : 's'} from cURL`, warnings.length ? `${warnings.length} command(s) skipped.` : undefined);
+    } catch {
+      toast.error('Import failed', 'Could not parse that cURL command.');
+    } finally {
+      setImporting(false);
+    }
+  };
 
   /* ── Step mutations ── */
   const patchStep = (id: string, patch: Partial<EditStep>) => setSteps((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
@@ -191,10 +286,31 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
     [next[i], next[j]] = [next[j], next[i]];
     return next;
   });
-  const addExtract = (s: EditStep) => patchStep(s.id, { extract: [...s.extract, { _k: nextId('k'), name: '', from: 'body', path: '' }] });
+  const addExtract = (s: EditStep) => patchStep(s.id, { extract: [...s.extract, { _k: nextId('k'), name: '', from: 'body', path: '', regex: '' }] });
   const setExtract = (s: EditStep, k: string, patch: Partial<EditExtract>) => patchStep(s.id, { extract: s.extract.map((x) => (x._k === k ? { ...x, ...patch } : x)) });
   const delExtract = (s: EditStep, k: string) => patchStep(s.id, { extract: s.extract.filter((x) => x._k !== k) });
-  const addCheck = (s: EditStep) => patchStep(s.id, { checks: [...s.checks, { _k: nextId('k'), kind: 'status', oneOf: '200', path: '', value: '', text: '', ms: '', name: '', op: 'exists', compareMode: 'lenient' }] });
+  const downloadJUnit = async () => {
+    if (!result) return;
+    try {
+      const xml = await exportFlowJUnit({ kind: 'flow', name: name.trim() || 'flow', result });
+      const url = URL.createObjectURL(new Blob([xml], { type: 'application/xml' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = `${(name.trim() || 'flow').replace(/[^\w.-]+/g, '_').slice(0, 60)}-junit.xml`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: any) { toast.error('Export failed', e?.response?.data?.error || e?.message || 'Could not build JUnit XML.'); }
+  };
+  const copyCurl = async (s: EditStep) => {
+    if (!(s.url || '').trim()) { toast.error('Nothing to copy', 'Add a URL to this step first.'); return; }
+    try { await navigator.clipboard.writeText(stepToCurl(s)); toast.success('Copied as cURL'); }
+    catch { toast.error('Copy failed', 'Clipboard is blocked in this context.'); }
+  };
+  const addVar = () => setVars((p) => [...p, { _k: nextId('v'), key: '', value: '' }]);
+  const setVar = (k: string, patch: Partial<VarRow>) => setVars((p) => p.map((v) => (v._k === k ? { ...v, ...patch } : v)));
+  const delVar = (k: string) => setVars((p) => p.filter((v) => v._k !== k));
+  // Seed variables available to {{...}} from step 1, before any extract (baseUrl, a static token, test data). Blank keys dropped.
+  const varsToRecord = (): Record<string, string> => { const o: Record<string, string> = {}; for (const v of vars) if (v.key.trim()) o[v.key.trim()] = v.value; return o; };
+  const addCheck = (s: EditStep) => patchStep(s.id, { checks: [...s.checks, { _k: nextId('k'), kind: 'status', oneOf: '200', path: '', value: '', text: '', ms: '', name: '', op: 'exists', compareMode: 'lenient', ignore: '', expr: '', schema: '' }] });
   const setCheck = (s: EditStep, k: string, patch: Partial<EditCheck>) => patchStep(s.id, { checks: s.checks.map((c) => (c._k === k ? { ...c, ...patch } : c)) });
   const delCheck = (s: EditStep, k: string) => patchStep(s.id, { checks: s.checks.filter((c) => c._k !== k) });
 
@@ -210,6 +326,7 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
     if (!f) return;
     setName(f.name);
     setSteps(f.steps.map(apiStepToEdit));
+    setVars(Object.entries(f.variables || {}).map(([key, value]) => ({ _k: nextId('v'), key, value: String(value) })));
     setResult(null);
     setError('');
   };
@@ -230,7 +347,7 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
     if (!steps.length) { setError('Add at least one step before saving.'); return; }
     setSaving(true); setError('');
     try {
-      const { flow } = await saveApiFlow({ id: selectedId || undefined, name: name.trim(), steps: steps.map(editStepToApi) });
+      const { flow } = await saveApiFlow({ id: selectedId || undefined, name: name.trim(), steps: steps.map(editStepToApi), variables: varsToRecord() });
       setSelectedId(flow.id);
       toast.success('Flow saved', `“${flow.name}” saved with ${flow.steps.length} step${flow.steps.length === 1 ? '' : 's'}.`);
       await refresh();
@@ -250,7 +367,7 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
     }
     setRunning(true); setError(''); setResult(null);
     try {
-      setResult(await runApiFlow({ steps: apiSteps, allowWrites }));
+      setResult(await runApiFlow({ steps: apiSteps, variables: varsToRecord(), allowWrites }));
     } catch (e: any) {
       setError(e?.response?.data?.error || e?.message || 'Flow run failed.');
     } finally { setRunning(false); }
@@ -290,9 +407,26 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
             </label>
           </div>
 
-          <p className="text-[11px] text-gray-400">Reference an extracted value anywhere in a later step's URL, header values or body with <code className="font-mono text-[#6D28D9]">{'{{variableName}}'}</code>.</p>
+          <p className="text-[11px] text-gray-400">Reference an extracted value anywhere in a later step's URL, header values or body with <code className="font-mono text-[#6D28D9]">{'{{variableName}}'}</code>. Generate unique data with <code className="font-mono text-[#6D28D9]">{'{{$uuid}}'}</code>, <code className="font-mono text-[#6D28D9]">{'{{$randomEmail}}'}</code>, <code className="font-mono text-[#6D28D9]">{'{{$timestamp}}'}</code>, <code className="font-mono text-[#6D28D9]">{'{{$randomInt}}'}</code>, <code className="font-mono text-[#6D28D9]">{'{{$randomString}}'}</code>. Transform a value with a pipe: <code className="font-mono text-[#6D28D9]">{'{{creds | base64}}'}</code>, <code className="font-mono text-[#6D28D9]">{'{{id | urlencode}}'}</code>, <code className="font-mono text-[#6D28D9]">{'{{name | jsonstring}}'}</code> (also upper / lower / trim / base64decode / urldecode).</p>
 
           {error && <div className="flex items-start gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg"><AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0 mt-px" /><p className="text-[12px] text-red-700">{error}</p></div>}
+
+          {/* Seed variables — available to {{...}} from step 1, before any extract */}
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className={`${LABEL} mb-0`}>Seed variables</span>
+              <span className="text-[11px] text-gray-400">reference as <code className="font-mono text-[#6D28D9]">{'{{name}}'}</code> in any step (e.g. <code className="font-mono">baseUrl</code>, a token, test data)</span>
+              <button type="button" onClick={addVar} className="ml-auto inline-flex items-center gap-1 text-[11px] text-[#6D28D9] hover:text-[#4C1D95]"><Plus className="w-3 h-3" />Add variable</button>
+            </div>
+            {vars.map((v) => (
+              <div key={v._k} className="flex items-center gap-2">
+                <input value={v.key} onChange={(e) => setVar(v._k, { key: e.target.value })} placeholder="name" className={`${FIELD} w-40 flex-shrink-0 font-mono text-[11px]`} />
+                <span className="text-gray-400 text-[11px]">=</span>
+                <input value={v.value} onChange={(e) => setVar(v._k, { value: e.target.value })} placeholder="value" className={`${FIELD} flex-1 min-w-0 font-mono text-[11px]`} />
+                <button type="button" onClick={() => delVar(v._k)} className="p-1 text-gray-400 hover:text-red-500 flex-shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>
+              </div>
+            ))}
+          </div>
 
           {/* Steps */}
           {steps.length === 0 && (
@@ -309,6 +443,7 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
                   <span className="text-[11.5px] font-mono text-gray-500 truncate flex-1 min-w-0">{s.url || <span className="text-gray-300">no URL yet</span>}</span>
                   <button type="button" onClick={() => move(i, -1)} disabled={i === 0} className="p-1 rounded text-gray-400 hover:text-[#7C3AED] disabled:opacity-30"><ChevronUp className="w-3.5 h-3.5" /></button>
                   <button type="button" onClick={() => move(i, 1)} disabled={i === steps.length - 1} className="p-1 rounded text-gray-400 hover:text-[#7C3AED] disabled:opacity-30"><ChevronDown className="w-3.5 h-3.5" /></button>
+                  <button type="button" onClick={() => void copyCurl(s)} className="p-1 rounded text-gray-400 hover:text-[#7C3AED]" title="Copy this step as a cURL command"><Copy className="w-3.5 h-3.5" /></button>
                   <button type="button" onClick={() => patchStep(s.id, { open: !s.open })} className="p-1 rounded text-gray-400 hover:text-[#7C3AED]" title={s.open ? 'Collapse' : 'Edit'}><ChevronRight className={`w-3.5 h-3.5 transition-transform ${s.open ? 'rotate-90' : ''}`} /></button>
                   <button type="button" onClick={() => removeStep(s.id)} className="p-1 rounded text-gray-400 hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
                 </div>
@@ -326,6 +461,35 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
                         <label className={LABEL}>URL</label>
                         <input value={s.url} onChange={(e) => patchStep(s.id, { url: e.target.value })} placeholder="{{baseUrl}}/v1/users/{{id}}" className={INPUT} />
                       </div>
+                      <div>
+                        <label className={LABEL} title="setup runs first; teardown always runs last (cleanup), even if an earlier step failed">Phase</label>
+                        <select value={s.phase} onChange={(e) => patchStep(s.id, { phase: e.target.value as StepPhase })} className={FIELD} title="setup → main → teardown (teardown always runs, for cleanup)">
+                          <option value="setup">setup</option>
+                          <option value="main">main</option>
+                          <option value="teardown">teardown</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Timeout + Poll / retry (eventual consistency): re-run this request until the expression holds. */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <label className="flex items-center gap-1.5 text-[12px] text-gray-600" title="Per-request timeout in ms — a slow/stuck dependency fails the step instead of hanging (default 15000)">
+                        Timeout
+                        <input value={s.timeout} onChange={(e) => patchStep(s.id, { timeout: e.target.value.replace(/[^0-9]/g, '') })} placeholder="15000" className={`${FIELD} w-24 flex-shrink-0`} />
+                        <span className="text-gray-400 text-[11px]">ms</span>
+                      </label>
+                      <span className="text-gray-200">·</span>
+                      <label className="flex items-center gap-1.5 text-[12px] text-gray-600 cursor-pointer" title="Retry this request until the expression holds — for a resource that appears/changes asynchronously">
+                        <input type="checkbox" checked={s.pollEnabled} onChange={(e) => patchStep(s.id, { pollEnabled: e.target.checked })} className="accent-[#7C3AED]" />
+                        Poll until
+                      </label>
+                      {s.pollEnabled && (
+                        <>
+                          <input value={s.pollUntil} onChange={(e) => patchStep(s.id, { pollUntil: e.target.value })} placeholder="status == 200" title="Expression over status / responseTimeMs / header.* / body fields / {{vars}}" className={`${FIELD} flex-1 min-w-0 font-mono text-[11px]`} />
+                          <input value={s.pollAttempts} onChange={(e) => patchStep(s.id, { pollAttempts: e.target.value })} placeholder="attempts (5)" title="Max attempts" className={`${FIELD} w-24 flex-shrink-0`} />
+                          <input value={s.pollDelayMs} onChange={(e) => patchStep(s.id, { pollDelayMs: e.target.value })} placeholder="delay ms (400)" title="Delay between attempts" className={`${FIELD} w-28 flex-shrink-0`} />
+                        </>
+                      )}
                     </div>
 
                     {isWrite(s.method) && (
@@ -352,6 +516,7 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
                               <option value="status">status</option>
                             </select>
                             <input value={x.path} onChange={(e) => setExtract(s, x._k, { path: e.target.value })} placeholder={x.from === 'header' ? 'Header-Name' : x.from === 'status' ? 'whole status' : 'data.0.id'} disabled={x.from === 'status'} className={`${FIELD} flex-1 min-w-0`} />
+                            <input value={x.regex} onChange={(e) => setExtract(s, x._k, { regex: e.target.value })} placeholder="regex (opt)" title="Optional regex on the value — binds capture group 1 (e.g. /posts/(\d+) on a Location header). Blank path + body = raw body text." className={`${FIELD} w-28 flex-shrink-0 font-mono text-[11px]`} />
                             <button type="button" onClick={() => delExtract(s, x._k)} className="p-1 text-gray-400 hover:text-red-500 flex-shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>
                           </div>
                         ))}
@@ -394,7 +559,12 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
                                 <option value="non-extensible">non-extensible</option>
                               </select>
                             )}
-                            {c.kind === 'bodyMatches' && <input value={c.value} onChange={(e) => setCheck(s, c._k, { value: e.target.value })} placeholder='{"id":1,"name":"Ada"}' title="Expected JSON body" className={`${FIELD} flex-1 min-w-0 font-mono text-[11px]`} />}
+                            {c.kind === 'bodyMatches' && <input value={c.value} onChange={(e) => setCheck(s, c._k, { value: e.target.value })} placeholder='{"id":{{newId}},"name":"Ada"}' title="Expected JSON body — may embed captured {{vars}}" className={`${FIELD} flex-1 min-w-0 font-mono text-[11px]`} />}
+                            {c.kind === 'bodyMatches' && <input value={c.ignore} onChange={(e) => setCheck(s, c._k, { ignore: e.target.value })} placeholder="ignore: createdAt, items.*.id" title="Comma-separated paths stripped from both sides before comparing (volatile ids/timestamps). Supports * wildcard, e.g. data.*.updatedAt" className={`${FIELD} w-44 flex-shrink-0 font-mono text-[11px]`} />}
+                            {c.kind === 'expr' && <input value={c.expr} onChange={(e) => setCheck(s, c._k, { expr: e.target.value })} placeholder="status >= 200 && status < 300" title="Boolean expression over status, responseTimeMs, header.*, body fields (e.g. data.length) and captured {{vars}}" className={`${FIELD} flex-1 min-w-0 font-mono text-[11px]`} />}
+                            {c.kind === 'schema' && <input value={c.path} onChange={(e) => setCheck(s, c._k, { path: e.target.value })} placeholder="path (optional)" title="Validate only this sub-part of the body (e.g. data.0); blank = whole body" className={`${FIELD} w-32 flex-shrink-0`} />}
+                            {c.kind === 'schema' && <input value={c.schema} onChange={(e) => setCheck(s, c._k, { schema: e.target.value })} placeholder='{"type":"object","required":["id"]}' title="JSON Schema the response (or the path-selected part) must satisfy" className={`${FIELD} flex-1 min-w-0 font-mono text-[11px]`} />}
+                            {c.kind === 'graphql' && <span className="flex-1 min-w-0 text-[11px] text-gray-400 self-center">Fails if the response body has a non-empty <code className="font-mono">errors</code> array (GraphQL replies 200 even on failure).</span>}
                             <button type="button" onClick={() => delCheck(s, c._k)} className="p-1 text-gray-400 hover:text-red-500 flex-shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>
                           </div>
                         ))}
@@ -415,7 +585,27 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
                 {catalog.endpoints.map((ep) => <option key={ep.id} value={ep.id}>{ep.method} {ep.url}</option>)}
               </select>
             )}
+            <button type="button" onClick={() => setCurlOpen((v) => !v)} className={SECONDARY_BTN} title="Paste a cURL command (browser devtools / Postman 'Copy as cURL') to add it as a step">
+              <ChevronRight className={`w-3.5 h-3.5 transition-transform ${curlOpen ? 'rotate-90' : ''}`} />Import cURL
+            </button>
           </div>
+          {curlOpen && (
+            <div className="space-y-2 p-2.5 rounded-lg border border-dashed border-gray-300 bg-gray-50/60">
+              <textarea
+                value={curlText}
+                onChange={(e) => setCurlText(e.target.value)}
+                rows={3}
+                placeholder={"curl 'https://api.example.com/v1/orders' -H 'Authorization: Bearer abc' -H 'Content-Type: application/json' -d '{\"item\":\"x\"}'"}
+                className={`${INPUT} w-full font-mono text-[11px] resize-y`}
+              />
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={importCurl} disabled={!curlText.trim() || importing} className={PRIMARY_BTN}>
+                  {importing ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}Add from cURL
+                </button>
+                <span className="text-[11px] text-gray-500">Parses method, URL, headers, body and auth. Multiple commands → multiple steps.</span>
+              </div>
+            </div>
+          )}
 
           {/* Results */}
           {result && (
@@ -424,6 +614,7 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
                 {result.passed ? <CheckCircle2 className="w-5 h-5 text-emerald-600" /> : <XCircle className="w-5 h-5 text-red-600" />}
                 <div className={`text-[13px] font-semibold ${result.passed ? 'text-emerald-700' : 'text-red-700'}`}>{result.passed ? 'Flow passed' : 'Flow failed'}</div>
                 <span className="ml-auto text-[11px] text-gray-500">{result.stepsRun}/{result.stepsTotal} steps · {formatDuration(result.durationMs)}</span>
+                <button type="button" onClick={() => void downloadJUnit()} title="Download this run as JUnit XML (for CI)" className="inline-flex items-center gap-1 px-2 py-1 rounded border border-gray-200 bg-white text-[11px] text-gray-600 hover:text-[#6D28D9] hover:border-[#DDD6FE]"><Download className="w-3.5 h-3.5" />JUnit</button>
               </div>
               {Object.keys(result.variables).length > 0 && (
                 <div className="flex flex-wrap gap-1">

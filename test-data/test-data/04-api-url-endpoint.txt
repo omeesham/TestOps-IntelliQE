@@ -1,0 +1,10 @@
+=== 04. API URL / Endpoint — "One live URL, probed" ===
+
+Paste ONE live URL into the API URL / Endpoint tab. IntelliQE probes it live and
+searches the origin for a spec. All of these respond in real time:
+
+  https://jsonplaceholder.typicode.com/users/1
+  https://httpbin.org/uuid
+  https://api.github.com/repos/microsoft/vscode
+
+Expected: 200 with a JSON body. The first one is the recommended primary test.

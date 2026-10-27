@@ -1,0 +1,38 @@
+# === 10. GraphQL — "Introspect the schema" ===
+# Preferred: paste this endpoint URL and let IntelliQE introspect it live:
+#   https://graphqlzero.almansi.me/api
+# Fallback: paste the SDL below (for hosts that block introspection with HTTP 413,
+#   e.g. https://countries.trevorblades.com/). This SDL mirrors that live Countries API.
+
+type Query {
+  continents: [Continent!]!
+  continent(code: ID!): Continent
+  countries: [Country!]!
+  country(code: ID!): Country
+  languages: [Language!]!
+  language(code: ID!): Language
+}
+
+type Continent {
+  code: ID!
+  name: String!
+  countries: [Country!]!
+}
+
+type Country {
+  code: ID!
+  name: String!
+  native: String!
+  capital: String
+  currency: String
+  emoji: String!
+  languages: [Language!]!
+  continent: Continent!
+}
+
+type Language {
+  code: ID!
+  name: String!
+  native: String!
+  rtl: Boolean!
+}

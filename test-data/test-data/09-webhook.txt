@@ -1,0 +1,14 @@
+=== 09. Webhook — "Your consumer endpoint + events" ===
+
+This method registers YOUR consumer endpoint and sends HMAC-signed sample events to it.
+Fill these into the Webhook form:
+
+  Consumer endpoint:  https://httpbin.org/post
+  Secret:             whsec_demo_123
+
+  Sample event payloads:
+    {"event":"order.created","id":"ord_1001","amount":4200,"currency":"USD"}
+    {"event":"order.refunded","id":"ord_1001","amount":4200,"currency":"USD"}
+
+Deliveries are signed with the secret; httpbin.org/post echoes them back so you can
+verify the signature header and body in real time.

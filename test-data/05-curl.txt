@@ -1,0 +1,15 @@
+# Paste these into the cURL method. All hit live public APIs.
+
+curl https://jsonplaceholder.typicode.com/todos/1
+
+curl -X POST https://httpbin.org/post \
+  -H 'Content-Type: application/json' \
+  -d '{"sku":"A1","qty":2}'
+
+curl -H 'Authorization: Bearer demo-token-123' https://httpbin.org/bearer
+
+curl 'https://jsonplaceholder.typicode.com/comments?postId=1'
+
+curl -X PUT https://httpbin.org/put \
+  -H 'Content-Type: application/json' \
+  -d '{"status":"active"}'

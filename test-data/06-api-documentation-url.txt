@@ -1,0 +1,11 @@
+=== 06. API Documentation URL — "A reference page, read by AI" ===
+
+This method is AI-read (needs a tenant Anthropic key configured). Paste a reference
+page URL; the AI first follows any spec link the page advertises, then reads the prose.
+
+  https://petstore3.swagger.io/
+  https://docs.github.com/en/rest/users/users
+
+Tip: if a docs page is JavaScript-rendered and comes back empty, paste the reference
+text directly, or use the OpenAPI / Swagger method with the spec URL instead
+(e.g. https://petstore3.swagger.io/api/v3/openapi.json).

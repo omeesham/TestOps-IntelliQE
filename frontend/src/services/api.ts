@@ -1016,20 +1016,25 @@ export async function captureWebPerformance(input: { url: string; engine?: WebEn
    ═════════════════════════════════════════════════════════════ */
 
 /* ── 1. Visual flow / journey builder ── */
-export interface FlowExtract { name: string; from: 'body' | 'header' | 'status'; path?: string }
+export interface FlowExtract { name: string; from: 'body' | 'header' | 'status'; path?: string; regex?: string }
 export type CompareMode = 'strict' | 'strict-order' | 'lenient' | 'non-extensible';
-export interface FlowCheck { kind: 'status' | 'jsonPathExists' | 'jsonPathEquals' | 'bodyContains' | 'responseTimeUnderMs' | 'header' | 'bodyMatches' | 'xpath'; equals?: number | string; oneOf?: number[]; path?: string; value?: unknown; text?: string; ms?: number; name?: string; op?: 'equals' | 'contains' | 'exists'; compareMode?: CompareMode }
+export interface FlowCheck { kind: 'status' | 'jsonPathExists' | 'jsonPathEquals' | 'bodyContains' | 'responseTimeUnderMs' | 'header' | 'bodyMatches' | 'xpath' | 'expr' | 'schema' | 'graphql'; equals?: number | string; oneOf?: number[]; path?: string; value?: unknown; text?: string; ms?: number; name?: string; op?: 'equals' | 'contains' | 'exists'; compareMode?: CompareMode; ignore?: string[]; expr?: string; schema?: string }
 export interface ApiOAuth2Config { grant?: string; tokenUrl?: string; clientId?: string; clientSecret?: string; scope?: string; audience?: string; username?: string; password?: string; refreshToken?: string; clientAuthBasic?: boolean }
 export interface ApiHttpAuth { type: string; value?: string; headerName?: string; oauth2?: ApiOAuth2Config }
 export interface ApiFormField { key: string; value?: string; type?: 'text' | 'file'; filename?: string; contentType?: string; dataBase64?: string }
-export type FlowStepType = 'request' | 'if' | 'loop' | 'wait' | 'group';
+export type FlowStepType = 'request' | 'if' | 'loop' | 'wait' | 'group' | 'retry';
 export type FlowConditionOp = 'eq' | 'ne' | 'exists' | 'notExists' | 'contains' | 'gt' | 'lt';
-export interface FlowCondition { var: string; op: FlowConditionOp; value?: string }
-export interface FlowLoop { mode: 'times' | 'while'; times?: number; while?: FlowCondition; maxIterations?: number }
+export interface FlowCondition { var?: string; op?: FlowConditionOp; value?: string; expr?: string }
+export interface FlowLoop { mode: 'times' | 'while' | 'forEach'; times?: number; while?: FlowCondition; maxIterations?: number; items?: string; var?: string }
+/** Retry/poll a block until `until` holds (or, without one, until the block passes). Models eventual consistency. */
+export interface FlowRetry { until?: FlowCondition; attempts?: number; delayMs?: number }
+export type StepPhase = 'setup' | 'main' | 'teardown';
 export interface FlowStep {
   id?: string;
   name?: string;
   type?: FlowStepType;
+  /** Lifecycle phase: setup → main → teardown (always runs). Omitted ⇒ main. */
+  phase?: StepPhase;
   method?: string;
   url?: string;
   headers?: { key: string; value: string }[];
@@ -1045,17 +1050,36 @@ export interface FlowStep {
   then?: FlowStep[];
   else?: FlowStep[];
   loop?: FlowLoop;
+  retry?: FlowRetry;
   steps?: FlowStep[];
   waitMs?: number;
   groupId?: string;
+  /** Per-request timeout in ms (100–120000). Omitted ⇒ 15000. */
+  timeoutMs?: number;
 }
 export interface SavedApiFlow { id: string; name: string; steps: FlowStep[]; variables: Record<string, string>; createdBy: string; createdAt: string; updatedAt: string }
-export interface FlowStepResult { index: number; name: string; method: string; url: string; ok: boolean; status?: number; elapsedMs: number; error?: string; extracted: Record<string, string>; checks: { kind: string; label: string; pass: boolean; detail?: string }[]; bodyPreview: string }
+export interface FlowStepResult { index: number; name: string; method: string; url: string; phase?: StepPhase; ok: boolean; status?: number; elapsedMs: number; error?: string; extracted: Record<string, string>; checks: { kind: string; label: string; pass: boolean; detail?: string }[]; bodyPreview: string }
 export interface FlowRunResult { passed: boolean; steps: FlowStepResult[]; variables: Record<string, string>; durationMs: number; stepsRun: number; stepsTotal: number }
 export async function listApiFlows(): Promise<{ flows: SavedApiFlow[] }> { const { data } = await api.get('/api-automation/flows'); return data; }
 export async function saveApiFlow(input: { id?: string; name: string; steps: FlowStep[]; variables?: Record<string, string> }): Promise<{ flow: SavedApiFlow }> { const { data } = await api.post('/api-automation/flows', input); return data; }
 export async function deleteApiFlow(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/flows/${encodeURIComponent(id)}`); return data; }
 export async function runApiFlow(input: { steps: FlowStep[]; variables?: Record<string, string>; allowWrites?: boolean }): Promise<FlowRunResult> { const { data } = await api.post('/api-automation/flows/run', input, { timeout: 180_000 }); return data; }
+/** A runnable integration journey the analyzer detected from the catalogue (not yet saved). */
+export interface SuggestedFlow { name: string; description: string; resource: string; steps: FlowStep[]; variables: Record<string, string>; suggested: true; hasWrites: boolean }
+export async function suggestApiIntegrationFlows(endpoints: unknown[]): Promise<{ flows: SuggestedFlow[] }> { const { data } = await api.post('/api-automation/flows/suggest', { endpoints }); return data; }
+export async function importCurlSteps(curl: string): Promise<{ steps: FlowStep[]; warnings: string[] }> { const { data } = await api.post('/api-automation/flows/import-curl', { curl }); return { steps: data.steps || [], warnings: data.warnings || [] }; }
+/** Run several flows in order as a suite, sharing captured variables between them. */
+export type SuiteFlowRole = 'setup' | 'flow' | 'teardown';
+export interface SuiteFlowInput { name?: string; steps: FlowStep[]; variables?: Record<string, string> }
+export interface SuiteFlowResult { name: string; passed: boolean; run: FlowRunResult; role: SuiteFlowRole }
+export interface SuiteRunResult { passed: boolean; flows: SuiteFlowResult[]; variables: Record<string, string>; durationMs: number; flowsRun: number; flowsTotal: number }
+export async function runApiFlowSuite(input: { flows: SuiteFlowInput[]; setup?: SuiteFlowInput; teardown?: SuiteFlowInput; variables?: Record<string, string>; allowWrites?: boolean; stopOnFailure?: boolean }): Promise<SuiteRunResult> { const { data } = await api.post('/api-automation/flows/run-suite', input, { timeout: 300_000 }); return data; }
+/** Run one flow across a dataset — once per row, each row seeding that run's variables (a parameterised test matrix). */
+export interface DatasetRowResult { index: number; row: Record<string, string>; passed: boolean; run: FlowRunResult }
+export interface DatasetRunResult { passed: boolean; rows: DatasetRowResult[]; rowsRun: number; rowsTotal: number; rowsPassed: number; durationMs: number }
+export async function runApiFlowDataset(input: { steps: FlowStep[]; variables?: Record<string, string>; allowWrites?: boolean; dataset: Record<string, string>[]; stopOnFailure?: boolean }): Promise<DatasetRunResult> { const { data } = await api.post('/api-automation/flows/run-dataset', input, { timeout: 300_000 }); return data; }
+/** Convert an already-computed run result into JUnit XML (for CI), without re-running. */
+export async function exportFlowJUnit(input: { kind: 'flow' | 'suite' | 'dataset'; name?: string; result: unknown }): Promise<string> { const { data } = await api.post('/api-automation/flows/export-junit', input, { responseType: 'text' }); return typeof data === 'string' ? data : String(data); }
 
 /* ── 2. Conversational chat-to-test ── */
 export interface ChatTestDraft { title: string; method: string; url: string; headers: { key: string; value: string }[]; body?: string; checks: FlowCheck[] }

@@ -19,9 +19,9 @@ export interface OAuth2Config { grant?: string; tokenUrl?: string; clientId?: st
 export interface EndpointFormField { key: string; value?: string; type?: 'text' | 'file'; filename?: string; contentType?: string; dataBase64?: string }
 export type ApiStyle = 'rest' | 'graphql' | 'soap' | 'jsonrpc' | 'webhook' | 'mcp';
 
-/** The twelve ways an API can enter the workspace. */
+/** The ways an API can enter the workspace. */
 export type ImportMethod =
-  | 'openapi' | 'postman' | 'endpoint' | 'curl' | 'docs-url' | 'connector'
+  | 'openapi' | 'postman' | 'bruno' | 'endpoint' | 'curl' | 'docs-url' | 'connector'
   | 'sdk' | 'webhook' | 'graphql' | 'mcp' | 'middleware' | 'manual' | 'file' | 'capture';
 
 export interface HeaderPair { key: string; value: string }
@@ -78,7 +78,8 @@ export interface ApiResource {
   parent?: string;
 }
 
-export interface ApiFlow { id: string; name: string; resource: string; steps: number[]; description: string }
+export interface ApiFlowBinding { var: string; toStep: number; into: 'path' | 'query' | 'body'; target: string }
+export interface ApiFlow { id: string; name: string; resource: string; steps: number[]; description: string; crossService?: boolean; bindings?: ApiFlowBinding[] }
 export interface ApiRisk { level: 'high' | 'medium' | 'low'; text: string; endpoints?: number[] }
 export interface ApiDependency { from: number; to: number; kind: string; reason: string }
 export interface StrategyLayer { id: StrategyLayerId; label: string; enabled: boolean; estimatedCases: number; rationale: string }
@@ -279,4 +280,4 @@ export interface ApiRunDetail extends ApiRunSummary {
    Navigation
    ═══════════════════════════════════════════════════════════════ */
 
-export type NavView = 'overview' | 'import' | 'integrations' | 'endpoints' | 'scenarios' | 'runs' | 'report' | 'environments' | 'tools' | 'developer';
+export type NavView = 'overview' | 'import' | 'integrations' | 'integration-tests' | 'endpoints' | 'scenarios' | 'runs' | 'report' | 'environments' | 'tools' | 'developer';
