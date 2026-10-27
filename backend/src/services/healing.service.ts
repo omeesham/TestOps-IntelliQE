@@ -8,9 +8,12 @@
  * to the real failing tests — every test surfaced "Backend did not return a fix".
  *
  * This service heals the REAL failing scripts instead:
- *   1. Load each failing script + its test-case intent straight from the DB.
- *   2. Ask Claude to fix it, giving it the actual code, the actual error, and
- *      the test's intent (see agents/healing-prompt.ts).
+ *   1. Load each failing script + its test-case intent straight from the DB, and
+ *      re-run it unchanged: one that now passes was intermittent, not broken.
+ *   2. Ask Claude to fix the rest, giving it the actual code, the actual error, and
+ *      the test's intent (see agents/healing-prompt.ts). Failures that point at the
+ *      app (answer-key mismatch, or code that passed before) are left for a person,
+ *      and a fix that weakens the test is rejected (see heal-guard.service.ts).
  *   3. RE-RUN the targeted scripts via Playwright (in a throwaway workspace) to
  *      get a real pass/fail verdict for each, keyed by test_case_id so the
  *      frontend can map results 1:1.
@@ -29,6 +32,7 @@ import { runClaudePrompt, isClaudeCliAuthenticated, parseJsonFromResponse } from
 import { buildHealingPrompt, type HealingFix } from '../agents/healing-prompt.js';
 import { PlaywrightRunError, classifyPlaywrightFailureExternal, prepareRunTestData, storedAllureResultsDir, runSafety } from './playwright-runner.service.js';
 import { isDocumentFinding } from './document-accuracy.service.js';
+import { weakerFixReason } from './heal-guard.service.js';
 import { TEST_DATA_ENV } from './test-data.service.js';
 import { errorWithBlocked, prepareGuardedRun, specForRun, type SafetySettings } from './uat-safety.service.js';
 
@@ -78,23 +82,8 @@ interface FailingRow {
   precondition?: string | null;
   steps?: string[] | null;
   expected_result?: string | null;
-}
-
-/** Best-effort lookup of the target URL so the fix prompt can correct paths/protocol. */
-async function resolveTargetUrl(tenantId: string): Promise<string | undefined> {
-  try {
-    const appRes = await pool.query(
-      `SELECT config_data FROM ${SCHEMA}.client_configurations
-       WHERE tenant_id = $1 AND integration_id LIKE 'app-%' AND status = 'connected'
-       ORDER BY updated_at DESC LIMIT 1`,
-      [tenantId],
-    );
-    if (appRes.rows.length > 0) {
-      const cfg = appRes.rows[0].config_data || {};
-      return cfg.baseUrl || cfg.targetUrl || undefined;
-    }
-  } catch { /* ignore — the script already carries an absolute URL */ }
-  return undefined;
+  test_data?: Record<string, unknown> | null;
+  last_passed_at?: string | null;
 }
 
 /**
@@ -242,8 +231,8 @@ export async function healRunScripts(
   const { rows } = await pool.query<FailingRow>(
     // NOTE: the test_cases column is `expected` (not `expected_result`); alias it
     // so the rest of this file can keep using `expected_result`.
-    `SELECT s.id, s.tc_number, s.test_case_id, s.test_case_title, s.file_name, s.code,
-            tc.title, tc.feature, tc.type, tc.precondition, tc.steps, tc.expected AS expected_result
+    `SELECT s.id, s.tc_number, s.test_case_id, s.test_case_title, s.file_name, s.code, s.last_passed_at,
+            tc.title, tc.feature, tc.type, tc.precondition, tc.steps, tc.expected AS expected_result, tc.test_data
      FROM ${SCHEMA}.automation_scripts s
      LEFT JOIN ${SCHEMA}.test_cases tc ON tc.id = s.test_case_id
      WHERE s.test_run_id = $1${tenantClause} AND s.framework = 'playwright'
@@ -260,20 +249,38 @@ export async function healRunScripts(
     });
   }
 
-  const targetUrl = await resolveTargetUrl(tenantId);
   const canUseAi = isClaudeCliAuthenticated();
+  const specOf = (row: FailingRow, code: string) => ({
+    testCaseId: row.test_case_id,
+    fileName: row.file_name || `${row.tc_number || 'test'}.spec.ts`,
+    code,
+  });
+  const guard = await runSafety(tenantId, runId, rows.map((r) => r.code));
+  // Only this run's own app URL: another app's URL would send the fix to the wrong site.
+  const targetUrl = guard.appUrl;
 
-  // ── 1. AI-fix each failing script (in parallel — the set is small). ──
+  // ── 1. Re-run the failing scripts unchanged: one that now passes failed by
+  // chance, and changing it would fix nothing. ──
+  const plainRun = await reRunHealedSpecs(tenantId, runId, rows.map((r) => specOf(r, r.code)), guard);
+
+  // ── 2. AI-fix each script that still fails and is safe to heal (in parallel — the set is small). ──
   const healed = await Promise.all(
     rows.map(async (row): Promise<{ row: FailingRow; newCode: string; healFix: string; healed: boolean }> => {
       const realError = errorById.get(row.test_case_id) || 'Test failed during execution (no error message was captured).';
 
-      if (!canUseAi) {
-        return { row, newCode: row.code, healFix: 'AI engine not connected — could not generate a fix.', healed: false };
+      if (plainRun.get(row.test_case_id)?.status === 'passed') {
+        return { row, newCode: row.code, healFix: 'Re-ran unchanged and passed — the failure was intermittent, so the script was left as is.', healed: false };
       }
       // A value that differs from the answer key is a finding about the app; changing the script would hide it.
       if (isDocumentFinding(realError)) {
-        return { row, newCode: row.code, healFix: 'the screen shows values that differ from the answer key — a finding about the app, not a script fault.', healed: false };
+        return { row, newCode: row.code, healFix: 'Not auto-healed: the screen shows values that differ from the answer key — a finding about the app, not a script fault.', healed: false };
+      }
+      // This exact code passed before, so the app changed: a person decides whether that is a defect.
+      if (row.last_passed_at) {
+        return { row, newCode: row.code, healFix: 'Not auto-healed: this script passed before without changes, so the app has likely changed. Check whether it is a defect or an intended change.', healed: false };
+      }
+      if (!canUseAi) {
+        return { row, newCode: row.code, healFix: 'Could not auto-fix: AI engine not connected.', healed: false };
       }
 
       try {
@@ -299,40 +306,39 @@ export async function healRunScripts(
         // Only accept a real, non-trivial change. If Claude echoed the same code
         // or returned nothing usable, treat it as "no fix produced".
         if (!newCode || newCode === row.code.trim()) {
-          return { row, newCode: row.code, healFix: fix?.diagnosis || 'AI did not produce a different script.', healed: false };
+          return { row, newCode: row.code, healFix: `Could not auto-fix: ${fix?.diagnosis || 'AI did not produce a different script.'}`, healed: false };
         }
-        if (row.code.includes('checkDocument(') && !newCode.includes('checkDocument(')) {
-          return { row, newCode: row.code, healFix: 'AI fix dropped the answer-key check, so it was not applied.', healed: false };
+        const caseText = [row.title, row.precondition, ...(Array.isArray(row.steps) ? row.steps : []), row.expected_result, JSON.stringify(row.test_data || {})].join('\n');
+        const weaker = weakerFixReason(row.code, newCode, caseText, realError);
+        if (weaker) {
+          return { row, newCode: row.code, healFix: `Not auto-healed: the AI fix was rejected because ${weaker}. ${fix?.diagnosis || ''}`.trim(), healed: false };
         }
         const summary = [fix?.diagnosis, fix?.fix].filter(Boolean).join(' → ') || 'Applied an AI fix to the failing script.';
         return { row, newCode, healFix: summary, healed: true };
       } catch (err: any) {
-        return { row, newCode: row.code, healFix: `Heal attempt failed: ${err?.message || 'unknown error'}.`, healed: false };
+        return { row, newCode: row.code, healFix: `Could not auto-fix: heal attempt failed: ${err?.message || 'unknown error'}.`, healed: false };
       }
     }),
   );
 
-  // ── 2. Re-run every targeted script (healed or not) to get a real verdict.
-  // We run BEFORE persisting so a fix is verified in a throwaway workspace first
-  // — the saved suite is never overwritten with unverified (possibly
-  // non-compiling) AI code. ──
-  const reRun = await reRunHealedSpecs(
+  // ── 3. Re-run the fixed scripts to get a real verdict. We run BEFORE persisting
+  // so a fix is verified in a throwaway workspace first — the saved suite is never
+  // overwritten with unverified (possibly non-compiling) AI code. ──
+  const fixes = healed.filter((h) => h.healed);
+  const fixRun = await reRunHealedSpecs(
     tenantId,
     runId,
-    healed.map((h) => ({
-      testCaseId: h.row.test_case_id,
-      fileName: h.row.file_name || `${h.row.tc_number || 'test'}.spec.ts`,
-      code: h.newCode,
-    })),
-    await runSafety(tenantId, runId, healed.map((h) => h.newCode)),
+    fixes.map((h) => specOf(h.row, h.newCode)),
+    await runSafety(tenantId, runId, fixes.map((h) => h.newCode)),
   );
+  const verdictOf = (h: (typeof healed)[number]) =>
+    (h.healed ? fixRun : plainRun).get(h.row.test_case_id) || { status: 'not_run' as const };
 
-  // ── 3. Persist ONLY fixes that actually PASSED the re-run. This guarantees we
+  // ── 4. Persist ONLY fixes that actually PASSED the re-run. This guarantees we
   // never replace a runnable (but failing) script with code that does not work,
   // which would otherwise break the later full-suite Allure report run. ──
-  for (const h of healed) {
-    if (!h.healed) continue;
-    if (reRun.get(h.row.test_case_id)?.status !== 'passed') continue;
+  for (const h of fixes) {
+    if (verdictOf(h).status !== 'passed') continue;
     try {
       await pool.query(
         `UPDATE ${SCHEMA}.automation_scripts
@@ -345,23 +351,11 @@ export async function healRunScripts(
     }
   }
 
-  // ── 4. Assemble per-test results + stamp last-run on the scripts. ──
+  // ── 5. Assemble per-test results + stamp last-run on the scripts. ──
   const details: HealResultDetail[] = healed.map((h) => {
-    const verdict = reRun.get(h.row.test_case_id) || { status: 'not_run' as const };
-    // Make the fix message honest about what actually happened on the re-run:
-    //  - code changed + now passes → describe the AI fix.
-    //  - no code change but now passes → it was a transient failure that cleared.
-    //  - still failing → say so, alongside what was attempted.
-    let healFix = h.healFix;
-    if (verdict.status === 'passed') {
-      healFix = h.healed
-        ? h.healFix
-        : 'Re-ran and passed — the original failure was transient (no code change needed).';
-    } else if (verdict.status === 'failed') {
-      healFix = h.healed
-        ? `${h.healFix} (still failing after re-run)`
-        : `Could not auto-fix: ${h.healFix}`;
-    }
+    const verdict = verdictOf(h);
+    // An applied fix that still fails says so; every other message already states the outcome.
+    const healFix = h.healed && verdict.status === 'failed' ? `${h.healFix} (still failing after re-run)` : h.healFix;
     // For any non-passing test the DB still holds the ORIGINAL code (we persist
     // only verified-passing fixes), so report the ORIGINAL error — it stays in
     // sync with the saved script and feeds a coherent error to the next attempt.
@@ -384,7 +378,8 @@ export async function healRunScripts(
     try {
       await pool.query(
         `UPDATE ${SCHEMA}.automation_scripts
-         SET last_run_at = $1, last_run_result = $2, updated_at = NOW()
+         SET last_run_at = $1, last_run_result = $2, updated_at = NOW(),
+             last_passed_at = CASE WHEN $2 = 'passed' THEN $1 ELSE last_passed_at END
          WHERE test_run_id = $3 AND test_case_id = $4`,
         [new Date().toISOString(), d.status, runId, d.testCaseId],
       );

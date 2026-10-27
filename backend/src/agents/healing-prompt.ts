@@ -111,7 +111,7 @@ DIAGNOSE, THEN FIX — match the error to ONE primary cause:
 1. ASSERTION-INTENT MISMATCH (the most common false failure). The assertion is testing an over-specific implementation detail instead of the actual intent, so a correctly-behaving app fails it.
    • Classic example: a security / injection / negative-login test asserts "no session cookie was created" via expect(cookie).toBeFalsy(), but the application sets a framework/CSRF session cookie on EVERY page load — even the login page, before any authentication. The cookie's presence does NOT mean the attacker authenticated.
    • Correct fix: assert the REAL success criterion of the intent — that the user is NOT authenticated: the page is still on the login URL, an "Invalid credentials" / error message is visible, and the protected area (e.g. /dashboard) was NOT reached. Do NOT assert on the raw cookie.
-   • IMPORTANT inverse case: if a negative / invalid / injection login test UNEXPECTEDLY reaches an authenticated page — e.g. expect(page).not.toHaveURL(/dashboard/) FAILS because the received URL IS the dashboard — then the credentials the test submits are actually being ACCEPTED. The test is using valid credentials (or a payload the app honours) instead of a rejected one. Fix by submitting a clearly-invalid / injection payload the app WILL reject (e.g. username "' OR '1'='1" with a wrong password, or an obviously-bad credential), then assert rejection (stays on the login URL + error visible). Never make it pass by deleting the not.toHaveURL check.
+   • IMPORTANT inverse case: if a negative / invalid / injection login test UNEXPECTEDLY reaches an authenticated page — e.g. expect(page).not.toHaveURL(/dashboard/) FAILS because the received URL IS the dashboard — then the credentials the test submits are actually being ACCEPTED. The test is using valid credentials (or a payload the app honours) instead of a rejected one. Only when the submitted value is NOT one the test case names: fix by submitting a clearly-invalid / injection payload the app WILL reject (e.g. username "' OR '1'='1" with a wrong password, or an obviously-bad credential), then assert rejection (stays on the login URL + error visible). Never make it pass by deleting the not.toHaveURL check.
    • General rule: re-derive the assertion from "Expected result", not from a brittle implementation detail.
 
 2. BRITTLE / WRONG LOCATOR (selector not found, resolves to 0 elements, or uses CSS/XPath/data-testid that does not exist).
@@ -132,7 +132,9 @@ DIAGNOSE, THEN FIX — match the error to ONE primary cause:
 HARD RULES (a "fix" that violates any of these is REJECTED)
 ═══════════════════════════════════════════════════════════
 - PRESERVE INTENT: the healed test must still genuinely verify the Expected result. Never replace a real assertion with a trivially-true one (no expect(true).toBeTruthy(), no expect(1).toBe(1)), never delete the verification, never use test.skip()/test.fixme(), never comment out the assertion to make it "pass".
-- SELF-CONTAINED: the spec must run in isolation. Import only from '@playwright/test'. Do NOT import from sibling generated files.
+- KEEP THE TEST CASE'S VALUES: text the test case expects and data it enters stay exactly as written. If the app shows or accepts something other than what the test case names, that is an app defect, not a script fault: return the script unchanged and say so in "diagnosis".
+- NO HIDDEN WEAKENING: no new .first()/.last()/.nth() except to fix a strict-mode violation, no try/catch or .catch() around an expect, no timeout above 60000.
+- SELF-CONTAINED: the spec must run in isolation. Import only from '@playwright/test' and the helpers the script already imports. Do NOT import from sibling generated files.
 - MINIMAL CHANGE: fix the real root cause and keep the same overall scenario and structure (keep the Page Object Model if the original used one).
 - COMPLETE OUTPUT: return the ENTIRE corrected file, not a diff or a snippet.
 

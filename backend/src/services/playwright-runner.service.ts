@@ -577,5 +577,18 @@ module.exports = defineConfig({
     );
   } catch { /* ignore */ }
 
+  // Remember which scripts passed as they are: if the same code fails later, the app changed.
+  const failedIds = new Set(details.filter((d) => d.status !== 'passed').map((d) => d.testCaseId));
+  const passedIds = [...new Set(details.filter((d) => d.status === 'passed' && d.testCaseId && !failedIds.has(d.testCaseId)).map((d) => d.testCaseId))];
+  if (passedIds.length > 0) {
+    try {
+      await pool.query(
+        `UPDATE "JBSTestOpsAI".automation_scripts SET last_passed_at = NOW()
+         WHERE test_run_id = $1 AND test_case_id IN (${passedIds.map((_, i) => `$${i + 2}`).join(', ')})`,
+        [runId, ...passedIds],
+      );
+    } catch { /* ignore */ }
+  }
+
   return { details, passed, failed, documentAccuracy };
 }
