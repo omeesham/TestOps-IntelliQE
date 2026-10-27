@@ -161,13 +161,23 @@ export function categoryFor(raw: string | undefined, type: TestCase['type']): Te
 
 /** What each coverage level asks for (test-design skill, section 4). */
 const COVERAGE_INSTRUCTIONS: Record<CoverageLevel, string> = {
-  essential: 'COVERAGE LEVEL: essential (smoke). One happy path per feature, one negative case per validation rule, and every business rule (BR-xx) once. Budget: about 1 case per rule plus 1 happy path per feature.',
+  essential: 'COVERAGE LEVEL: essential (smoke). One happy path per feature, then the most critical rules only: one negative case each for the rules whose failure would block the main flow or lose data. Skip boundary, format, edge, security and accessibility cases. Combine several required fields left empty into one case. Rules left out are reported as uncovered, not padded.',
   standard: 'COVERAGE LEVEL: standard (regression). Everything in essential, plus: boundary values (min, max, just below, just above) for every constrained field (FLD-xx); one case per meaningful condition combination of multi-condition business rules; each valid state transition and at least one blocked transition; error guessing for each form (empty submit, leading/trailing spaces, special characters, duplicate submit); and at most one baseline security check per form, only for what the app really has. Budget: at most 3 cases per field or business rule; combine valid boundaries of independent fields into one case.',
   exhaustive: 'COVERAGE LEVEL: exhaustive (full regression). Everything in standard, plus: every invalid equivalence class per field, pairwise combinations of independent options, extended error guessing (interruptions, back button after submit, session expiry where the app has sessions), role × action for every role, and baseline accessibility checks per screen. Budget: at most 6 cases per field or business rule.',
 };
 
 /** Rules handled per generation call, so each response stays within output and time limits. */
 const RULES_PER_BATCH = 8;
+
+/** Smoke stays small: without a requested count, the main pass keeps to this many cases. */
+const SMOKE_MAIN_CASES = 15;
+
+/** Ceiling for the main pass: the requested count, else the smoke ceiling at essential coverage (0 = none). */
+function mainCaseCeiling(state: TestOpsState): number {
+  const requested = state.generationOptions?.maxTestCases;
+  if (requested && requested > 0) return requested;
+  return state.generationOptions?.coverage === 'essential' ? SMOKE_MAIN_CASES : 0;
+}
 
 /** Coverage-model ids (FLD-xx, BR-xx, EXT-xx) that the cases trace to. */
 export function coveredIds(cases: { traceabilityId?: string }[]): Set<string> {
@@ -201,20 +211,23 @@ const DOCUMENT_COVERAGE: Record<CoverageLevel, string> = {
   exhaustive: 'COVERAGE LEVEL: exhaustive (skill §7). Standard, plus every scan-quality class for every field group, several documents per upload combined with variations, and release regression per field group. Budget: at most 40 cases.',
 };
 
+/** The budgets above, enforced: the gap fill can otherwise go past them. */
+const DOCUMENT_CASES: Record<CoverageLevel, number> = { essential: 10, standard: 24, exhaustive: 40 };
+
 /**
  * A shared environment marked read-only: the guard blocks every write during
  * runs, so no case may depend on saving. The same instruction goes to every pass.
  */
 function readOnlyNote(ctx: TestOpsState['appContext']): string {
   return ctx?.safety?.readOnly
-    ? '\nREAD-ONLY ENVIRONMENT: writes are blocked during test runs. Cases may navigate, upload files, start extraction, read results and check validation messages, but must never depend on completing a save, submit or delete: no case may expect data to be saved, changed or removed.'
+    ? '\nREAD-ONLY ENVIRONMENT: writes are blocked during test runs. Cases may navigate, upload files, start extraction, read results and check validation messages, but must never depend on completing a save, submit or delete: no case may expect data to be saved, changed or removed. Allowed: "Save is blocked and the required field is highlighted when Project is empty". Not allowed: "Save sends a save request with the edited values", "end-to-end flow through Save & Next", "the save goes through once the field is filled", "the next document loads after Save & Next", "an error on save keeps the values".'
     : '';
 }
 
 /** Document features get their own pass, so the main pass leaves their extraction checks to it. */
 function documentScope(docs: DocumentExtraction[] | undefined): string {
   if (!docs?.length) return '';
-  return `\n- DOCUMENT FEATURES (${docs.map((d) => d.feature).join(', ')}) are designed in a separate pass: do NOT write extraction-accuracy, confidence (including how confidence is shown), unreadable or illegible value, extracted-value rule, upload or bad-document cases for them here. Cover the rest of the application, plus end-to-end journeys that pass through them.`;
+  return `\n- DOCUMENT FEATURES (${docs.map((d) => d.feature).join(', ')}) are designed in a separate pass: do NOT write extraction-accuracy, confidence (including how confidence is shown), unreadable or illegible value, extracted-value rule (row count or order, totals rows, marks that are not data), upload or bad-document cases for them here, nor cases that compare scanned values with an answer key. Cover the rest of the application, plus end-to-end journeys that pass through them.`;
 }
 
 /** Prompt for one document feature: its extraction model in, data-driven cases out. */
@@ -311,7 +324,9 @@ async function generateDocumentCases(state: TestOpsState, doc: DocumentExtractio
       console.warn(`[generatorAgent] document gap fill failed for ${doc.feature}: ${(err as Error).message}`);
     }
   }
-  return cases.map((c) => ({ ...c, module: doc.feature, feature: c.submodule ? `${doc.feature} – ${c.submodule}` : doc.feature }));
+  return cases
+    .slice(0, DOCUMENT_CASES[state.generationOptions?.coverage || 'standard'])
+    .map((c) => ({ ...c, module: doc.feature, feature: c.submodule ? `${doc.feature} – ${c.submodule}` : doc.feature }));
 }
 
 function buildPrompt(state: TestOpsState, excludeTitles: string[] = [], gapFocus = ''): string {
@@ -322,10 +337,20 @@ function buildPrompt(state: TestOpsState, excludeTitles: string[] = [], gapFocus
     : '';
 
   const coverage = state.generationOptions?.coverage || 'standard';
-  const requestedMax = state.generationOptions?.maxTestCases;
-  const countInstruction = requestedMax && requestedMax > 0
-    ? `- Generate AT MOST ${requestedMax} test cases — this is a HARD CEILING, do not exceed it. Spend the budget on the HIGHEST-VALUE cases: prioritise by business risk (happy path, then the most likely failure modes, then critical edge/security cases). Return ONLY the most important ${requestedMax}.`
+  const ceiling = mainCaseCeiling(state);
+  const countInstruction = ceiling
+    ? `- Generate AT MOST ${ceiling} test cases — this is a HARD CEILING, do not exceed it. Spend the budget on the HIGHEST-VALUE cases: prioritise by business risk (happy path, then the most likely failure modes, then critical edge/security cases). Return ONLY the most important ${ceiling}, most important first.`
     : `- The number of cases follows from the coverage model and the coverage level: as many as the techniques require, no padding.`;
+  const minimums = coverage === 'essential'
+    ? `- Cover EVERY feature in parsedRequirements.features with its happy path, then spend the rest of the budget on the most critical rules.`
+    : `- Every field rule (FLD-xx) and business rule (BR-xx) in STRUCTURED REQUIREMENTS gets at least one case, with its id in traceabilityId.
+- Cover EVERY feature in parsedRequirements.features.
+- For EACH feature, generate at minimum: 1 happy-path test, 1 alternate-path test, 2-4 negative tests (one per realistic failure mode), 1-2 edge case tests, 1 authorization test per relevant actor, and (where relevant) 1 accessibility and 1 security test.
+- For EACH user flow in parsedRequirements.flows: at least one full end-to-end test (type: "e2e") that walks the flow start to finish.
+- For EACH edge case listed: at least one dedicated test.
+- For EACH non-functional requirement (security, accessibility, performance): at least one test that explicitly verifies it.
+- For EVERY persona x feature pair in personaMatrix where the actor is DENIED: a negative authorization test confirming the denial is enforced.
+- Do NOT merge multiple scenarios into one case. Each test verifies ONE behaviour.`;
 
   const exclusionBlock = excludeTitles.length > 0
     ? `\n\nALREADY GENERATED — DO NOT REPEAT THESE TITLES (case-insensitive):\n${excludeTitles.map((s) => `- ${s}`).join('\n')}\nGenerate only NEW scenarios not in the above list.`
@@ -388,15 +413,9 @@ COVERAGE MANDATE (NON-NEGOTIABLE):
 ═══════════════════════════════════════════════════════════════
 ${COVERAGE_INSTRUCTIONS[coverage]}
 ${countInstruction}
-- Every field rule (FLD-xx) and business rule (BR-xx) in STRUCTURED REQUIREMENTS gets at least one case, with its id in traceabilityId.
 - Ground every case in the requirements or the observed application. Never invent pages, fields, roles or protections; state assumptions in the description.
-- Cover EVERY feature in parsedRequirements.features.
-- For EACH feature, generate at minimum: 1 happy-path test, 1 alternate-path test, 2-4 negative tests (one per realistic failure mode), 1-2 edge case tests, 1 authorization test per relevant actor, and (where relevant) 1 accessibility and 1 security test.
-- For EACH user flow in parsedRequirements.flows: at least one full end-to-end test (type: "e2e") that walks the flow start to finish.
-- For EACH edge case listed: at least one dedicated test.
-- For EACH non-functional requirement (security, accessibility, performance): at least one test that explicitly verifies it.
-- For EVERY persona x feature pair in personaMatrix where the actor is DENIED: a negative authorization test confirming the denial is enforced.
-- Do NOT merge multiple scenarios into one case. Each test verifies ONE behaviour.${documentScope(pr.documentExtraction)}${gapFocus}${exclusionBlock}
+- Test only the validation the requirements state or the observed application shows: do not assume formats, ranges or calendar checks.
+${minimums}${documentScope(pr.documentExtraction)}${gapFocus}${exclusionBlock}
 
 ═══════════════════════════════════════════════════════════════
 QUALITY RULES (every case must satisfy these — incomplete cases will be rejected):
@@ -432,6 +451,7 @@ export async function generatorAgent(state: TestOpsState): Promise<TestOpsState>
   const system = skillSystemPrompt('You are a senior test architect. Design test cases with the skills below.', skills);
 
   const requestedMax = state.generationOptions?.maxTestCases;
+  const ceiling = mainCaseCeiling(state);
   const items = ruleItems(state);
   // Document features get their own pass (own prompt and skill), run alongside
   // the main pass. A failed document pass leaves the rest of the suite intact.
@@ -461,7 +481,7 @@ export async function generatorAgent(state: TestOpsState): Promise<TestOpsState>
   };
 
   let testCases: TestCase[];
-  if (items.length > RULES_PER_BATCH && !(requestedMax && requestedMax > 0)) {
+  if (items.length > RULES_PER_BATCH && !ceiling) {
     // Large coverage model: one call for journeys, then one call per batch of
     // rules, so no single response grows past the model's output or time limits.
     testCases = await generate(`\n\nTHIS PASS: happy paths per feature, end-to-end flows, and role or security cases. Field rules and business rules are covered in separate passes, so do not write boundary, invalid-input or rule cases here.`);
@@ -493,11 +513,11 @@ export async function generatorAgent(state: TestOpsState): Promise<TestOpsState>
   // When the caller asked for a specific count (the chat wizard always does),
   // treat it as the floor. Otherwise a small request like "3 cases" still drags
   // in a second full 16k-token generation pass and blows the request timeout.
-  if (requestedMax && requestedMax > 0) {
-    minimumExpected = Math.min(minimumExpected, requestedMax);
+  if (ceiling) {
+    minimumExpected = Math.min(minimumExpected, ceiling);
   }
 
-  const room = requestedMax && requestedMax > 0 ? requestedMax - testCases.length : Infinity;
+  const room = ceiling ? ceiling - testCases.length : Infinity;
   const uncovered = items.filter((it) => !coveredIds(testCases).has(it.id));
 
   if (items.length > 0 && uncovered.length > 0 && room > 0) {
@@ -532,6 +552,7 @@ You returned only ${testCases.length} test cases. With ${pr.features.length} fea
     }
   }
 
+  if (ceiling) testCases = testCases.slice(0, ceiling);
   testCases = addNew(testCases, (await documentPass).flat());
   if (!testCases.length) throw new Error('Claude returned no test cases in first pass');
   if (requestedMax && requestedMax > 0) testCases = testCases.slice(0, requestedMax);
