@@ -10,6 +10,7 @@ import {
   getConnectionStatus,
   toApiBase,
   extractProjectKey,
+  validateJiraUrl,
 } from '../services/jira.service.js';
 import { decryptField } from '../utils/crypto.js';
 
@@ -25,6 +26,15 @@ router.post('/connect', async (req: Request, res: Response) => {
 
     if (!baseUrl || !email || !apiToken) {
       res.status(400).json({ error: 'baseUrl, email, and apiToken are required' });
+      return;
+    }
+
+    // Reject a non-URL value (e.g. an API token pasted into the URL field)
+    // up front — otherwise it reaches the network layer as a bogus host and
+    // comes back as a cryptic "ENOTFOUND".
+    const urlError = validateJiraUrl(baseUrl);
+    if (urlError) {
+      res.status(400).json({ error: urlError });
       return;
     }
 
@@ -50,13 +60,19 @@ router.post('/connect', async (req: Request, res: Response) => {
   } catch (err: any) {
     // No masking — return exactly what JIRA / the network reported.
     const status = err?.response?.status ?? null;
-    const detail =
+    let detail =
       err?.response?.data?.errorMessages?.join('; ') ||
       err?.response?.data?.message ||
       (err?.response?.data ? JSON.stringify(err.response.data) : '') ||
       err?.code ||
       err?.message ||
       'Unknown error';
+    // Translate a raw DNS failure into something actionable — the host in the
+    // JIRA URL could not be resolved (typo, wrong site, or not a URL at all).
+    if (err?.code === 'ENOTFOUND' || err?.code === 'EAI_AGAIN') {
+      const host = err?.hostname ? `"${err.hostname}"` : 'that host';
+      detail = `Could not reach ${host}. Check the JIRA URL — it should be your site root, e.g. https://your-site.atlassian.net.`;
+    }
     console.error('JIRA connect error:', {
       status, code: err?.code, data: err?.response?.data, message: err?.message,
     });

@@ -37,7 +37,7 @@ import { parseDocument } from '../services/document-parser.service.js';
 import { getTenantLlm } from '../services/llm.service.js';
 import { getConfigsForTenant, upsertConfig } from '../services/configurations.service.js';
 import {
-  importFromText, importFromUrl, parseCurlCommands, introspectGraphql, discoverMcpTools,
+  importFromText, importFromUrl, parseCurlCommands, parseHar, introspectGraphql, discoverMcpTools,
   parseConnectorManifest, endpointsFromWebhook, probeEndpoint, parseStructured, dedupeEndpoints,
   type ImportResult, type ImportedEndpoint, type ImportMethod,
 } from '../services/api-import.service.js';
@@ -67,7 +67,11 @@ import { analyzeFailureClusters } from '../services/api-failure-clusters.service
 import { listListeners, createListener, deleteListener, getEvents } from '../services/api-callback.service.js';
 import { runFlow, runSuite, runFlowDataset, listFlows, getFlow, saveFlow, deleteFlow, listStepGroups, saveStepGroup, deleteStepGroup, getStepGroupMap, type FlowStep } from '../services/api-flow.service.js';
 import { toJUnit } from '../utils/junit.js';
+import { toMarkdown } from '../utils/run-report.js';
+import { postmanToFlow } from '../utils/postman-import.js';
 import { maskResult } from '../utils/secret-mask.js';
+import { flowToPostman } from '../utils/postman.js';
+import { lintFlow } from '../utils/flow-lint.js';
 import { suggestIntegrationFlows } from '../services/api-flow-bridge.service.js';
 import { chatRefineTest } from '../services/api-chat-test.service.js';
 import { generateSyntheticData } from '../services/api-synth-data.service.js';
@@ -88,6 +92,7 @@ import { listDataProfiles, saveDataProfile, deleteDataProfile, parseCsv, parseEx
 import { orchestrate, getOrchestratorConfig, saveOrchestratorConfig, rotateOrchestratorToken, listOrchestratorEvents } from '../services/api-orchestrator.service.js';
 // ─── Atto coworker lifecycle tools (all additive, opt-in; pipeline untouched) ───
 import { generateFromStory } from '../services/api-story-gen.service.js';
+import { listSignoffs, createSignoff, deleteSignoff } from '../services/api-signoff.service.js';
 import { analyzeMultimodal } from '../services/api-multimodal.service.js';
 import { optimizeSuite } from '../services/api-suite-optimizer.service.js';
 import { proposeHeal } from '../services/api-heal.service.js';
@@ -1173,6 +1178,57 @@ router.post('/flows/import-curl', async (req: Request, res: Response) => {
     res.json({ steps: (parsed.endpoints || []).map(endpointToFlowStep), warnings: parsed.warnings || [] });
   } catch (err) { fail(res, err); }
 });
+// Import a HAR recording (browser DevTools → Save all as HAR) as flow steps —
+// replay a recorded session as an integration flow. The HAR parser already keeps
+// only API traffic (skips page assets) and lifts bearer/basic auth.
+router.post('/flows/import-har', async (req: Request, res: Response) => {
+  try {
+    const har = String(req.body?.har || '');
+    if (!har.trim()) { res.status(400).json({ error: 'Upload a HAR recording.' }); return; }
+    let doc: unknown;
+    try { doc = JSON.parse(har); } catch { res.status(400).json({ error: 'That file is not valid HAR JSON.' }); return; }
+    const parsed = parseHar(doc);
+    res.json({ steps: (parsed.endpoints || []).map(endpointToFlowStep), warnings: parsed.warnings || [] });
+  } catch (err) { fail(res, err); }
+});
+// Import a Postman Collection (v2.0 / v2.1) as flow steps — the inverse of the
+// Postman export. Requests (across folders) become steps; collection variables
+// come back as suggested seed variables so `{{baseUrl}}`-style tokens resolve.
+router.post('/flows/import-postman', async (req: Request, res: Response) => {
+  try {
+    const raw = req.body?.collection;
+    let doc: { info?: unknown; item?: unknown; variable?: unknown };
+    if (raw && typeof raw === 'object') doc = raw as typeof doc;
+    else {
+      const text = String(raw || '');
+      if (!text.trim()) { res.status(400).json({ error: 'Upload a Postman collection (v2.0 / v2.1).' }); return; }
+      try { doc = JSON.parse(text); } catch { res.status(400).json({ error: 'That file is not valid Postman collection JSON.' }); return; }
+    }
+    if (!doc || !doc.info || !('item' in doc)) { res.status(400).json({ error: 'That JSON is not a Postman collection (missing info/item).' }); return; }
+    const { steps, variables, warnings } = postmanToFlow(doc);
+    res.json({ steps, variables, warnings });
+  } catch (err) { fail(res, err); }
+});
+// Export a flow as a Postman Collection (v2.1) for Newman/CI or sharing. The
+// flow's {{var}} syntax is Postman's, so it carries over; control-flow steps are
+// flattened to their request steps (Postman has no if/loop/retry).
+router.post('/flows/export-postman', async (req: Request, res: Response) => {
+  try {
+    const steps = Array.isArray(req.body?.steps) ? req.body.steps : [];
+    const vars = req.body?.variables && typeof req.body.variables === 'object' ? req.body.variables : {};
+    res.json(flowToPostman(String(req.body?.name || ''), steps, vars));
+  } catch (err) { fail(res, err); }
+});
+// Static pre-flight lint of a flow — catch authoring bugs (a typo'd {{var}} that
+// is never captured, a step that asserts nothing, duplicate step names) BEFORE
+// running it. Pure and network-free; also usable as a CI gate (fail on !ok).
+router.post('/flows/lint', async (req: Request, res: Response) => {
+  try {
+    const steps = Array.isArray(req.body?.steps) ? req.body.steps : [];
+    const vars = req.body?.variables && typeof req.body.variables === 'object' ? req.body.variables : {};
+    res.json(lintFlow(steps, vars));
+  } catch (err) { fail(res, err); }
+});
 // Run several flows in order as a suite, threading each flow's captured variables
 // into the next (suite-level shared fixtures — e.g. a login flow seeds the token).
 router.post('/flows/run-suite', async (req: Request, res: Response) => {
@@ -1200,6 +1256,15 @@ router.post('/flows/export-junit', async (req: Request, res: Response) => {
     // Mask again here (idempotent) so a CI job that posts a raw result to this
     // converter still gets a redacted report.
     res.type('application/xml').send(toJUnit(kind, String(req.body?.name || ''), maskResult(kind, req.body?.result)));
+  } catch (err) { fail(res, err); }
+});
+// Render an already-computed run result as a human-readable Markdown report (the
+// counterpart to JUnit) — for a PR description, a bug report, or Slack. Masked
+// (idempotent) so a secret captured mid-run never lands in the report body.
+router.post('/flows/export-report', async (req: Request, res: Response) => {
+  try {
+    const kind = (['flow', 'suite', 'dataset'] as const).includes(req.body?.kind) ? req.body.kind : 'flow';
+    res.type('text/markdown').send(toMarkdown(kind, String(req.body?.name || ''), maskResult(kind, req.body?.result)));
   } catch (err) { fail(res, err); }
 });
 
@@ -1956,6 +2021,33 @@ router.post('/requirements', async (req: Request, res: Response) => {
     res.status(201).json({ requirement });
   } catch (err) { fail(res, err); }
 });
+/* ── Sign-off (Phase 3): a run verified in a customer-similar environment ── */
+router.get('/signoffs', async (req: Request, res: Response) => {
+  try {
+    const runId = req.query.runId ? String(req.query.runId) : undefined;
+    res.json({ signoffs: await listSignoffs(req.user!.tenantId, runId) });
+  } catch (err) { fail(res, err, 500); }
+});
+router.post('/signoffs', async (req: Request, res: Response) => {
+  try {
+    const signoff = await createSignoff(req.user!.tenantId, req.user!.username, {
+      runId: String(req.body?.runId || ''),
+      environmentId: String(req.body?.environmentId || ''),
+      note: typeof req.body?.note === 'string' ? req.body.note : undefined,
+    });
+    void logAudit(req, 'create', 'api_signoff', signoff.id, { runId: signoff.runId, result: signoff.result, environment: signoff.environmentName });
+    res.status(201).json({ signoff });
+  } catch (err) { fail(res, err); }
+});
+router.delete('/signoffs/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteSignoff(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'Sign-off not found.' }); return; }
+    void logAudit(req, 'delete', 'api_signoff', String(req.params.id), {});
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+
 router.delete('/requirements/:id', async (req: Request, res: Response) => {
   try {
     const ok = await deleteRequirement(req.user!.tenantId, String(req.params.id));

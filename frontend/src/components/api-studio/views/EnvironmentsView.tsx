@@ -12,7 +12,7 @@
  * same one the picker points at.
  */
 import { useState } from 'react';
-import { Plus, Server, Star, Trash2, Pencil, Save, X, Lock, Check, Zap } from 'lucide-react';
+import { Plus, Server, Star, Trash2, Pencil, Save, X, Lock, Check, Zap, ShieldCheck } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import { createApiEnvironment, updateApiEnvironment, deleteApiEnvironment } from '@/services/api';
 import { useToast } from '@/components/feedback/ToastProvider';
@@ -75,6 +75,18 @@ export default function EnvironmentsView({ store }: { store: ApiEnvironmentsStor
     catch (err) { toast.fromError(err); }
   };
 
+  /* Customer-similar marks an environment as standing in for the customer's own.
+     A release-gate sign-off is only accepted against one of these. */
+  const toggleCustomerLike = async (env: ApiEnvironment) => {
+    const next = !env.customerLike;
+    try {
+      await updateApiEnvironment(env.id, { customerLike: next } as Partial<ApiEnvironment>);
+      await reload();
+      toast.success(next ? 'Marked customer-similar' : 'No longer customer-similar',
+        next ? `${env.name} can now carry a release sign-off.` : env.name);
+    } catch (err) { toast.fromError(err); }
+  };
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-[1100px] mx-auto px-6 py-5 space-y-4">
@@ -120,6 +132,9 @@ export default function EnvironmentsView({ store }: { store: ApiEnvironmentsStor
                   <h3 className="text-[13px] font-semibold text-gray-900 min-w-0 truncate">{env.name}</h3>
                   {active && <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-[9.5px] font-semibold flex-shrink-0 ${BRAND_CHIP}`}><Zap className="w-2.5 h-2.5" />Active</span>}
                   {env.isDefault && <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-[9.5px] font-semibold flex-shrink-0 ${MUTED_CHIP}`}><Star className="w-2.5 h-2.5" />Default</span>}
+                  {/* Icon only: the footer button names the state, and three
+                      text badges would squeeze the environment name out. */}
+                  {env.customerLike && <span className="inline-flex items-center px-1 py-0.5 rounded border flex-shrink-0 text-emerald-700 bg-emerald-50 border-emerald-200" title="Customer-similar — a release sign-off is accepted against this environment" aria-label="Customer-similar"><ShieldCheck className="w-3 h-3" /></span>}
                   <div className="ml-auto flex items-center gap-0.5 flex-shrink-0">
                     <button type="button" onClick={() => setEditing(env)} className="p-1 rounded text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
                     <button type="button" onClick={() => remove(env)} className="p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
@@ -134,6 +149,9 @@ export default function EnvironmentsView({ store }: { store: ApiEnvironmentsStor
                 <div className="mt-3 flex items-center gap-2">
                   <span className="text-[10.5px] text-gray-400">Updated {relativeTime(env.updatedAt)}</span>
                   <div className="ml-auto flex items-center gap-1.5">
+                    <button type="button" onClick={() => toggleCustomerLike(env)} className={SECONDARY_BTN} title="A release-gate sign-off is only accepted against a customer-similar environment">
+                      <ShieldCheck className="w-3.5 h-3.5" />{env.customerLike ? 'Not customer-similar' : 'Customer-similar'}
+                    </button>
                     {!env.isDefault && <button type="button" onClick={() => makeDefault(env)} className={SECONDARY_BTN}>Set default</button>}
                     {active
                       ? <span className="inline-flex items-center gap-1 text-[11.5px] font-medium text-[#7C3AED]"><Check className="w-3.5 h-3.5" />In use</span>

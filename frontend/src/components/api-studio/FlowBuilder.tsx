@@ -8,10 +8,10 @@
  * the API, touches no pipeline.
  */
 import { useEffect, useRef, useState } from 'react';
-import { Workflow, X, Play, Plus, Trash2, ChevronUp, ChevronDown, ChevronRight, Save, AlertTriangle, CheckCircle2, XCircle, Check, Copy, Download } from 'lucide-react';
+import { Workflow, X, Play, Plus, Trash2, ChevronUp, ChevronDown, ChevronRight, Save, AlertTriangle, CheckCircle2, XCircle, Check, Copy, Download, Upload, ShieldCheck, Info, FileText } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import { useToast } from '@/components/feedback/ToastProvider';
-import { listApiFlows, saveApiFlow, deleteApiFlow, runApiFlow, importCurlSteps, exportFlowJUnit, type SavedApiFlow, type FlowStep, type FlowCheck, type FlowRunResult, type StepPhase } from '@/services/api';
+import { listApiFlows, saveApiFlow, deleteApiFlow, runApiFlow, importCurlSteps, importHarSteps, importPostmanSteps, exportFlowJUnit, exportFlowReport, exportFlowPostman, lintApiFlow, type SavedApiFlow, type FlowStep, type FlowCheck, type FlowRunResult, type FlowLintReport, type StepPhase } from '@/services/api';
 import { MethodBadge } from './primitives';
 import { CARD, STRIP, INPUT, FIELD, LABEL, PRIMARY_BTN, SECONDARY_BTN, formatDuration } from './format';
 import type { CatalogEndpoint } from './types';
@@ -65,6 +65,8 @@ const CHECK_LABELS: Record<FlowCheck['kind'], string> = {
   expr: 'Expression',
   schema: 'JSON Schema (contract)',
   graphql: 'GraphQL (no errors)',
+  noSecrets: 'No leaked secrets',
+  noError: 'No error envelope (REST)',
 };
 
 const clip = (s: string, n = 48) => (s.length > n ? `${s.slice(0, n)}…` : s);
@@ -105,6 +107,8 @@ function editCheckToApi(c: EditCheck): FlowCheck {
     case 'expr': return { kind: 'expr', expr: c.expr };
     case 'schema': return { kind: 'schema', schema: c.schema, ...(c.path.trim() ? { path: c.path } : {}) };
     case 'graphql': return { kind: 'graphql' };
+    case 'noSecrets': return { kind: 'noSecrets' };
+    case 'noError': return { kind: 'noError' };
   }
 }
 
@@ -195,6 +199,8 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
   const [curlText, setCurlText] = useState('');
   const [importing, setImporting] = useState(false);
   const [result, setResult] = useState<FlowRunResult | null>(null);
+  const [lint, setLint] = useState<FlowLintReport | null>(null);
+  const [linting, setLinting] = useState(false);
   const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -300,6 +306,73 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
       URL.revokeObjectURL(url);
     } catch (e: any) { toast.error('Export failed', e?.response?.data?.error || e?.message || 'Could not build JUnit XML.'); }
   };
+  const downloadReport = async () => {
+    if (!result) return;
+    try {
+      const md = await exportFlowReport({ kind: 'flow', name: name.trim() || 'flow', result });
+      const url = URL.createObjectURL(new Blob([md], { type: 'text/markdown' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = `${(name.trim() || 'flow').replace(/[^\w.-]+/g, '_').slice(0, 60)}-report.md`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: any) { toast.error('Export failed', e?.response?.data?.error || e?.message || 'Could not build the report.'); }
+  };
+  const copyReport = async () => {
+    if (!result) return;
+    try {
+      const md = await exportFlowReport({ kind: 'flow', name: name.trim() || 'flow', result });
+      await navigator.clipboard.writeText(md);
+      toast.success('Report copied', 'Markdown report on the clipboard — paste into a PR or Slack.');
+    } catch (e: any) { toast.error('Copy failed', e?.response?.data?.error || e?.message || 'Could not copy the report.'); }
+  };
+  const downloadPostman = async () => {
+    if (!steps.length) { toast.error('Nothing to export', 'Add at least one step.'); return; }
+    try {
+      const coll = await exportFlowPostman({ name: name.trim() || 'flow', steps: steps.map(editStepToApi), variables: varsToRecord() });
+      const url = URL.createObjectURL(new Blob([JSON.stringify(coll, null, 2)], { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = `${(name.trim() || 'flow').replace(/[^\w.-]+/g, '_').slice(0, 60)}.postman_collection.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: any) { toast.error('Export failed', e?.response?.data?.error || e?.message || 'Could not build the collection.'); }
+  };
+  const importHarFile = async (file?: File) => {
+    if (!file || importing) return;
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const { steps: parsed, warnings } = await importHarSteps(text);
+      if (!parsed.length) { toast.error('No API calls found', warnings[0] || 'The HAR had no API requests (page assets are skipped).'); return; }
+      setSteps((prev) => [...prev, ...parsed.map(apiStepToEdit)]);
+      toast.success(`Added ${parsed.length} step${parsed.length === 1 ? '' : 's'} from HAR`, warnings.length ? `${warnings.length} skipped.` : undefined);
+    } catch {
+      toast.error('Import failed', 'Could not read that HAR file.');
+    } finally {
+      setImporting(false);
+    }
+  };
+  const importPostmanFile = async (file?: File) => {
+    if (!file || importing) return;
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const { steps: parsed, variables, warnings } = await importPostmanSteps(text);
+      if (!parsed.length) { toast.error('No requests found', warnings[0] || 'That Postman collection had no requests.'); return; }
+      setSteps((prev) => [...prev, ...parsed.map(apiStepToEdit)]);
+      const incoming = Object.entries(variables || {});
+      if (incoming.length) setVars((prev) => {
+        const have = new Set(prev.map((v) => v.key.trim()));
+        const add = incoming.filter(([k]) => k && !have.has(k)).map(([k, v]) => ({ _k: nextId('v'), key: k, value: v }));
+        return add.length ? [...prev, ...add] : prev;
+      });
+      const detail = [incoming.length ? `${incoming.length} variable${incoming.length === 1 ? '' : 's'}` : '', warnings.length ? `${warnings.length} warning${warnings.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+      toast.success(`Added ${parsed.length} step${parsed.length === 1 ? '' : 's'} from Postman`, detail || undefined);
+    } catch {
+      toast.error('Import failed', 'Could not read that Postman collection.');
+    } finally {
+      setImporting(false);
+    }
+  };
   const copyCurl = async (s: EditStep) => {
     if (!(s.url || '').trim()) { toast.error('Nothing to copy', 'Add a URL to this step first.'); return; }
     try { await navigator.clipboard.writeText(stepToCurl(s)); toast.success('Copied as cURL'); }
@@ -358,6 +431,20 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
     } finally { setSaving(false); }
   };
 
+  const checkFlow = async () => {
+    if (!steps.length || linting) { if (!steps.length) toast.error('Nothing to check', 'Add at least one step.'); return; }
+    setLinting(true);
+    try {
+      const report = await lintApiFlow(steps.map(editStepToApi), varsToRecord());
+      setLint(report);
+      if (report.errors) toast.error(`${report.errors} issue${report.errors === 1 ? '' : 's'} to fix`, 'This flow has blocking problems — see the list below.');
+      else if (report.warnings || report.info) toast.success('No blocking issues', `${report.warnings} warning(s), ${report.info} note(s).`);
+      else toast.success('Flow looks good', 'No issues found.');
+    } catch (e: any) {
+      toast.error('Check failed', e?.response?.data?.error || e?.message || 'Could not lint the flow.');
+    } finally { setLinting(false); }
+  };
+
   const run = async () => {
     const apiSteps = steps.map(editStepToApi).filter((s) => (s.url || '').trim());
     if (!apiSteps.length) { setError('Add at least one step with a URL.'); return; }
@@ -365,7 +452,7 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
       setError('This flow includes write-method steps. Tick “Allow writes” to run it.');
       return;
     }
-    setRunning(true); setError(''); setResult(null);
+    setRunning(true); setError(''); setResult(null); setLint(null);
     try {
       setResult(await runApiFlow({ steps: apiSteps, variables: varsToRecord(), allowWrites }));
     } catch (e: any) {
@@ -396,6 +483,8 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
                 {selectedId && <button type="button" onClick={() => void removeFlow(selectedId)} className="p-2 rounded-lg text-gray-400 hover:text-red-500 border border-gray-200" title="Delete saved flow"><Trash2 className="w-3.5 h-3.5" /></button>}
               </>
             )}
+            <button type="button" onClick={() => void checkFlow()} disabled={linting || !steps.length} className={SECONDARY_BTN} title="Pre-flight lint: undefined {{vars}}, no-assertion steps, duplicate names"><ShieldCheck className="w-3.5 h-3.5" />{linting ? 'Checking…' : 'Check'}</button>
+            <button type="button" onClick={() => void downloadPostman()} disabled={!steps.length} className={SECONDARY_BTN} title="Export as a Postman Collection (v2.1) for Newman/CI"><Download className="w-3.5 h-3.5" />Postman</button>
             <button type="button" onClick={() => void save()} disabled={saving || !steps.length} className={SECONDARY_BTN}>{saving ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}Save</button>
             <button type="button" onClick={() => void run()} disabled={running || !steps.length} className={PRIMARY_BTN}>{running ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}{running ? 'Running…' : 'Run'}</button>
           </div>
@@ -410,6 +499,29 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
           <p className="text-[11px] text-gray-400">Reference an extracted value anywhere in a later step's URL, header values or body with <code className="font-mono text-[#6D28D9]">{'{{variableName}}'}</code>. Generate unique data with <code className="font-mono text-[#6D28D9]">{'{{$uuid}}'}</code>, <code className="font-mono text-[#6D28D9]">{'{{$randomEmail}}'}</code>, <code className="font-mono text-[#6D28D9]">{'{{$timestamp}}'}</code>, <code className="font-mono text-[#6D28D9]">{'{{$randomInt}}'}</code>, <code className="font-mono text-[#6D28D9]">{'{{$randomString}}'}</code>. Transform a value with a pipe: <code className="font-mono text-[#6D28D9]">{'{{creds | base64}}'}</code>, <code className="font-mono text-[#6D28D9]">{'{{id | urlencode}}'}</code>, <code className="font-mono text-[#6D28D9]">{'{{name | jsonstring}}'}</code> (also upper / lower / trim / base64decode / urldecode).</p>
 
           {error && <div className="flex items-start gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg"><AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0 mt-px" /><p className="text-[12px] text-red-700">{error}</p></div>}
+
+          {/* Pre-flight lint report */}
+          {lint && (
+            <div className={`rounded-lg border px-3 py-2 ${lint.errors ? 'bg-red-50 border-red-200' : lint.warnings || lint.info ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
+              <div className="flex items-center justify-between">
+                <span className={`text-[12px] font-semibold ${lint.errors ? 'text-red-700' : lint.warnings || lint.info ? 'text-amber-700' : 'text-emerald-700'}`}>
+                  {lint.errors ? `${lint.errors} error${lint.errors === 1 ? '' : 's'}` : 'No blocking issues'}
+                  {(lint.warnings || lint.info) ? ` · ${lint.warnings} warning${lint.warnings === 1 ? '' : 's'} · ${lint.info} note${lint.info === 1 ? '' : 's'}` : ''}
+                </span>
+                <button type="button" onClick={() => setLint(null)} className="text-gray-400 hover:text-gray-600" title="Dismiss"><X className="w-3.5 h-3.5" /></button>
+              </div>
+              {lint.issues.length > 0 && (
+                <ul className="mt-1.5 space-y-1">
+                  {lint.issues.map((iss, k) => (
+                    <li key={k} className="flex items-start gap-1.5 text-[11px]">
+                      {iss.level === 'error' ? <XCircle className="w-3.5 h-3.5 text-red-500 flex-shrink-0 mt-px" /> : iss.level === 'warning' ? <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0 mt-px" /> : <Info className="w-3.5 h-3.5 text-gray-400 flex-shrink-0 mt-px" />}
+                      <span className="text-gray-700">{iss.step ? <span className="font-medium">{iss.step}: </span> : null}{iss.message}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
 
           {/* Seed variables — available to {{...}} from step 1, before any extract */}
           <div className="space-y-1.5">
@@ -565,6 +677,8 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
                             {c.kind === 'schema' && <input value={c.path} onChange={(e) => setCheck(s, c._k, { path: e.target.value })} placeholder="path (optional)" title="Validate only this sub-part of the body (e.g. data.0); blank = whole body" className={`${FIELD} w-32 flex-shrink-0`} />}
                             {c.kind === 'schema' && <input value={c.schema} onChange={(e) => setCheck(s, c._k, { schema: e.target.value })} placeholder='{"type":"object","required":["id"]}' title="JSON Schema the response (or the path-selected part) must satisfy" className={`${FIELD} flex-1 min-w-0 font-mono text-[11px]`} />}
                             {c.kind === 'graphql' && <span className="flex-1 min-w-0 text-[11px] text-gray-400 self-center">Fails if the response body has a non-empty <code className="font-mono">errors</code> array (GraphQL replies 200 even on failure).</span>}
+                            {c.kind === 'noSecrets' && <span className="flex-1 min-w-0 text-[11px] text-gray-400 self-center">Fails if the body exposes a credential field (<code className="font-mono">password</code>, <code className="font-mono">secret</code>, <code className="font-mono">apiKey</code>, private key…) with a real value.</span>}
+                            {c.kind === 'noError' && <span className="flex-1 min-w-0 text-[11px] text-gray-400 self-center">Fails on a "200 but failed" body: <code className="font-mono">error</code>, <code className="font-mono">errors[]</code>, <code className="font-mono">success:false</code>, or <code className="font-mono">status:"error"</code>.</span>}
                             <button type="button" onClick={() => delCheck(s, c._k)} className="p-1 text-gray-400 hover:text-red-500 flex-shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>
                           </div>
                         ))}
@@ -588,6 +702,14 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
             <button type="button" onClick={() => setCurlOpen((v) => !v)} className={SECONDARY_BTN} title="Paste a cURL command (browser devtools / Postman 'Copy as cURL') to add it as a step">
               <ChevronRight className={`w-3.5 h-3.5 transition-transform ${curlOpen ? 'rotate-90' : ''}`} />Import cURL
             </button>
+            <label className={`${SECONDARY_BTN} cursor-pointer`} title="Import a HAR recording (browser DevTools → Network → Save all as HAR). API calls become steps; page assets are skipped.">
+              <Upload className="w-3.5 h-3.5" />Import HAR
+              <input type="file" accept=".har,application/json" className="hidden" onChange={(e) => { void importHarFile(e.target.files?.[0]); e.target.value = ''; }} />
+            </label>
+            <label className={`${SECONDARY_BTN} cursor-pointer`} title="Import a Postman Collection (v2.0 / v2.1). Requests become steps; collection variables become seed variables.">
+              <Upload className="w-3.5 h-3.5" />Import Postman
+              <input type="file" accept=".json,application/json" className="hidden" onChange={(e) => { void importPostmanFile(e.target.files?.[0]); e.target.value = ''; }} />
+            </label>
           </div>
           {curlOpen && (
             <div className="space-y-2 p-2.5 rounded-lg border border-dashed border-gray-300 bg-gray-50/60">
@@ -614,8 +736,18 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
                 {result.passed ? <CheckCircle2 className="w-5 h-5 text-emerald-600" /> : <XCircle className="w-5 h-5 text-red-600" />}
                 <div className={`text-[13px] font-semibold ${result.passed ? 'text-emerald-700' : 'text-red-700'}`}>{result.passed ? 'Flow passed' : 'Flow failed'}</div>
                 <span className="ml-auto text-[11px] text-gray-500">{result.stepsRun}/{result.stepsTotal} steps · {formatDuration(result.durationMs)}</span>
+                <button type="button" onClick={() => void copyReport()} title="Copy a Markdown run report (for a PR, bug report or Slack)" className="inline-flex items-center gap-1 px-2 py-1 rounded border border-gray-200 bg-white text-[11px] text-gray-600 hover:text-[#6D28D9] hover:border-[#DDD6FE]"><Copy className="w-3.5 h-3.5" />Report</button>
+                <button type="button" onClick={() => void downloadReport()} title="Download this run as a Markdown report" className="inline-flex items-center gap-1 px-2 py-1 rounded border border-gray-200 bg-white text-[11px] text-gray-600 hover:text-[#6D28D9] hover:border-[#DDD6FE]"><FileText className="w-3.5 h-3.5" />.md</button>
                 <button type="button" onClick={() => void downloadJUnit()} title="Download this run as JUnit XML (for CI)" className="inline-flex items-center gap-1 px-2 py-1 rounded border border-gray-200 bg-white text-[11px] text-gray-600 hover:text-[#6D28D9] hover:border-[#DDD6FE]"><Download className="w-3.5 h-3.5" />JUnit</button>
               </div>
+              {result.summary && (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 text-[11px] text-gray-500">
+                  <span><b className="text-gray-700 font-semibold">{result.summary.checksPassed}/{result.summary.checks}</b> checks</span>
+                  <span><b className="text-gray-700 font-semibold">{result.summary.requests}</b> requests</span>
+                  <span>slowest <b className="text-gray-700 font-semibold">{result.summary.maxStepMs}ms</b>{result.summary.slowestStep ? ` · ${result.summary.slowestStep}` : ''}</span>
+                  <span>avg <b className="text-gray-700 font-semibold">{result.summary.avgStepMs}ms</b></span>
+                </div>
+              )}
               {Object.keys(result.variables).length > 0 && (
                 <div className="flex flex-wrap gap-1">
                   {Object.entries(result.variables).map(([k, v]) => (

@@ -28,6 +28,8 @@ export interface ApiEnvironment {
   color?: string;
   variables: EnvVariable[];
   isDefault: boolean;
+  /** Stands in for the customer's environment — what a Phase 3 sign-off requires. */
+  customerLike: boolean;
   createdBy?: string;
   createdAt: string;
   updatedAt: string;
@@ -63,6 +65,7 @@ function rowToEnv(row: any, opts: { reveal: boolean }): ApiEnvironment {
         : String(v.value ?? ''),
     })),
     isDefault: !!row.is_default,
+    customerLike: !!row.customer_like,
     createdBy: row.created_by || undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -117,7 +120,7 @@ export async function getEnvironment(tenantId: string, id: string, opts: { revea
 export async function createEnvironment(
   tenantId: string,
   username: string,
-  input: { name: string; baseUrl?: string; color?: string; variables?: unknown; isDefault?: boolean },
+  input: { name: string; baseUrl?: string; color?: string; variables?: unknown; isDefault?: boolean; customerLike?: boolean },
 ): Promise<ApiEnvironment> {
   const name = String(input.name || '').trim().slice(0, NAME_MAX);
   if (!name) throw new Error('An environment needs a name.');
@@ -127,9 +130,9 @@ export async function createEnvironment(
   const vars = sanitizeVariables(input.variables);
   if (input.isDefault) await pool.query(`UPDATE api_environments SET is_default = 0 WHERE tenant_id = $1`, [tenantId]);
   const { rows } = await pool.query(
-    `INSERT INTO api_environments (tenant_id, name, base_url, color, variables, is_default, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-    [tenantId, name, baseUrl || null, color, JSON.stringify(vars), input.isDefault ? 1 : 0, username],
+    `INSERT INTO api_environments (tenant_id, name, base_url, color, variables, is_default, customer_like, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+    [tenantId, name, baseUrl || null, color, JSON.stringify(vars), input.isDefault ? 1 : 0, input.customerLike ? 1 : 0, username],
   );
   return rowToEnv(rows[0], { reveal: false });
 }
@@ -137,7 +140,7 @@ export async function createEnvironment(
 export async function updateEnvironment(
   tenantId: string,
   id: string,
-  input: { name?: string; baseUrl?: string; color?: string; variables?: unknown; isDefault?: boolean },
+  input: { name?: string; baseUrl?: string; color?: string; variables?: unknown; isDefault?: boolean; customerLike?: boolean },
 ): Promise<ApiEnvironment | null> {
   const existing = await getEnvironment(tenantId, id);
   if (!existing) return null;
@@ -148,11 +151,12 @@ export async function updateEnvironment(
   const color = input.color !== undefined ? sanitizeColor(input.color) : (existing.color ?? null);
   const vars = input.variables !== undefined ? sanitizeVariables(input.variables, await storedVariables(tenantId, id)) : await storedVariables(tenantId, id);
   const isDefault = input.isDefault !== undefined ? !!input.isDefault : existing.isDefault;
+  const customerLike = input.customerLike !== undefined ? !!input.customerLike : existing.customerLike;
   if (isDefault) await pool.query(`UPDATE api_environments SET is_default = 0 WHERE tenant_id = $1 AND id <> $2`, [tenantId, id]);
   const { rows } = await pool.query(
-    `UPDATE api_environments SET name = $1, base_url = $2, color = $3, variables = $4, is_default = $5, updated_at = SYSUTCDATETIME()
-     WHERE tenant_id = $6 AND id = $7 RETURNING *`,
-    [name, baseUrl || null, color, JSON.stringify(vars), isDefault ? 1 : 0, tenantId, id],
+    `UPDATE api_environments SET name = $1, base_url = $2, color = $3, variables = $4, is_default = $5, customer_like = $6, updated_at = SYSUTCDATETIME()
+     WHERE tenant_id = $7 AND id = $8 RETURNING *`,
+    [name, baseUrl || null, color, JSON.stringify(vars), isDefault ? 1 : 0, customerLike ? 1 : 0, tenantId, id],
   );
   return rows.length ? rowToEnv(rows[0], { reveal: false }) : null;
 }

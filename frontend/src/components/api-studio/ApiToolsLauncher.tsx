@@ -21,7 +21,7 @@ import {
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useAuth } from '@/contexts/AuthContext';
 import { getApiToolToggles, updateApiToolToggles } from '@/services/api';
-import { FIELD } from './format';
+import { CARD, FIELD } from './format';
 import { EmptyState } from './primitives';
 
 import ContractCheck from './ContractCheck';
@@ -113,8 +113,10 @@ import AuditLog from './AuditLog';
 import Approvals from './Approvals';
 import EvidenceExport from './EvidenceExport';
 
+import IntegrationTestsView from './views/IntegrationTestsView';
+
 import type { Catalog } from './hooks/useCatalog';
-import type { CatalogEndpoint, Scenario, StrategyLayerId } from './types';
+import type { CatalogEndpoint, NavView, Scenario, StrategyLayerId } from './types';
 
 interface Props {
   catalog: Catalog;
@@ -123,6 +125,8 @@ interface Props {
   /** Pre-fills the gallery search — lets a caller (e.g. an Overview feature chip)
       deep-link straight to a capability's tools. */
   initialSearch?: string;
+  /** Lets a tool hand the user back to another tab (e.g. "Open the catalogue"). */
+  onNavigate?: (view: NavView) => void;
 }
 
 interface ToolDef { icon: ElementType; label: string; desc: string; open: () => void }
@@ -195,7 +199,7 @@ const DIFFERENTIATORS = new Set<string>([
   'Unified cross-layer test', 'API + UI hybrid test', 'Monitoring', 'Public status page',
 ]);
 
-export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearch = '' }: Props) {
+export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearch = '', onNavigate }: Props) {
   const { endpoints, selected } = catalog;
   const toast = useToast();
   const { user } = useAuth();
@@ -246,6 +250,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
   const [semanticOpen, setSemanticOpen] = useState(false);
   const [callbackOpen, setCallbackOpen] = useState(false);
   const [flowOpen, setFlowOpen] = useState(false);
+  const [integrationOpen, setIntegrationOpen] = useState(false);
   const [chatTestOpen, setChatTestOpen] = useState(false);
   const [maintenanceOpen, setMaintenanceOpen] = useState(false);
   const [synthOpen, setSynthOpen] = useState(false);
@@ -318,6 +323,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
         { icon: Workflow, label: 'Model-based generation', desc: 'Learn the state machine → long business sequences', open: () => setModelGenOpen(true) },
         { icon: Database, label: 'Synthetic data factory', desc: 'Realistic, seeded test data', open: () => setSynthOpen(true) },
         { icon: Workflow, label: 'Flow builder', desc: 'Assemble a multi-step journey', open: () => setFlowOpen(true) },
+        { icon: Workflow, label: 'Integration tests', desc: 'Runnable journeys — chain real values, assert each step', open: () => setIntegrationOpen(true) },
         { icon: Layers, label: 'Step groups library', desc: 'Reusable login / token / teardown sequences', open: () => setStepGroupsOpen(true) },
         { icon: Combine, label: 'Unified cross-layer test', desc: 'One test: API + DB + UI steps, shared vars', open: () => setUnifiedOpen(true) },
         { icon: Bot, label: 'Autonomous maintenance', desc: 'Drift + gaps → a changeset', open: () => setMaintenanceOpen(true) },
@@ -621,6 +627,17 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
       {fixWorkflowOpen && <FixWorkflow endpoints={ep} onClose={() => setFixWorkflowOpen(false)} />}
       {dataDrivenOpen && <DataDriven endpoints={ep} onClose={() => setDataDrivenOpen(false)} />}
       {automationOpen && <RunAutomation endpoints={ep} onClose={() => setAutomationOpen(false)} />}
+      {integrationOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#1E1B4B]/45 backdrop-blur-md p-4" onClick={() => setIntegrationOpen(false)}>
+          <div className={`${CARD} w-full max-w-5xl h-[88vh] overflow-hidden`} onClick={(e) => e.stopPropagation()}>
+            <IntegrationTestsView
+              endpoints={ep}
+              onOpenCatalogue={() => { setIntegrationOpen(false); onNavigate?.('endpoints'); }}
+              onClose={() => setIntegrationOpen(false)}
+            />
+          </div>
+        </div>
+      )}
       {nlOpen && (
         <NlAuthor
           endpoints={ep}

@@ -34,6 +34,35 @@ export function toApiBase(raw: string): string {
 }
 
 /**
+ * Validate that the pasted value is actually a JIRA site URL — not, e.g., an
+ * API token typed into the URL field by mistake. That mistake otherwise reaches
+ * the network layer as `https://ATATT…/` and surfaces as a cryptic DNS
+ * "ENOTFOUND". Returns a user-facing error string, or null when the URL is OK.
+ */
+export function validateJiraUrl(raw: string): string | null {
+  const s = (raw || '').trim();
+  if (!s) return 'JIRA URL is required.';
+  let host: string;
+  try {
+    const withProto = /^https?:\/\//i.test(s) ? s : `https://${s}`;
+    host = new URL(withProto).host;
+  } catch {
+    return 'That JIRA URL is not valid. Use your site root — e.g. https://your-site.atlassian.net.';
+  }
+  // Drop any port to check the bare hostname.
+  const hostname = host.replace(/:\d+$/, '');
+  if (!hostname) {
+    return 'That JIRA URL is not valid. Use your site root — e.g. https://your-site.atlassian.net.';
+  }
+  // A real host is dotted (sub.domain.tld). An Atlassian API token ("ATATT…") or
+  // any bare word has no dot — almost always a token pasted into the URL field.
+  if (!hostname.includes('.')) {
+    return 'That looks like an API token or an incomplete address, not a JIRA URL. Enter your site URL — e.g. https://your-site.atlassian.net — here, and put the token in the API Token field.';
+  }
+  return null;
+}
+
+/**
  * Pull the JIRA project key out of a pasted URL so we can scope story fetches to
  * the project the user is actually working on — not every project in the org.
  * Handles the common shapes:

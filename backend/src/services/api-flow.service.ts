@@ -62,7 +62,9 @@ export interface FlowCheck {
     | 'xpath'         // XPath over an XML/SOAP response (exists | equals | contains)
     | 'expr'          // a boolean expression over status/timing/headers/body + captured vars
     | 'schema'        // validate the body (or a path-selected part) against a JSON Schema (ajv)
-    | 'graphql';      // GraphQL envelope has no `errors` (a failed query still returns HTTP 200)
+    | 'graphql'       // GraphQL envelope has no `errors` (a failed query still returns HTTP 200)
+    | 'noSecrets'     // the response body leaks no credential-named field (password/secret/apiKey/…)
+    | 'noError';      // the body is not a "200 but failed" REST error envelope (error/errors/success:false/status:'error')
   equals?: number | string;
   oneOf?: number[];
   /** expr: the boolean expression to assert, e.g. `status >= 200 && status < 300`. */
@@ -171,6 +173,18 @@ export interface FlowStepResult {
   bodyPreview: string;
 }
 
+/** At-a-glance aggregates over a run, for CI/dashboards (latency, pass/fail, check counts). */
+export interface FlowRunSummary {
+  requests: number;      // HTTP request rows (excludes wait / retry-marker rows)
+  passed: number;        // step rows that passed
+  failed: number;        // step rows that failed
+  checks: number;        // total assertions run
+  checksPassed: number;
+  maxStepMs: number;     // slowest request step
+  avgStepMs: number;     // mean latency over request steps
+  slowestStep?: string;  // its name
+}
+
 export interface FlowRunResult {
   passed: boolean;
   steps: FlowStepResult[];
@@ -178,6 +192,7 @@ export interface FlowRunResult {
   durationMs: number;
   stepsRun: number;
   stepsTotal: number;
+  summary?: FlowRunSummary;
 }
 
 const MAX_STEPS = 40;          // authored top-level steps kept per saved flow
@@ -410,9 +425,62 @@ async function runChecks(checks: FlowCheck[] | undefined, res: { status?: number
       const first = list[0];
       const firstMsg = first && typeof first === 'object' ? String((first as Record<string, unknown>).message ?? '') : String(first ?? '');
       out.push({ kind: c.kind, label: 'graphql: no errors', pass: list.length === 0, detail: list.length ? `${list.length} error(s): ${firstMsg.slice(0, 100)}` : undefined });
+    } else if (c.kind === 'noSecrets') {
+      // Fail if the body exposes a credential-named field with a real value — an
+      // API should never return a password/secret/private key. (`token` and
+      // `authorization` are intentionally NOT flagged: often legitimately returned.)
+      const hits: string[] = [];
+      findLeaks(parsed, '', hits, 0);
+      out.push({ kind: c.kind, label: 'no leaked secrets', pass: hits.length === 0, detail: hits.length ? `leaked: ${hits.slice(0, 6).join(', ')}${hits.length > 6 ? ` (+${hits.length - 6})` : ''}` : undefined });
+    } else if (c.kind === 'noError') {
+      // Catch a "200 but failed" body (common in REST APIs that always return 200).
+      const reason = errorEnvelope(parsed);
+      out.push({ kind: c.kind, label: 'no error envelope', pass: !reason, detail: reason || undefined });
     }
   }
   return out;
+}
+
+const LEAK_NAME_RE = /(password|passwd|pwd|pass_?hash|secret|private[_-]?key|client[_-]?secret|access[_-]?key|api[_-]?key|apikey)/i;
+/** Collect dotted paths of credential-named fields that carry a real (non-empty string / number) value. */
+function findLeaks(node: unknown, path: string, hits: string[], depth: number): void {
+  if (node == null || depth > 8 || hits.length >= 20) return;
+  if (Array.isArray(node)) { for (let i = 0; i < node.length && hits.length < 20; i++) findLeaks(node[i], `${path}[${i}]`, hits, depth + 1); return; }
+  if (typeof node !== 'object') return;
+  for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+    const p = path ? `${path}.${k}` : k;
+    const real = (typeof v === 'string' && v.trim().length >= 4) || typeof v === 'number';
+    if (LEAK_NAME_RE.test(k) && real) hits.push(p);
+    findLeaks(v, p, hits, depth + 1);
+  }
+}
+
+/** True when a top-level `error` value signals a real error (not null/''/false/0/empty). */
+function truthyError(err: unknown): boolean {
+  if (err == null || err === false || err === 0) return false;
+  if (typeof err === 'string') return err.trim() !== '';
+  if (Array.isArray(err)) return err.length > 0;
+  if (typeof err === 'object') return Object.keys(err).length > 0;
+  return !!err;
+}
+/** Detect a "HTTP 200 but failed" REST error envelope; return the reason or null. */
+function errorEnvelope(parsed: unknown): string | null {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const b = parsed as Record<string, unknown>;
+  if (truthyError(b.error)) {
+    const e = b.error;
+    const msg = typeof e === 'string' ? e : (e && typeof e === 'object' && typeof (e as Record<string, unknown>).message === 'string' ? (e as Record<string, unknown>).message : JSON.stringify(e));
+    return `error: ${String(msg).slice(0, 100)}`;
+  }
+  if (Array.isArray(b.errors) && b.errors.length > 0) {
+    const f = b.errors[0] as Record<string, unknown> | string;
+    const msg = f && typeof f === 'object' && typeof f.message === 'string' ? f.message : String(f);
+    return `${b.errors.length} error(s): ${String(msg).slice(0, 80)}`;
+  }
+  if (b.success === false) return 'success: false';
+  if (b.ok === false) return 'ok: false';
+  if (typeof b.status === 'string' && /^(error|fail|failure)$/i.test(b.status)) return `status: ${b.status}`;
+  return null;
 }
 
 /** Build the variable bag an `expr` check evaluates against. */
@@ -623,7 +691,14 @@ async function execSteps(steps: FlowStep[], ctx: ExecCtx, depth: number): Promis
     if (isWriteMethod(method) && !ctx.allowWrites) {
       throw new Error(`A ${method} step performs a write. Re-run with writes explicitly allowed if that is safe against this environment.`);
     }
-    const auth = await resolveHttpAuth(s.auth);   // resolves oauth2 → bearer; no-op otherwise
+    const resolvedAuth = await resolveHttpAuth(s.auth);   // resolves oauth2 → bearer; no-op otherwise
+    // Substitute {{vars}} in the auth value/headerName too (like url/headers/body),
+    // so a seeded or captured token works in structured auth (e.g. bearer {{token}}).
+    const auth = resolvedAuth
+      ? { ...resolvedAuth,
+          value: resolvedAuth.value != null ? substitute(resolvedAuth.value, ctx.vars) : resolvedAuth.value,
+          headerName: resolvedAuth.headerName != null ? substitute(resolvedAuth.headerName, ctx.vars) : resolvedAuth.headerName }
+      : resolvedAuth;
     const ep: HttpEndpoint = {
       method,
       url: substitute(s.url || '', ctx.vars),
@@ -736,6 +811,24 @@ export async function runFlow(input: { steps: FlowStep[]; variables?: Record<str
     durationMs: Date.now() - started,
     stepsRun: ctx.results.length,
     stepsTotal: all.length,
+    summary: summarize(ctx.results),
+  };
+}
+
+/** Aggregate a run's step rows into at-a-glance metrics (latency over request rows only). */
+function summarize(rows: FlowStepResult[]): FlowRunSummary {
+  const reqs = rows.filter((r) => r.method !== 'WAIT' && r.method !== 'RETRY');
+  const lat = reqs.map((r) => r.elapsedMs || 0);
+  const slow = reqs.reduce<FlowStepResult | null>((a, r) => (!a || (r.elapsedMs || 0) > (a.elapsedMs || 0) ? r : a), null);
+  return {
+    requests: reqs.length,
+    passed: rows.filter((r) => r.ok).length,
+    failed: rows.filter((r) => !r.ok).length,
+    checks: rows.reduce((n, r) => n + r.checks.length, 0),
+    checksPassed: rows.reduce((n, r) => n + r.checks.filter((c) => c.pass).length, 0),
+    maxStepMs: lat.length ? Math.max(...lat) : 0,
+    avgStepMs: lat.length ? Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) : 0,
+    slowestStep: slow?.name,
   };
 }
 

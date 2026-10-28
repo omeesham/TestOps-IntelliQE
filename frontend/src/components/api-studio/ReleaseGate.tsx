@@ -15,10 +15,15 @@ import { useEffect, useState } from 'react';
 import { X, ShieldCheck, Play, Trash2, Pencil, Save, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import { useToast } from '@/components/feedback/ToastProvider';
-import { listGatePolicies, saveGatePolicy, deleteGatePolicy, evaluateReleaseGate, listApiRuns, type GatePolicy, type GateResult } from '@/services/api';
+import {
+  listGatePolicies, saveGatePolicy, deleteGatePolicy, evaluateReleaseGate, listApiRuns,
+  listApiEnvironments, listSignoffs, createSignoff, deleteSignoff,
+  type GatePolicy, type GateResult, type Signoff,
+} from '@/services/api';
 import { CARD, STRIP, INPUT, LABEL, PRIMARY_BTN, SECONDARY_BTN, THEAD, relativeTime } from './format';
+import type { ApiEnvironment } from './types';
 
-type Tab = 'evaluate' | 'policies';
+type Tab = 'evaluate' | 'signoff' | 'policies';
 
 /** The tunable part of a policy — shared by the inline thresholds and the policy form. */
 type Thresholds = {
@@ -28,6 +33,7 @@ type Thresholds = {
   minConfidence: number;
   requireNoNewFailures: boolean;
   blockOnHighSeverityFail: boolean;
+  requireSignoff: boolean;
 };
 
 type PolicyForm = Thresholds & { name: string };
@@ -39,6 +45,7 @@ const DEFAULT_THRESHOLDS: Thresholds = {
   minConfidence: 70,
   requireNoNewFailures: true,
   blockOnHighSeverityFail: true,
+  requireSignoff: false,
 };
 
 const BLANK_POLICY: PolicyForm = { name: '', ...DEFAULT_THRESHOLDS };
@@ -81,6 +88,10 @@ function ThresholdFields({ value, onChange }: { value: Thresholds; onChange: (pa
           <input type="checkbox" checked={value.blockOnHighSeverityFail} onChange={(e) => onChange({ blockOnHighSeverityFail: e.target.checked })} className="w-3.5 h-3.5" />
           Block on high-severity fail
         </label>
+        <label className="flex items-center gap-2 text-[11.5px] text-gray-600" title="The run must be signed off green in an environment marked customer-similar">
+          <input type="checkbox" checked={value.requireSignoff} onChange={(e) => onChange({ requireSignoff: e.target.checked })} className="w-3.5 h-3.5" />
+          Require sign-off in a customer-similar environment
+        </label>
       </div>
     </>
   );
@@ -115,20 +126,61 @@ export default function ReleaseGate({ onClose }: { onClose: () => void }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [savingPolicy, setSavingPolicy] = useState(false);
 
+  // ── Sign-off (Phase 3) ──
+  const [environments, setEnvironments] = useState<ApiEnvironment[]>([]);
+  const [signoffs, setSignoffs] = useState<Signoff[]>([]);
+  const [signEnvId, setSignEnvId] = useState('');
+  const [signNote, setSignNote] = useState('');
+  const [signing, setSigning] = useState(false);
+
   useEffect(() => {
     void (async () => {
       try {
-        const [runsRes, pols] = await Promise.all([listApiRuns(1, 20), listGatePolicies()]);
+        const [runsRes, pols, envsRes] = await Promise.all([listApiRuns(1, 20), listGatePolicies(), listApiEnvironments()]);
         const items = Array.isArray(runsRes?.items) ? runsRes.items : [];
         setRuns(items);
         if (items.length) setRunId(String(items[0].runId ?? items[0].id ?? ''));
         setPolicies(pols);
+        const envs: ApiEnvironment[] = Array.isArray(envsRes?.environments) ? envsRes.environments : [];
+        setEnvironments(envs);
+        // Default to a customer-similar environment when the tenant has one.
+        const preferred = envs.find((e) => e.customerLike) || envs[0];
+        if (preferred) setSignEnvId(preferred.id);
       } catch (e: any) {
         setError(e?.response?.data?.error || e?.message || 'Request failed.');
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /* The sign-off list follows whichever run is selected, so the Sign-off tab and
+     the Evaluate tab always talk about the same run. */
+  useEffect(() => {
+    if (!runId) { setSignoffs([]); return; }
+    void listSignoffs(runId).then(setSignoffs).catch(() => setSignoffs([]));
+  }, [runId]);
+
+  const sign = async () => {
+    if (!runId || !signEnvId) return;
+    setSigning(true); setError('');
+    try {
+      const s = await createSignoff({ runId, environmentId: signEnvId, note: signNote.trim() || undefined });
+      setSignoffs((p) => [s, ...p]);
+      setSignNote('');
+      if (s.result === 'pass' && s.customerLike) toast.success('Signed off', 'The release gate will accept this run.');
+      else if (!s.customerLike) toast.warning('Signed off, but not customer-similar', `"${s.environmentName}" is not marked customer-similar, so the gate will still block.`);
+      else toast.warning('Signed off as failing', `That run is ${s.passRate}% — the gate will still block.`);
+      setResult(null);
+    } catch (e: any) {
+      const msg = e?.response?.data?.error || e?.message || 'Request failed.';
+      setError(msg); toast.error('Sign-off failed', msg);
+    } finally { setSigning(false); }
+  };
+
+  const removeSignoff = async (id: string) => {
+    try { await deleteSignoff(id); setSignoffs((p) => p.filter((s) => s.id !== id)); setResult(null); toast.success('Sign-off removed'); }
+    catch (e: any) { toast.error('Delete failed', e?.response?.data?.error || e?.message || 'Request failed.'); }
+  };
 
   const refreshPolicies = async () => { setPolicies(await listGatePolicies()); };
 
@@ -212,6 +264,7 @@ export default function ReleaseGate({ onClose }: { onClose: () => void }) {
 
         <div className="flex items-center gap-1 px-3 border-b border-[#EDE9FE] flex-shrink-0">
           <button type="button" onClick={() => switchTab('evaluate')} className={tab === 'evaluate' ? TAB_ACTIVE : TAB_INACTIVE}>Evaluate</button>
+          <button type="button" onClick={() => switchTab('signoff')} className={tab === 'signoff' ? TAB_ACTIVE : TAB_INACTIVE}>Sign-off</button>
           <button type="button" onClick={() => switchTab('policies')} className={tab === 'policies' ? TAB_ACTIVE : TAB_INACTIVE}>Policies</button>
         </div>
 
@@ -276,6 +329,11 @@ export default function ReleaseGate({ onClose }: { onClose: () => void }) {
                       </span>
                     </div>
                     {result.title && <div className="mt-1 text-[11px] text-gray-500 truncate">{result.title}</div>}
+                    <div className="mt-1 text-[11px] text-gray-500">
+                      {result.signoff
+                        ? <>Signed off by <span className="font-medium text-gray-700">{result.signoff.signedBy}</span> in <span className="font-medium text-gray-700">{result.signoff.environmentName}</span>{result.signoff.customerLike ? '' : ' (not customer-similar)'} · {result.signoff.result} · {relativeTime(result.signoff.signedAt)}</>
+                        : <>Not signed off — <button type="button" onClick={() => switchTab('signoff')} className="text-[#7C3AED] hover:underline font-medium">sign off this run</button></>}
+                    </div>
                   </div>
 
                   {/* Stats */}
@@ -341,6 +399,80 @@ export default function ReleaseGate({ onClose }: { onClose: () => void }) {
                   </div>
                 </div>
               )}
+            </>
+          )}
+
+          {tab === 'signoff' && (
+            <>
+              <p className="text-[11.5px] text-gray-500">
+                A sign-off attests that a finished run was verified in a given environment. The release gate accepts one only when it is
+                <span className="font-semibold text-gray-700"> green</span> and the environment is marked
+                <span className="font-semibold text-gray-700"> customer-similar</span> (set that on the Environments tab).
+              </p>
+
+              <div>
+                <label className={LABEL}>Run being signed off</label>
+                <select value={runId} onChange={(e) => { setRunId(e.target.value); setResult(null); }} className={INPUT} disabled={!runs.length}>
+                  {runs.length === 0 && <option value="">No finished runs yet</option>}
+                  {runs.map((r, i) => (
+                    <option key={r.runId ?? r.id ?? i} value={String(r.runId ?? r.id ?? '')}>
+                      {(r.title || r.runId || 'Run')} — {r.stats?.passRate ?? '–'}%
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className={LABEL}>Environment it was verified in</label>
+                <select value={signEnvId} onChange={(e) => setSignEnvId(e.target.value)} className={INPUT} disabled={!environments.length}>
+                  {environments.length === 0 && <option value="">No environments yet</option>}
+                  {environments.map((e) => (
+                    <option key={e.id} value={e.id}>{e.name}{e.customerLike ? ' — customer-similar' : ''}</option>
+                  ))}
+                </select>
+                {!!signEnvId && !environments.find((e) => e.id === signEnvId)?.customerLike && (
+                  <p className="mt-1 text-[11px] text-amber-700">This environment is not marked customer-similar — a sign-off against it will not satisfy the gate.</p>
+                )}
+              </div>
+
+              <div>
+                <label className={LABEL}>Note (optional)</label>
+                <input value={signNote} onChange={(e) => setSignNote(e.target.value)} placeholder="What was verified, and anything the reviewer should know" className={INPUT} />
+              </div>
+
+              <div className="flex items-center justify-end">
+                <button type="button" onClick={() => void sign()} disabled={signing || !runId || !signEnvId} className={PRIMARY_BTN}>
+                  {signing ? <Spinner className="w-3.5 h-3.5" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                  {signing ? 'Signing…' : 'Sign off this run'}
+                </button>
+              </div>
+
+              <div>
+                <label className={LABEL}>Sign-offs for this run</label>
+                {signoffs.length === 0 ? (
+                  <p className="text-[12px] text-gray-400">Not signed off yet.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {signoffs.map((s) => {
+                      const green = s.result === 'pass' && s.customerLike;
+                      return (
+                        <div key={s.id} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-[11.5px] ${green ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}>
+                          {green ? <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" /> : <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />}
+                          <div className="min-w-0 flex-1">
+                            <p className="text-gray-800 truncate">
+                              <span className="font-semibold">{s.environmentName}</span>
+                              {!s.customerLike && <span className="text-amber-700"> · not customer-similar</span>}
+                              <span className={s.result === 'pass' ? 'text-emerald-700' : 'text-amber-700'}> · {s.result} ({s.passRate}%)</span>
+                            </p>
+                            <p className="text-gray-500 truncate">{s.signedBy} · {relativeTime(s.signedAt)}{s.note ? ` · ${s.note}` : ''}</p>
+                          </div>
+                          <button type="button" onClick={() => void removeSignoff(s.id)} className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 flex-shrink-0" title="Remove sign-off"><Trash2 className="w-4 h-4" /></button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </>
           )}
 

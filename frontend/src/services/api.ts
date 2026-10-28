@@ -1018,7 +1018,7 @@ export async function captureWebPerformance(input: { url: string; engine?: WebEn
 /* ── 1. Visual flow / journey builder ── */
 export interface FlowExtract { name: string; from: 'body' | 'header' | 'status'; path?: string; regex?: string }
 export type CompareMode = 'strict' | 'strict-order' | 'lenient' | 'non-extensible';
-export interface FlowCheck { kind: 'status' | 'jsonPathExists' | 'jsonPathEquals' | 'bodyContains' | 'responseTimeUnderMs' | 'header' | 'bodyMatches' | 'xpath' | 'expr' | 'schema' | 'graphql'; equals?: number | string; oneOf?: number[]; path?: string; value?: unknown; text?: string; ms?: number; name?: string; op?: 'equals' | 'contains' | 'exists'; compareMode?: CompareMode; ignore?: string[]; expr?: string; schema?: string }
+export interface FlowCheck { kind: 'status' | 'jsonPathExists' | 'jsonPathEquals' | 'bodyContains' | 'responseTimeUnderMs' | 'header' | 'bodyMatches' | 'xpath' | 'expr' | 'schema' | 'graphql' | 'noSecrets' | 'noError'; equals?: number | string; oneOf?: number[]; path?: string; value?: unknown; text?: string; ms?: number; name?: string; op?: 'equals' | 'contains' | 'exists'; compareMode?: CompareMode; ignore?: string[]; expr?: string; schema?: string }
 export interface ApiOAuth2Config { grant?: string; tokenUrl?: string; clientId?: string; clientSecret?: string; scope?: string; audience?: string; username?: string; password?: string; refreshToken?: string; clientAuthBasic?: boolean }
 export interface ApiHttpAuth { type: string; value?: string; headerName?: string; oauth2?: ApiOAuth2Config }
 export interface ApiFormField { key: string; value?: string; type?: 'text' | 'file'; filename?: string; contentType?: string; dataBase64?: string }
@@ -1059,7 +1059,8 @@ export interface FlowStep {
 }
 export interface SavedApiFlow { id: string; name: string; steps: FlowStep[]; variables: Record<string, string>; createdBy: string; createdAt: string; updatedAt: string }
 export interface FlowStepResult { index: number; name: string; method: string; url: string; phase?: StepPhase; ok: boolean; status?: number; elapsedMs: number; error?: string; extracted: Record<string, string>; checks: { kind: string; label: string; pass: boolean; detail?: string }[]; bodyPreview: string }
-export interface FlowRunResult { passed: boolean; steps: FlowStepResult[]; variables: Record<string, string>; durationMs: number; stepsRun: number; stepsTotal: number }
+export interface FlowRunSummary { requests: number; passed: number; failed: number; checks: number; checksPassed: number; maxStepMs: number; avgStepMs: number; slowestStep?: string }
+export interface FlowRunResult { passed: boolean; steps: FlowStepResult[]; variables: Record<string, string>; durationMs: number; stepsRun: number; stepsTotal: number; summary?: FlowRunSummary }
 export async function listApiFlows(): Promise<{ flows: SavedApiFlow[] }> { const { data } = await api.get('/api-automation/flows'); return data; }
 export async function saveApiFlow(input: { id?: string; name: string; steps: FlowStep[]; variables?: Record<string, string> }): Promise<{ flow: SavedApiFlow }> { const { data } = await api.post('/api-automation/flows', input); return data; }
 export async function deleteApiFlow(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/flows/${encodeURIComponent(id)}`); return data; }
@@ -1068,6 +1069,15 @@ export async function runApiFlow(input: { steps: FlowStep[]; variables?: Record<
 export interface SuggestedFlow { name: string; description: string; resource: string; steps: FlowStep[]; variables: Record<string, string>; suggested: true; hasWrites: boolean }
 export async function suggestApiIntegrationFlows(endpoints: unknown[]): Promise<{ flows: SuggestedFlow[] }> { const { data } = await api.post('/api-automation/flows/suggest', { endpoints }); return data; }
 export async function importCurlSteps(curl: string): Promise<{ steps: FlowStep[]; warnings: string[] }> { const { data } = await api.post('/api-automation/flows/import-curl', { curl }); return { steps: data.steps || [], warnings: data.warnings || [] }; }
+export async function exportFlowPostman(input: { name?: string; steps: FlowStep[]; variables?: Record<string, string> }): Promise<unknown> { const { data } = await api.post('/api-automation/flows/export-postman', input); return data; }
+export async function importHarSteps(har: string): Promise<{ steps: FlowStep[]; warnings: string[] }> { const { data } = await api.post('/api-automation/flows/import-har', { har }); return { steps: data.steps || [], warnings: data.warnings || [] }; }
+/** Import a Postman Collection (v2.0/v2.1) as flow steps (inverse of exportFlowPostman); collection variables come back as suggested seed vars. */
+export async function importPostmanSteps(collection: string): Promise<{ steps: FlowStep[]; variables: Record<string, string>; warnings: string[] }> { const { data } = await api.post('/api-automation/flows/import-postman', { collection }); return { steps: data.steps || [], variables: data.variables || {}, warnings: data.warnings || [] }; }
+/** Static pre-flight lint of a flow — undefined {{vars}}, no-assertion steps, dup names. Pure, network-free; `ok` is false when there are errors (a CI gate). */
+export type FlowLintLevel = 'error' | 'warning' | 'info';
+export interface FlowLintIssue { level: FlowLintLevel; step?: string; message: string }
+export interface FlowLintReport { ok: boolean; errors: number; warnings: number; info: number; issues: FlowLintIssue[] }
+export async function lintApiFlow(steps: FlowStep[], variables?: Record<string, string>): Promise<FlowLintReport> { const { data } = await api.post('/api-automation/flows/lint', { steps, variables }); return data; }
 /** Run several flows in order as a suite, sharing captured variables between them. */
 export type SuiteFlowRole = 'setup' | 'flow' | 'teardown';
 export interface SuiteFlowInput { name?: string; steps: FlowStep[]; variables?: Record<string, string> }
@@ -1080,6 +1090,8 @@ export interface DatasetRunResult { passed: boolean; rows: DatasetRowResult[]; r
 export async function runApiFlowDataset(input: { steps: FlowStep[]; variables?: Record<string, string>; allowWrites?: boolean; dataset: Record<string, string>[]; stopOnFailure?: boolean }): Promise<DatasetRunResult> { const { data } = await api.post('/api-automation/flows/run-dataset', input, { timeout: 300_000 }); return data; }
 /** Convert an already-computed run result into JUnit XML (for CI), without re-running. */
 export async function exportFlowJUnit(input: { kind: 'flow' | 'suite' | 'dataset'; name?: string; result: unknown }): Promise<string> { const { data } = await api.post('/api-automation/flows/export-junit', input, { responseType: 'text' }); return typeof data === 'string' ? data : String(data); }
+/** Render a run result as a human-readable Markdown report (PR/bug-report/Slack) — the counterpart to JUnit. */
+export async function exportFlowReport(input: { kind: 'flow' | 'suite' | 'dataset'; name?: string; result: unknown }): Promise<string> { const { data } = await api.post('/api-automation/flows/export-report', input, { responseType: 'text' }); return typeof data === 'string' ? data : String(data); }
 
 /* ── 2. Conversational chat-to-test ── */
 export interface ChatTestDraft { title: string; method: string; url: string; headers: { key: string; value: string }[]; body?: string; checks: FlowCheck[] }
@@ -1460,9 +1472,16 @@ export async function deleteHybridTest(id: string): Promise<void> { await api.de
 export async function runHybridTest(input: { seed?: FlowStep[]; ui: HybridUi; cleanup?: FlowStep[]; variables?: Record<string, string>; allowWrites?: boolean }): Promise<HybridRunResult> { const { data } = await api.post('/api-automation/hybrid/run', input, { timeout: 120_000 }); return data; }
 
 // Feature B — Agentic release gate (score a finished run → go / no-go)
-export interface GatePolicy { id: string; name: string; minPassRate: number; maxFailed: number; maxBroken: number; minConfidence: number; requireNoNewFailures: boolean; blockOnHighSeverityFail: boolean; createdBy: string; createdAt: string; updatedAt: string }
+export interface GatePolicy { id: string; name: string; minPassRate: number; maxFailed: number; maxBroken: number; minConfidence: number; requireNoNewFailures: boolean; blockOnHighSeverityFail: boolean; requireSignoff: boolean; createdBy: string; createdAt: string; updatedAt: string }
 export interface GateCheck { label: string; pass: boolean; actual: number | string; threshold: number | string }
-export interface GateResult { decision: 'go' | 'no-go'; score: number; runId: string; title: string; stats: { total: number; passed: number; failed: number; broken: number; passRate: number } | null; checks: GateCheck[]; reasons: string[]; anomalies: { flaky: number; slow: number; newFailure: number } }
+export interface GateSignoffRef { environmentName: string; customerLike: boolean; result: string; signedBy: string; signedAt: string }
+export interface GateResult { decision: 'go' | 'no-go'; score: number; runId: string; title: string; stats: { total: number; passed: number; failed: number; broken: number; passRate: number } | null; checks: GateCheck[]; reasons: string[]; anomalies: { flaky: number; slow: number; newFailure: number }; signoff: GateSignoffRef | null }
+
+/** Phase 3 — sign-off: a finished run attested in a customer-similar environment. */
+export interface Signoff { id: string; runId: string; runTitle: string; environmentId: string; environmentName: string; customerLike: boolean; result: 'pass' | 'fail'; passRate: number; note: string; signedBy: string; signedAt: string }
+export async function listSignoffs(runId?: string): Promise<Signoff[]> { const { data } = await api.get('/api-automation/signoffs', { params: runId ? { runId } : {} }); return data.signoffs || []; }
+export async function createSignoff(input: { runId: string; environmentId: string; note?: string }): Promise<Signoff> { const { data } = await api.post('/api-automation/signoffs', input); return data.signoff; }
+export async function deleteSignoff(id: string): Promise<void> { await api.delete(`/api-automation/signoffs/${encodeURIComponent(id)}`); }
 export async function listGatePolicies(): Promise<GatePolicy[]> { const { data } = await api.get('/api-automation/release-gates'); return data.policies || []; }
 export async function saveGatePolicy(input: Partial<GatePolicy>): Promise<GatePolicy> { const { data } = await api.post('/api-automation/release-gates', input); return data.policy; }
 export async function deleteGatePolicy(id: string): Promise<void> { await api.delete(`/api-automation/release-gates/${encodeURIComponent(id)}`); }

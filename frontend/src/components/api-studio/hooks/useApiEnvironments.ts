@@ -34,6 +34,7 @@ export function mapEnv(e: any): ApiEnvironment {
       ? e.variables.map((v: any): EnvVariable => ({ key: String(v?.key ?? ''), value: String(v?.value ?? ''), secret: !!v?.secret }))
       : [],
     isDefault: !!e?.isDefault,
+    customerLike: !!e?.customerLike,
     createdBy: e?.createdBy,
     createdAt: String(e?.createdAt ?? ''),
     updatedAt: String(e?.updatedAt ?? ''),

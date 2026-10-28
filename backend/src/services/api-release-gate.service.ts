@@ -13,6 +13,7 @@
  */
 import pool from '../db.js';
 import { getApiRunDetail, getApiOverview } from './api-dashboard.service.js';
+import { latestSignoffForRun } from './api-signoff.service.js';
 
 export interface GatePolicy {
   id: string;
@@ -23,6 +24,8 @@ export interface GatePolicy {
   minConfidence: number;
   requireNoNewFailures: boolean;
   blockOnHighSeverityFail: boolean;
+  /** Phase 3 — demand a green sign-off in a customer-similar environment. */
+  requireSignoff: boolean;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -35,6 +38,7 @@ function mapPolicy(r: any): GatePolicy {
     minConfidence: Number(r.min_confidence),
     requireNoNewFailures: r.require_no_new_failures === true || r.require_no_new_failures === 1,
     blockOnHighSeverityFail: r.block_high_sev === true || r.block_high_sev === 1,
+    requireSignoff: r.require_signoff === true || r.require_signoff === 1,
     createdBy: r.created_by || '', createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
@@ -59,17 +63,18 @@ export async function saveGatePolicy(tenantId: string, username: string, input: 
   const minConfidence = clampPct(input?.minConfidence, 70);
   const noNew = input?.requireNoNewFailures ? 1 : 0;
   const blockHigh = input?.blockOnHighSeverityFail ? 1 : 0;
+  const reqSignoff = input?.requireSignoff ? 1 : 0;
   if (input?.id) {
     const { rows } = await pool.query(
-      `UPDATE api_release_gates SET name = $3, min_pass_rate = $4, max_failed = $5, max_broken = $6, min_confidence = $7, require_no_new_failures = $8, block_high_sev = $9, updated_at = SYSUTCDATETIME() OUTPUT INSERTED.* WHERE tenant_id = $1 AND id = $2`,
-      [tenantId, input.id, name, minPassRate, maxFailed, maxBroken, minConfidence, noNew, blockHigh],
+      `UPDATE api_release_gates SET name = $3, min_pass_rate = $4, max_failed = $5, max_broken = $6, min_confidence = $7, require_no_new_failures = $8, block_high_sev = $9, require_signoff = $10, updated_at = SYSUTCDATETIME() OUTPUT INSERTED.* WHERE tenant_id = $1 AND id = $2`,
+      [tenantId, input.id, name, minPassRate, maxFailed, maxBroken, minConfidence, noNew, blockHigh, reqSignoff],
     );
     if (!rows.length) throw new Error('Release gate not found.');
     return mapPolicy(rows[0]);
   }
   const { rows } = await pool.query(
-    `INSERT INTO api_release_gates (tenant_id, name, min_pass_rate, max_failed, max_broken, min_confidence, require_no_new_failures, block_high_sev, created_by) OUTPUT INSERTED.* VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-    [tenantId, name, minPassRate, maxFailed, maxBroken, minConfidence, noNew, blockHigh, username],
+    `INSERT INTO api_release_gates (tenant_id, name, min_pass_rate, max_failed, max_broken, min_confidence, require_no_new_failures, block_high_sev, require_signoff, created_by) OUTPUT INSERTED.* VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [tenantId, name, minPassRate, maxFailed, maxBroken, minConfidence, noNew, blockHigh, reqSignoff, username],
   );
   return mapPolicy(rows[0]);
 }
@@ -88,6 +93,8 @@ export interface GateResult {
   checks: GateCheck[];
   reasons: string[];
   anomalies: { flaky: number; slow: number; newFailure: number };
+  /** The sign-off the gate graded against, when one exists (Phase 3). */
+  signoff: { environmentName: string; customerLike: boolean; result: string; signedBy: string; signedAt: string } | null;
 }
 
 export async function evaluateGate(
@@ -100,8 +107,8 @@ export async function evaluateGate(
   let policy: GatePolicy | null = null;
   if (input?.policyId) policy = (await listGatePolicies(tenantId)).find((p) => p.id === input.policyId) || null;
   const t = {
-    minPassRate: 80, maxFailed: 0, maxBroken: 0, minConfidence: 70, requireNoNewFailures: false, blockOnHighSeverityFail: false,
-    ...(policy ? { minPassRate: policy.minPassRate, maxFailed: policy.maxFailed, maxBroken: policy.maxBroken, minConfidence: policy.minConfidence, requireNoNewFailures: policy.requireNoNewFailures, blockOnHighSeverityFail: policy.blockOnHighSeverityFail } : {}),
+    minPassRate: 80, maxFailed: 0, maxBroken: 0, minConfidence: 70, requireNoNewFailures: false, blockOnHighSeverityFail: false, requireSignoff: false,
+    ...(policy ? { minPassRate: policy.minPassRate, maxFailed: policy.maxFailed, maxBroken: policy.maxBroken, minConfidence: policy.minConfidence, requireNoNewFailures: policy.requireNoNewFailures, blockOnHighSeverityFail: policy.blockOnHighSeverityFail, requireSignoff: policy.requireSignoff } : {}),
     ...(input?.thresholds || {}),
   };
 
@@ -134,6 +141,18 @@ export async function evaluateGate(
   if (t.requireNoNewFailures) checks.push({ label: 'No newly-failing tests', pass: anomalies.newFailure === 0, actual: anomalies.newFailure, threshold: 0 });
   if (t.blockOnHighSeverityFail) checks.push({ label: 'No high-severity failures', pass: highSevFails === 0, actual: highSevFails, threshold: 0 });
 
+  // Phase 3 — the sign-off check. It must be PRESENT, GREEN, and made against
+  // an environment marked customer-similar; each miss reports which one it was.
+  const signoff = await latestSignoffForRun(tenantId, run.runId).catch(() => null);
+  if (t.requireSignoff) {
+    const ok = !!signoff && signoff.customerLike && signoff.result === 'pass';
+    const actual = !signoff ? 'not signed off'
+      : !signoff.customerLike ? `signed off in "${signoff.environmentName}" (not customer-similar)`
+      : signoff.result !== 'pass' ? `signed off failing (${signoff.passRate}%)`
+      : `signed off by ${signoff.signedBy} in "${signoff.environmentName}"`;
+    checks.push({ label: 'Signed off in a customer-similar environment', pass: ok, actual, threshold: 'green sign-off' });
+  }
+
   const blocked = checks.filter((c) => !c.pass);
   return {
     decision: blocked.length === 0 ? 'go' : 'no-go',
@@ -144,5 +163,8 @@ export async function evaluateGate(
     checks,
     reasons: blocked.map((c) => `${c.label}: ${c.actual} (needs ${c.threshold})`),
     anomalies,
+    signoff: signoff
+      ? { environmentName: signoff.environmentName, customerLike: signoff.customerLike, result: signoff.result, signedBy: signoff.signedBy, signedAt: signoff.signedAt }
+      : null,
   };
 }

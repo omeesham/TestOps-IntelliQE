@@ -17,7 +17,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import {
   Workflow, Sparkles, Play, Save, Trash2, CheckCircle2, XCircle, AlertTriangle,
-  Loader2, RefreshCw, ArrowRight, ShieldAlert, Boxes, Table2, Download,
+  Loader2, RefreshCw, ArrowRight, ShieldAlert, Boxes, Table2, Download, X,
 } from 'lucide-react';
 import {
   listApiFlows, saveApiFlow, deleteApiFlow, runApiFlow, runApiFlowSuite, runApiFlowDataset, suggestApiIntegrationFlows, exportFlowJUnit,
@@ -30,9 +30,11 @@ import { EmptyState } from '../primitives';
 interface Props {
   endpoints: CatalogEndpoint[];
   onOpenCatalogue: () => void;
+  /** Dismisses the tool — it opens as an overlay from the Tools gallery. */
+  onClose: () => void;
 }
 
-export default function IntegrationTestsView({ endpoints, onOpenCatalogue }: Props) {
+export default function IntegrationTestsView({ endpoints, onOpenCatalogue, onClose }: Props) {
   const [saved, setSaved] = useState<SavedApiFlow[]>([]);
   const [suggestions, setSuggestions] = useState<SuggestedFlow[] | null>(null);
   const [loadingSaved, setLoadingSaved] = useState(true);
@@ -202,6 +204,7 @@ export default function IntegrationTestsView({ endpoints, onOpenCatalogue }: Pro
             {suggesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
             Suggest from catalogue
           </button>
+          <button type="button" onClick={onClose} aria-label="Close" title="Close" className="p-1.5 rounded-md text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]"><X className="w-4 h-4" /></button>
         </div>
       </div>
 

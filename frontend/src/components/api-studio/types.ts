@@ -129,6 +129,8 @@ export interface ApiEnvironment {
   color?: string;
   variables: EnvVariable[];
   isDefault: boolean;
+  /** Stands in for the customer's environment — required by a Phase 3 sign-off. */
+  customerLike?: boolean;
   createdBy?: string;
   createdAt: string;
   updatedAt: string;
@@ -280,4 +282,4 @@ export interface ApiRunDetail extends ApiRunSummary {
    Navigation
    ═══════════════════════════════════════════════════════════════ */
 
-export type NavView = 'overview' | 'import' | 'integrations' | 'integration-tests' | 'endpoints' | 'scenarios' | 'runs' | 'report' | 'environments' | 'tools' | 'developer';
+export type NavView = 'overview' | 'import' | 'integrations' | 'endpoints' | 'scenarios' | 'runs' | 'report' | 'environments' | 'tools' | 'developer';

@@ -1350,6 +1350,28 @@ export async function initDb(): Promise<void> {
         created_at               DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
         updated_at               DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
       )`);
+    // Phase 3 — a policy may demand a green sign-off in a customer-similar env.
+    await addColumn('api_release_gates', 'require_signoff', 'BIT NOT NULL DEFAULT 0');
+    // Phase 3 — the sign-off record itself. Environment name/flag and the run's
+    // pass rate are SNAPSHOT here: an attestation must keep saying what was true
+    // when it was made, even if the environment is renamed or re-flagged later.
+    await createTable('api_signoffs', `
+      CREATE TABLE ${SCHEMA}.api_signoffs (
+        id                UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id         UNIQUEIDENTIFIER NOT NULL,
+        run_id            NVARCHAR(200) NOT NULL,
+        run_title         NVARCHAR(500),
+        environment_id    NVARCHAR(100),
+        environment_name  NVARCHAR(200),
+        customer_like     BIT NOT NULL DEFAULT 0,
+        result            NVARCHAR(10) NOT NULL DEFAULT 'fail',
+        pass_rate         INT NOT NULL DEFAULT 0,
+        note              NVARCHAR(MAX),
+        signed_by         NVARCHAR(100),
+        signed_at         DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    // Phase 3 — environments say whether they stand in for the customer's.
+    await addColumn('api_environments', 'customer_like', 'BIT NOT NULL DEFAULT 0');
     await createTable('api_ci_config', `
       CREATE TABLE ${SCHEMA}.api_ci_config (
         tenant_id   UNIQUEIDENTIFIER PRIMARY KEY,
@@ -1664,6 +1686,7 @@ export async function initDb(): Promise<void> {
     await createIndex('idx_api_test_cycles_plan', 'api_test_cycles', '(tenant_id, plan_id, created_at DESC)');
     await createIndex('idx_api_test_assignments_plan', 'api_test_assignments', '(tenant_id, plan_id)');
     await createIndex('idx_api_requirements_tenant', 'api_requirements', '(tenant_id, updated_at DESC)');
+    await createIndex('idx_api_signoffs_run', 'api_signoffs', '(tenant_id, run_id, signed_at DESC)');
     await createIndex('idx_api_tm_connectors_tenant', 'api_tm_connectors', '(tenant_id, updated_at DESC)');
     await createIndex('idx_api_cicd_connectors_tenant', 'api_cicd_connectors', '(tenant_id, updated_at DESC)');
     await createIndex('idx_api_apitest_connectors_tenant', 'api_apitest_connectors', '(tenant_id, updated_at DESC)');

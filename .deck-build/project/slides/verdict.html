@@ -1,0 +1,32 @@
+<section id="verdict" data-transition="push" style="background:#F7F8FA;color:#2A3142;font-family:'IBM Plex Sans', Verdana, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<h2 style="font-family:'Rubik', Arial, sans-serif;font-size:68px;font-weight:600;line-height:1.1">The gate, as it actually ran</h2>
+<table style="font-family:'IBM Plex Sans', Verdana, sans-serif;font-size:28px;padding:20px 24px;border:1px solid #DCE1EA;border-radius:12px;background:#FFFFFF">
+<tr style="background:#ECEFF5">
+<th style="width:42%;text-align:left;font-weight:600">Check</th>
+<th style="width:30%;text-align:left;font-weight:600">Actual</th>
+<th style="width:17%;text-align:left;font-weight:600">Threshold</th>
+<th style="width:11%;text-align:left;font-weight:600">Verdict</th>
+</tr>
+<tr>
+<td>Pass rate at or above minimum</td>
+<td>100%</td>
+<td>90%</td>
+<td style="color:#1E7A52;font-weight:600">PASS</td>
+</tr>
+<tr style="background:#F7F8FA">
+<td>Signed off in a customer-similar environment</td>
+<td>signed off by jbsadmin in “TEST”</td>
+<td>green sign-off</td>
+<td style="color:#1E7A52;font-weight:600">PASS</td>
+</tr>
+</table>
+<div style="display:flex;gap:28px;align-items:center;background:#1E7A52;padding:40px 48px;border-radius:16px">
+<x-icon name="Verified" style="width:56px;height:56px;color:#FFFFFF"></x-icon>
+<div style="display:flex;flex-direction:column;gap:8px">
+<h3 style="font-family:'Rubik', Arial, sans-serif;font-size:44px;font-weight:600;color:#FFFFFF">GO — safe to deploy</h3>
+<p style="font-size:28px;color:#CFEADD">Confidence 100 out of 100, with the attestation named on the banner.</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6A7488">The same gate shows NO-GO the moment the sign-off is missing, stale or failing.</p>
+<aside>Read straight off the Release Gate modal in the running app. The sign-off line appears on the verdict banner whether or not the policy requires one, so a team can see the attestation before they decide to enforce it.</aside>
+</section>
