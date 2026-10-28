@@ -181,7 +181,7 @@ export default function ApiStudio() {
           <ReportTab report={run.report} rows={run.rows} scenarios={run.scenarios} onExport={run.handleExport} exporting={run.exporting} canExport={!!run.testRunId} onPushToRepo={run.handlePushToRepo} pushState={run.pushState} canPush={run.specs.length > 0 && run.selected.size > 0} />
         )}
         {view === 'environments' && <EnvironmentsView store={envStore} />}
-        {view === 'tools' && <ApiToolsLauncher key={`tools:${toolsSeed}`} catalog={catalog} scenarios={run.scenarios} initialSearch={toolsSeed} onNavigate={navigate} />}
+        {view === 'tools' && <ApiToolsLauncher key={`tools:${toolsSeed}`} catalog={catalog} scenarios={run.scenarios} initialSearch={toolsSeed} onNavigate={navigate} environment={envStore.activeEnvironment} />}
       </div>
 
       {/* ── Import API — modal ── */}

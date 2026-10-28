@@ -1406,8 +1406,20 @@ export interface AttoBrief { requirements: string; coverage: 'essential' | 'stan
 
 // Story-driven generation
 export interface AcceptanceCriterion { id: string; text: string; endpoints: string[]; testIdeas: string[]; kind: 'happy-path' | 'negative' | 'auth' | 'validation' | 'edge' | 'other' }
-export interface StoryGenResult { title: string; summary: string; criteria: AcceptanceCriterion[]; brief: AttoBrief; unmappedCriteria: number }
-export async function generateFromStory(input: { story: string; endpoints: any[] }): Promise<StoryGenResult> { const { data } = await api.post('/api-automation/story/generate', input, { timeout: 180_000 }); return data; }
+/** Where a requirement traces back to — derived from the story and the catalogue, never generated. */
+export interface ReqSourceRef { kind: string; label: string; ref: string; url?: string; verified: boolean; detail?: string }
+export type ChecklistId = 'captured' | 'source' | 'reviewed' | 'signed-off';
+export interface ChecklistItem { id: ChecklistId; label: string; pass: boolean; detail: string }
+export interface ReqInput { name: string; in: 'path' | 'query' | 'header' | 'body'; required: boolean; note?: string }
+export interface ReqResponse { status: number; when: string }
+export interface EndpointRequirement {
+  method: string; url: string; purpose: string;
+  inputs: ReqInput[]; expectedResponses: ReqResponse[]; businessRules: string[];
+  sources: ReqSourceRef[]; criteriaIds: string[];
+  checklist: ChecklistItem[]; ready: boolean;
+}
+export interface StoryGenResult { title: string; summary: string; criteria: AcceptanceCriterion[]; brief: AttoBrief; unmappedCriteria: number; endpointRequirements: EndpointRequirement[]; checklist: ChecklistItem[] }
+export async function generateFromStory(input: { story: string; endpoints: any[]; environment?: { name: string; customerLike: boolean } | null }): Promise<StoryGenResult> { const { data } = await api.post('/api-automation/story/generate', input, { timeout: 180_000 }); return data; }
 
 // Multimodal inputs
 export interface DetectedFlow { name: string; steps: string[] }

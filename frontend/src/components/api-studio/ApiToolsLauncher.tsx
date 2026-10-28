@@ -116,7 +116,7 @@ import EvidenceExport from './EvidenceExport';
 import IntegrationTestsView from './views/IntegrationTestsView';
 
 import type { Catalog } from './hooks/useCatalog';
-import type { CatalogEndpoint, NavView, Scenario, StrategyLayerId } from './types';
+import type { ApiEnvironment, CatalogEndpoint, NavView, Scenario, StrategyLayerId } from './types';
 
 interface Props {
   catalog: Catalog;
@@ -127,6 +127,8 @@ interface Props {
   initialSearch?: string;
   /** Lets a tool hand the user back to another tab (e.g. "Open the catalogue"). */
   onNavigate?: (view: NavView) => void;
+  /** The environment a run would target — tools that gate on it need to know. */
+  environment?: ApiEnvironment | null;
 }
 
 interface ToolDef { icon: ElementType; label: string; desc: string; open: () => void }
@@ -199,7 +201,7 @@ const DIFFERENTIATORS = new Set<string>([
   'Unified cross-layer test', 'API + UI hybrid test', 'Monitoring', 'Public status page',
 ]);
 
-export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearch = '', onNavigate }: Props) {
+export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearch = '', onNavigate, environment }: Props) {
   const { endpoints, selected } = catalog;
   const toast = useToast();
   const { user } = useAuth();
@@ -314,7 +316,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
       items: [
         { icon: BrainCircuit, label: 'AI coworker (Atto)', desc: 'Chat + autonomy across the lifecycle', open: () => setCoworkerOpen(true) },
         { icon: Bot, label: 'Autopilot (autonomous loop)', desc: 'Discover → generate → run → heal → reviewed PR', open: () => setAutopilotOpen(true) },
-        { icon: FileText, label: 'Story-driven generation', desc: 'Jira story / PRD → a test plan', open: () => setStoryOpen(true) },
+        { icon: FileText, label: 'Story-driven generation', desc: 'Jira story / PRD → a reviewed test plan', open: () => setStoryOpen(true) },
         { icon: ImageIcon, label: 'Multimodal inputs', desc: 'Screenshot / Figma / recording → a plan', open: () => setMultimodalOpen(true) },
         { icon: Wand2, label: 'Author in plain English', desc: 'Describe tests → a run strategy', open: () => setNlOpen(true) },
         { icon: MessageSquare, label: 'Chat-to-test', desc: 'Refine a test in plain English', open: () => setChatTestOpen(true) },
@@ -696,7 +698,15 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
       {storyOpen && (
         <StoryGen
           endpoints={ep}
-          onApply={(brief) => { catalog.setStrategy({ coverage: brief.coverage, layers: brief.layers as StrategyLayerId[], requirements: brief.requirements }); toast.success('Strategy updated', `${brief.coverage} coverage · ${brief.layers.length} layer${brief.layers.length === 1 ? '' : 's'} · story applied`); }}
+          environment={environment}
+          onApply={(brief, approvedUrls) => {
+            catalog.setStrategy({ coverage: brief.coverage, layers: brief.layers as StrategyLayerId[], requirements: brief.requirements });
+            // A rejected requirement must not be planned, so the run is narrowed
+            // to the endpoints that cleared review — not just its brief text.
+            const approvedIds = catalog.endpoints.filter((e) => approvedUrls.includes(e.url)).map((e) => e.id);
+            if (approvedIds.length) { catalog.clearSelection(); catalog.selectMany(approvedIds, true); }
+            toast.success('Strategy updated', `${brief.coverage} coverage · ${brief.layers.length} layer${brief.layers.length === 1 ? '' : 's'} · ${approvedIds.length} approved endpoint${approvedIds.length === 1 ? '' : 's'}`);
+          }}
           onClose={() => setStoryOpen(false)}
         />
       )}

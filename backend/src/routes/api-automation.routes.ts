@@ -92,6 +92,7 @@ import { listDataProfiles, saveDataProfile, deleteDataProfile, parseCsv, parseEx
 import { orchestrate, getOrchestratorConfig, saveOrchestratorConfig, rotateOrchestratorToken, listOrchestratorEvents } from '../services/api-orchestrator.service.js';
 // ─── Atto coworker lifecycle tools (all additive, opt-in; pipeline untouched) ───
 import { generateFromStory } from '../services/api-story-gen.service.js';
+import { resolveStorySources } from '../services/api-story-source.service.js';
 import { listSignoffs, createSignoff, deleteSignoff } from '../services/api-signoff.service.js';
 import { analyzeMultimodal } from '../services/api-multimodal.service.js';
 import { optimizeSuite } from '../services/api-suite-optimizer.service.js';
@@ -204,6 +205,7 @@ function endpointsFromBody(raw: unknown, max = 500): ImportedEndpoint[] {
       expectedStatus: Number.isInteger(Number((e as any).expectedStatus)) ? Number((e as any).expectedStatus) : undefined,
       expectedResponse: typeof (e as any).expectedResponse === 'string' ? (e as any).expectedResponse.slice(0, 20000) : undefined,
       description: typeof (e as any).description === 'string' ? (e as any).description.slice(0, 2000) : undefined,
+      operationId: typeof (e as any).operationId === 'string' ? (e as any).operationId.slice(0, 200) : undefined,
       tags: Array.isArray((e as any).tags) ? (e as any).tags.map(String).slice(0, 10) : undefined,
       resource: typeof (e as any).resource === 'string' ? (e as any).resource.slice(0, 80) : undefined,
       pathTemplate: typeof (e as any).pathTemplate === 'string' ? (e as any).pathTemplate.slice(0, 500) : undefined,
@@ -1370,8 +1372,21 @@ router.post('/story/generate', async (req: Request, res: Response) => {
   try {
     const llm = await getTenantLlm(req.user!.tenantId);
     if (!llm) { res.status(400).json({ error: 'Configure an LLM (System Configuration → LLM) or an API-automation provider to generate from a story.' }); return; }
-    const endpoints = endpointsFromBody(req.body?.endpoints).map((e) => ({ method: e.method, url: e.url, title: e.title }));
-    res.json(await generateFromStory(String(req.body?.story || ''), endpoints, llm));
+    const story = String(req.body?.story || '');
+    const endpoints = endpointsFromBody(req.body?.endpoints).map((e) => ({
+      method: e.method, url: e.url, title: e.title, operationId: e.operationId,
+      description: e.description, source: e.source,
+      pathParams: e.pathParams, queryParams: e.queryParams, body: e.body,
+    }));
+    // Where each requirement came from is resolved HERE — out of the story text
+    // and the tenant's own Jira / test-management connections — so the model is
+    // never in a position to invent an issue key.
+    const sources = await resolveStorySources(req.user!.tenantId, story).catch(() => []);
+    const env = req.body?.environment;
+    res.json(await generateFromStory(story, endpoints, llm, {
+      sources,
+      environment: env?.name ? { name: String(env.name).slice(0, 120), customerLike: !!env.customerLike } : null,
+    }));
   } catch (err) { fail(res, err); }
 });
 
