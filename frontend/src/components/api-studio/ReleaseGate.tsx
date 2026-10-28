@@ -233,6 +233,7 @@ export default function ReleaseGate({ onClose }: { onClose: () => void }) {
       minConfidence: p.minConfidence,
       requireNoNewFailures: p.requireNoNewFailures,
       blockOnHighSeverityFail: p.blockOnHighSeverityFail,
+      requireSignoff: p.requireSignoff,
     });
   };
 
