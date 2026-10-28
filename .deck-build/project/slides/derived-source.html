@@ -1,9 +1,0 @@
-<section id="derived-source" data-transition="magic" style="background:#4F6BED;color:#FFFFFF;font-family:'IBM Plex Sans', Verdana, sans-serif;padding:128px;display:flex;flex-direction:column;justify-content:center;gap:44px">
-<h2 style="font-family:'Rubik', Arial, sans-serif;font-size:88px;font-weight:600;line-height:1.08;width:1500px">The source link is derived, never generated.</h2>
-<p style="font-size:36px;line-height:1.45;color:#E2E8FF;width:1400px">The model writes the purpose, the inputs, the expected responses and the rules. It is never asked where a requirement came from. That is built from the endpoint’s own import origin and its operation id, and matched back to the endpoint by position.</p>
-<div style="display:flex;gap:24px;align-items:center;background:#3D56C9;padding:32px 40px;border-radius:14px;width:1400px">
-<x-icon name="Lock" style="width:48px;height:48px;color:#FFFFFF"></x-icon>
-<p style="font-size:28px;line-height:1.45;color:#E2E8FF">A model that is never asked for a Jira key cannot invent one. Traceability that would be worth nothing if it could be hallucinated stays worth something.</p>
-</div>
-<aside>This was the single most important design call in Phase 1. Asking the model to fill in the source would have produced plausible-looking spec sections and issue keys with nothing behind them — exactly the failure mode that makes a traceability matrix untrustworthy.</aside>
-</section>
