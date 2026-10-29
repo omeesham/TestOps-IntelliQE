@@ -81,6 +81,28 @@ export interface ReqResponse {
   when: string;
 }
 
+/**
+ * The trust label for what was captured about one endpoint, decided
+ * deterministically from completeness, source strength and the model's own
+ * grounding estimate — never set by the model directly:
+ *
+ *   SOURCE_BACKED    captured, traces back to a CONFIRMED source, little inferred
+ *   INFERRED         captured, but leans on the endpoint's own definition
+ *   MISSING          nothing testable was captured
+ *   CONFLICTING      the requirement says two incompatible things about it
+ *   REVIEW_REQUIRED  too thin or untraceable to trust without a person
+ */
+export type ReqClassification =
+  | 'SOURCE_BACKED' | 'INFERRED' | 'MISSING' | 'CONFLICTING' | 'REVIEW_REQUIRED';
+
+/** One disagreement found for an endpoint, and where it was seen. */
+export interface ReqConflict {
+  /** One line naming the contradiction. */
+  summary: string;
+  /** Flagged by the model from the text, or by a check over the responses. */
+  origin: 'model' | 'responses';
+}
+
 /** What the agent captured about one endpoint it intends to test. */
 export interface EndpointRequirement {
   method: string;
@@ -93,6 +115,15 @@ export interface EndpointRequirement {
   sources: ReqSourceRef[];
   /** The criteria that mapped onto this endpoint. */
   criteriaIds: string[];
+  /** 5-state trust label, decided deterministically (see {@link ReqClassification}). */
+  classification: ReqClassification;
+  /**
+   * 0–1 confidence in what was captured, reproducible from completeness,
+   * source strength and the model's grounding estimate — not a raw model number.
+   */
+  confidence: number;
+  /** Cross-source / within-requirement disagreements found for this endpoint. */
+  conflicts: ReqConflict[];
   checklist: ChecklistItem[];
   /**
    * True when the agent did its own half: captured and sourced. Item 3 is the
@@ -154,7 +185,7 @@ const cid = () => `ac-${Date.now().toString(36)}-${(++seq).toString(36)}`;
 
 /** The four items for one endpoint, each with the reason it reads as it does. */
 function checkEndpoint(
-  req: Omit<EndpointRequirement, 'checklist' | 'ready'>,
+  req: Omit<EndpointRequirement, 'checklist' | 'ready' | 'classification' | 'confidence' | 'conflicts'>,
   endpoint: StoryEndpoint,
   context: StoryContext,
 ): ChecklistItem[] {
@@ -239,6 +270,84 @@ function rollUp(requirements: EndpointRequirement[], context: StoryContext): Che
   });
 }
 
+/** Normalise a condition string so two phrasings of the same case compare equal. */
+function normWhen(s: string): string {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/**
+ * Deterministic conflict scan over the captured responses: the same condition
+ * mapped to two different statuses is a contradiction the story cannot mean. The
+ * model may also report conflicts it read in the text; those are merged in by the
+ * caller. Nothing here invents disagreement — it only names what is already there.
+ */
+function responseConflicts(responses: ReqResponse[]): ReqConflict[] {
+  const byWhen = new Map<string, Set<number>>();
+  for (const r of responses) {
+    const key = normWhen(r.when);
+    if (!key) continue;
+    (byWhen.get(key) || byWhen.set(key, new Set()).get(key)!).add(r.status);
+  }
+  const out: ReqConflict[] = [];
+  for (const [, statuses] of byWhen) {
+    if (statuses.size > 1) {
+      const list = [...statuses].sort((a, b) => a - b);
+      out.push({ summary: `The story asks for ${list.join(' and ')} on the same condition.`, origin: 'responses' });
+    }
+  }
+  return out;
+}
+
+/** Is a given part of the requirement present? Inputs count as captured when the
+ *  endpoint honestly takes none. */
+function capturedParts(req: Omit<EndpointRequirement, 'checklist' | 'ready' | 'classification' | 'confidence' | 'conflicts'>, endpoint: StoryEndpoint) {
+  const hasInputs = req.inputs.length > 0 || !takesInputs(endpoint);
+  return {
+    purpose: !!req.purpose,
+    inputs: hasInputs,
+    responses: req.expectedResponses.length > 0,
+    rules: req.businessRules.length > 0,
+  };
+}
+
+/**
+ * Decide the 5-state label and a reproducible confidence from completeness, how
+ * well the trace is confirmed, the model's grounding estimate and any conflict.
+ * The model never sets the label — it only supplies a grounding hint and candidate
+ * conflicts, the same stance the derived-source rule takes on provenance.
+ */
+function classify(
+  req: Omit<EndpointRequirement, 'checklist' | 'ready' | 'classification' | 'confidence' | 'conflicts'>,
+  endpoint: StoryEndpoint,
+  grounding: number,
+  conflicts: ReqConflict[],
+): { classification: ReqClassification; confidence: number } {
+  const parts = capturedParts(req, endpoint);
+  const captured = [parts.purpose, parts.inputs, parts.responses, parts.rules].filter(Boolean).length;
+  const completeness = captured / 4;
+  const hasVerified = req.sources.some((s) => s.verified);
+  const hasAnySource = req.sources.length > 0;
+  const sourceScore = hasVerified ? 1 : hasAnySource ? 0.5 : 0;
+  const g = Math.max(0, Math.min(1, Number.isFinite(grounding) ? grounding : 0.5));
+
+  let classification: ReqClassification;
+  if (conflicts.length) classification = 'CONFLICTING';
+  else if (captured === 0) classification = 'MISSING';
+  else if (captured <= 1) classification = 'REVIEW_REQUIRED';
+  else if (hasVerified && g >= 0.6 && captured >= 3) classification = 'SOURCE_BACKED';
+  else if (!hasAnySource) classification = 'REVIEW_REQUIRED';
+  else classification = 'INFERRED';
+
+  // Confidence: completeness + how confirmed the trace is + how grounded the
+  // model says it is; a conflict caps it low, a hollow one lower still.
+  let confidence = 0.45 * completeness + 0.3 * sourceScore + 0.25 * g;
+  if (classification === 'CONFLICTING') confidence = Math.min(confidence, 0.4);
+  if (classification === 'MISSING') confidence = Math.min(confidence, 0.15);
+  confidence = Math.round(Math.max(0, Math.min(1, confidence)) * 100) / 100;
+
+  return { classification, confidence };
+}
+
 export async function generateFromStory(
   story: string,
   endpoints: StoryEndpoint[],
@@ -260,14 +369,16 @@ export async function generateFromStory(
                  "purpose": "<what this endpoint is for in this story, one sentence, <=200 chars>",
                  "inputs": [ { "name": "<field or parameter>", "in": one of ${JSON.stringify(PARAM_IN)}, "required": true|false, "note": "<what it means or constrains, <=120 chars>" } ],
                  "expectedResponses": [ { "status": <http status number>, "when": "<the condition that produces it, <=120 chars>" } ],
-                 "businessRules": [ "<a rule the endpoint must honour, stated so it can be tested, <=160 chars>" ] } ],
+                 "businessRules": [ "<a rule the endpoint must honour, stated so it can be tested, <=160 chars>" ],
+                 "grounding": <number 0..1 — how much of the four parts above is stated outright in the requirement vs inferred from the endpoint's own definition; 1 = every part is in the text, 0 = all inferred>,
+                 "conflicts": [ "<a specific contradiction the requirement states about THIS endpoint, e.g. 'one rule rejects an over-limit cart with 409, another with 422' — [] when the text is consistent>" ] } ],
  "requirements": "<one focused paragraph (<=600 chars) a test generator can act on — the overall intent, the important cases, any constraints>",
  "coverage": one of ${JSON.stringify(COVERAGE)},
  "layers": array (subset of ${JSON.stringify(LAYERS)}) implied by the story }
 
 Guidance: Extract EVERY distinct acceptance criterion as its own entry (a "Given/When/Then", a bullet, or an implied rule). Only reference endpoint URLs that appear in the catalogue below — never invent one. Choose "exhaustive" coverage when the story stresses edge cases or many rules, "essential" for a single simple rule. Include "negative" when error/invalid paths are implied, "auth" for permissions, "flow" for multi-step lifecycles.
 
-For endpointRequirements, write one entry for EVERY endpoint any criterion maps to. Capture all four parts: what it is for, what goes in, what should come back (success AND the error statuses the story implies), and the business rules it must honour. Ground every part in the requirement text — where the story is silent, say what the endpoint's own definition implies rather than inventing a rule. Never state where the requirement came from; that is recorded separately.
+For endpointRequirements, write one entry for EVERY endpoint any criterion maps to. Capture all four parts: what it is for, what goes in, what should come back (success AND the error statuses the story implies), and the business rules it must honour. Ground every part in the requirement text — where the story is silent, say what the endpoint's own definition implies rather than inventing a rule. Set "grounding" honestly: low when you had to infer most of it, high when the text states it. Report a "conflict" only when the requirement genuinely says two incompatible things about the same endpoint — do not manufacture disagreement. Never state where the requirement came from; that is recorded separately.
 
 REQUIREMENT:
 ${text}
@@ -344,9 +455,23 @@ Return the JSON now.`;
       criteriaIds: criteria.filter((c) => c.endpoints.includes(url)).map((c) => c.id),
     };
 
+    // Conflicts: what a check over the captured responses finds, plus any the
+    // model read in the text — deduped, capped, each deterministic once parsed.
+    const modelConflicts: ReqConflict[] = (Array.isArray(f.conflicts) ? f.conflicts : [])
+      .map((c: any) => String(c || '').slice(0, 200).trim())
+      .filter(Boolean)
+      .map((summary: string): ReqConflict => ({ summary, origin: 'model' }));
+    const conflicts: ReqConflict[] = [...responseConflicts(base.expectedResponses), ...modelConflicts]
+      .filter((c, i, a) => a.findIndex((x) => normWhen(x.summary) === normWhen(c.summary)) === i)
+      .slice(0, 6);
+    const { classification, confidence } = classify(base, endpoint, Number(f.grounding), conflicts);
+
     const checklist = checkEndpoint(base, endpoint, context);
     return {
       ...base,
+      classification,
+      confidence,
+      conflicts,
       checklist,
       ready: checklist.filter((c) => c.id === 'captured' || c.id === 'source').every((c) => c.pass),
     };

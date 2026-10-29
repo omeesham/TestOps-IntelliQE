@@ -92,7 +92,7 @@ import { listDataProfiles, saveDataProfile, deleteDataProfile, parseCsv, parseEx
 import { orchestrate, getOrchestratorConfig, saveOrchestratorConfig, rotateOrchestratorToken, listOrchestratorEvents } from '../services/api-orchestrator.service.js';
 // ─── Atto coworker lifecycle tools (all additive, opt-in; pipeline untouched) ───
 import { generateFromStory } from '../services/api-story-gen.service.js';
-import { resolveStorySources } from '../services/api-story-source.service.js';
+import { resolveStorySources, resolveOrigin } from '../services/api-story-source.service.js';
 import { listSignoffs, createSignoff, deleteSignoff } from '../services/api-signoff.service.js';
 import { analyzeMultimodal } from '../services/api-multimodal.service.js';
 import { optimizeSuite } from '../services/api-suite-optimizer.service.js';
@@ -159,6 +159,9 @@ import { logAudit } from '../utils/audit.js';
 import {
   listEnvironments, getEnvironment, createEnvironment, updateEnvironment, deleteEnvironment, applyEnvironment, resolveApiCase,
 } from '../services/api-environments.service.js';
+import {
+  getReadinessConfig, saveReadinessConfig, evaluateReadiness, enforceReadiness, listReadinessHistory,
+} from '../services/api-env-readiness.service.js';
 import { renderApiCases } from '../agents/apiGeneratorAgent.js';
 import { getApiOverview, listApiRuns, getApiRunDetail, recordImport, listImports } from '../services/api-dashboard.service.js';
 import { runHeadlessApiRun } from '../services/api-run.service.js';
@@ -920,6 +923,65 @@ router.post('/environments/:id/resolve', async (req: Request, res: Response) => 
   } catch (err) { fail(res, err); }
 });
 
+/* ── Environment Readiness Gate (opt-in; roadmap Feature 5 / Gate 4) ──
+   Active pre-run checks (reachability, health, dependencies, required vars,
+   auth, production write-safety). Config lives on the environment; every
+   evaluation is snapshotted as audit evidence. */
+router.get('/environments/:id/readiness/config', async (req: Request, res: Response) => {
+  try { res.json({ config: await getReadinessConfig(req.user!.tenantId, String(req.params.id)) }); }
+  catch (err) { fail(res, err, 500); }
+});
+router.post('/environments/:id/readiness/config', async (req: Request, res: Response) => {
+  try {
+    const config = await saveReadinessConfig(req.user!.tenantId, String(req.params.id), req.body?.config ?? req.body);
+    if (!config) { res.status(404).json({ error: 'Environment not found.' }); return; }
+    res.json({ config });
+  } catch (err) { fail(res, err); }
+});
+/** Run the readiness checks now (preview) and return the report. */
+router.post('/environments/:id/readiness/check', async (req: Request, res: Response) => {
+  try {
+    const readiness = await evaluateReadiness(req.user!.tenantId, req.user!.username, String(req.params.id), {
+      context: 'preview', allowWrites: !!req.body?.allowWrites,
+    });
+    res.json({ readiness });
+  } catch (err) { fail(res, err); }
+});
+router.get('/environments/:id/readiness/history', async (req: Request, res: Response) => {
+  try { res.json({ history: await listReadinessHistory(req.user!.tenantId, String(req.params.id), Number(req.query.limit) || 50) }); }
+  catch (err) { fail(res, err, 500); }
+});
+
+/**
+ * Pre-run readiness gate shared by the run endpoints. When the run body carries
+ * an `environmentId` whose environment has readiness enabled + blockOnFail, this
+ * probes the environment and, on failure, responds 412 `environment_not_ready`
+ * and returns true (caller must stop). No `environmentId`, or readiness off →
+ * returns false and the run proceeds exactly as before (opt-in, no-op default).
+ */
+async function readinessGate(req: Request, res: Response): Promise<boolean> {
+  const envId = req.body?.environmentId;
+  if (!envId) return false;
+  // Write intent: an explicit allowWrites flag (flow runs) or any write-method
+  // endpoint in the body (a generated-suite run). Drives the production safety check.
+  const bodyEndpoints = Array.isArray(req.body?.endpoints) ? req.body.endpoints : [];
+  const hasWriteEndpoints = bodyEndpoints.some((e: any) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(e?.method || '').toUpperCase()));
+  const allowWrites = !!req.body?.allowWrites || hasWriteEndpoints;
+  try {
+    const guard = await enforceReadiness(req.user!.tenantId, req.user!.username, String(envId), { allowWrites });
+    if (guard.blocked) {
+      res.status(412).json({ blocked: true, reason: 'environment_not_ready', readiness: guard.readiness });
+      return true;
+    }
+  } catch {
+    // A readiness-evaluation error must not silently let an unverified run
+    // through when a gate was requested — surface it, but don't crash the route.
+    res.status(502).json({ blocked: true, reason: 'environment_readiness_error' });
+    return true;
+  }
+  return false;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Dashboard & history
    ═══════════════════════════════════════════════════════════════ */
@@ -1034,6 +1096,9 @@ router.post('/render', async (req: Request, res: Response) => {
 router.post('/runs', async (req: Request, res: Response) => {
   const endpoints = endpointsFromBody(req.body?.endpoints);
   if (!endpoints.length) { res.status(400).json({ error: 'Send at least one endpoint with an absolute http(s) URL.' }); return; }
+  // Pre-run environment readiness gate (opt-in). Blocks before the job starts so
+  // an environment problem reads as environment_not_ready, not test failures.
+  if (await readinessGate(req, res)) return;
   const tenantId = req.user!.tenantId;
   const username = req.user!.username;
   const input = {
@@ -1140,6 +1205,7 @@ function sendRun(req: Request, res: Response, kind: 'flow' | 'suite' | 'dataset'
 }
 router.post('/flows/run', async (req: Request, res: Response) => {
   try {
+    if (await readinessGate(req, res)) return;
     // Resolve the tenant's reusable step groups so `group` steps can expand.
     const groups = await getStepGroupMap(req.user!.tenantId).catch(() => ({}));
     sendRun(req, res, 'flow', await runFlow({ steps: req.body?.steps, variables: req.body?.variables, allowWrites: !!req.body?.allowWrites, groups }));
@@ -1235,6 +1301,7 @@ router.post('/flows/lint', async (req: Request, res: Response) => {
 // into the next (suite-level shared fixtures — e.g. a login flow seeds the token).
 router.post('/flows/run-suite', async (req: Request, res: Response) => {
   try {
+    if (await readinessGate(req, res)) return;
     const groups = await getStepGroupMap(req.user!.tenantId).catch(() => ({}));
     const flows = Array.isArray(req.body?.flows) ? req.body.flows : [];
     sendRun(req, res, 'suite', await runSuite({ flows, setup: req.body?.setup, teardown: req.body?.teardown, variables: req.body?.variables, allowWrites: !!req.body?.allowWrites, groups, stopOnFailure: !!req.body?.stopOnFailure }));
@@ -1245,6 +1312,7 @@ router.post('/flows/run-suite', async (req: Request, res: Response) => {
 // parameterised test matrix. Rows are independent (captures don't cross rows).
 router.post('/flows/run-dataset', async (req: Request, res: Response) => {
   try {
+    if (await readinessGate(req, res)) return;
     const groups = await getStepGroupMap(req.user!.tenantId).catch(() => ({}));
     const dataset = Array.isArray(req.body?.dataset) ? req.body.dataset : [];
     sendRun(req, res, 'dataset', await runFlowDataset({ steps: req.body?.steps, variables: req.body?.variables, allowWrites: !!req.body?.allowWrites, groups, dataset, stopOnFailure: !!req.body?.stopOnFailure }));
@@ -1379,9 +1447,17 @@ router.post('/story/generate', async (req: Request, res: Response) => {
       pathParams: e.pathParams, queryParams: e.queryParams, body: e.body,
     }));
     // Where each requirement came from is resolved HERE — out of the story text
-    // and the tenant's own Jira / test-management connections — so the model is
-    // never in a position to invent an issue key.
-    const sources = await resolveStorySources(req.user!.tenantId, story).catch(() => []);
+    // and the tenant's own Jira / test-management connections, plus the source the
+    // reviewer explicitly loaded from (verified at its source too) — so the model
+    // is never in a position to invent an issue key.
+    const [keyed, originRef] = await Promise.all([
+      resolveStorySources(req.user!.tenantId, story).catch(() => []),
+      resolveOrigin(req.user!.tenantId, req.body?.origin).catch(() => null),
+    ]);
+    // The loaded origin leads (strongest), then keys scanned from the text; dedupe
+    // by ref+label so loading PROJ-120 and also typing it does not double up.
+    const sources = [...(originRef ? [originRef] : []), ...keyed]
+      .filter((s, i, a) => a.findIndex((x) => x.ref.toUpperCase() === s.ref.toUpperCase() && x.label === s.label) === i);
     const env = req.body?.environment;
     res.json(await generateFromStory(story, endpoints, llm, {
       sources,

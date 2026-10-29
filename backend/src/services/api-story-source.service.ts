@@ -23,6 +23,7 @@
  * generation. Tier 3 is local and always available.
  */
 import { getCredsForTenant, getStory } from './jira.service.js';
+import { getCredsForTenant as getAdoCredsForTenant, getStory as getAdoStory } from './azure-devops.service.js';
 import { listConnectors, importCases, VENDOR_LABELS, type TmVendor } from './api-tm-connectors.service.js';
 
 export type SourceKind = 'jira' | TmVendor | 'import';
@@ -144,6 +145,51 @@ export async function resolveStorySources(tenantId: string, storyText: string): 
     }));
 
   return [...jira, ...tm, ...unverified];
+}
+
+/** Where a story was explicitly loaded from in the UI (a pull-in, not a key scan). */
+export type StoryOriginKind = 'jira' | 'ado' | 'document';
+export interface StoryOrigin { kind: StoryOriginKind; ref: string; label?: string }
+
+/**
+ * Resolve the source for a story the reviewer LOADED from a connected tool or an
+ * uploaded document, rather than one whose key was scanned out of pasted text.
+ * It is still verified at its source here — the UI only says which tool and id to
+ * check, never asserts the link itself — so the "a source is never taken on the
+ * client's word" guarantee holds for pull-ins too. A Jira/ADO ref that cannot be
+ * re-confirmed comes back unverified rather than being dropped; an uploaded
+ * document stands as its own source (the user supplied the file directly).
+ */
+export async function resolveOrigin(tenantId: string, origin?: StoryOrigin | null): Promise<ReqSourceRef | null> {
+  const ref = String(origin?.ref || '').trim();
+  if (!origin || !ref) return null;
+
+  if (origin.kind === 'jira') {
+    const creds = await getCredsForTenant(tenantId).catch(() => null);
+    if (creds) {
+      try {
+        const story = await getStory(creds, ref);
+        return { kind: 'jira', label: 'Jira', ref: story.key || ref, url: `${creds.baseUrl}/browse/${encodeURIComponent(ref)}`, verified: true, detail: story.title ? String(story.title).slice(0, 160) : undefined };
+      } catch { /* fall through to unverified */ }
+    }
+    return { kind: 'jira', label: 'Jira', ref, verified: false, detail: 'Loaded from Jira, but it could not be re-confirmed.' };
+  }
+
+  if (origin.kind === 'ado') {
+    const creds = await getAdoCredsForTenant(tenantId).catch(() => null);
+    if (creds) {
+      try {
+        const wi = await getAdoStory(creds, ref);
+        const url = `${creds.baseUrl}/${encodeURIComponent(creds.project)}/_workitems/edit/${encodeURIComponent(ref)}`;
+        return { kind: 'import', label: 'Azure DevOps', ref: wi.key || ref, url, verified: true, detail: wi.title ? String(wi.title).slice(0, 160) : undefined };
+      } catch { /* fall through to unverified */ }
+    }
+    return { kind: 'import', label: 'Azure DevOps', ref, verified: false, detail: 'Loaded from Azure DevOps, but it could not be re-confirmed.' };
+  }
+
+  // A document the user uploaded: no re-checkable address, but a real, directly
+  // supplied source — so it stands as its own verified origin (its file name).
+  return { kind: 'import', label: 'Document', ref: ref.slice(0, 200), verified: true, detail: 'Loaded from an uploaded requirement document.' };
 }
 
 /**

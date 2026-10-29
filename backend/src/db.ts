@@ -1372,6 +1372,27 @@ export async function initDb(): Promise<void> {
       )`);
     // Phase 3 — environments say whether they stand in for the customer's.
     await addColumn('api_environments', 'customer_like', 'BIT NOT NULL DEFAULT 0');
+    // Environment readiness gate (opt-in): a JSON config per environment saying
+    // which active pre-run checks are mandatory (base-URL reachable, health
+    // paths, dependency URLs, required vars, auth probe, production-write safety)
+    // and whether a failed check BLOCKS the run. Empty/absent = disabled.
+    await addColumn('api_environments', 'readiness_config', 'NVARCHAR(MAX)');
+    // Readiness evidence: every evaluation (preview or pre-run gate) snapshotted
+    // so Gate 4 "evidence of readiness at execution time" is auditable.
+    await createTable('api_env_readiness_runs', `
+      CREATE TABLE ${SCHEMA}.api_env_readiness_runs (
+        id                UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id         UNIQUEIDENTIFIER NOT NULL,
+        environment_id    NVARCHAR(100) NOT NULL,
+        environment_name  NVARCHAR(200),
+        ready             BIT NOT NULL DEFAULT 0,
+        blocked           BIT NOT NULL DEFAULT 0,
+        context           NVARCHAR(40) NOT NULL DEFAULT 'preview',
+        checks            NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        blockers          NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        created_by        NVARCHAR(100),
+        created_at        DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
     await createTable('api_ci_config', `
       CREATE TABLE ${SCHEMA}.api_ci_config (
         tenant_id   UNIQUEIDENTIFIER PRIMARY KEY,
@@ -1716,6 +1737,7 @@ export async function initDb(): Promise<void> {
     await createIndex('idx_api_test_comments_key', 'api_test_comments', '(tenant_id, test_key, created_at)');
     await createIndex('idx_api_test_versions_key', 'api_test_versions', '(tenant_id, test_key, version_no DESC)');
     await createIndex('idx_api_environments_tenant', 'api_environments', '(tenant_id)');
+    await createIndex('idx_api_env_readiness_runs', 'api_env_readiness_runs', '(tenant_id, environment_id, created_at DESC)');
     await createIndex('idx_web_visual_baselines_tenant', 'web_visual_baselines', '(tenant_id, updated_at DESC)');
     await createIndex('idx_api_callback_listeners_tenant', 'api_callback_listeners', '(tenant_id, created_at DESC)');
     await createIndex('idx_api_callback_listeners_token', 'api_callback_listeners', '(token)');

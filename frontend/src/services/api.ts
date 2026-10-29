@@ -790,6 +790,43 @@ export async function resolveApiEnvironment(id: string, endpoints: any[]): Promi
   return data;
 }
 
+/* ── Environment readiness gate (opt-in pre-run checks) ── */
+export interface ApiReadinessConfig {
+  enabled: boolean;
+  blockOnFail: boolean;
+  checkBaseUrl: boolean;
+  healthPaths: string[];
+  dependencies: string[];
+  requiredVars: string[];
+  checkAuth: boolean;
+  authType: 'bearer' | 'basic' | 'apikey';
+  authHeaderName?: string;
+  authProbePath?: string;
+  production: boolean;
+  blockWritesOnProduction: boolean;
+}
+export interface ApiReadinessCheck { id: string; label: string; pass: boolean; actual: string; severity: 'info' | 'warning' | 'critical' }
+export interface ApiReadinessResult {
+  environmentId: string; environmentName: string; enabled: boolean; blockOnFail: boolean;
+  ready: boolean; blocked: boolean; checks: ApiReadinessCheck[]; blockers: string[]; evaluatedAt: string; context: string;
+}
+export async function getApiReadinessConfig(id: string): Promise<{ config: ApiReadinessConfig }> {
+  const { data } = await api.get(`/api-automation/environments/${encodeURIComponent(id)}/readiness/config`);
+  return data;
+}
+export async function saveApiReadinessConfig(id: string, config: ApiReadinessConfig): Promise<{ config: ApiReadinessConfig }> {
+  const { data } = await api.post(`/api-automation/environments/${encodeURIComponent(id)}/readiness/config`, { config });
+  return data;
+}
+export async function checkApiReadiness(id: string, allowWrites = false): Promise<{ readiness: ApiReadinessResult }> {
+  const { data } = await api.post(`/api-automation/environments/${encodeURIComponent(id)}/readiness/check`, { allowWrites });
+  return data;
+}
+export async function listApiReadinessHistory(id: string, limit = 50): Promise<{ history: Array<ApiReadinessResult & { id: string; createdBy?: string; createdAt: string }> }> {
+  const { data } = await api.get(`/api-automation/environments/${encodeURIComponent(id)}/readiness/history`, { params: { limit } });
+  return data;
+}
+
 /** The dashboard roll-up; `fresh` bypasses the server's short cache (Refresh, post-run reload). */
 export async function getApiOverview(fresh = false): Promise<any> {
   const { data } = await api.get('/api-automation/overview', { timeout: 60_000, params: fresh ? { fresh: 1 } : undefined });
@@ -1412,14 +1449,19 @@ export type ChecklistId = 'captured' | 'source' | 'reviewed' | 'signed-off';
 export interface ChecklistItem { id: ChecklistId; label: string; pass: boolean; detail: string }
 export interface ReqInput { name: string; in: 'path' | 'query' | 'header' | 'body'; required: boolean; note?: string }
 export interface ReqResponse { status: number; when: string }
+export type ReqClassification = 'SOURCE_BACKED' | 'INFERRED' | 'MISSING' | 'CONFLICTING' | 'REVIEW_REQUIRED';
+export interface ReqConflict { summary: string; origin: 'model' | 'responses' }
 export interface EndpointRequirement {
   method: string; url: string; purpose: string;
   inputs: ReqInput[]; expectedResponses: ReqResponse[]; businessRules: string[];
   sources: ReqSourceRef[]; criteriaIds: string[];
+  classification: ReqClassification; confidence: number; conflicts: ReqConflict[];
   checklist: ChecklistItem[]; ready: boolean;
 }
 export interface StoryGenResult { title: string; summary: string; criteria: AcceptanceCriterion[]; brief: AttoBrief; unmappedCriteria: number; endpointRequirements: EndpointRequirement[]; checklist: ChecklistItem[] }
-export async function generateFromStory(input: { story: string; endpoints: any[]; environment?: { name: string; customerLike: boolean } | null }): Promise<StoryGenResult> { const { data } = await api.post('/api-automation/story/generate', input, { timeout: 180_000 }); return data; }
+/** Where a story was explicitly loaded from (Jira issue, ADO work item, or a document). */
+export interface StoryOrigin { kind: 'jira' | 'ado' | 'document'; ref: string; label?: string }
+export async function generateFromStory(input: { story: string; endpoints: any[]; environment?: { name: string; customerLike: boolean } | null; origin?: StoryOrigin | null }): Promise<StoryGenResult> { const { data } = await api.post('/api-automation/story/generate', input, { timeout: 180_000 }); return data; }
 
 // Multimodal inputs
 export interface DetectedFlow { name: string; steps: string[] }

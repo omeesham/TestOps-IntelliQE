@@ -12,9 +12,10 @@
  * same one the picker points at.
  */
 import { useState } from 'react';
-import { Plus, Server, Star, Trash2, Pencil, Save, X, Lock, Check, Zap, ShieldCheck } from 'lucide-react';
+import { Plus, Server, Star, Trash2, Pencil, Save, X, Lock, Check, Zap, ShieldCheck, ShieldAlert } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import { createApiEnvironment, updateApiEnvironment, deleteApiEnvironment } from '@/services/api';
+import EnvironmentReadinessPanel from './EnvironmentReadinessPanel';
 import { useToast } from '@/components/feedback/ToastProvider';
 import Loader from '@/components/feedback/Loader';
 import {
@@ -37,6 +38,7 @@ export default function EnvironmentsView({ store }: { store: ApiEnvironmentsStor
   const { environments, loading, reload, activeEnvironment, noneSelected, activeId, setActiveId } = store;
   const [editing, setEditing] = useState<Partial<ApiEnvironment> | null>(null);
   const [saving, setSaving] = useState(false);
+  const [readinessFor, setReadinessFor] = useState<ApiEnvironment | null>(null);
 
   const save = async (env: { id?: string; name: string; baseUrl: string; color: string; variables: EnvVariable[]; isDefault: boolean }) => {
     if (!env.name.trim()) { toast.warning('Name required', 'Give the environment a name.'); return; }
@@ -114,6 +116,7 @@ export default function EnvironmentsView({ store }: { store: ApiEnvironmentsStor
         />
 
         {editing && <EnvForm initial={editing} saving={saving} onCancel={() => setEditing(null)} onSave={save} />}
+        {readinessFor && <EnvironmentReadinessPanel env={readinessFor} onClose={() => setReadinessFor(null)} />}
 
         {loading && environments.length === 0 ? (
           <Loader.Block label="Loading environments" />
@@ -136,6 +139,7 @@ export default function EnvironmentsView({ store }: { store: ApiEnvironmentsStor
                       text badges would squeeze the environment name out. */}
                   {env.customerLike && <span className="inline-flex items-center px-1 py-0.5 rounded border flex-shrink-0 text-emerald-700 bg-emerald-50 border-emerald-200" title="Customer-similar — a release sign-off is accepted against this environment" aria-label="Customer-similar"><ShieldCheck className="w-3 h-3" /></span>}
                   <div className="ml-auto flex items-center gap-0.5 flex-shrink-0">
+                    <button type="button" onClick={() => setReadinessFor(env)} className="p-1 rounded text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]" title="Readiness gate — pre-run environment checks"><ShieldAlert className="w-3.5 h-3.5" /></button>
                     <button type="button" onClick={() => setEditing(env)} className="p-1 rounded text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
                     <button type="button" onClick={() => remove(env)} className="p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
                   </div>
