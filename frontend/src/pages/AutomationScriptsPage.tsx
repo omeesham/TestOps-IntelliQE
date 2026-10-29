@@ -125,6 +125,7 @@ export default function AutomationScriptsPage() {
       setConfirmDelete(null);
       if (selectedScript?.id === id) closeScript();
       setScripts(prev => prev.filter(s => s.id !== id));
+      setPagination(prev => ({ ...prev, total: Math.max(0, prev.total - 1) }));
     } catch (err) {
       console.error('Delete failed:', err);
     }
@@ -145,7 +146,8 @@ export default function AutomationScriptsPage() {
   };
 
   /* ── Stats ── */
-  const totalScripts = scripts.length;
+  // All matching scripts, not just the page on screen.
+  const totalScripts = pagination.total;
   const modifiedCount = scripts.filter(s => s.status === 'modified').length;
   const groupedByRun = scripts.reduce<Record<string, Script[]>>((acc, s) => {
     const key = s.test_run_id || 'unknown';

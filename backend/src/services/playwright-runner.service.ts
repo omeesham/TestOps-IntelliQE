@@ -579,19 +579,23 @@ module.exports = defineConfig({
   const passed = details.filter((d) => d.status === 'passed').length;
   const failed = details.filter((d) => d.status === 'failed').length;
 
-  // Best-effort last-run stamp.
-  try {
-    await pool.query(
-      `UPDATE "JBSTestOpsAI".automation_scripts SET last_run_at = $1, last_run_result = $2, updated_at = NOW()
-       WHERE test_run_id = $3${isPlatform ? '' : ' AND tenant_id = $4'}`,
-      isPlatform ? [new Date().toISOString(), failed > 0 ? 'failed' : 'passed', runId]
-                 : [new Date().toISOString(), failed > 0 ? 'failed' : 'passed', runId, tenantId],
-    );
-  } catch { /* ignore */ }
-
-  // Remember which scripts passed as they are: if the same code fails later, the app changed.
+  // Each script's own result: failed when any of its tests failed (a document spec runs one test per document).
   const failedIds = new Set(details.filter((d) => d.status !== 'passed').map((d) => d.testCaseId));
   const passedIds = [...new Set(details.filter((d) => d.status === 'passed' && d.testCaseId && !failedIds.has(d.testCaseId)).map((d) => d.testCaseId))];
+  const nowIso = new Date().toISOString();
+  for (const [result, ids] of [['passed', passedIds], ['failed', [...failedIds].filter(Boolean)]] as const) {
+    if (ids.length === 0) continue;
+    try {
+      await pool.query(
+        `UPDATE "JBSTestOpsAI".automation_scripts SET last_run_at = $1, last_run_result = $2, updated_at = NOW()
+         WHERE test_run_id = $3${isPlatform ? '' : ' AND tenant_id = $4'}
+           AND test_case_id IN (${ids.map((_, i) => `$${i + (isPlatform ? 4 : 5)}`).join(', ')})`,
+        [nowIso, result, runId, ...(isPlatform ? [] : [tenantId]), ...ids],
+      );
+    } catch { /* best effort */ }
+  }
+
+  // Remember which scripts passed as they are: if the same code fails later, the app changed.
   if (passedIds.length > 0) {
     try {
       await pool.query(
