@@ -238,6 +238,19 @@ async function snapshotPage(page: import('@playwright/test').Page): Promise<Page
         const near = input.parentElement?.querySelectorAll('label');
         if (near?.length === 1) label = text(near[0]);
       }
+      // A caption that is not a <label> (e.g. <span class="label">): visible, before the field, in a box
+      // holding only this field. Notes after it ("Confidence: N/A", hidden text) are skipped, and a box
+      // holding only notes defers to its parent.
+      for (let box = input.type === 'file' ? null : input.parentElement, up = 0; !label && box && up < 2; box = box.parentElement, up++) {
+        if (box.querySelectorAll(FIELD_SELECTOR).length !== 1) break;
+        const labelled = Array.from(box.querySelectorAll('[class*="label" i]'));
+        const captions = labelled
+          .filter((c) => (c as HTMLElement).offsetParent !== null && (c.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING))
+          .map(text).filter((t) => t && !/^confidence\b/i.test(t));
+        const caption = captions[0]
+          || (labelled.length ? '' : ((box as HTMLElement).innerText || '').replace(/Confidence:\s*\S+/gi, '').replace(/\s+/g, ' ').trim());
+        if (caption && caption.length <= 60) label = caption;
+      }
       if (!label) label = input.placeholder || '';
       // "*" in a label is the usual mark of a mandatory field, often with no `required` attribute.
       const starred = /\*/.test(label);
@@ -330,7 +343,7 @@ async function snapshotPage(page: import('@playwright/test').Page): Promise<Page
         if (lbl && !CONF.test(text(lbl))) label = text(lbl);
         else {
           const field = box.querySelector('input, select, textarea');
-          if (field) label = field.getAttribute('aria-label') || (field as HTMLInputElement).placeholder || field.getAttribute('name') || '';
+          if (field) label = describeField(field).label || field.getAttribute('name') || '';
         }
       }
       if (!label) label = text(el.parentElement).replace(tx, '').trim();
@@ -362,6 +375,7 @@ async function tryLogin(
   password: string,
 ): Promise<boolean> {
   try {
+    const loginPath = new URL(page.url()).pathname;
     // Find password input first — it's the most reliable anchor.
     const pwInput = page.locator('input[type="password"]').first();
     if (await pwInput.count() === 0) return false;
@@ -387,9 +401,11 @@ async function tryLogin(
       await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => { /* tolerate */ });
     }
 
-    // Heuristic for success: URL changed AND no password input visible.
+    // Success: no password input, and not still on a login page (a rejected
+    // sign-in can come back on the same path without a password box).
     const stillHasPw = (await page.locator('input[type="password"]').count()) > 0;
-    return !stillHasPw;
+    const stillOnLogin = new URL(page.url()).pathname === loginPath && /\b(log ?in|sign ?in)\b/i.test(await page.title());
+    return !stillHasPw && !stillOnLogin;
   } catch {
     return false;
   }
