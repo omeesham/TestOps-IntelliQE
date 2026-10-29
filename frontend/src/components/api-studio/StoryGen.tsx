@@ -488,8 +488,15 @@ export default function StoryGen({
   const [edited, setEdited] = useState<Record<string, true>>({});
   const [reviews, setReviews] = useState<Record<string, ReviewState>>({});
 
-  /** Catalogue endpoint by URL, so a saved edit can recompute the captured check. */
-  const endpointByUrl = useMemo(() => new Map(endpoints.map((e) => [e.url, e])), [endpoints]);
+  /**
+   * Catalogue endpoint by requirement ref (`METHOD url`), so a saved edit can
+   * recompute the captured check against the right endpoint — the url alone is
+   * ambiguous when a path has both a GET and a POST.
+   */
+  const endpointByRef = useMemo(
+    () => new Map(endpoints.map((e) => [`${(e.method || 'GET').toUpperCase()} ${e.url}`, e])),
+    [endpoints],
+  );
 
   // ── Load the requirement from a connected tool or an uploaded document ──
   const { user } = useAuth();
@@ -613,8 +620,8 @@ export default function StoryGen({
     }
   };
 
-  const approved = useMemo(() => reqs.filter((r) => reviews[r.url] === 'approved'), [reqs, reviews]);
-  const reviewed = useMemo(() => reqs.filter((r) => reviews[r.url]), [reqs, reviews]);
+  const approved = useMemo(() => reqs.filter((r) => reviews[r.ref] === 'approved'), [reqs, reviews]);
+  const reviewed = useMemo(() => reqs.filter((r) => reviews[r.ref]), [reqs, reviews]);
 
   /**
    * The gate. Items 1, 2 and 3 must hold for everything that will be planned;
@@ -812,20 +819,20 @@ export default function StoryGen({
                   <p className={LABEL}>Requirements to review</p>
                   {reqs.map((r) => (
                     <RequirementCard
-                      key={r.url}
+                      key={r.ref}
                       req={r}
-                      review={reviews[r.url]}
-                      endpoint={endpointByUrl.get(r.url)}
-                      edited={!!edited[r.url]}
+                      review={reviews[r.ref]}
+                      endpoint={endpointByRef.get(r.ref)}
+                      edited={!!edited[r.ref]}
                       defaultOpen={reqs.length <= 3}
                       onReview={(state) => setReviews((prev) => {
                         const next = { ...prev };
-                        if (state) next[r.url] = state; else delete next[r.url];
+                        if (state) next[r.ref] = state; else delete next[r.ref];
                         return next;
                       })}
                       onSaveEdit={(edit) => {
-                        setReqs((prev) => prev.map((x) => (x.url === r.url ? reevaluate({ ...x, ...edit }, endpointByUrl.get(r.url)) : x)));
-                        setEdited((prev) => ({ ...prev, [r.url]: true }));
+                        setReqs((prev) => prev.map((x) => (x.ref === r.ref ? reevaluate({ ...x, ...edit }, endpointByRef.get(r.ref)) : x)));
+                        setEdited((prev) => ({ ...prev, [r.ref]: true }));
                       }}
                     />
                   ))}

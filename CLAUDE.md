@@ -98,3 +98,14 @@ Every DB query filters by `tenant_id`. Auth middleware attaches tenant context f
 - **Credential storage**: Fields matching sensitive key names are XOR-encrypted at rest with `__ENC__` prefix
 - **Database dates**: The `db.ts` shim converts `Date` values to ISO strings on read (not Date objects)
 - **Frontend state**: sessionStorage for auth (`intelliqe_token`, `intelliqe_user`), localStorage for preferences
+
+## Definition of Done
+
+Before calling any feature "done", confirm every item. If one can't be met, say so explicitly instead of reporting success.
+
+1. **Acceptance criteria restated** — before building, state what "done" means for this specific task (behavior, inputs/outputs, where it lives in the UI). Don't substitute a different design.
+2. **Right layer, additive by default** — place code in the correct layer (route → service → agent/worker; UI in `pages`/`components` + `services/api.ts`). Prefer new `api-*.service.ts` / new tab / new check kind over editing shared machinery. Changes to `db.ts`, auth middleware, the pipeline orchestrator, or the tenant filter are **core-touching**: plan first, show the plan, get approval before building.
+3. **Framework rules respected** — every DB query filters by `tenant_id`; use the `db.ts` pg-shim SQL conventions (or explicit T-SQL for dialect-heavy queries); sensitive fields encrypted with `__ENC__`; real-time via SSE; token/date/state patterns per **Key Patterns** above.
+4. **Typecheck is the gate** — frontend: `tsc -b` (NOT `tsc --noEmit`, which checks nothing and always passes); backend: `npm run build`. Must be clean.
+5. **Proven running, not just compiled** — exercise the feature end to end (live run / pipeline / browser), and show the proof (output, screenshot, or diff). Report failures honestly with the actual output.
+6. **Reviewable commit** — land the change as a feature-sized commit (not left in a large uncommitted pile); offer `/code-review` or `/security-review` for core-touching work.

@@ -107,6 +107,12 @@ export interface ReqConflict {
 export interface EndpointRequirement {
   method: string;
   url: string;
+  /**
+   * Stable, unique key for this requirement within a result — `METHOD url`.
+   * Two endpoints can share a url (e.g. GET and POST /posts), so the url alone
+   * is not a safe key; callers key review state and lists on this instead.
+   */
+  ref: string;
   purpose: string;
   inputs: ReqInput[];
   expectedResponses: ReqResponse[];
@@ -168,18 +174,69 @@ const COVERAGE = ['essential', 'standard', 'exhaustive'];
 const KINDS = ['happy-path', 'negative', 'auth', 'validation', 'edge', 'other'];
 const PARAM_IN = ['path', 'query', 'header', 'body'];
 
-function endpointLines(endpoints: StoryEndpoint[]): string {
-  return endpoints.slice(0, 80).map((e) => `- ${(e.method || 'GET').toUpperCase()} ${e.url}${e.title ? `  (${e.title})` : ''}`).join('\n');
+function endpointLines(endpoints: StoryEndpoint[], ids: string[]): string {
+  return endpoints.slice(0, 80)
+    .map((e, i) => `- [${ids[i]}] ${(e.method || 'GET').toUpperCase()} ${e.url}${e.title ? `  (${e.title})` : ''}`)
+    .join('\n');
 }
 
 /**
- * Keep only the URLs the model picked that really exist in the catalogue. The
- * model is told to quote verbatim, but this is the hard guarantee — a mapped
- * endpoint is always one the user actually has.
+ * Canonical path for matching: drop scheme+host and query, and collapse every
+ * concrete or templated id segment to `{}`. So `/posts/1`, `/posts/{id}` and
+ * `https://api/posts/42?x=1` all land on `/posts/{}` — a story's bare path and
+ * the catalogue's absolute, concretised URL compare equal.
  */
-function keepKnown(urls: unknown, known: Set<string>): string[] {
-  if (!Array.isArray(urls)) return [];
-  return [...new Set(urls.map(String).filter((u) => known.has(u)))].slice(0, 8);
+function normPath(u: string): string {
+  let s = String(u || '').trim();
+  s = s.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]+/i, ''); // strip scheme://host
+  s = s.replace(/[?#].*$/, '');                        // strip query / fragment
+  if (!s.startsWith('/')) s = '/' + s;
+  const segs = s.split('/').map((seg) => {
+    if (!seg) return seg;
+    if (/^\{.*\}$/.test(seg) || /^:/.test(seg)) return '{}';                 // {id} or :id
+    if (/^\d+$/.test(seg)) return '{}';                                      // 42
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seg)) return '{}'; // uuid
+    if (/^[0-9a-f]{16,}$/i.test(seg)) return '{}';                           // long hex id
+    return seg.toLowerCase();
+  });
+  const out = segs.join('/').replace(/\/+$/, '');
+  return out || '/';
+}
+
+/** The match key for an endpoint: method + canonical path, so method matters. */
+function endpointKey(method: string | undefined, url: string): string {
+  return `${(method || 'GET').toUpperCase()} ${normPath(url)}`;
+}
+
+/**
+ * Resolve whatever token the model returned for an endpoint — ideally the `eN`
+ * id we handed it, but also a bare `GET /posts`, an absolute URL, or a path — to
+ * the catalogue endpoint id(s) it means. Returns [] when nothing matches, so a
+ * mapped endpoint is always one the user actually has.
+ */
+function resolveRefs(
+  raw: unknown,
+  idToEp: Map<string, StoryEndpoint>,
+  keyToId: Map<string, string>,
+  pathToIds: Map<string, string[]>,
+): string[] {
+  const tokens = Array.isArray(raw) ? raw : raw == null ? [] : [raw];
+  const out: string[] = [];
+  for (const tok of tokens) {
+    const t = String(tok || '').trim();
+    if (!t) continue;
+    if (idToEp.has(t)) { out.push(t); continue; }                           // exact id
+    const idm = t.match(/\be(\d{1,3})\b/i);                                 // "[e2]" / "e2"
+    if (idm && idToEp.has(`e${idm[1]}`)) { out.push(`e${idm[1]}`); continue; }
+    const mm = t.match(/^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(.+)$/i); // "POST /posts"
+    if (mm) {
+      const id = keyToId.get(`${mm[1].toUpperCase()} ${normPath(mm[2])}`);
+      if (id) { out.push(id); continue; }
+    }
+    const byPath = pathToIds.get(normPath(t));                               // path only — all methods
+    if (byPath) out.push(...byPath);
+  }
+  return [...new Set(out)].slice(0, 8);
 }
 
 /** Does this endpoint take anything at all? An endpoint that takes nothing can
@@ -258,7 +315,7 @@ function checkEndpoint(
 function rollUp(requirements: EndpointRequirement[], context: StoryContext): ChecklistItem[] {
   const ids: ChecklistId[] = ['captured', 'source', 'reviewed', 'signed-off'];
   const labels = checkEndpoint(
-    { method: '', url: '', purpose: '', inputs: [], expectedResponses: [], businessRules: [], sources: [], criteriaIds: [] },
+    { method: '', url: '', ref: '', purpose: '', inputs: [], expectedResponses: [], businessRules: [], sources: [], criteriaIds: [] },
     { method: '', url: '' },
     context,
   );
@@ -376,14 +433,30 @@ export async function generateFromStory(
   if (!text) throw new Error('Paste a story, PRD or acceptance criteria to generate from.');
   if (!llm) throw new Error('Story-driven generation needs an LLM — configure one under System Configuration → LLM, or an API-automation LLM provider.');
 
+  // Hand the model a short, stable id per endpoint (`e1`, `e2`, …) and have it
+  // return the id — far more reliable than asking it to reproduce a long,
+  // absolute, concretised URL verbatim. keyToId / pathToIds let us still resolve
+  // a bare `GET /posts` or a path if the model answers in that form.
+  const ids = endpoints.map((_, i) => `e${i + 1}`);
+  const idToEp = new Map<string, StoryEndpoint>(ids.map((id, i) => [id, endpoints[i]]));
+  const keyToId = new Map<string, string>();
+  const pathToIds = new Map<string, string[]>();
+  ids.forEach((id, i) => {
+    const key = endpointKey(endpoints[i].method, endpoints[i].url);
+    if (!keyToId.has(key)) keyToId.set(key, id);
+    const p = normPath(endpoints[i].url);
+    pathToIds.set(p, [...(pathToIds.get(p) || []), id]);
+  });
+  const resolve = (raw: unknown) => resolveRefs(raw, idToEp, keyToId, pathToIds);
+
   const prompt = `You are a senior SDET turning a product requirement (a Jira story, a PRD, or a user story with acceptance criteria) into an API test plan. Read the requirement, then respond with STRICT JSON only, no prose:
 {"title": "<short title for the story, <=100 chars>",
  "summary": "<one sentence restating the goal, <=200 chars>",
  "criteria": [ { "text": "<one acceptance criterion restated as a testable statement, <=200 chars>",
-                 "endpoints": [ "<catalogue endpoint URLs this criterion exercises — VERBATIM from the list below, [] if unclear>" ],
+                 "endpoints": [ "<ids of the catalogue endpoints this criterion exercises, e.g. \\"e2\\" — from the list below, [] if unclear>" ],
                  "testIdeas": [ "<=4 short imperative scenario titles, e.g. 'Reject checkout with an empty cart'>" ],
                  "kind": one of ${JSON.stringify(KINDS)} } ],
- "endpointRequirements": [ { "url": "<a catalogue endpoint URL this story reaches — VERBATIM>",
+ "endpointRequirements": [ { "id": "<the id of a catalogue endpoint this story reaches, e.g. \\"e2\\", from the list below>",
                  "purpose": "<what this endpoint is for in this story, one sentence, <=200 chars>",
                  "inputs": [ { "name": "<field or parameter>", "in": one of ${JSON.stringify(PARAM_IN)}, "required": true|false, "note": "<what it means or constrains, <=120 chars>" } ],
                  "expectedResponses": [ { "status": <http status number>, "when": "<the condition that produces it, <=120 chars>" } ],
@@ -394,7 +467,7 @@ export async function generateFromStory(
  "coverage": one of ${JSON.stringify(COVERAGE)},
  "layers": array (subset of ${JSON.stringify(LAYERS)}) implied by the story }
 
-Guidance: Extract EVERY distinct acceptance criterion as its own entry (a "Given/When/Then", a bullet, or an implied rule). Only reference endpoint URLs that appear in the catalogue below — never invent one. Choose "exhaustive" coverage when the story stresses edge cases or many rules, "essential" for a single simple rule. Include "negative" when error/invalid paths are implied, "auth" for permissions, "flow" for multi-step lifecycles.
+Guidance: Extract EVERY distinct acceptance criterion as its own entry (a "Given/When/Then", a bullet, or an implied rule). Reference endpoints only by an id (e.g. "e2") from the catalogue below — never invent an id, and match the right HTTP method (the same path can appear as both a GET and a POST, which are different ids). Choose "exhaustive" coverage when the story stresses edge cases or many rules, "essential" for a single simple rule. Include "negative" when error/invalid paths are implied, "auth" for permissions, "flow" for multi-step lifecycles.
 
 For endpointRequirements, write one entry for EVERY endpoint any criterion maps to. Capture all four parts: what it is for, what goes in, what should come back (success AND the error statuses the story implies), and the business rules it must honour. Ground every part in the requirement text — where the story is silent, say what the endpoint's own definition implies rather than inventing a rule. Set "grounding" honestly: low when you had to infer most of it, high when the text states it. Report a "conflict" only when the requirement genuinely says two incompatible things about the same endpoint — do not manufacture disagreement. Never state where the requirement came from; that is recorded separately.
 
@@ -402,7 +475,7 @@ REQUIREMENT:
 ${text}
 
 ENDPOINT CATALOGUE:
-${endpointLines(endpoints) || '(none provided)'}
+${endpointLines(endpoints, ids) || '(none provided)'}
 
 Return the JSON now.`;
 
@@ -410,16 +483,25 @@ Return the JSON now.`;
   let parsed: Record<string, any> = {};
   try { parsed = parseJsonFromResponse<Record<string, any>>(res) || {}; } catch { throw new Error('The model did not return a usable plan. Try a shorter or clearer story.'); }
 
-  const known = new Set(endpoints.map((e) => e.url));
-  const byUrl = new Map(endpoints.map((e) => [e.url, e]));
   const rawCriteria = Array.isArray(parsed.criteria) ? parsed.criteria : [];
-  const criteria: AcceptanceCriterion[] = rawCriteria.slice(0, 40).map((c: any) => ({
+  // Each criterion keeps its resolved endpoint ids internally (method-aware); the
+  // public `endpoints` list is those endpoints' URLs, for display and the brief.
+  const built = rawCriteria.slice(0, 40).map((c: any) => ({
     id: cid(),
     text: String(c?.text || '').slice(0, 200),
-    endpoints: keepKnown(c?.endpoints, known),
+    refs: resolve(c?.endpoints),
     testIdeas: Array.isArray(c?.testIdeas) ? c.testIdeas.map((t: any) => String(t).slice(0, 160)).slice(0, 4) : [],
     kind: (KINDS.includes(String(c?.kind)) ? c.kind : 'other') as AcceptanceCriterion['kind'],
-  })).filter((c: AcceptanceCriterion) => c.text);
+  })).filter((c: { text: string }) => c.text);
+
+  const urlsOf = (refs: string[]) => [...new Set(refs.map((id) => idToEp.get(id)!.url))];
+  const criteria: AcceptanceCriterion[] = built.map((c: { id: string; text: string; refs: string[]; testIdeas: string[]; kind: AcceptanceCriterion['kind'] }) => ({
+    id: c.id,
+    text: c.text,
+    endpoints: urlsOf(c.refs).slice(0, 8),
+    testIdeas: c.testIdeas,
+    kind: c.kind,
+  }));
 
   const coverage = (COVERAGE.includes(String(parsed.coverage)) ? parsed.coverage : 'standard') as NlBrief['coverage'];
   let layers = Array.isArray(parsed.layers) ? [...new Set(parsed.layers.map(String).filter((l: string) => LAYERS.includes(l)))] : [];
@@ -439,24 +521,37 @@ Return the JSON now.`;
   };
 
   // ── The checklist: one requirement per endpoint the story actually reaches ──
-  const reached = [...new Set(criteria.flatMap((c) => c.endpoints))];
+  // Keyed by endpoint id, so a shared path with two methods (GET vs POST /posts)
+  // stays two requirements; a true duplicate (same method+url) folds to one.
+  const seenRef = new Set<string>();
+  const reached: string[] = [];
+  for (const id of [...new Set(built.flatMap((c: { refs: string[] }) => c.refs))] as string[]) {
+    const e = idToEp.get(id)!;
+    const ref = `${(e.method || 'GET').toUpperCase()} ${e.url}`;
+    if (seenRef.has(ref)) continue;
+    seenRef.add(ref);
+    reached.push(id);
+  }
   const facets = new Map<string, any>();
   for (const r of (Array.isArray(parsed.endpointRequirements) ? parsed.endpointRequirements : []).slice(0, 40)) {
-    const url = String(r?.url || '');
-    if (known.has(url)) facets.set(url, r);
+    for (const id of resolve(r?.id ?? r?.url)) if (!facets.has(id)) facets.set(id, r);
   }
 
-  const endpointRequirements: EndpointRequirement[] = reached.map((url) => {
-    const endpoint = byUrl.get(url)!;
-    const f = facets.get(url) || {};
+  const endpointRequirements: EndpointRequirement[] = reached.map((id) => {
+    const endpoint = idToEp.get(id)!;
+    const url = endpoint.url;
+    const method = String(endpoint.method || 'GET').toUpperCase();
+    const ref = `${method} ${url}`;
+    const f = facets.get(id) || {};
     // The source is DERIVED, never read from the model: the story's own verified
     // external refs first, then this endpoint's import origin as the fallback.
     const origin = importOriginOf({ ...endpoint, source: endpoint.source });
     const sources: ReqSourceRef[] = [...(context.sources || []), ...(origin ? [origin] : [])];
 
     const base = {
-      method: String(endpoint.method || 'GET').toUpperCase(),
+      method,
       url,
+      ref,
       purpose: String(f.purpose || '').slice(0, 200),
       inputs: (Array.isArray(f.inputs) ? f.inputs : []).slice(0, 30).map((i: any): ReqInput => ({
         name: String(i?.name || '').slice(0, 80),
@@ -470,7 +565,7 @@ Return the JSON now.`;
       })).filter((r: ReqResponse) => r.status >= 100 && r.status <= 599),
       businessRules: (Array.isArray(f.businessRules) ? f.businessRules : []).map((b: any) => String(b).slice(0, 160)).filter(Boolean).slice(0, 20),
       sources,
-      criteriaIds: criteria.filter((c) => c.endpoints.includes(url)).map((c) => c.id),
+      criteriaIds: built.filter((c: { refs: string[] }) => c.refs.includes(id)).map((c: { id: string }) => c.id),
     };
 
     // Conflicts: what a check over the captured responses finds, plus any the
@@ -500,7 +595,7 @@ Return the JSON now.`;
     summary: String(parsed.summary || '').slice(0, 200),
     criteria,
     brief,
-    unmappedCriteria: criteria.filter((c) => c.endpoints.length === 0).length,
+    unmappedCriteria: built.filter((c: { refs: string[] }) => c.refs.length === 0).length,
     endpointRequirements,
     checklist: rollUp(endpointRequirements, context),
   };

@@ -1452,7 +1452,7 @@ export interface ReqResponse { status: number; when: string }
 export type ReqClassification = 'SOURCE_BACKED' | 'INFERRED' | 'MISSING' | 'CONFLICTING' | 'REVIEW_REQUIRED';
 export interface ReqConflict { summary: string; origin: 'model' | 'responses' }
 export interface EndpointRequirement {
-  method: string; url: string; purpose: string;
+  method: string; url: string; ref: string; purpose: string;
   inputs: ReqInput[]; expectedResponses: ReqResponse[]; businessRules: string[];
   sources: ReqSourceRef[]; criteriaIds: string[];
   classification: ReqClassification; confidence: number; conflicts: ReqConflict[];
