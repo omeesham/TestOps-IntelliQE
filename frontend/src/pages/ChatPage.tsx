@@ -1252,8 +1252,12 @@ export default function ChatPage() {
 
     let scripts: any[] = [];
     let scriptErr: string | null = null;
+    let failedTcs: string[] = [];
     try {
-      const scriptRes = await generateScriptsForRun(savedTestRunId);
+      const scriptRes = await generateScriptsForRun(savedTestRunId, false, ({ done, total }) => {
+        if (total) updatePipeline('script-gen', 'running', `Producing automation scripts... ${done}/${total}`);
+      });
+      failedTcs = scriptRes?.failed || [];
       const rows = Array.isArray(scriptRes?.scripts) ? scriptRes.scripts : [];
       scripts = rows.map((s: any) => ({
         testCaseId: s.test_case_id || s.testCaseId,
@@ -1282,6 +1286,9 @@ export default function ChatPage() {
     updatePipeline('script-gen', 'completed', `${scripts.length} scripts created`);
 
     push('tessa', `Generated ${scripts.length} test scripts. Review the code below, then click "Execute Test Suite" to run them.`);
+    if (failedTcs.length) {
+      push('tessa', `⚠️ No script was generated for ${failedTcs.length} test case(s): ${failedTcs.join(', ')}. Generate scripts again from Generated Test Cases to retry them.`);
+    }
     setStep('script-review');
   };
 

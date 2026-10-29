@@ -184,21 +184,56 @@ router.delete('/:id', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * Script generation runs in the background, one job per run: a large suite
+ * takes far longer than an HTTP request may stay open. The client polls
+ * GET /generate/:testRunId/status. Jobs live in memory (one backend instance);
+ * after a restart the status call reports the scripts saved so far.
+ */
+interface ScriptJob {
+  status: 'running' | 'done' | 'failed';
+  total: number;
+  done: number;
+  generated: number;
+  /** TC numbers that got no script; generating again retries them. */
+  failed: string[];
+  /** True when only reviewed/approved cases were in scope. */
+  reviewedOnly: boolean;
+  error?: string;
+}
+const scriptJobs = new Map<string, ScriptJob>();
+const scriptJobKey = (tenantId: string, testRunId: unknown) => `${tenantId}:${String(testRunId).toLowerCase()}`;
+/** Parallel Claude calls per job; one case per call keeps each response small. */
+const SCRIPT_CONCURRENCY = 4;
+const SCRIPT_ATTEMPTS = 2;
+
 /* ────────────────────────────────────────────
    POST /api/automation-scripts/generate/:testRunId
-   Generate scripts for all reviewed test cases in a run
+   Start generating scripts for a run's test cases: the reviewed/approved ones
+   when any are reviewed, otherwise every case. Returns 202 with the job, or
+   200 with the scripts when nothing is left to generate.
    ──────────────────────────────────────────── */
 router.post('/generate/:testRunId', async (req: Request, res: Response) => {
+  const tenantId = req.user!.tenantId;
+  const { testRunId } = req.params;
+  const key = scriptJobKey(tenantId, testRunId);
+  const running = scriptJobs.get(key);
+  if (running?.status === 'running') return res.status(202).json({ ok: true, ...running });
+  // Claimed before the first await so a second click cannot start a parallel job.
+  const job: ScriptJob = { status: 'running', total: 0, done: 0, generated: 0, failed: [], reviewedOnly: false };
+  scriptJobs.set(key, job);
+  let started = false;
   try {
-    const tenantId = req.user!.tenantId;
     const username = req.user!.username || 'system';
-    const { testRunId } = req.params;
 
     // Get test run info
     const runRes = await pool.query(
       `SELECT * FROM ${SCHEMA}.test_runs WHERE id = $1 AND tenant_id = $2`, [testRunId, tenantId]
     );
-    if (runRes.rows.length === 0) return res.status(404).json({ error: 'Test run not found' });
+    if (runRes.rows.length === 0) {
+      scriptJobs.delete(key);
+      return res.status(404).json({ error: 'Test run not found' });
+    }
     const run = runRes.rows[0];
 
     // `regenerate: true` forces fresh generation (clears prior scripts). Otherwise,
@@ -227,17 +262,23 @@ router.post('/generate/:testRunId', async (req: Request, res: Response) => {
        ORDER BY sort_order, created_at`, [testRunId]
     );
     if (casesRes.rows.length === 0) {
+      scriptJobs.delete(key);
       return res.status(400).json({ error: 'No test cases found for this run. Generate and save test cases first.' });
     }
+    // Once anyone has reviewed cases, only reviewed/approved ones are scripted.
+    const reviewed = casesRes.rows.filter((tc: any) => tc.status === 'reviewed' || tc.status === 'approved');
+    job.reviewedOnly = reviewed.length > 0;
+    const inScope = job.reviewedOnly ? reviewed : casesRes.rows;
 
     const existingScripts = await pool.query(
       `SELECT * FROM ${SCHEMA}.automation_scripts WHERE test_run_id = $1 AND tenant_id = $2
        ORDER BY tc_number, created_at`, [testRunId, tenantId]
     );
     const scriptedIds = new Set(existingScripts.rows.map((s: any) => String(s.test_case_id).toLowerCase()));
-    const testCases = casesRes.rows.filter((tc: any) => !scriptedIds.has(String(tc.id).toLowerCase()));
+    const testCases = inScope.filter((tc: any) => !scriptedIds.has(String(tc.id).toLowerCase()));
     if (testCases.length === 0) {
-      return res.json({ ok: true, generated: 0, total: existingScripts.rows.length, scripts: existingScripts.rows, cached: true });
+      scriptJobs.delete(key);
+      return res.json({ ok: true, generated: 0, total: existingScripts.rows.length, scripts: existingScripts.rows, failed: [], cached: true });
     }
 
     // Mobile vs web run — mobile produces Appium/WebdriverIO specs (framework=appium).
@@ -280,19 +321,35 @@ router.post('/generate/:testRunId', async (req: Request, res: Response) => {
     const appName = (isMobileRun ? (mobileMeta.fileName || mobileMeta.appName) : appContext?.appName)
       || run.story_title || 'Application';
 
-    // Generate scripts using Claude CLI or fallback
-    const scripts: Array<{ testCaseId: string; tcNumber: string; title: string; fileName: string; code: string }> = [];
+    job.total = testCases.length;
+    started = true;
+    res.status(202).json({ ok: true, ...job });
+
+    // Each script is saved as soon as it is written, so a slow or failed case
+    // never costs the others.
+    const saveScript = async (script: { testCaseId: string; tcNumber: string; title: string; fileName: string; code: string }) => {
+      // ON CONFLICT DO NOTHING + RETURNING * → conditional INSERT...SELECT that
+      // emits the row only when no existing (test_run_id, test_case_id) row exists.
+      const insertRes = await pool.query(`
+        INSERT INTO ${SCHEMA}.automation_scripts
+          (tenant_id, test_run_id, test_case_id, tc_number, test_case_title, file_name, language, framework, code, status, created_by)
+        OUTPUT INSERTED.*
+        SELECT $1, $2, $3, $4, $5, $6, 'typescript', $9, $7, 'generated', $8
+        WHERE NOT EXISTS (
+          SELECT 1 FROM ${SCHEMA}.automation_scripts
+          WHERE test_run_id = $2 AND test_case_id = $3
+        )
+      `, [tenantId, testRunId, script.testCaseId, script.tcNumber, script.title, script.fileName, script.code, username, framework]);
+      await pool.query(
+        `UPDATE ${SCHEMA}.test_cases SET status = 'scripted'
+         WHERE id = $1 AND test_run_id = $2 AND status IN ('generated', 'reviewed', 'approved')`, [script.testCaseId, testRunId]
+      );
+      if (insertRes.rows.length > 0) job.generated++;
+    };
 
     if (isClaudeCliAuthenticated()) {
-      // Generate in small batches so each Claude call returns COMPLETE output.
-      // POM specs are verbose (a page-object class per spec), so a single call
-      // for all cases would overflow the token limit and truncate the JSON,
-      // forcing the template fallback. 4 per call keeps every response whole.
-      const BATCH_SIZE = 4;
-
-      for (let start = 0; start < testCases.length; start += BATCH_SIZE) {
-        const batch = testCases.slice(start, start + BATCH_SIZE);
-        const tcSummary = batch.map((tc: any) => ({
+      const scriptOne = async (tc: any) => {
+        const tcSummary = [{
           id: tc.id,
           tcNumber: tc.tc_number,
           title: tc.title,
@@ -304,7 +361,7 @@ router.post('/generate/:testRunId', async (req: Request, res: Response) => {
           precondition: tc.precondition || '',
           type: tc.type,
           priority: tc.priority,
-        }));
+        }];
 
         const prompt = isMobileRun
           ? buildAppiumPrompt(tcSummary, { appName, platform: mobilePlatform!, appId: mobileAppId, mainActivity: mobileMeta.mainActivity })
@@ -344,31 +401,37 @@ Return ONLY a JSON array (no markdown fence, no commentary), one object per inpu
   { "testCaseId": "<id from above>", "fileName": "<kebab-case-name>.spec.ts", "code": "<full self-contained TypeScript POM spec>" }
 ]`;
 
-        try {
-          const raw = await runClaudePrompt(prompt, { maxTokens: 16000 });
-          const parsed = parseJsonFromResponse(raw);
-          if (Array.isArray(parsed)) {
-            for (const item of parsed) {
-              const tc = batch.find((t: any) => t.id === item.testCaseId)
-                || testCases.find((t: any) => t.id === item.testCaseId);
-              if (!item?.code) continue;
-              scripts.push({
-                testCaseId: item.testCaseId,
-                tcNumber: tc?.tc_number || '',
-                title: tc?.title || '',
-                fileName: item.fileName || `test-${scripts.length + 1}.spec.ts`,
-                code: item.code,
-              });
-            }
+        for (let attempt = 1; attempt <= SCRIPT_ATTEMPTS; attempt++) {
+          try {
+            const raw = await runClaudePrompt(prompt, { maxTokens: 16000 });
+            const parsed = parseJsonFromResponse(raw);
+            const item = Array.isArray(parsed) ? parsed.find((i: any) => i?.code) : null;
+            if (!item) throw new Error('no script in the response');
+            await saveScript({
+              testCaseId: tc.id,
+              tcNumber: tc.tc_number || '',
+              title: tc.title || '',
+              fileName: item.fileName || `${String(tc.tc_number || 'test').toLowerCase()}.spec.ts`,
+              code: item.code,
+            });
+            return;
+          } catch (err: any) {
+            console.error(`Script generation failed for ${tc.tc_number} (attempt ${attempt}):`, err.message);
           }
-        } catch (err: any) {
-          console.error(`Claude script generation failed for batch starting ${start}:`, err.message);
         }
-      }
-    }
+        job.failed.push(tc.tc_number || String(tc.id));
+      };
 
-    // Fallback: generate template-based scripts if Claude didn't produce results
-    if (scripts.length === 0) {
+      let next = 0;
+      const worker = async () => {
+        while (next < testCases.length) {
+          await scriptOne(testCases[next++]);
+          job.done++;
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(SCRIPT_CONCURRENCY, testCases.length) }, worker));
+    } else {
+      // No AI engine: template scaffolds the user completes by hand.
       for (const tc of testCases) {
         const slug = `${(tc.tc_number || 'tc').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${tc.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`;
 
@@ -435,59 +498,46 @@ ${tc.precondition ? `    // Precondition: ${tc.precondition}\n` : ''}${steps}
 });
 `;
         }
-        scripts.push({
+        await saveScript({
           testCaseId: tc.id,
           tcNumber: tc.tc_number,
           title: tc.title,
           fileName,
           code,
         });
+        job.done++;
       }
     }
-
-    // Save to DB
-    const savedScripts: any[] = [];
-    for (const script of scripts) {
-      // ON CONFLICT DO NOTHING + RETURNING * → conditional INSERT...SELECT that
-      // emits the row only when no existing (test_run_id, test_case_id) row exists.
-      const insertRes = await pool.query(`
-        INSERT INTO ${SCHEMA}.automation_scripts
-          (tenant_id, test_run_id, test_case_id, tc_number, test_case_title, file_name, language, framework, code, status, created_by)
-        OUTPUT INSERTED.*
-        SELECT $1, $2, $3, $4, $5, $6, 'typescript', $9, $7, 'generated', $8
-        WHERE NOT EXISTS (
-          SELECT 1 FROM ${SCHEMA}.automation_scripts
-          WHERE test_run_id = $2 AND test_case_id = $3
-        )
-      `, [tenantId, testRunId, script.testCaseId, script.tcNumber, script.title, script.fileName, script.code, username, framework]);
-
-      if (insertRes.rows.length > 0) {
-        savedScripts.push(insertRes.rows[0]);
-      }
+    job.status = 'done';
+  } catch (err: any) {
+    console.error('Generate scripts error:', err);
+    if (!started) {
+      scriptJobs.delete(key);
+      return res.status(500).json({ error: err.message });
     }
+    job.status = 'failed';
+    job.error = err.message;
+  }
+});
 
-    // Update test case status to 'scripted'
-    await pool.query(
-      `UPDATE ${SCHEMA}.test_cases SET status = 'scripted'
-       WHERE test_run_id = $1 AND status IN ('generated', 'reviewed', 'approved')`, [testRunId]
-    );
-
-    // Return ALL scripts for the run (newly inserted + any that already existed),
-    // so re-running on the same run still returns the full set rather than an
-    // empty array that the UI would read as "no scripts".
-    const allScriptsRes = await pool.query(
+/* ────────────────────────────────────────────
+   GET /api/automation-scripts/generate/:testRunId/status
+   Progress of the run's script job; once it is not running, also every
+   script saved for the run.
+   ──────────────────────────────────────────── */
+router.get('/generate/:testRunId/status', async (req: Request, res: Response) => {
+  try {
+    const tenantId = req.user!.tenantId;
+    const { testRunId } = req.params;
+    const job = scriptJobs.get(scriptJobKey(tenantId, testRunId));
+    if (job?.status === 'running') return res.json({ ok: true, ...job });
+    const { rows } = await pool.query(
       `SELECT * FROM ${SCHEMA}.automation_scripts WHERE test_run_id = $1 AND tenant_id = $2
        ORDER BY tc_number, created_at`, [testRunId, tenantId]
     );
-
-    res.json({
-      ok: true,
-      generated: savedScripts.length,
-      total: allScriptsRes.rows.length,
-      scripts: allScriptsRes.rows,
-    });
+    res.json({ ok: true, status: 'done', failed: [], generated: 0, ...job, total: rows.length, scripts: rows });
   } catch (err: any) {
-    console.error('Generate scripts error:', err);
+    console.error('Script job status error:', err);
     res.status(500).json({ error: err.message });
   }
 });

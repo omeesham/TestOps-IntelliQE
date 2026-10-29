@@ -475,15 +475,41 @@ export async function deleteAutomationScript(id: string) {
   return data;
 }
 
-export async function generateScriptsForRun(testRunId: string, regenerate = false) {
-  // POM script generation runs several batched Claude calls server-side; allow
-  // up to 6 min so the default 2-min client timeout doesn't abort it.
-  const { data } = await api.post(
-    `/automation-scripts/generate/${testRunId}`,
-    { regenerate },
-    { timeout: 360_000 },
-  );
-  return data;
+export interface ScriptProgress { done: number; total: number }
+
+// Script generation runs as a background job on the server (one Claude call
+// per case). This starts it, or joins the one already running, and resolves
+// when it ends with every script saved for the run plus the `failed` TC numbers.
+export async function generateScriptsForRun(
+  testRunId: string,
+  regenerate = false,
+  onProgress?: (p: ScriptProgress) => void,
+) {
+  const { data } = await api.post(`/automation-scripts/generate/${testRunId}`, { regenerate });
+  if (data.status !== 'running') return data;
+  onProgress?.({ done: data.done, total: data.total });
+  let misses = 0;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 3000));
+    let status: { status: string; done: number; total: number; error?: string };
+    try {
+      ({ data: status } = await api.get(`/automation-scripts/generate/${testRunId}/status`));
+      misses = 0;
+    } catch (err) {
+      if (++misses >= 5) throw err;
+      continue;
+    }
+    if (status.status === 'running') {
+      onProgress?.({ done: status.done, total: status.total });
+      continue;
+    }
+    if (status.status === 'failed') {
+      throw Object.assign(new Error(status.error || 'Script generation failed'), {
+        response: { data: { error: `Script generation stopped: ${status.error || 'unknown error'}` } },
+      });
+    }
+    return status;
+  }
 }
 
 export async function getScriptsByRun(testRunId: string) {
