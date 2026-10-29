@@ -30,6 +30,8 @@ import RunsView from './views/RunsView';
 import EnvironmentsView from './views/EnvironmentsView';
 import EnvironmentPicker from './views/EnvironmentPicker';
 import ApiToolsLauncher from './ApiToolsLauncher';
+import { validateApiEndpoints, type ApiValidationReport } from './apiValidation';
+import { ValidationGateModal } from './ValidationReport';
 import { EmptyState } from './primitives';
 import { PRIMARY_BTN, SECONDARY_BTN } from './format';
 import PageTabs, { type TabItem } from '@/components/ui/PageTabs';
@@ -74,7 +76,18 @@ export default function ApiStudio() {
 
   const openRun = (id: string) => { setOpenRunId(id); setView('runs'); };
 
-  const design = () => run.runScenarios({ endpoints: catalog.selectedEndpoints, strategy: catalog.strategy, profile: catalog.profile, environment: envStore.activeEnvironment });
+  /* The actual kickoff — split out so the validation gate can defer it. */
+  const startGeneration = () => run.runScenarios({ endpoints: catalog.selectedEndpoints, strategy: catalog.strategy, profile: catalog.profile, environment: envStore.activeEnvironment });
+
+  /* Generation gate — re-validate the selected endpoints against the active
+     environment before a run starts. Clean selection runs straight through;
+     anything with errors/warnings opens the "proceed anyway" dialog. */
+  const [genGate, setGenGate] = useState<ApiValidationReport | null>(null);
+  const design = () => {
+    const report = validateApiEndpoints(catalog.selectedEndpoints, envStore.activeEnvironment);
+    if (report.errorCount > 0 || report.warningCount > 0) { setGenGate(report); return; }
+    startGeneration();
+  };
 
   const sel = catalog.selectedEndpoints.length;
 
@@ -142,7 +155,7 @@ export default function ApiStudio() {
             <ListChecks className="w-4 h-4 text-[#7C3AED] flex-shrink-0" />
             <p className="text-sm text-purple-800 min-w-0"><span className="font-semibold">{run.scenarios.length} scenarios are ready.</span> Select what you want to run and launch the suite. Automation, execution, healing, and reporting{run.runEnvName ? <> · resolved against <span className="font-semibold">{run.runEnvName}</span></> : null}</p>
             <button type="button" onClick={() => void run.runSuite()} title="Run the selected scenarios through automation, execution, healing and the report" className={`${PRIMARY_BTN} ml-auto flex-shrink-0 whitespace-nowrap`}>
-              Run {run.selected.size} scenario{run.selected.size === 1 ? '' : 's'}
+              Automate {run.selected.size} scenario{run.selected.size === 1 ? '' : 's'}
             </button>
           </div>
         )}
@@ -173,7 +186,7 @@ export default function ApiStudio() {
               <Loader size="lg" label={`Designing scenarios for ${run.runEndpoints.length} endpoint${run.runEndpoints.length === 1 ? '' : 's'}`} />
             </div>
           ) : (
-            <ScenariosTab scenarios={run.scenarios} selected={run.selected} editable={run.phase === 'review' || run.finished} onToggle={run.toggleScenario} onSelectAll={run.selectScenarios} onClearAll={run.clearScenarios} />
+            <ScenariosTab scenarios={run.scenarios} selected={run.selected} editable={run.phase === 'review' || run.finished} onToggle={run.toggleScenario} onSelectAll={run.selectScenarios} onClearAll={run.clearScenarios} onDelete={run.deleteScenario} onUpdate={run.updateScenario} />
           )
         )}
         {view === 'runs' && <RunsView run={run} openRunId={openRunId} onOpenRun={setOpenRunId} onShowReport={() => navigate('report')} />}
@@ -187,8 +200,17 @@ export default function ApiStudio() {
       {/* ── Import API — modal ── */}
       {importOpen && (
         <ImportModal onClose={() => setImportOpen(false)}>
-          <ImportView catalog={catalog} onOpenCatalogue={() => { setImportOpen(false); setView('endpoints'); }} log={run.log} />
+          <ImportView catalog={catalog} onOpenCatalogue={() => { setImportOpen(false); setView('endpoints'); }} log={run.log} environment={envStore.activeEnvironment} />
         </ImportModal>
+      )}
+
+      {/* ── Generation gate — validate selected endpoints before a run ── */}
+      {genGate && (
+        <ValidationGateModal
+          report={genGate}
+          onProceed={() => { setGenGate(null); startGeneration(); }}
+          onCancel={() => { setGenGate(null); setView('endpoints'); }}
+        />
       )}
     </div>
   );

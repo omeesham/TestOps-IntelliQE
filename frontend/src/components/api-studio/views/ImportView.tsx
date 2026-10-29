@@ -6,7 +6,7 @@
  * per file. Below: the twelve named methods, each with the form it needs.
  * Every path ends in the same place — endpoints in the catalogue, profiled.
  */
-import { useCallback, useRef, useState, type DragEvent } from 'react';
+import { useCallback, useMemo, useRef, useState, type DragEvent } from 'react';
 import { UploadCloud, CheckCircle2, AlertTriangle, ArrowRight, FileText, X, Plus, Trash2, Layers } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import {
@@ -19,12 +19,16 @@ import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, LABEL, CARD, CARD_HOVER, CHIP
 import { KeyValueRows } from '../EndpointEditor';
 import EndpointEditor from '../EndpointEditor';
 import type { Catalog } from '../hooks/useCatalog';
-import type { AuthType, HeaderPair, ImportMethod, LogLine } from '../types';
+import { validateApiEndpoints } from '../apiValidation';
+import ValidationReport from '../ValidationReport';
+import type { AuthType, HeaderPair, ImportMethod, LogLine, ApiEnvironment } from '../types';
 
 interface Props {
   catalog: Catalog;
   onOpenCatalogue: () => void;
   log: (stage: LogLine['stage'], text: string, level?: LogLine['level']) => void;
+  /** Active environment — used to resolve {{vars}}/base URL when validating the import. */
+  environment?: ApiEnvironment | null;
 }
 
 interface Outcome { method: ImportMethod; name: string; res: ApiImportResponse; added: number; duplicates: number }
@@ -38,7 +42,7 @@ const FORMAT_COLOR: Record<string, string> = {
   'WSDL / XML': '#6366F1', PDF: '#EF4444', Word: '#2563EB', Excel: '#16A34A', Markdown: '#64748B', 'Source code': '#8B5CF6',
 };
 
-export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
+export default function ImportView({ catalog, onOpenCatalogue, log, environment }: Props) {
   const toast = useToast();
   const [active, setActive] = useState<ImportMethodDef | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -142,7 +146,7 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
             <button type="button" onClick={() => setError('')} className="ml-auto text-red-400 hover:text-red-600"><X className="w-3.5 h-3.5" /></button>
           </div>
         )}
-        {outcome && <OutcomePanel outcome={outcome} onOpenCatalogue={onOpenCatalogue} onDismiss={() => setOutcome(null)} />}
+        {outcome && <OutcomePanel outcome={outcome} environment={environment} onOpenCatalogue={onOpenCatalogue} onDismiss={() => setOutcome(null)} />}
 
         {/* Method grid */}
         <div>
@@ -208,9 +212,12 @@ export default function ImportView({ catalog, onOpenCatalogue, log }: Props) {
 
 /* ── Result panel ─────────────────────────────────────────────── */
 
-function OutcomePanel({ outcome, onOpenCatalogue, onDismiss }: { outcome: Outcome; onOpenCatalogue: () => void; onDismiss: () => void }) {
+function OutcomePanel({ outcome, environment, onOpenCatalogue, onDismiss }: { outcome: Outcome; environment?: ApiEnvironment | null; onOpenCatalogue: () => void; onDismiss: () => void }) {
   const { res, added, duplicates } = outcome;
   const none = (res.endpoints || []).length === 0;
+  // Deterministic readiness check over what the document produced — surfaced here
+  // so a non-API file (or un-runnable endpoints) is caught before the catalogue.
+  const report = useMemo(() => validateApiEndpoints(res.endpoints || [], environment), [res.endpoints, environment]);
   return (
     <div className={`${CARD} p-4`}>
       <div className="flex items-start gap-3">
@@ -223,6 +230,7 @@ function OutcomePanel({ outcome, onOpenCatalogue, onDismiss }: { outcome: Outcom
             {duplicates > 0 && <span className="font-normal text-gray-500"> · {duplicates} already present</span>}
           </p>
           {res.notice && <p className="mt-2 text-[11.5px] text-[#4C1D95] bg-[#F5F3FF] border border-[#DDD6FE] rounded-md px-2.5 py-1.5">{res.notice}</p>}
+          <div className="mt-2"><ValidationReport report={report} /></div>
           {res.observed && (
             <p className="mt-2 text-[11px] text-gray-600">Live probe: status <span className="font-mono font-semibold">{res.observed.status}</span> in {res.observed.durationMs}ms · {res.observed.contentType || 'no content-type'}</p>
           )}

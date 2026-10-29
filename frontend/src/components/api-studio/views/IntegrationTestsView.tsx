@@ -17,8 +17,9 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import {
   Workflow, Sparkles, Play, Save, Trash2, CheckCircle2, XCircle, AlertTriangle,
-  Loader2, RefreshCw, ArrowRight, ShieldAlert, Boxes, Table2, Download, X,
+  RefreshCw, ArrowRight, ShieldAlert, Boxes, Table2, Download, X,
 } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import {
   listApiFlows, saveApiFlow, deleteApiFlow, runApiFlow, runApiFlowSuite, runApiFlowDataset, suggestApiIntegrationFlows, exportFlowJUnit,
   type SavedApiFlow, type SuggestedFlow, type FlowRunResult, type FlowStep, type FlowStepResult, type StepPhase, type SuiteRunResult, type DatasetRunResult,
@@ -201,7 +202,7 @@ export default function IntegrationTestsView({ endpoints, onOpenCatalogue, onClo
         </div>
         <div className="ml-auto flex items-center gap-2 flex-shrink-0">
           <button type="button" onClick={suggest} disabled={suggesting || !endpoints.length} className={PRIMARY_BTN} title={endpoints.length ? 'Detect integration journeys from the imported endpoints' : 'Import endpoints first'}>
-            {suggesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+            {suggesting ? <Spinner className="w-3.5 h-3.5" /> : <Sparkles className="w-3.5 h-3.5" />}
             Suggest from catalogue
           </button>
           <button type="button" onClick={onClose} aria-label="Close" title="Close" className="p-1.5 rounded-md text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]"><X className="w-4 h-4" /></button>
@@ -266,7 +267,7 @@ export default function IntegrationTestsView({ endpoints, onOpenCatalogue, onClo
             <div className="ml-auto flex items-center gap-2">
               {mainChosen.length > 0 && <span className="text-[11px] text-gray-400">{mainChosen.length} selected</span>}
               <button type="button" onClick={() => void runSuite()} disabled={!canRunSuite || suiteRunning} className={PRIMARY_BTN} title="Run setup (once), the selected flows in order sharing captured variables, then teardown (once)">
-                {suiteRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Boxes className="w-3.5 h-3.5" />}Run{suiteCount >= 2 ? ` ${suiteCount}` : ''} as suite
+                {suiteRunning ? <Spinner className="w-3.5 h-3.5" /> : <Boxes className="w-3.5 h-3.5" />}Run{suiteCount >= 2 ? ` ${suiteCount}` : ''} as suite
               </button>
             </div>
           )}
@@ -292,7 +293,7 @@ export default function IntegrationTestsView({ endpoints, onOpenCatalogue, onClo
         )}
         {suiteResult && <SuiteResultPanel result={suiteResult} onClose={() => setSuiteResult(null)} onDownload={() => void downloadJUnit('suite', 'Integration suite', suiteResult)} />}
         {loadingSaved && !saved.length ? (
-          <div className="flex items-center gap-2 text-[13px] text-gray-400 px-1 py-4"><Loader2 className="w-4 h-4 animate-spin" />Loading…</div>
+          <div className="flex items-center gap-2 text-[13px] text-gray-400 px-1 py-4"><Spinner className="w-4 h-4" />Loading…</div>
         ) : saved.length === 0 ? (
           <EmptyState
             icon={Workflow}
@@ -341,7 +342,7 @@ export default function IntegrationTestsView({ endpoints, onOpenCatalogue, onClo
                 </select>
               </label>
               <button type="button" onClick={() => void runDataset()} disabled={!dataFlow || !dataText.trim() || dataRunning} className={`${PRIMARY_BTN} ml-auto`} title="Run the chosen flow once per dataset row">
-                {dataRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}Run across dataset
+                {dataRunning ? <Spinner className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}Run across dataset
               </button>
             </div>
             <textarea
@@ -402,16 +403,16 @@ function FlowCard(props: {
         <div className="flex items-center gap-2 flex-shrink-0">
           {onSave && (
             <button type="button" onClick={onSave} disabled={saving} className={SECONDARY_BTN} title="Save as a re-runnable integration test">
-              {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}Save
+              {saving ? <Spinner className="w-3.5 h-3.5" /> : <Save className="w-3.5 h-3.5" />}Save
             </button>
           )}
           {onDelete && (
             <button type="button" onClick={onDelete} disabled={deleting} className={SECONDARY_BTN} title="Delete this integration test">
-              {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+              {deleting ? <Spinner className="w-3.5 h-3.5" /> : <Trash2 className="w-3.5 h-3.5" />}
             </button>
           )}
           <button type="button" onClick={onRun} disabled={running} className={PRIMARY_BTN} title="Run the journey end to end">
-            {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}Run
+            {running ? <Spinner className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}Run
           </button>
         </div>
       </div>

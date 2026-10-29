@@ -151,7 +151,7 @@ export type Phase =
   | 'report'      // finished — the report is on screen
   | 'failed';     // the run stopped on an error
 
-export type StageKey = 'scenarios' | 'automate' | 'execute' | 'heal' | 'report';
+export type StageKey = 'scenarios' | 'automate' | 'heal' | 'report';
 export type StageStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
 
 export interface Stage {

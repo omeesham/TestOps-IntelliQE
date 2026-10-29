@@ -10,7 +10,8 @@
  * of product-defect test failures. "Check now" previews the checks on demand.
  */
 import { useEffect, useState } from 'react';
-import { X, Activity, Save, ShieldAlert, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import { X, Activity, Save, ShieldAlert, CheckCircle2, XCircle } from 'lucide-react';
+import Spinner from '@/components/feedback/Spinner';
 import {
   getApiReadinessConfig, saveApiReadinessConfig, checkApiReadiness,
   type ApiReadinessConfig, type ApiReadinessResult,
@@ -72,7 +73,7 @@ export default function EnvironmentReadinessPanel({ env, onClose }: { env: ApiEn
         </div>
 
         {loading ? (
-          <div className="py-10 text-center text-gray-400 text-[12px]"><Loader2 className="w-5 h-5 animate-spin mx-auto" /></div>
+          <div className="py-10 text-center text-gray-400 text-[12px]"><Spinner className="w-5 h-5 mx-auto" /></div>
         ) : (
           <div className="space-y-3">
             <div className="flex flex-wrap gap-4">
@@ -140,10 +141,10 @@ export default function EnvironmentReadinessPanel({ env, onClose }: { env: ApiEn
 
             <div className="flex items-center justify-end gap-2 pt-1">
               <button type="button" onClick={check} disabled={checking} className={SECONDARY_BTN}>
-                {checking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}Check now
+                {checking ? <Spinner className="w-3.5 h-3.5" /> : <Activity className="w-3.5 h-3.5" />}Check now
               </button>
               <button type="button" onClick={save} disabled={saving} className={PRIMARY_BTN}>
-                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}Save
+                {saving ? <Spinner className="w-3.5 h-3.5" /> : <Save className="w-3.5 h-3.5" />}Save
               </button>
             </div>
           </div>

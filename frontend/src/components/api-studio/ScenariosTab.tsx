@@ -7,12 +7,12 @@
  * from automation, execution and the report alike.
  */
 import { Fragment, useMemo, useState } from 'react';
-import { ChevronRight, ListChecks, Search, Check, Send } from 'lucide-react';
+import { ChevronRight, ListChecks, Search, Check, Send, Pencil, Trash2, X } from 'lucide-react';
 import {
   MethodBadge, CategoryChip, PriorityChip, StatusCode, CodeBlock, EmptyState, FilterChip, TabHero,
 } from './primitives';
-import { prettyJson, categoryMeta, STRIP, THEAD, RAISED } from './format';
-import type { Scenario } from './types';
+import { prettyJson, categoryMeta, STRIP, THEAD, RAISED, FIELD } from './format';
+import type { ApiCaseMeta, Scenario } from './types';
 
 interface Props {
   scenarios: Scenario[];
@@ -20,14 +20,52 @@ interface Props {
   onToggle: (id: string) => void;
   onSelectAll: (ids: string[]) => void;
   onClearAll: () => void;
-  /** False once the run has moved past the gate — selection is then fixed. */
+  /** Remove a scenario from the suite entirely. */
+  onDelete: (id: string) => void;
+  /** Edit a scenario's reviewable fields (title, category, priority, status). */
+  onUpdate: (id: string, patch: Partial<Pick<Scenario, 'title' | 'type' | 'priority'>> & { api?: Partial<ApiCaseMeta> }) => void;
+  /** False once the run has moved past the gate — selection and edits are then fixed. */
   editable: boolean;
 }
 
-export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAll, onClearAll, editable }: Props) {
+/** The fields the row-level editor can change. */
+interface Draft { title: string; type: string; priority: string; expectedStatus: string }
+
+const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
+
+export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAll, onClearAll, onDelete, onUpdate, editable }: Props) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [category, setCategory] = useState('all');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Draft>({ title: '', type: '', priority: 'P2', expectedStatus: '' });
+
+  const startEdit = (s: Scenario) => {
+    setExpanded(null);
+    setEditingId(s.id);
+    setDraft({
+      title: s.title,
+      type: s.type || '',
+      priority: (s.priority || 'P2').toUpperCase(),
+      expectedStatus: String(s.api?.expectedStatus ?? ''),
+    });
+  };
+  const cancelEdit = () => setEditingId(null);
+  const saveEdit = (s: Scenario) => {
+    onUpdate(s.id, {
+      title: draft.title.trim() || s.title,
+      type: draft.type.trim(),
+      priority: draft.priority,
+      api: { expectedStatus: draft.expectedStatus.trim() },
+    });
+    setEditingId(null);
+  };
+  const confirmDelete = (s: Scenario) => {
+    if (window.confirm(`Delete scenario ${s.id}? It will be removed from the suite.`)) {
+      if (editingId === s.id) setEditingId(null);
+      onDelete(s.id);
+    }
+  };
 
   // The categories actually present, so the filter never offers an empty bucket.
   const categories = useMemo(() => {
@@ -122,6 +160,7 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
               <th className="w-14 px-2 py-1.5 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Pri</th>
               <th className="w-24 px-2 py-1.5 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Expects</th>
               <th className="w-20 px-2 py-1.5 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Asserts</th>
+              <th className="w-20 px-2 py-1.5 text-right text-[10px] font-semibold text-gray-500 uppercase tracking-wide">{editable ? 'Actions' : ''}</th>
               <th className="w-8" />
             </tr>
           </thead>
@@ -129,6 +168,7 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
             {visible.map((s) => {
               const isOpen = expanded === s.id;
               const isSelected = selected.has(s.id);
+              const isEditing = editingId === s.id;
               // Prefer the structured steps (each with its own expected result);
               // fall back to parsing the "N. action → Expected: result" strings.
               const stepList = (s.testSteps && s.testSteps.length)
@@ -143,10 +183,10 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
               return (
                 <Fragment key={s.id}>
                   <tr
-                    className={`border-b border-gray-100 transition-colors cursor-pointer ${
-                      isOpen ? 'bg-[#F5F3FF]' : isSelected ? 'hover:bg-gray-50' : 'bg-gray-50/40 hover:bg-gray-50'
+                    className={`border-b border-gray-100 transition-colors ${isEditing ? '' : 'cursor-pointer'} ${
+                      isEditing ? 'bg-[#EEF2FF]' : isOpen ? 'bg-[#F5F3FF]' : isSelected ? 'hover:bg-gray-50' : 'bg-gray-50/40 hover:bg-gray-50'
                     }`}
-                    onClick={() => setExpanded(isOpen ? null : s.id)}
+                    onClick={() => { if (isEditing) return; setExpanded(isOpen ? null : s.id); }}
                   >
                     <td className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
                       <input
@@ -159,23 +199,91 @@ export default function ScenariosTab({ scenarios, selected, onToggle, onSelectAl
                     </td>
                     <td className="px-2 py-1.5 font-mono text-[11px] text-gray-400">{s.id}</td>
                     <td className="px-2 py-1.5">
-                      <div className={`text-[12px] leading-snug ${isSelected ? 'text-gray-800' : 'text-gray-400'}`}>{s.title}</div>
-                      <div className="flex items-center gap-1.5 mt-0.5">
-                        <MethodBadge method={s.api?.method || ''} />
-                      </div>
+                      {isEditing ? (
+                        <input
+                          value={draft.title}
+                          onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
+                          onClick={(e) => e.stopPropagation()}
+                          className={`w-full ${FIELD}`}
+                          placeholder="Scenario title"
+                        />
+                      ) : (
+                        <>
+                          <div className={`text-[12px] leading-snug ${isSelected ? 'text-gray-800' : 'text-gray-400'}`}>{s.title}</div>
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            <MethodBadge method={s.api?.method || ''} />
+                          </div>
+                        </>
+                      )}
                     </td>
-                    <td className="px-2 py-1.5"><CategoryChip type={s.type} /></td>
-                    <td className="px-2 py-1.5"><PriorityChip priority={s.priority} /></td>
-                    <td className="px-2 py-1.5"><StatusCode code={s.api?.expectedStatus || ''} /></td>
+                    <td className="px-2 py-1.5">
+                      {isEditing ? (
+                        <input
+                          value={draft.type}
+                          onChange={(e) => setDraft((d) => ({ ...d, type: e.target.value }))}
+                          onClick={(e) => e.stopPropagation()}
+                          className={`w-full ${FIELD}`}
+                          placeholder="Category"
+                        />
+                      ) : <CategoryChip type={s.type} />}
+                    </td>
+                    <td className="px-2 py-1.5">
+                      {isEditing ? (
+                        <select
+                          value={draft.priority}
+                          onChange={(e) => setDraft((d) => ({ ...d, priority: e.target.value }))}
+                          onClick={(e) => e.stopPropagation()}
+                          className={`w-full ${FIELD}`}
+                        >
+                          {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+                        </select>
+                      ) : <PriorityChip priority={s.priority} />}
+                    </td>
+                    <td className="px-2 py-1.5">
+                      {isEditing ? (
+                        <input
+                          value={draft.expectedStatus}
+                          onChange={(e) => setDraft((d) => ({ ...d, expectedStatus: e.target.value }))}
+                          onClick={(e) => e.stopPropagation()}
+                          className={`w-full ${FIELD}`}
+                          placeholder="200"
+                        />
+                      ) : <StatusCode code={s.api?.expectedStatus || ''} />}
+                    </td>
                     <td className="px-2 py-1.5 text-[11px] text-gray-500 tabular-nums">{checkSteps.length}</td>
+                    <td className="px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
+                      {editable && (
+                        <div className="flex items-center justify-end gap-1">
+                          {isEditing ? (
+                            <>
+                              <button type="button" onClick={() => saveEdit(s)} title="Save changes" className="p-1 rounded text-emerald-600 hover:bg-emerald-50">
+                                <Check className="w-3.5 h-3.5" />
+                              </button>
+                              <button type="button" onClick={cancelEdit} title="Cancel" className="p-1 rounded text-gray-400 hover:bg-gray-100">
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button type="button" onClick={() => startEdit(s)} title="Edit scenario" className="p-1 rounded text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]">
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                              <button type="button" onClick={() => confirmDelete(s)} title="Delete scenario" className="p-1 rounded text-gray-400 hover:text-red-600 hover:bg-red-50">
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-2 py-1.5">
                       <ChevronRight className={`w-3.5 h-3.5 text-gray-300 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
                     </td>
                   </tr>
 
-                  {isOpen && (
+                  {isOpen && !isEditing && (
                     <tr className="border-b border-gray-200 bg-[#F5F3FF]">
-                      <td colSpan={8} className="px-4 py-3">
+                      <td colSpan={9} className="px-4 py-3">
                        <div className="@container">
                         <div className="grid grid-cols-1 @[680px]:grid-cols-2 gap-4">
                           {/* What gets sent */}

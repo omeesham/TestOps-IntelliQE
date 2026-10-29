@@ -23,7 +23,7 @@ import { envRunKey } from './useApiEnvironments';
 import { formatDuration } from '../format';
 import type {
   Phase, Stage, StageKey, StageStatus, Scenario, Spec, RunRow, LogLine, LogLevel, RunReport, PushState,
-  ServiceObject, CatalogEndpoint, Strategy, ApiProfile, ApiEnvironment,
+  ServiceObject, CatalogEndpoint, Strategy, ApiProfile, ApiEnvironment, ApiCaseMeta,
 } from '../types';
 
 /** How often the design job is polled for progress. */
@@ -32,8 +32,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const INITIAL_STAGES: Stage[] = [
   { key: 'scenarios', label: 'Test Cases Scenarios', hint: 'Design every scenario the strategy calls for', status: 'pending', detail: 'Not started' },
-  { key: 'automate', label: 'Automate', hint: 'Render each scenario into a runnable request spec', status: 'pending', detail: 'Not started' },
-  { key: 'execute', label: 'Execute', hint: 'Run the suite against the live endpoints', status: 'pending', detail: 'Not started' },
+  { key: 'automate', label: 'Automating', hint: 'Render each scenario into a runnable spec and run the suite against the live endpoints', status: 'pending', detail: 'Not started' },
   { key: 'heal', label: 'Heal', hint: 'Diagnose failures and repair what the test got wrong', status: 'pending', detail: 'Not started' },
   { key: 'report', label: 'Report', hint: 'Publish the result', status: 'pending', detail: 'Not started' },
 ];
@@ -150,6 +149,12 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
       const durationMs = s.startedAt ? Date.now() - s.startedAt : s.durationMs;
       return { ...s, status, detail, durationMs };
     }));
+  }, []);
+
+  // Update a stage's detail text without touching its status or running clock —
+  // lets the merged Automating stage report sub-steps while staying 'running'.
+  const setStageDetail = useCallback((key: StageKey, detail: string) => {
+    setStages((prev) => prev.map((s) => (s.key === key ? { ...s, detail } : s)));
   }, []);
 
   useEffect(() => { opts.onPhase?.(phase); }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -389,12 +394,12 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
       log('automate', `Could not save the run: ${err?.response?.data?.error || err?.message}. Execution continues, but this run will not appear on the Reports page.`, 'warn');
     }
     if (myRun !== runIdRef.current) return;
-    setStage('automate', 'done', `${chosenSpecs.length} specs ready`);
+    setStageDetail('automate', `${chosenSpecs.length} specs ready · running…`);
 
-    /* ── Execute ── */
+    /* ── Execute (same Automating stage, kept running) ── */
     setPhase('executing');
-    setStage('execute', 'running', `Running ${chosenSpecs.length} specs…`);
-    log('execute', `Executing ${chosenSpecs.length} specs against ${baseUrl || 'the endpoints'}`);
+    setStageDetail('automate', `Running ${chosenSpecs.length} specs…`);
+    log('automate', `Executing ${chosenSpecs.length} specs against ${baseUrl || 'the endpoints'}`);
     setRows(chosen.map((c) => ({ testCaseId: c.id, name: c.title, status: 'running', duration: '' })));
     const execStart = Date.now();
     let exec: any = null;
@@ -403,7 +408,7 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
     } catch (err: any) {
       if (myRun !== runIdRef.current) return;
       const msg = err?.response?.data?.error || err?.message || 'Execution failed.';
-      setStage('execute', 'failed', msg); log('execute', msg, 'error'); setRunError(msg);
+      setStage('automate', 'failed', msg); log('automate', msg, 'error'); setRunError(msg);
       setRows((prev) => prev.map((r) => ({ ...r, status: 'not_run', error: msg })));
       setPhase('failed'); toast.error('Execution failed', msg);
       return;
@@ -414,8 +419,8 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
     if (exec?.summary?.executed === false) {
       const reason = exec.summary.reason || 'The endpoint could not be reached.';
       setRows(chosen.map((c) => ({ testCaseId: c.id, name: c.title, status: 'not_run', duration: '', error: reason })));
-      setStage('execute', 'skipped', reason); setStage('heal', 'skipped', 'Nothing ran to heal');
-      log('execute', reason, 'warn');
+      setStage('automate', 'skipped', reason); setStage('heal', 'skipped', 'Nothing ran to heal');
+      log('automate', reason, 'warn');
       finishReport(chosen.length, 0, 0, chosen.length, 0, execMs, exec?.reportUrl);
       return;
     }
@@ -426,8 +431,8 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
     let passed = current.filter((r) => r.status === 'passed').length;
     let failed = current.filter((r) => r.status === 'failed').length;
     let notRun = current.filter((r) => r.status === 'not_run').length;
-    setStage('execute', 'done', `${passed} passed · ${failed} failed${notRun ? ` · ${notRun} not run` : ''}`);
-    log('execute', `${passed} passed, ${failed} failed${notRun ? `, ${notRun} not run` : ''}`, failed > 0 ? 'warn' : 'ok');
+    setStage('automate', 'done', `${chosenSpecs.length} specs · ${passed} passed · ${failed} failed${notRun ? ` · ${notRun} not run` : ''}`);
+    log('automate', `${passed} passed, ${failed} failed${notRun ? `, ${notRun} not run` : ''}`, failed > 0 ? 'warn' : 'ok');
 
     /* ── Heal ── */
     let healedCount = 0;
@@ -543,11 +548,28 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
   const selectScenarios = useCallback((ids: string[]) => setSelected((prev) => new Set([...prev, ...ids])), []);
   const clearScenarios = useCallback(() => setSelected(new Set()), []);
 
+  /** Drop a scenario from the review entirely — and from the selection with it. */
+  const deleteScenario = useCallback((id: string) => {
+    setScenarios((prev) => prev.filter((s) => s.id !== id));
+    setSelected((prev) => { const n = new Set(prev); n.delete(id); return n; });
+  }, []);
+
+  /** Edit a scenario's reviewable fields in place (title, category, priority,
+   *  expected status). Only the review-gate fields; steps/request are untouched. */
+  const updateScenario = useCallback((
+    id: string,
+    patch: Partial<Pick<Scenario, 'title' | 'type' | 'priority'>> & { api?: Partial<ApiCaseMeta> },
+  ) => {
+    setScenarios((prev) => prev.map((s) => (s.id === id
+      ? { ...s, ...patch, api: patch.api ? { ...(s.api as ApiCaseMeta), ...patch.api } : s.api }
+      : s)));
+  }, []);
+
   return {
     phase, stages, scenarios, specs, serviceObjects, selected, rows, report, testRunId, runError, exporting, pushState,
     runEndpoints, runLabel, runEnvName, runEnvKey, runCases, reresolving, logs, running, started, finished, baseUrl,
     runScenarios, runSuite, reresolve, resetRun, handleExport, handlePushToRepo,
-    toggleScenario, selectScenarios, clearScenarios, setRunError, log,
+    toggleScenario, selectScenarios, clearScenarios, deleteScenario, updateScenario, setRunError, log,
     elapsedMs: () => (startedAtRef.current ? Date.now() - startedAtRef.current : 0),
   };
 }
