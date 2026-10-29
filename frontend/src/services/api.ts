@@ -1461,7 +1461,7 @@ export interface EndpointRequirement {
 export interface StoryGenResult { title: string; summary: string; criteria: AcceptanceCriterion[]; brief: AttoBrief; unmappedCriteria: number; endpointRequirements: EndpointRequirement[]; checklist: ChecklistItem[] }
 /** Where a story was explicitly loaded from (Jira issue, ADO work item, or a document). */
 export interface StoryOrigin { kind: 'jira' | 'ado' | 'document'; ref: string; label?: string }
-export async function generateFromStory(input: { story: string; endpoints: any[]; environment?: { name: string; customerLike: boolean } | null; origin?: StoryOrigin | null }): Promise<StoryGenResult> { const { data } = await api.post('/api-automation/story/generate', input, { timeout: 180_000 }); return data; }
+export async function generateFromStory(input: { story: string; endpoints: any[]; environment?: { id?: string; name: string; customerLike: boolean } | null; origin?: StoryOrigin | null }): Promise<StoryGenResult> { const { data } = await api.post('/api-automation/story/generate', input, { timeout: 180_000 }); return data; }
 
 // Multimodal inputs
 export interface DetectedFlow { name: string; steps: string[] }

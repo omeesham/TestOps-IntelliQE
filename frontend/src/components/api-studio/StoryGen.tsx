@@ -578,7 +578,7 @@ export default function StoryGen({
           description: e.description, source: e.source,
           pathParams: e.pathParams, queryParams: e.queryParams, body: e.body,
         })),
-        environment: environment ? { name: environment.name, customerLike: !!environment.customerLike } : null,
+        environment: environment ? { id: environment.id, name: environment.name, customerLike: !!environment.customerLike } : null,
         origin: origin || undefined,
       });
       setResult(res);

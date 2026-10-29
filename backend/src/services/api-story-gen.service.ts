@@ -147,10 +147,18 @@ export interface StoryGenResult {
   checklist: ChecklistItem[];
 }
 
+/** The most recent sign-off recorded in the target environment, if any. */
+export interface EnvSignoff {
+  result: 'pass' | 'fail';
+  passRate: number;
+  signedAt: string;
+  signedBy?: string;
+}
+
 /** What the caller knows that this service cannot work out for itself. */
 export interface StoryContext {
-  /** The environment the run would target, for the customer-similar check. */
-  environment?: { name: string; customerLike: boolean } | null;
+  /** The environment the run would target, for the customer-similar + sign-off check. */
+  environment?: { name: string; customerLike: boolean; latestSignoff?: EnvSignoff | null } | null;
   /** External refs already resolved from the story text (Jira, test management). */
   sources?: ReqSourceRef[];
 }
@@ -197,6 +205,8 @@ function checkEndpoint(
 
   const env = context.environment;
   const verified = req.sources.filter((s) => s.verified);
+  const so = env?.latestSignoff || null;
+  const signedDate = so ? String(so.signedAt).slice(0, 10) : '';
 
   return [
     {
@@ -225,13 +235,21 @@ function checkEndpoint(
     },
     {
       id: 'signed-off',
-      label: 'Will run somewhere customer-similar',
-      pass: !!env?.customerLike,
+      label: 'Tested and signed off in a customer-similar environment',
+      // Forward-looking at planning time — the environment must be customer-similar
+      // — but now backed by the real sign-off record: a GREEN latest attestation
+      // passes with evidence, a RED one fails with a caution, none keeps the
+      // forward-looking pass (the run will be signed off against it).
+      pass: !!env?.customerLike && (!so || so.result === 'pass'),
       detail: !env
         ? 'No environment selected, so the run cannot be signed off.'
-        : env.customerLike
-          ? `“${env.name}” is flagged customer-similar.`
-          : `“${env.name}” is not flagged customer-similar.`,
+        : !env.customerLike
+          ? `“${env.name}” is not flagged customer-similar.`
+          : so && so.result === 'pass'
+            ? `“${env.name}” is customer-similar — last signed off green on ${signedDate} at ${so.passRate}%.`
+            : so && so.result === 'fail'
+              ? `“${env.name}” is customer-similar, but its last sign-off there failed (${signedDate}, ${so.passRate}%) — re-test and re-sign before release.`
+              : `“${env.name}” is customer-similar — no sign-off recorded here yet; the run will be signed off against it.`,
     },
   ];
 }

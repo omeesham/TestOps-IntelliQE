@@ -65,6 +65,21 @@ export async function latestSignoffForRun(tenantId: string, runId: string): Prom
 }
 
 /**
+ * The most recent sign-off recorded in a given environment, across all runs.
+ * The requirement agent reads this to say whether the environment a plan will
+ * target is one where features actually get signed off — and whether the last
+ * attestation there was green. Scoped to the one environment, so the result set
+ * stays small; newest first, so row 0 is the latest.
+ */
+export async function latestSignoffForEnvironment(tenantId: string, environmentId: string): Promise<Signoff | null> {
+  const { rows } = await pool.query(
+    `SELECT * FROM api_signoffs WHERE tenant_id = $1 AND environment_id = $2 ORDER BY signed_at DESC`,
+    [tenantId, environmentId],
+  );
+  return rows[0] ? mapSignoff(rows[0]) : null;
+}
+
+/**
  * Sign off a finished run in a given environment.
  *
  * The result is DERIVED from the run, never supplied by the caller: a run with

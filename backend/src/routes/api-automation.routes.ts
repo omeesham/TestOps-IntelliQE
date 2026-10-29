@@ -93,7 +93,7 @@ import { orchestrate, getOrchestratorConfig, saveOrchestratorConfig, rotateOrche
 // ─── Atto coworker lifecycle tools (all additive, opt-in; pipeline untouched) ───
 import { generateFromStory } from '../services/api-story-gen.service.js';
 import { resolveStorySources, resolveOrigin } from '../services/api-story-source.service.js';
-import { listSignoffs, createSignoff, deleteSignoff } from '../services/api-signoff.service.js';
+import { listSignoffs, createSignoff, deleteSignoff, latestSignoffForEnvironment } from '../services/api-signoff.service.js';
 import { analyzeMultimodal } from '../services/api-multimodal.service.js';
 import { optimizeSuite } from '../services/api-suite-optimizer.service.js';
 import { proposeHeal } from '../services/api-heal.service.js';
@@ -1458,11 +1458,19 @@ router.post('/story/generate', async (req: Request, res: Response) => {
     // by ref+label so loading PROJ-120 and also typing it does not double up.
     const sources = [...(originRef ? [originRef] : []), ...keyed]
       .filter((s, i, a) => a.findIndex((x) => x.ref.toUpperCase() === s.ref.toUpperCase() && x.label === s.label) === i);
+    // Read the real sign-off record for the target environment so the agent's
+    // "signed-off" item reflects an actual green/red attestation, not just the flag.
     const env = req.body?.environment;
-    res.json(await generateFromStory(story, endpoints, llm, {
-      sources,
-      environment: env?.name ? { name: String(env.name).slice(0, 120), customerLike: !!env.customerLike } : null,
-    }));
+    let environment = null;
+    if (env?.name) {
+      const latest = env.id ? await latestSignoffForEnvironment(req.user!.tenantId, String(env.id)).catch(() => null) : null;
+      environment = {
+        name: String(env.name).slice(0, 120),
+        customerLike: !!env.customerLike,
+        latestSignoff: latest ? { result: latest.result, passRate: latest.passRate, signedAt: latest.signedAt, signedBy: latest.signedBy } : null,
+      };
+    }
+    res.json(await generateFromStory(story, endpoints, llm, { sources, environment }));
   } catch (err) { fail(res, err); }
 });
 
