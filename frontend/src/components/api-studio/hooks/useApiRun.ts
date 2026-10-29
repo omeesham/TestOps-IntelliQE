@@ -31,7 +31,7 @@ const DESIGN_POLL_MS = 3000;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const INITIAL_STAGES: Stage[] = [
-  { key: 'scenarios', label: 'Scenarios', hint: 'Design every scenario the strategy calls for', status: 'pending', detail: 'Not started' },
+  { key: 'scenarios', label: 'Test Cases Scenarios', hint: 'Design every scenario the strategy calls for', status: 'pending', detail: 'Not started' },
   { key: 'automate', label: 'Automate', hint: 'Render each scenario into a runnable request spec', status: 'pending', detail: 'Not started' },
   { key: 'execute', label: 'Execute', hint: 'Run the suite against the live endpoints', status: 'pending', detail: 'Not started' },
   { key: 'heal', label: 'Heal', hint: 'Diagnose failures and repair what the test got wrong', status: 'pending', detail: 'Not started' },

@@ -105,7 +105,11 @@ export default function CommandPalette() {
     >
       <div
         data-surface="3d"
-        className="w-full max-w-xl bg-white rounded-2xl border border-[#E7E3F5] shadow-2xl overflow-hidden"
+        className="w-full max-w-xl bg-white rounded-2xl border border-[#E7E3F5] overflow-hidden"
+        // Plain white box: drop shadow-2xl AND override the global modal glow
+        // (index.css §12.7 paints every .fixed.inset-0 > .bg-white with a violet
+        // drop shadow; a bare class removal would let that glow show instead).
+        style={{ boxShadow: 'none' }}
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
       >
