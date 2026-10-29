@@ -468,7 +468,7 @@ function ReqEditForm({ draft, setDraft }: { draft: ReqEdit; setDraft: (d: ReqEdi
 }
 
 export default function StoryGen({
-  endpoints, environment, onApply, onClose,
+  endpoints, environment, onApply, onClose, onMineEndpoints,
 }: {
   endpoints: CatalogEndpoint[];
   /** The environment the run would target — decides the customer-similar check. */
@@ -476,6 +476,8 @@ export default function StoryGen({
   /** `approvedUrls` is what survived review — the caller narrows the run to it. */
   onApply: (brief: AttoBrief, approvedUrls: string[]) => void;
   onClose: () => void;
+  /** Mine endpoints from an uploaded requirement document into the catalogue. */
+  onMineEndpoints?: (file: File) => Promise<{ added: number; duplicates: number; total: number }>;
 }) {
   const toast = useToast();
   const [story, setStory] = useState('');
@@ -497,6 +499,7 @@ export default function StoryGen({
   const [pickerItems, setPickerItems] = useState<{ key: string; summary: string }[]>([]);
   const [picking, setPicking] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [mining, setMining] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   /** Open the Jira / ADO list (lazy — only hit the tool when the user asks). */
@@ -543,7 +546,11 @@ export default function StoryGen({
     }
   };
 
-  /** Extract a BRD / FRD / PRD document to text and prefill the box. */
+  /**
+   * One-stop document upload: extract the requirement text to prefill the box,
+   * AND (when the caller wired it) mine the same file for endpoints into the
+   * catalogue — so a BRD/FRD gives both the requirement and the APIs to map it to.
+   */
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = ''; // let the same file be picked again later
@@ -551,14 +558,30 @@ export default function StoryGen({
     setImporting(true);
     try {
       const doc = await extractDocumentText(file);
-      if (!doc.text?.trim()) { toast.error('Nothing to read', 'That document had no extractable text.'); return; }
+      if (!doc.text?.trim()) { toast.error('Nothing to read', 'That document had no extractable text.'); setImporting(false); return; }
       setStory(doc.text.slice(0, 8000));
       setOrigin({ kind: 'document', ref: doc.fileName || file.name, label: 'Document' });
       if (doc.warning) toast.info('Read with a caveat', doc.warning);
     } catch (err: any) {
       toast.fromError(err);
-    } finally {
       setImporting(false);
+      return;
+    }
+    setImporting(false);
+
+    // Best-effort endpoint mining from the same document — never blocks the story.
+    if (onMineEndpoints) {
+      setMining(true);
+      try {
+        const { added, total } = await onMineEndpoints(file);
+        if (total === 0) toast.info('No endpoints in the document', 'The requirement was loaded; it describes no API endpoints to add.');
+        else if (added === 0) toast.info('Endpoints already in your catalogue', `${total} found in the document — all already imported.`);
+        else toast.success(`${added} endpoint${added === 1 ? '' : 's'} added`, added < total ? `${total - added} were already in the catalogue.` : 'Mined from the document into your catalogue.');
+      } catch {
+        // The requirement text still loaded; mining is a bonus, so stay quiet on failure.
+      } finally {
+        setMining(false);
+      }
     }
   };
 
@@ -664,7 +687,7 @@ export default function StoryGen({
                 <button
                   key={k}
                   type="button"
-                  disabled={loading || importing}
+                  disabled={loading || importing || mining}
                   onClick={() => void openPicker(k)}
                   className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[11px] disabled:opacity-50 ${
                     picker === k ? 'bg-[#F5F3FF] border-[#C4B5FD] text-[#7C3AED]' : 'text-gray-600 border-gray-200 hover:border-[#C4B5FD] hover:text-[#7C3AED]'
@@ -675,7 +698,7 @@ export default function StoryGen({
               ))}
               <button
                 type="button"
-                disabled={loading || importing}
+                disabled={loading || importing || mining}
                 onClick={() => fileRef.current?.click()}
                 className="inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[11px] text-gray-600 border-gray-200 hover:border-[#C4B5FD] hover:text-[#7C3AED] disabled:opacity-50"
               >
@@ -683,6 +706,7 @@ export default function StoryGen({
               </button>
               <input ref={fileRef} type="file" accept=".pdf,.doc,.docx,.txt,.md,.markdown,.xlsx,.xls,.csv" className="hidden" onChange={onFile} />
               {importing && <Spinner className="w-3.5 h-3.5 animate-spin text-[#7C3AED]" />}
+              {mining && <span className="inline-flex items-center gap-1 text-[11px] text-[#7C3AED]"><Spinner className="w-3 h-3 animate-spin" /> Mining endpoints…</span>}
               {origin && (
                 <span className="inline-flex items-center gap-1 max-w-[280px] px-1.5 py-0.5 rounded border text-[10.5px] text-[#7C3AED] bg-[#F5F3FF] border-[#DDD6FE]">
                   <Link2 className="w-3 h-3 flex-shrink-0" />
@@ -718,7 +742,7 @@ export default function StoryGen({
               className={`${INPUT} resize-y`}
             />
             <p className="text-[11px] text-gray-400 mt-1">
-              Paste it, or load it from Jira, Azure DevOps or a BRD/FRD document. Each criterion is mapped to endpoints in your catalogue, and the loaded source (or an issue key like PROJ-120 in the text) is verified to trace every requirement back.
+              Paste it, or load it from Jira, Azure DevOps or a BRD/FRD document — a document also has any endpoints it describes mined into your catalogue. Each criterion is mapped to those endpoints, and the loaded source (or an issue key like PROJ-120 in the text) is verified to trace every requirement back.
             </p>
           </div>
 

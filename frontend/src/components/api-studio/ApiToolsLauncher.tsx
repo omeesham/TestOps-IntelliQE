@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useAuth } from '@/contexts/AuthContext';
-import { getApiToolToggles, updateApiToolToggles } from '@/services/api';
+import { getApiToolToggles, updateApiToolToggles, importApiFiles } from '@/services/api';
 import { CARD, FIELD } from './format';
 import { EmptyState } from './primitives';
 
@@ -699,6 +699,15 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
         <StoryGen
           endpoints={ep}
           environment={environment}
+          onMineEndpoints={async (file) => {
+            // Reuse the existing AI file-import so a BRD/FRD dropped into the
+            // story agent also yields runnable endpoints in the catalogue.
+            const res = await importApiFiles([file], 'auto');
+            const { added, duplicates, total } = catalog.addEndpoints(res.endpoints || [], {
+              method: 'file', name: file.name, format: res.format || 'document', parser: res.parser || 'llm', profile: res.profile,
+            });
+            return { added, duplicates, total };
+          }}
           onApply={(brief, approvedUrls) => {
             catalog.setStrategy({ coverage: brief.coverage, layers: brief.layers as StrategyLayerId[], requirements: brief.requirements });
             // A rejected requirement must not be planned, so the run is narrowed
