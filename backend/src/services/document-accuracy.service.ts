@@ -78,6 +78,38 @@ export function isDocumentFinding(error: string | undefined): boolean {
   return /: expected "[^"]*", screen shows "/.test(error || '');
 }
 
+/** Every expected value in an answer key (header fields and table rows). */
+export function answerKeyValues(key: unknown): string[] {
+  const values = new Set<string>();
+  const add = (obj: unknown) => {
+    if (!obj || typeof obj !== 'object') return;
+    for (const v of Object.values(obj)) if (typeof v === 'string' && v.trim()) values.add(v.trim());
+  };
+  for (const doc of Object.values((key && typeof key === 'object' ? key : {}) as Record<string, any>)) {
+    add(doc?.fields);
+    for (const row of Array.isArray(doc?.rows) ? doc.rows : []) add(row?.expected);
+  }
+  return [...values];
+}
+
+export const MASK = '«document value»';
+
+/**
+ * Error text of a document test, safe to send to the AI: data read from the
+ * documents (worker names, customers, hours…) is replaced — every answer-key
+ * value, plus field values and received strings Playwright printed from the page.
+ */
+export function maskDocumentValues(text: string, keyValues: string[]): string {
+  let out = text;
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const v of keyValues.filter((v) => v.length >= 3).sort((a, b) => b.length - a.length)) {
+    out = out.replace(new RegExp(escape(v), 'gi'), MASK);
+  }
+  return out
+    .replace(/\bvalue="[^"]*"/g, `value="${MASK}"`)
+    .replace(/(Received(?: string)?:\s*)"[^"\n]*"/g, `$1"${MASK}"`);
+}
+
 /** The document-check attachments of a Playwright JSON report. */
 export function collectDocumentChecks(summary: any): DocumentCheck[] {
   const checks: DocumentCheck[] = [];

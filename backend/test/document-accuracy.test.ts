@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   collectDocumentChecks, summariseDocumentChecks, writeAllureScorecard, isDocumentFinding,
+  answerKeyValues, maskDocumentValues, MASK,
   type DocumentCheck, type AccuracySettings,
 } from '../src/services/document-accuracy.service.js';
 
@@ -83,4 +84,35 @@ test('a value mismatch is a finding; other failures are not', () => {
   assert.ok(isDocumentFinding('Error: b.pdf – Ticket Number: expected "2", screen shows "3"'));
   assert.ok(!isDocumentFinding('locator.click: Timeout 15000ms exceeded'));
   assert.ok(!isDocumentFinding(undefined));
+});
+
+test('maskDocumentValues: document data never reaches the AI', () => {
+  const key = {
+    'LT-0001.pdf': {
+      tags: ['clean'],
+      fields: { 'Customer Name': 'Summit Booth Co', 'Ticket Number': '70276063' },
+      rows: [{ expected: { 'Worker Name': 'Priya Moreno', 'ST Hrs': '8' } }],
+    },
+  };
+  const values = answerKeyValues(key);
+  assert.deepEqual(values.sort(), ['70276063', '8', 'Priya Moreno', 'Summit Booth Co'].sort());
+
+  const error = [
+    'Error: Timed out 120000ms waiting for expect(locator).toBeVisible()',
+    'Locator: getByRole(\'button\', { name: \'Scan\' })',
+    '  - locator resolved to <input value="PRIYA MORENO" name="worker"/>',
+    '  - locator resolved to <input value="Jon Smth" name="worker2"/>',
+    'Received string: "Summit Booth Co."',
+    'Ticket 70276063 for priya moreno',
+  ].join('\n');
+  const masked = maskDocumentValues(error, values);
+  for (const secret of ['Priya', 'PRIYA', 'Moreno', 'Jon Smth', 'Summit', '70276063']) {
+    assert.ok(!masked.includes(secret), `"${secret}" leaked: ${masked}`);
+  }
+  // What the healer needs stays: the failing step and the locator.
+  assert.match(masked, /toBeVisible\(\)/);
+  assert.match(masked, /name: 'Scan'/);
+  assert.ok(masked.includes(MASK));
+  // Values under 3 characters are not masked (they would garble the message).
+  assert.match(masked, /120000ms/);
 });

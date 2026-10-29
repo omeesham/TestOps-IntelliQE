@@ -30,10 +30,10 @@ import { fileURLToPath } from 'url';
 import pool from '../db.js';
 import { runClaudePrompt, isClaudeCliAuthenticated, parseJsonFromResponse } from '../agents/claude-runner.js';
 import { buildHealingPrompt, type HealingFix } from '../agents/healing-prompt.js';
-import { PlaywrightRunError, classifyPlaywrightFailureExternal, prepareRunTestData, storedAllureResultsDir, runSafety } from './playwright-runner.service.js';
-import { isDocumentFinding } from './document-accuracy.service.js';
+import { PlaywrightRunError, classifyPlaywrightFailureExternal, prepareRunTestData, storedAllureResultsDir, runAnswerKeyValues, runSafety } from './playwright-runner.service.js';
+import { isDocumentFinding, maskDocumentValues } from './document-accuracy.service.js';
 import { weakerFixReason } from './heal-guard.service.js';
-import { TEST_DATA_ENV } from './test-data.service.js';
+import { specUsesDocumentHelper, TEST_DATA_ENV } from './test-data.service.js';
 import { errorWithBlocked, prepareGuardedRun, specForRun, type SafetySettings } from './uat-safety.service.js';
 
 const execFileAsync = promisify(execFile);
@@ -258,6 +258,8 @@ export async function healRunScripts(
   const guard = await runSafety(tenantId, runId, rows.map((r) => r.code));
   // Only this run's own app URL: another app's URL would send the fix to the wrong site.
   const targetUrl = guard.appUrl;
+  // Document data (worker names, customers, hours) never goes to the AI.
+  const keyValues = rows.some((r) => specUsesDocumentHelper(r.code)) ? await runAnswerKeyValues(tenantId, runId) : [];
 
   // ── 1. Re-run the failing scripts unchanged: one that now passes failed by
   // chance, and changing it would fix nothing. ──
@@ -293,7 +295,7 @@ export async function healRunScripts(
           expectedResult: row.expected_result || undefined,
           fileName: row.file_name || `${row.tc_number || 'test'}.spec.ts`,
           code: row.code,
-          error: realError,
+          error: specUsesDocumentHelper(row.code) ? maskDocumentValues(realError, keyValues) : realError,
           targetUrl,
         });
 

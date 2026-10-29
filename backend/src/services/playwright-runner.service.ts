@@ -5,9 +5,9 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import pool from '../db.js';
-import { appTestDataDir, installDocumentHelper, materializeTestData, specUsesDocumentHelper, specUsesTestData, TEST_DATA_ENV } from './test-data.service.js';
+import { ANSWER_KEY_FILE, appTestDataDir, installDocumentHelper, materializeTestData, specUsesDocumentHelper, specUsesTestData, TEST_DATA_ENV } from './test-data.service.js';
 import { getConfigsForTenant } from './configurations.service.js';
-import { accuracySettings, collectDocumentChecks, summariseDocumentChecks, writeAllureScorecard, type AccuracyScorecard } from './document-accuracy.service.js';
+import { accuracySettings, answerKeyValues, collectDocumentChecks, summariseDocumentChecks, writeAllureScorecard, type AccuracyScorecard } from './document-accuracy.service.js';
 import { appEnvironments, pickEnvironment } from './app-environments.js';
 import { errorWithBlocked, prepareGuardedRun, specForRun, type SafetySettings } from './uat-safety.service.js';
 
@@ -41,6 +41,18 @@ export async function prepareRunTestData(tenantId: string, runId: string, worksp
   } catch (err) {
     console.warn(`[runner] test files not prepared for run ${runId}: ${(err as Error).message}`);
     return null;
+  }
+}
+
+/** The expected values in the answer key of a run's app; empty when it has none. */
+export async function runAnswerKeyValues(tenantId: string, runId: string): Promise<string[]> {
+  try {
+    const { rows } = await pool.query(`SELECT app_id FROM test_runs WHERE id = $1`, [runId]);
+    const appId: string | null = rows[0]?.app_id || null;
+    if (!appId) return [];
+    return answerKeyValues(JSON.parse(await fs.readFile(path.join(appTestDataDir(tenantId, appId), ANSWER_KEY_FILE), 'utf-8')));
+  } catch {
+    return [];
   }
 }
 
