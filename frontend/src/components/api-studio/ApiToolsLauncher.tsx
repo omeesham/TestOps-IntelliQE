@@ -94,6 +94,9 @@ import ProxyServer from './ProxyServer';
 import StatusPages from './StatusPages';
 import AiCoworker from './AiCoworker';
 import StoryGen from './StoryGen';
+import BrdRequirements from './BrdRequirements';
+import FrdRequirements from './FrdRequirements';
+import DefectSync from './DefectSync';
 import Multimodal from './Multimodal';
 import SuiteOptimizer from './SuiteOptimizer';
 import ImpactAnalysis from './ImpactAnalysis';
@@ -288,6 +291,10 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
   const [statusPagesOpen, setStatusPagesOpen] = useState(false);
   const [coworkerOpen, setCoworkerOpen] = useState(false);
   const [storyOpen, setStoryOpen] = useState(false);
+  const [brdOpen, setBrdOpen] = useState(false);
+  const [frdOpen, setFrdOpen] = useState(false);
+  const [jiraSyncOpen, setJiraSyncOpen] = useState(false);
+  const [azureSyncOpen, setAzureSyncOpen] = useState(false);
   const [multimodalOpen, setMultimodalOpen] = useState(false);
   const [optimizerOpen, setOptimizerOpen] = useState(false);
   const [impactOpen, setImpactOpen] = useState(false);
@@ -317,6 +324,8 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
         { icon: BrainCircuit, label: 'AI coworker (Atto)', desc: 'Chat + autonomy across the lifecycle', open: () => setCoworkerOpen(true) },
         { icon: Bot, label: 'Autopilot (autonomous loop)', desc: 'Discover → generate → run → heal → reviewed PR', open: () => setAutopilotOpen(true) },
         { icon: FileText, label: 'Story-driven generation', desc: 'Jira story / PRD → a reviewed test plan', open: () => setStoryOpen(true) },
+        { icon: ClipboardList, label: 'Business requirements (BRD)', desc: 'Extract structured BRs from a BRD → traceability', open: () => setBrdOpen(true) },
+        { icon: ClipboardCheck, label: 'Functional requirements (FRD)', desc: 'Extract structured FRs + API shape from an FRD', open: () => setFrdOpen(true) },
         { icon: ImageIcon, label: 'Multimodal inputs', desc: 'Screenshot / Figma / recording → a plan', open: () => setMultimodalOpen(true) },
         { icon: Wand2, label: 'Author in plain English', desc: 'Describe tests → a run strategy', open: () => setNlOpen(true) },
         { icon: MessageSquare, label: 'Chat-to-test', desc: 'Refine a test in plain English', open: () => setChatTestOpen(true) },
@@ -443,6 +452,8 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
         { icon: Gauge, label: 'Public status page', desc: 'Shareable uptime + SLO', open: () => setStatusPagesOpen(true) },
         { icon: HeartPulse, label: 'Failure → fix workflow', desc: 'Cluster → heal → PR, one guided flow', open: () => setFixWorkflowOpen(true) },
         { icon: Bug, label: 'Bug report', desc: 'Tracker-ready report from a failure', open: () => setBugReportOpen(true) },
+        { icon: Bug, label: 'Jira sync & defects', desc: 'Failures → Jira defects · dedupe · audit trail', open: () => setJiraSyncOpen(true) },
+        { icon: Bug, label: 'Azure DevOps sync & defects', desc: 'Failures → Azure defects · dedupe · audit trail', open: () => setAzureSyncOpen(true) },
         { icon: GitMerge, label: 'Remediation PR', desc: 'Open a GitHub/GitLab PR with a changeset', open: () => setRemediationOpen(true) },
         { icon: FolderGit2, label: 'Git-synced tests', desc: 'Push / pull the catalogue as test-as-code', open: () => setGitSyncOpen(true) },
         { icon: FileCheck2, label: 'Evidence export', desc: 'Compliance evidence → PDF', open: () => setEvidenceOpen(true) },
@@ -719,6 +730,10 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
           onClose={() => setStoryOpen(false)}
         />
       )}
+      {brdOpen && <BrdRequirements onClose={() => setBrdOpen(false)} />}
+      {frdOpen && <FrdRequirements onClose={() => setFrdOpen(false)} />}
+      {jiraSyncOpen && <DefectSync provider="jira" onClose={() => setJiraSyncOpen(false)} />}
+      {azureSyncOpen && <DefectSync provider="azure" onClose={() => setAzureSyncOpen(false)} />}
       {multimodalOpen && (
         <Multimodal
           endpoints={ep}

@@ -22,7 +22,10 @@ export type ApiStyle = 'rest' | 'graphql' | 'soap' | 'jsonrpc' | 'webhook' | 'mc
 /** The ways an API can enter the workspace. */
 export type ImportMethod =
   | 'openapi' | 'postman' | 'bruno' | 'endpoint' | 'curl' | 'docs-url' | 'connector'
-  | 'sdk' | 'webhook' | 'graphql' | 'mcp' | 'middleware' | 'manual' | 'file' | 'capture';
+  | 'sdk' | 'webhook' | 'graphql' | 'mcp' | 'middleware' | 'manual' | 'file' | 'capture'
+  // Requirement-driven sources (Module 1): Jira issue, Azure DevOps work item,
+  // or an uploaded Business/Functional Requirements Document.
+  | 'jira' | 'ado' | 'brd' | 'frd';
 
 export interface HeaderPair { key: string; value: string }
 

@@ -8,10 +8,11 @@
  */
 import {
   FileJson, Package, PackageOpen, Link2, Terminal, BookOpen, Puzzle, Code2, Webhook, Braces, Bot, Route, Send,
+  Ticket, Cloud, FileText, ClipboardCheck,
 } from 'lucide-react';
 import type { ImportMethod } from './types';
 
-export type ImportInput = 'files' | 'url' | 'text' | 'probe' | 'graphql' | 'mcp' | 'webhook' | 'manual' | 'connector';
+export type ImportInput = 'files' | 'url' | 'text' | 'probe' | 'graphql' | 'mcp' | 'webhook' | 'manual' | 'connector' | 'jira' | 'ado';
 
 export interface ImportMethodDef {
   id: ImportMethod;
@@ -47,6 +48,10 @@ export const IMPORT_METHODS: ImportMethodDef[] = [
   { id: 'mcp', label: 'MCP Server', short: 'MCP', desc: 'A server’s tools, imported', detail: 'A Model Context Protocol server over Streamable HTTP. The handshake, tools/list and one tools/call per tool are imported.', icon: Bot, accent: '#7C3AED', inputs: ['mcp'] },
   { id: 'middleware', label: 'Middleware', short: 'Middleware', desc: 'Server route definitions', detail: 'Server route definitions — Express/Nest/Fastify, Spring, FastAPI/Flask, ASP.NET, gateway route tables. Every registered route becomes an endpoint.', icon: Route, accent: '#06B6D4', inputs: ['files', 'text'], accept: '.ts,.js,.py,.java,.cs,.go,.rb,.php,.kt,.yaml,.yml,.json,.txt', format: 'middleware', ai: true, placeholder: 'Paste the router / controller source…' },
   { id: 'manual', label: 'Manual HTTP Request', short: 'Manual', desc: 'Build one request by hand', detail: 'Build one request by hand — method, URL, params, headers, auth, body and the expected response.', icon: Send, accent: '#3B82F6', inputs: ['manual'] },
+  { id: 'jira', label: 'Jira', short: 'Jira', desc: 'An issue, read for endpoints', detail: 'Pull a Jira issue (story, task, bug…) from your connected Jira and read its description + acceptance criteria for the API endpoints it describes. Uses the Jira connection from System Configuration — nothing is stored here.', icon: Ticket, accent: '#2684FF', inputs: ['jira'], format: 'jira', ai: true },
+  { id: 'ado', label: 'Azure DevOps', short: 'Azure', desc: 'A work item, read for endpoints', detail: 'Pull an Azure DevOps work item (user story, task, bug…) from your connected organization and read its description + acceptance criteria for the API endpoints it describes. Uses the Azure connection from System Configuration.', icon: Cloud, accent: '#0078D4', inputs: ['ado'], format: 'ado', ai: true },
+  { id: 'brd', label: 'BRD', short: 'BRD', desc: 'Business Requirements Document', detail: 'Upload a Business Requirements Document (PDF, Word or Excel). The platform reads the business requirements and infers the API endpoints they imply, bringing them into the catalogue.', icon: FileText, accent: '#9333EA', inputs: ['files'], accept: '.pdf,.docx,.doc,.xlsx,.xls,.md,.txt', format: 'brd', ai: true },
+  { id: 'frd', label: 'FRD', short: 'FRD', desc: 'Functional Requirements Document', detail: 'Upload a Functional Requirements Document (PDF, Word or Excel). Every documented operation — method, path, parameters, headers, body, auth and expected responses — becomes an endpoint in the catalogue.', icon: ClipboardCheck, accent: '#0D9488', inputs: ['files'], accept: '.pdf,.docx,.doc,.xlsx,.xls,.md,.txt', format: 'frd', ai: true },
 ];
 
 /** File types the bulk drop zone accepts (documents + machine-readable). */

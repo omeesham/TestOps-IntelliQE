@@ -253,8 +253,8 @@ export async function getStories(creds: AdoCreds): Promise<WorkItemSummary[]> {
   }));
 }
 
-export async function getWorkItems(creds: AdoCreds, opts?: { type?: string }): Promise<WorkItemSummary[]> {
-  const types = opts?.type ? [opts.type] : ALL_TYPES;
+export async function getWorkItems(creds: AdoCreds, opts?: { type?: string; types?: string[] }): Promise<WorkItemSummary[]> {
+  const types = opts?.types?.length ? opts.types : opts?.type ? [opts.type] : ALL_TYPES;
   const ids = await wiqlIds(creds, typesClause(types), 200);
   const items = await batchFields(creds, ids, ['System.Id', 'System.Title', 'System.WorkItemType', 'System.State']);
   return items.map((w) => ({
@@ -450,6 +450,26 @@ export async function getTestCases(creds: AdoCreds): Promise<TestCaseSummary[]> 
   }));
 }
 
+// ─── Expanded fetch (Module 5): projects + work-item comments ───
+export interface AdoProject { key: string; name: string; id: string; state?: string }
+
+/** List the organisation's projects (the account's PAT scope). */
+export async function getProjects(creds: AdoCreds): Promise<AdoProject[]> {
+  const url = `${creds.baseUrl}/_apis/projects?api-version=${API_VERSION}&$top=200&stateFilter=wellFormed`;
+  const resp = await axios.get(url, { headers: authHeaders(creds) });
+  const values = Array.isArray(resp.data?.value) ? resp.data.value : [];
+  return values.map((p: any) => ({ key: p.name, name: p.name, id: String(p.id), state: p.state })).slice(0, 200);
+}
+
+/** Add a comment to a work item (used when a failure recurs on an existing defect). */
+export async function addComment(creds: AdoCreds, id: string, text: string): Promise<void> {
+  // Work-item comments live under the project and need the preview media type.
+  const url = `${creds.baseUrl}/${encodeURIComponent(creds.project)}/_apis/wit/workItems/${encodeURIComponent(id)}/comments?api-version=7.0-preview.3`;
+  await axios.post(url, { text: esc(String(text).slice(0, 4000)) }, {
+    headers: { ...authHeaders(creds), 'Content-Type': 'application/json' },
+  });
+}
+
 // ─── DB helpers (tenant-scoped, client_configurations) ───
 export async function getCredsForTenant(tenantId: string): Promise<AdoCreds | null> {
   const { rows } = await pool.query(
@@ -524,5 +544,5 @@ export async function getConnectionStatus(tenantId: string) {
 export default {
   testConnection, getStories, getStory, getWorkItems, getTestCases, createBug, deleteWorkItem,
   getCredsForTenant, saveCredsForTenant, deleteCredsForTenant, getConnectionStatus,
-  normalizeOrg, buildAuthHeader,
+  normalizeOrg, buildAuthHeader, getProjects, addComment,
 };

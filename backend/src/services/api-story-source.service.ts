@@ -222,4 +222,5 @@ const IMPORT_LABELS: Record<string, string> = {
   middleware: 'Middleware', manual: 'Manual request', url: 'Live URL',
   connector: 'Custom connector', pdf: 'PDF', word: 'Word', excel: 'Excel',
   markdown: 'Markdown', code: 'Source code',
+  jira: 'Jira', ado: 'Azure DevOps', brd: 'BRD', frd: 'FRD',
 };

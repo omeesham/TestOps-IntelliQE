@@ -200,7 +200,7 @@ export default function ApiStudio() {
       {/* ── Import API — modal ── */}
       {importOpen && (
         <ImportModal onClose={() => setImportOpen(false)}>
-          <ImportView catalog={catalog} onOpenCatalogue={() => { setImportOpen(false); setView('endpoints'); }} log={run.log} environment={envStore.activeEnvironment} />
+          <ImportView catalog={catalog} onOpenCatalogue={() => { setImportOpen(false); setView('endpoints'); }} log={run.log} environment={envStore.activeEnvironment} onOpenStory={() => { setImportOpen(false); navigate('tools', 'story'); }} />
         </ImportModal>
       )}
 

@@ -405,6 +405,16 @@ export async function importApiEndpoint(input: { url: string; method?: string; h
   return data;
 }
 
+export async function importApiJira(key: string): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/jira', { key }, { timeout: IMPORT_TIMEOUT });
+  return data;
+}
+
+export async function importApiAzure(id: string): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/azure', { id }, { timeout: IMPORT_TIMEOUT });
+  return data;
+}
+
 export async function importApiCurl(curl: string): Promise<ApiImportResponse> {
   const { data } = await api.post('/api-automation/import/curl', { curl });
   return data;
@@ -843,6 +853,172 @@ export async function getApiRun(id: string): Promise<any> {
 }
 export async function listApiImports(limit = 50): Promise<{ items: any[] }> {
   const { data } = await api.get('/api-automation/imports', { params: { limit } });
+  return data;
+}
+
+/* ── BRD (Business Requirements Document) module ── */
+export interface BusinessRequirement {
+  brId: string;
+  title: string;
+  description?: string;
+  objective?: string;
+  rules?: string[];
+  workflows?: string[];
+  acceptanceCriteria?: string[];
+  validations?: string[];
+  dependencies?: string[];
+  positiveScenarios?: string[];
+  negativeScenarios?: string[];
+}
+export interface BrdDocument {
+  id: string;
+  name: string;
+  summary?: string;
+  source: string;
+  requirementCount: number;
+  createdBy?: string;
+  createdAt: string;
+}
+
+/** Analyse a BRD — pass a File (upload) or raw text. Returns structured requirements. */
+export async function analyzeBrd(input: { file?: File; text?: string; name?: string }): Promise<{ document: BrdDocument; requirements: BusinessRequirement[] }> {
+  if (input.file) {
+    const form = new FormData();
+    form.append('file', input.file);
+    if (input.name) form.append('name', input.name);
+    const { data } = await api.post('/api-automation/brd/analyze', form, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: IMPORT_TIMEOUT });
+    return data;
+  }
+  const { data } = await api.post('/api-automation/brd/analyze', { text: input.text || '', name: input.name }, { timeout: IMPORT_TIMEOUT });
+  return data;
+}
+export async function listBrdDocuments(): Promise<{ documents: BrdDocument[] }> {
+  const { data } = await api.get('/api-automation/brd');
+  return data;
+}
+export async function getBrdDocument(id: string): Promise<{ document: BrdDocument; requirements: BusinessRequirement[] }> {
+  const { data } = await api.get(`/api-automation/brd/${encodeURIComponent(id)}`);
+  return data;
+}
+export async function deleteBrdDocument(id: string): Promise<{ ok: boolean }> {
+  const { data } = await api.delete(`/api-automation/brd/${encodeURIComponent(id)}`);
+  return data;
+}
+
+/* ── FRD (Functional Requirements Document) module ── */
+export interface FrEndpoint { method: string; path: string; description?: string }
+export interface FrResponse { status: string; description?: string }
+export interface FunctionalRequirement {
+  frId: string;
+  title: string;
+  description?: string;
+  actors?: string[];
+  preconditions?: string[];
+  endpoints?: FrEndpoint[];
+  parameters?: string[];
+  headers?: string[];
+  requestBody?: string;
+  auth?: string;
+  responses?: FrResponse[];
+  validations?: string[];
+  errorHandling?: string[];
+  acceptanceCriteria?: string[];
+  dependencies?: string[];
+  positiveScenarios?: string[];
+  negativeScenarios?: string[];
+}
+export interface FrdDocument {
+  id: string;
+  name: string;
+  summary?: string;
+  source: string;
+  requirementCount: number;
+  createdBy?: string;
+  createdAt: string;
+}
+
+/** Analyse an FRD — pass a File (upload) or raw text. Returns structured functional requirements. */
+export async function analyzeFrd(input: { file?: File; text?: string; name?: string }): Promise<{ document: FrdDocument; requirements: FunctionalRequirement[] }> {
+  if (input.file) {
+    const form = new FormData();
+    form.append('file', input.file);
+    if (input.name) form.append('name', input.name);
+    const { data } = await api.post('/api-automation/frd/analyze', form, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: IMPORT_TIMEOUT });
+    return data;
+  }
+  const { data } = await api.post('/api-automation/frd/analyze', { text: input.text || '', name: input.name }, { timeout: IMPORT_TIMEOUT });
+  return data;
+}
+export async function listFrdDocuments(): Promise<{ documents: FrdDocument[] }> {
+  const { data } = await api.get('/api-automation/frd');
+  return data;
+}
+export async function getFrdDocument(id: string): Promise<{ document: FrdDocument; requirements: FunctionalRequirement[] }> {
+  const { data } = await api.get(`/api-automation/frd/${encodeURIComponent(id)}`);
+  return data;
+}
+export async function deleteFrdDocument(id: string): Promise<{ ok: boolean }> {
+  const { data } = await api.delete(`/api-automation/frd/${encodeURIComponent(id)}`);
+  return data;
+}
+
+/* ── Jira integration — Module 4 (expanded fetch + defect automation) ── */
+export interface JiraProject { key: string; name: string; id: string; projectTypeKey?: string }
+export interface JiraIssueSummary { key: string; summary: string; type: string; status?: string; priority?: string; parentKey?: string }
+export interface RunFailure { title: string; error?: string; method?: string; url?: string; testId?: string }
+export interface SyncDefectResult { signature: string; title: string; action: 'created' | 'updated' | 'would-create' | 'would-update' | 'skipped'; issueKey?: string; issueUrl?: string; occurrence?: number; error?: string }
+export interface SyncDefectResponse { dryRun: boolean; connected: boolean; summary: { total: number; created: number; updated: number; skipped: number }; results: SyncDefectResult[] }
+export interface JiraSyncHistoryRow { id: string; runId?: string; runTitle?: string; createdCount: number; updatedCount: number; skippedCount: number; dryRun: boolean; createdBy?: string; createdAt: string }
+export interface JiraDefectLink { id: string; signature: string; issueKey?: string; issueUrl?: string; title?: string; method?: string; url?: string; runId?: string; status: string; occurrenceCount: number; createdAt: string; lastSeenAt: string }
+
+export async function getJiraProjects(): Promise<{ projects: JiraProject[] }> {
+  const { data } = await api.get('/api-automation/jira/projects', { timeout: 60_000 });
+  return data;
+}
+export async function getJiraIssues(opts?: { types?: string[]; jql?: string; projectKey?: string; maxResults?: number }): Promise<{ issues: JiraIssueSummary[] }> {
+  const params: Record<string, string> = {};
+  if (opts?.types?.length) params.types = opts.types.join(',');
+  if (opts?.jql) params.jql = opts.jql;
+  if (opts?.projectKey) params.projectKey = opts.projectKey;
+  if (opts?.maxResults) params.maxResults = String(opts.maxResults);
+  const { data } = await api.get('/api-automation/jira/issues', { params, timeout: 60_000 });
+  return data;
+}
+export async function syncJiraDefects(input: { failures: RunFailure[]; runId?: string; runTitle?: string; dryRun?: boolean }): Promise<SyncDefectResponse> {
+  const { data } = await api.post('/api-automation/jira/sync-defects', input, { timeout: 120_000 });
+  return data;
+}
+export async function listJiraDefectLinks(runId?: string): Promise<{ links: JiraDefectLink[] }> {
+  const { data } = await api.get('/api-automation/jira/defect-links', { params: runId ? { runId } : {} });
+  return data;
+}
+export async function listJiraSyncHistory(): Promise<{ history: JiraSyncHistoryRow[] }> {
+  const { data } = await api.get('/api-automation/jira/sync-history');
+  return data;
+}
+
+/* ── Azure DevOps integration — Module 5 (mirrors the Jira surface, shared shapes) ── */
+export async function getAzureProjects(): Promise<{ projects: JiraProject[] }> {
+  const { data } = await api.get('/api-automation/azure/projects', { timeout: 60_000 });
+  return data;
+}
+export async function getAzureWorkItems(opts?: { types?: string[] }): Promise<{ issues: JiraIssueSummary[] }> {
+  const params: Record<string, string> = {};
+  if (opts?.types?.length) params.types = opts.types.join(',');
+  const { data } = await api.get('/api-automation/azure/work-items', { params, timeout: 60_000 });
+  // Azure work items expose "state"; map to the shared issue shape's "status".
+  return { issues: (data.issues || []).map((i: any) => ({ key: i.key, summary: i.summary, type: i.type, status: i.status || i.state })) };
+}
+export async function syncAzureDefects(input: { failures: RunFailure[]; runId?: string; runTitle?: string; dryRun?: boolean }): Promise<SyncDefectResponse> {
+  const { data } = await api.post('/api-automation/azure/sync-defects', input, { timeout: 120_000 });
+  return data;
+}
+export async function listAzureDefectLinks(runId?: string): Promise<{ links: JiraDefectLink[] }> {
+  const { data } = await api.get('/api-automation/azure/defect-links', { params: runId ? { runId } : {} });
+  return data;
+}
+export async function listAzureSyncHistory(): Promise<{ history: JiraSyncHistoryRow[] }> {
+  const { data } = await api.get('/api-automation/azure/sync-history');
   return data;
 }
 

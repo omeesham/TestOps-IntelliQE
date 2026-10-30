@@ -519,6 +519,59 @@ export async function createBug(creds: JiraCreds, bug: JiraBugInput): Promise<{ 
   return { key, url: `${creds.baseUrl}/browse/${key}` };
 }
 
+// --- Expanded fetch (Module 4): projects + all issue types ---
+export interface JiraProject { key: string; name: string; id: string; projectTypeKey?: string }
+export interface JiraIssueSummary { key: string; summary: string; type: string; status?: string; priority?: string; parentKey?: string }
+
+/** List the projects visible to the connected account. */
+export async function getProjects(creds: JiraCreds): Promise<JiraProject[]> {
+  const data = await request<any>(creds, `${creds.baseUrl}/rest/api/3/project/search`, { maxResults: 100, orderBy: 'name' });
+  const values = Array.isArray(data?.values) ? data.values : Array.isArray(data) ? data : [];
+  return values.map((p: any) => ({ key: p.key, name: p.name, id: String(p.id), projectTypeKey: p.projectTypeKey })).slice(0, 200);
+}
+
+/**
+ * Fetch issues of any type (epics, stories, tasks, subtasks, bugs). Scoped to a
+ * project when one is known; the new /search/jql endpoint requires bounded JQL,
+ * so a date clause is added when there is no project or type restriction.
+ */
+export async function getIssues(
+  creds: JiraCreds,
+  opts?: { types?: string[]; jql?: string; maxResults?: number; projectKey?: string },
+): Promise<JiraIssueSummary[]> {
+  const max = Math.min(100, Math.max(1, opts?.maxResults ?? 50));
+  const projectKey = opts?.projectKey || creds.projectKey;
+  let jql = (opts?.jql || '').trim();
+  if (!jql) {
+    const clauses: string[] = [];
+    if (projectKey) clauses.push(`project = "${projectKey}"`);
+    if (opts?.types?.length) {
+      const quoted = opts.types.map((t) => `"${String(t).replace(/"/g, '\\"')}"`).join(', ');
+      clauses.push(`issuetype in (${quoted})`);
+    }
+    if (!clauses.length) clauses.push('created >= "2000-01-01"'); // keep the JQL bounded
+    jql = `${clauses.join(' AND ')} ORDER BY created DESC`;
+  }
+  const data = await request<any>(creds, `${creds.baseUrl}/rest/api/3/search/jql`, {
+    jql, maxResults: max, fields: 'summary,issuetype,status,priority,parent',
+  });
+  const issues = Array.isArray(data?.issues) ? data.issues : [];
+  return issues.map((i: any) => ({
+    key: i.key,
+    summary: i.fields?.summary ?? '',
+    type: i.fields?.issuetype?.name ?? '',
+    status: i.fields?.status?.name,
+    priority: i.fields?.priority?.name,
+    parentKey: i.fields?.parent?.key,
+  }));
+}
+
+/** Add a plain-text comment to an issue (used when a failure recurs on an existing defect). */
+export async function addComment(creds: JiraCreds, issueKey: string, text: string): Promise<void> {
+  const body = { body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: String(text).slice(0, 4000) }] }] } };
+  await postRequest<any>(creds, `${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(issueKey)}/comment`, body);
+}
+
 /**
  * Delete a JIRA issue (used to cascade an IntelliQE bug deletion / unlink to
  * the JIRA Bug it was raised as). Subtasks are deleted along with it.
@@ -530,4 +583,4 @@ export async function deleteIssue(creds: JiraCreds, issueKey: string): Promise<v
   });
 }
 
-export default { testConnection, getStories, getStory, getCredsForTenant, saveCredsForTenant, deleteCredsForTenant, getConnectionStatus, createBug, deleteIssue };
+export default { testConnection, getStories, getStory, getCredsForTenant, saveCredsForTenant, deleteCredsForTenant, getConnectionStatus, createBug, deleteIssue, getProjects, getIssues, addComment };

@@ -6,12 +6,12 @@
  * per file. Below: the twelve named methods, each with the form it needs.
  * Every path ends in the same place — endpoints in the catalogue, profiled.
  */
-import { useCallback, useMemo, useRef, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { UploadCloud, CheckCircle2, AlertTriangle, ArrowRight, FileText, X, Plus, Trash2, Layers } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import {
   importApiFiles, importApiText, importApiUrl, importApiEndpoint, importApiCurl, importApiGraphql, importApiMcp,
-  importApiConnector, importApiWebhook, importApiSource, type ApiImportResponse,
+  importApiConnector, importApiWebhook, importApiSource, importApiJira, importApiAzure, type ApiImportResponse,
 } from '@/services/api';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { IMPORT_METHODS, BULK_ACCEPT, type ImportMethodDef, type ImportInput } from '../importMethods';
@@ -29,6 +29,8 @@ interface Props {
   log: (stage: LogLine['stage'], text: string, level?: LogLine['level']) => void;
   /** Active environment — used to resolve {{vars}}/base URL when validating the import. */
   environment?: ApiEnvironment | null;
+  /** Opens the Story generator — offered after a requirement-driven import (Jira/Azure/BRD/FRD). */
+  onOpenStory?: () => void;
 }
 
 interface Outcome { method: ImportMethod; name: string; res: ApiImportResponse; added: number; duplicates: number }
@@ -42,13 +44,21 @@ const FORMAT_COLOR: Record<string, string> = {
   'WSDL / XML': '#6366F1', PDF: '#EF4444', Word: '#2563EB', Excel: '#16A34A', Markdown: '#64748B', 'Source code': '#8B5CF6',
 };
 
-export default function ImportView({ catalog, onOpenCatalogue, log, environment }: Props) {
+export default function ImportView({ catalog, onOpenCatalogue, log, environment, onOpenStory }: Props) {
   const toast = useToast();
   const [active, setActive] = useState<ImportMethodDef | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [manualOpen, setManualOpen] = useState(false);
+  /** The opened method form — scrolled into view when a card is picked. */
+  const formRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!active || active.id === 'manual') return;
+    // Let the form mount and lay out before scrolling, so the target offset is final.
+    const id = window.setTimeout(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+    return () => window.clearTimeout(id);
+  }, [active]);
 
   /** Every import funnels through here so the catalogue, log and result panel agree. */
   const finish = useCallback((method: ImportMethod, name: string, res: ApiImportResponse) => {
@@ -146,7 +156,7 @@ export default function ImportView({ catalog, onOpenCatalogue, log, environment 
             <button type="button" onClick={() => setError('')} className="ml-auto text-red-400 hover:text-red-600"><X className="w-3.5 h-3.5" /></button>
           </div>
         )}
-        {outcome && <OutcomePanel outcome={outcome} environment={environment} onOpenCatalogue={onOpenCatalogue} onDismiss={() => setOutcome(null)} />}
+        {outcome && <OutcomePanel outcome={outcome} environment={environment} onOpenCatalogue={onOpenCatalogue} onOpenStory={onOpenStory} onDismiss={() => setOutcome(null)} />}
 
         {/* Method grid */}
         <div>
@@ -185,13 +195,15 @@ export default function ImportView({ catalog, onOpenCatalogue, log, environment 
 
         {/* Active method form */}
         {active && active.id !== 'manual' && (
-          <MethodForm
-            key={active.id}
-            def={active}
-            busy={busy === active.id}
-            onClose={() => setActive(null)}
-            onRun={(name, fn) => run(active.id, active.id, name, fn)}
-          />
+          <div ref={formRef} className="scroll-mt-2">
+            <MethodForm
+              key={active.id}
+              def={active}
+              busy={busy === active.id}
+              onClose={() => setActive(null)}
+              onRun={(name, fn) => run(active.id, active.id, name, fn)}
+            />
+          </div>
         )}
       </div>
 
@@ -212,9 +224,11 @@ export default function ImportView({ catalog, onOpenCatalogue, log, environment 
 
 /* ── Result panel ─────────────────────────────────────────────── */
 
-function OutcomePanel({ outcome, environment, onOpenCatalogue, onDismiss }: { outcome: Outcome; environment?: ApiEnvironment | null; onOpenCatalogue: () => void; onDismiss: () => void }) {
-  const { res, added, duplicates } = outcome;
+function OutcomePanel({ outcome, environment, onOpenCatalogue, onOpenStory, onDismiss }: { outcome: Outcome; environment?: ApiEnvironment | null; onOpenCatalogue: () => void; onOpenStory?: () => void; onDismiss: () => void }) {
+  const { res, added, duplicates, method } = outcome;
   const none = (res.endpoints || []).length === 0;
+  // Requirement-driven sources can also feed the Story generator for a brief.
+  const fromRequirements = method === 'jira' || method === 'ado' || method === 'brd' || method === 'frd';
   // Deterministic readiness check over what the document produced — surfaced here
   // so a non-API file (or un-runnable endpoints) is caught before the catalogue.
   const report = useMemo(() => validateApiEndpoints(res.endpoints || [], environment), [res.endpoints, environment]);
@@ -259,6 +273,7 @@ function OutcomePanel({ outcome, environment, onOpenCatalogue, onDismiss }: { ou
           )}
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
+          {fromRequirements && onOpenStory && <button type="button" onClick={onOpenStory} className={SECONDARY_BTN} title="Open the Story generator to turn these requirements into a test-plan brief">Requirements brief<ArrowRight className="w-3.5 h-3.5" /></button>}
           {!none && <button type="button" onClick={onOpenCatalogue} className={PRIMARY_BTN}>Review catalogue<ArrowRight className="w-3.5 h-3.5" /></button>}
           <button type="button" onClick={onDismiss} className="p-1.5 rounded-md text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]"><X className="w-4 h-4" /></button>
         </div>
@@ -300,7 +315,35 @@ function MethodForm({ def, busy, onClose, onRun }: { def: ImportMethodDef; busy:
       {(input === 'graphql' || input === 'mcp') && <ServerForm kind={input} busy={busy} onRun={onRun} />}
       {input === 'webhook' && <WebhookForm busy={busy} onRun={onRun} />}
       {input === 'connector' && <ConnectorForm busy={busy} onRun={onRun} />}
+      {(input === 'jira' || input === 'ado') && <IssueForm kind={input} busy={busy} onRun={onRun} />}
     </div>
+  );
+}
+
+/** Jira / Azure DevOps — pull one issue/work item by key and read it for endpoints.
+    Reuses the tenant's existing connection; a missing connection surfaces as a
+    clear error from the backend on import. */
+function IssueForm({ kind, busy, onRun }: { kind: 'jira' | 'ado'; busy: boolean; onRun: RunFn }) {
+  const [ref, setRef] = useState('');
+  const isJira = kind === 'jira';
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const v = ref.trim();
+    if (!v) return;
+    const ok = await onRun(v, () => (isJira ? importApiJira(v) : importApiAzure(v)));
+    if (ok) setRef('');
+  };
+  return (
+    <form onSubmit={submit} className="space-y-3">
+      <div>
+        <label className={LABEL}>{isJira ? 'Jira issue key' : 'Azure DevOps work item id'}</label>
+        <input value={ref} onChange={(e) => setRef(e.target.value)} placeholder={isJira ? 'PROJ-123' : '12345'} className={INPUT} spellCheck={false} />
+        <p className="text-[10.5px] text-gray-400 mt-2 leading-relaxed">
+          Uses your {isJira ? 'Jira' : 'Azure DevOps'} connection from System Configuration → Integrations. The issue's description and acceptance criteria are read by AI for the API endpoints they describe.
+        </p>
+      </div>
+      <div className="flex justify-end"><SubmitBtn busy={busy} label="Import" disabled={!ref.trim()} /></div>
+    </form>
   );
 }
 

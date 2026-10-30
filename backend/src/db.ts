@@ -1690,6 +1690,117 @@ export async function initDb(): Promise<void> {
         created_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
       )`);
 
+    // ─── BRD / FRD requirements (Module 2/3) ───
+    // A Business Requirements Document and the structured business requirements
+    // extracted from it. Additive; nothing else reads these yet.
+    await createTable('brd_documents', `
+      CREATE TABLE ${SCHEMA}.brd_documents (
+        id                UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id         UNIQUEIDENTIFIER NOT NULL,
+        name              NVARCHAR(400) NOT NULL,
+        summary           NVARCHAR(MAX),
+        source            NVARCHAR(40) NOT NULL DEFAULT 'upload',
+        requirement_count INT NOT NULL DEFAULT 0,
+        created_by        NVARCHAR(200),
+        created_at        DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('business_requirements', `
+      CREATE TABLE ${SCHEMA}.business_requirements (
+        id                  UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id           UNIQUEIDENTIFIER NOT NULL,
+        document_id         UNIQUEIDENTIFIER NOT NULL REFERENCES ${SCHEMA}.brd_documents(id) ON DELETE CASCADE,
+        br_id               NVARCHAR(40) NOT NULL,
+        title               NVARCHAR(600) NOT NULL,
+        description         NVARCHAR(MAX),
+        objective           NVARCHAR(MAX),
+        rules               NVARCHAR(MAX),
+        workflows           NVARCHAR(MAX),
+        acceptance_criteria NVARCHAR(MAX),
+        validations         NVARCHAR(MAX),
+        dependencies        NVARCHAR(MAX),
+        positive_scenarios  NVARCHAR(MAX),
+        negative_scenarios  NVARCHAR(MAX),
+        sort_order          INT NOT NULL DEFAULT 0,
+        created_at          DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+
+    // Module 3 — FRD (Functional Requirements Document). Functional requirements
+    // (FR-###) carry concrete API shape: endpoints/method/params/headers/body/
+    // auth/responses/validations/errors, stored as JSON columns.
+    await createTable('frd_documents', `
+      CREATE TABLE ${SCHEMA}.frd_documents (
+        id                UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id         UNIQUEIDENTIFIER NOT NULL,
+        name              NVARCHAR(400) NOT NULL,
+        summary           NVARCHAR(MAX),
+        source            NVARCHAR(40) NOT NULL DEFAULT 'upload',
+        requirement_count INT NOT NULL DEFAULT 0,
+        created_by        NVARCHAR(200),
+        created_at        DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('functional_requirements', `
+      CREATE TABLE ${SCHEMA}.functional_requirements (
+        id                  UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id           UNIQUEIDENTIFIER NOT NULL,
+        document_id         UNIQUEIDENTIFIER NOT NULL REFERENCES ${SCHEMA}.frd_documents(id) ON DELETE CASCADE,
+        fr_id               NVARCHAR(40) NOT NULL,
+        title               NVARCHAR(600) NOT NULL,
+        description         NVARCHAR(MAX),
+        actors              NVARCHAR(MAX),
+        preconditions       NVARCHAR(MAX),
+        endpoints           NVARCHAR(MAX),
+        parameters          NVARCHAR(MAX),
+        headers             NVARCHAR(MAX),
+        request_body        NVARCHAR(MAX),
+        auth                NVARCHAR(400),
+        responses           NVARCHAR(MAX),
+        validations         NVARCHAR(MAX),
+        error_handling      NVARCHAR(MAX),
+        acceptance_criteria NVARCHAR(MAX),
+        dependencies        NVARCHAR(MAX),
+        positive_scenarios  NVARCHAR(MAX),
+        negative_scenarios  NVARCHAR(MAX),
+        sort_order          INT NOT NULL DEFAULT 0,
+        created_at          DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+
+    // Module 4 — Jira defect automation. A stable per-failure signature links a
+    // test failure to the tracker defect it raised, so recurring failures update
+    // the existing issue instead of filing duplicates. Provider-agnostic (jira
+    // today; azure later). jira_sync_history records each sync for an audit trail.
+    await createTable('jira_defect_links', `
+      CREATE TABLE ${SCHEMA}.jira_defect_links (
+        id                UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id         UNIQUEIDENTIFIER NOT NULL,
+        provider          NVARCHAR(20) NOT NULL DEFAULT 'jira',
+        signature         NVARCHAR(80) NOT NULL,
+        issue_key         NVARCHAR(60),
+        issue_url         NVARCHAR(600),
+        title             NVARCHAR(600),
+        method            NVARCHAR(10),
+        url               NVARCHAR(600),
+        run_id            NVARCHAR(80),
+        status            NVARCHAR(40) NOT NULL DEFAULT 'open',
+        occurrence_count  INT NOT NULL DEFAULT 1,
+        created_by        NVARCHAR(200),
+        created_at        DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        last_seen_at      DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+    await createTable('jira_sync_history', `
+      CREATE TABLE ${SCHEMA}.jira_sync_history (
+        id                UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id         UNIQUEIDENTIFIER NOT NULL,
+        provider          NVARCHAR(20) NOT NULL DEFAULT 'jira',
+        run_id            NVARCHAR(80),
+        run_title         NVARCHAR(600),
+        created_count     INT NOT NULL DEFAULT 0,
+        updated_count     INT NOT NULL DEFAULT 0,
+        skipped_count     INT NOT NULL DEFAULT 0,
+        dry_run           BIT NOT NULL DEFAULT 0,
+        created_by        NVARCHAR(200),
+        created_at        DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+
     // ─── 11. Indexes ───
     await createIndex('idx_api_data_profiles_tenant', 'api_data_profiles', '(tenant_id, updated_at DESC)');
     await createIndex('idx_api_step_groups_tenant', 'api_step_groups', '(tenant_id, updated_at DESC)');
@@ -1759,6 +1870,12 @@ export async function initDb(): Promise<void> {
     await createIndex('idx_api_schedules_due', 'api_schedules', '(enabled, next_run_at)');
     await createIndex('idx_api_webhooks_tenant', 'api_webhooks', '(tenant_id)');
     await createIndex('idx_api_run_reviews_run', 'api_run_reviews', '(tenant_id, run_id, created_at DESC)');
+    await createIndex('idx_brd_documents_tenant', 'brd_documents', '(tenant_id, created_at DESC)');
+    await createIndex('idx_business_requirements_doc', 'business_requirements', '(tenant_id, document_id, sort_order)');
+    await createIndex('idx_frd_documents_tenant', 'frd_documents', '(tenant_id, created_at DESC)');
+    await createIndex('idx_functional_requirements_doc', 'functional_requirements', '(tenant_id, document_id, sort_order)');
+    await createIndex('idx_jira_defect_links_sig', 'jira_defect_links', '(tenant_id, provider, signature)');
+    await createIndex('idx_jira_sync_history_tenant', 'jira_sync_history', '(tenant_id, created_at DESC)');
     await createIndex('idx_users_tenant', 'users', '(tenant_id)');
     await createIndex('idx_client_configs_tenant', 'client_configurations', '(tenant_id)');
     await createIndex('idx_conversations_username', 'conversations', '(username)');

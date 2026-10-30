@@ -41,7 +41,11 @@ import { cleanAuthValue, isPlaceholderSecret } from '../utils/api-auth.js';
 
 export type ImportMethod =
   | 'openapi' | 'postman' | 'bruno' | 'endpoint' | 'curl' | 'docs-url' | 'connector'
-  | 'sdk' | 'webhook' | 'graphql' | 'mcp' | 'middleware' | 'manual' | 'file';
+  | 'sdk' | 'webhook' | 'graphql' | 'mcp' | 'middleware' | 'manual' | 'file'
+  // Requirement-driven sources (Module 1): a Jira issue, an Azure DevOps work
+  // item, or an uploaded Business/Functional Requirements Document — each read
+  // for the API endpoints it describes.
+  | 'jira' | 'ado' | 'brd' | 'frd';
 
 export type ApiStyle = 'rest' | 'graphql' | 'soap' | 'jsonrpc' | 'webhook' | 'mcp';
 
@@ -245,6 +249,69 @@ export function sniffFormat(text: string, fileName = ''): SniffedFormat {
   }
   if (/^\s*(meta|get|post|put|patch|delete)\s*\{/m.test(t)) return 'bruno';
   return 'text';
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Format / method guard — "did you pick the right importer?"
+   ──────────────────────────────────────────────────────────────── */
+
+/** Human names for the confidently-detected formats, for mismatch messages. */
+const FORMAT_LABEL: Record<string, string> = {
+  openapi: 'an OpenAPI / Swagger document',
+  postman: 'a Postman collection',
+  bruno: 'a Bruno collection',
+  har: 'a HAR recording',
+  connector: 'a Custom Connector manifest',
+  curl: 'a cURL command',
+  wsdl: 'a WSDL / SOAP document',
+  'graphql-sdl': 'a GraphQL schema',
+};
+/** The import method a user should have picked for each detected format. */
+const FORMAT_METHOD_LABEL: Record<string, string> = {
+  openapi: 'OpenAPI / Swagger',
+  postman: 'Postman Collection',
+  bruno: 'Bruno Collection',
+  har: 'Postman Collection (HAR export)',
+  connector: 'Custom Connector',
+  curl: 'cURL',
+  wsdl: 'a WSDL-capable method',
+  'graphql-sdl': 'GraphQL',
+};
+/** Methods whose input is a specific machine-readable format we can verify by sniff. */
+const STRICT_FORMAT_HINTS = new Set(['openapi', 'swagger', 'postman', 'bruno', 'connector', 'curl']);
+/** Formats sniff names with confidence — so a conflict is real, not a guess. */
+const NAMED_FORMATS = new Set(['openapi', 'postman', 'bruno', 'har', 'connector', 'curl', 'wsdl', 'graphql-sdl']);
+
+/** The sniff verdicts that are acceptable for a chosen strict-format method. */
+function expectedSniffFor(hint: string): Set<string> {
+  switch (hint) {
+    case 'openapi':
+    case 'swagger': return new Set(['openapi']);
+    case 'postman': return new Set(['postman', 'har']); // the Postman card also takes HAR
+    case 'bruno': return new Set(['bruno']);
+    case 'connector': return new Set(['connector', 'json', 'yaml']);
+    case 'curl': return new Set(['curl']);
+    default: return new Set();
+  }
+}
+
+/**
+ * When the user picked a specific format method, make sure the content is really
+ * that format. Throws a clear, actionable error ONLY when the content is
+ * confidently a *different* known format — an ambiguous json/yaml/text is left to
+ * the parser (it will fail cleanly on its own). This is the "pick the right
+ * collection, otherwise throw" guard for the Import-by-method cards.
+ */
+export function assertFormatMatchesMethod(hint: string, sniffed: SniffedFormat): void {
+  const h = (hint || '').toLowerCase();
+  if (!STRICT_FORMAT_HINTS.has(h)) return;
+  if (expectedSniffFor(h).has(sniffed)) return;
+  if (!NAMED_FORMATS.has(sniffed)) return; // ambiguous — let the parser try/fail
+  const chosen = FORMAT_LABEL[h === 'swagger' ? 'openapi' : h] || 'the selected format';
+  throw new Error(
+    `This looks like ${FORMAT_LABEL[sniffed]}, not ${chosen}. ` +
+    `Use the “${FORMAT_METHOD_LABEL[sniffed] || 'matching'}” import method instead, or provide ${chosen}.`,
+  );
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -1460,6 +1527,9 @@ export async function importFromText(text: string, opts: TextImportOptions = {})
   const name = opts.fileName || 'pasted text';
   const hint = (opts.formatHint || 'auto').toLowerCase();
   const sniffed = sniffFormat(text, name);
+  // Guard: a specific method was chosen — the content must match it (or be
+  // ambiguous). A confidently-different format is rejected with a clear error.
+  assertFormatMatchesMethod(hint, sniffed);
   const structured = ['openapi', 'postman', 'har', 'connector', 'json', 'yaml'].includes(sniffed) ? parseStructured(text) : null;
 
   let result: ImportResult | null = null;

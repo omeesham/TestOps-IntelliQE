@@ -36,6 +36,10 @@ import multer from 'multer';
 import { parseDocument } from '../services/document-parser.service.js';
 import { getTenantLlm } from '../services/llm.service.js';
 import { getConfigsForTenant, upsertConfig } from '../services/configurations.service.js';
+import { getCredsForTenant as getJiraCreds, getStory as getJiraStory, getProjects as getJiraProjects, getIssues as getJiraIssues } from '../services/jira.service.js';
+import { syncDefects as syncJiraDefects, listSyncHistory as listJiraSyncHistory, listDefectLinks as listJiraDefectLinks } from '../services/api-jira-sync.service.js';
+import { getCredsForTenant as getAdoCreds, getStory as getAdoStory, getProjects as getAdoProjects, getWorkItems as getAdoWorkItems } from '../services/azure-devops.service.js';
+import { syncDefects as syncAzureDefects, listSyncHistory as listAzureSyncHistory, listDefectLinks as listAzureDefectLinks } from '../services/api-azure-sync.service.js';
 import {
   importFromText, importFromUrl, parseCurlCommands, parseHar, introspectGraphql, discoverMcpTools,
   parseConnectorManifest, endpointsFromWebhook, probeEndpoint, parseStructured, dedupeEndpoints,
@@ -93,6 +97,8 @@ import { orchestrate, getOrchestratorConfig, saveOrchestratorConfig, rotateOrche
 // ─── Atto coworker lifecycle tools (all additive, opt-in; pipeline untouched) ───
 import { generateFromStory } from '../services/api-story-gen.service.js';
 import { resolveStorySources, resolveOrigin } from '../services/api-story-source.service.js';
+import { analyzeBrd, saveBrdAnalysis, listBrdDocuments, getBrdDocument, deleteBrdDocument } from '../services/api-brd.service.js';
+import { analyzeFrd, saveFrdAnalysis, listFrdDocuments, getFrdDocument, deleteFrdDocument } from '../services/api-frd.service.js';
 import { listSignoffs, createSignoff, deleteSignoff, latestSignoffForEnvironment } from '../services/api-signoff.service.js';
 import { analyzeMultimodal } from '../services/api-multimodal.service.js';
 import { optimizeSuite } from '../services/api-suite-optimizer.service.js';
@@ -223,7 +229,7 @@ function endpointsFromBody(raw: unknown, max = 500): ImportedEndpoint[] {
   return out;
 }
 
-async function respondImport(req: Request, res: Response, method: ImportMethod, name: string, result: ImportResult): Promise<void> {
+async function respondImport(req: Request, res: Response, method: ImportMethod, name: string, result: ImportResult, extra?: Record<string, unknown>): Promise<void> {
   const endpoints = dedupeEndpoints(result.endpoints);
   await recordImport(req.user!.tenantId, req.user!.username, {
     method, name, format: result.format, parser: result.parser, endpointCount: endpoints.length, warnings: result.warnings,
@@ -238,7 +244,20 @@ async function respondImport(req: Request, res: Response, method: ImportMethod, 
     // Pattern intelligence comes back with every import so the UI can show
     // what was understood immediately, without a second round-trip.
     profile: endpoints.length ? analyzeApiSurface(endpoints) : null,
+    // Requirement-driven imports (Jira/Azure/BRD/FRD) attach their source
+    // origin so the UI can offer a one-click "generate requirements brief".
+    ...(extra || {}),
   });
+}
+
+/** A clean, non-leaky message for a failed Jira/Azure issue fetch — maps the
+    external HTTP status to something actionable without exposing raw internals. */
+function issueFetchError(provider: string, ref: string, err: unknown): string {
+  const status = (err as any)?.response?.status ?? (String((err as any)?.message || '').match(/status code (\d{3})/)?.[1]);
+  const code = Number(status);
+  if (code === 404) return `${provider} item "${ref}" was not found. Check the id/key and that your connection can see its project.`;
+  if (code === 401 || code === 403) return `${provider} rejected the request (authentication/permission). Reconnect ${provider} under System Configuration → Integrations.`;
+  return `Could not fetch "${ref}" from ${provider}. Verify the connection and try again.`;
 }
 
 function bodyHeaders(raw: unknown): Record<string, string> {
@@ -257,6 +276,9 @@ router.post('/import/files', upload.array('files', 20), async (req: Request, res
   const files = (req.files as Express.Multer.File[] | undefined) || [];
   if (!files.length) { res.status(400).json({ error: 'No files uploaded. Send multipart/form-data with one or more "files" fields.' }); return; }
   const formatHint = typeof req.body?.format === 'string' ? req.body.format : 'auto';
+  // A BRD/FRD upload keeps its provenance so traceability can tell a requirements
+  // document apart from a plain file import.
+  const docMethod: ImportMethod = (formatHint === 'brd' || formatHint === 'frd') ? formatHint : 'file';
   const llm = (await getTenantLlm(req.user!.tenantId)) || undefined;
 
   const perFile: { fileName: string; count: number; parser?: string; format?: string; error?: string; warnings: string[] }[] = [];
@@ -297,13 +319,13 @@ router.post('/import/files', upload.array('files', 20), async (req: Request, res
     try {
       const parsed = await parseDocument(f.buffer, f.mimetype, f.originalname);
       if (!parsed.text?.trim()) throw new Error('No extractable text (image-only or password-protected?)');
-      const result = await importFromText(parsed.text, { fileName: f.originalname, formatHint, llm, sourceMethod: 'file' });
+      const result = await importFromText(parsed.text, { fileName: f.originalname, formatHint, llm, sourceMethod: docMethod });
       all.push(...result.endpoints);
       perFile.push({ fileName: f.originalname, count: result.endpoints.length, parser: result.parser, format: result.format, warnings: [...result.warnings, ...(parsed.warning ? [parsed.warning] : [])] });
       warnings.push(...result.warnings.map((w) => `${f.originalname}: ${w}`));
       if (parsed.warning) warnings.push(`${f.originalname}: ${parsed.warning}`);
       if (result.notice) notices.push(result.notice);
-      await recordImport(req.user!.tenantId, req.user!.username, { method: 'file', name: f.originalname, format: result.format, parser: result.parser, endpointCount: result.endpoints.length, warnings: result.warnings });
+      await recordImport(req.user!.tenantId, req.user!.username, { method: docMethod, name: f.originalname, format: result.format, parser: result.parser, endpointCount: result.endpoints.length, warnings: result.warnings });
     } catch (err) {
       perFile.push({ fileName: f.originalname, count: 0, error: (err as Error).message, warnings: [] });
     }
@@ -338,6 +360,56 @@ router.post('/import/url', async (req: Request, res: Response) => {
     const llm = (await getTenantLlm(req.user!.tenantId)) || undefined;
     const result = await importFromUrl(url, { formatHint: String(req.body?.format || 'auto'), llm, headers: bodyHeaders(req.body?.headers), baseUrl: req.body?.baseUrl, sourceMethod: 'docs-url' });
     await respondImport(req, res, result.parser === 'llm' ? 'docs-url' : 'openapi', url, result);
+  } catch (err) { fail(res, err); }
+});
+
+/**
+ * Import endpoints from a Jira issue (Module 1 — requirement-driven source).
+ * Reuses the tenant's existing Jira connection (System Configuration); the
+ * issue's title + description + acceptance criteria are AI-read into endpoints.
+ */
+router.post('/import/jira', async (req: Request, res: Response) => {
+  try {
+    const key = String(req.body?.key || '').trim();
+    if (!key) { res.status(400).json({ error: 'A Jira issue key is required (e.g. PROJ-123).' }); return; }
+    const creds = await getJiraCreds(req.user!.tenantId);
+    if (!creds) { res.status(409).json({ error: 'Jira is not connected. Connect it under System Configuration → Integrations first.' }); return; }
+    let story;
+    try {
+      story = await getJiraStory(creds, key);
+    } catch (e) {
+      res.status(502).json({ error: issueFetchError('Jira', key, e) }); return;
+    }
+    const text = [story.title, story.description, story.acceptanceCriteria].filter(Boolean).join('\n\n');
+    if (text.trim().length < 10) { res.status(400).json({ error: `Jira issue ${key} has no readable description or acceptance criteria to extract endpoints from.` }); return; }
+    const llm = (await getTenantLlm(req.user!.tenantId)) || undefined;
+    const result = await importFromText(text, { fileName: `Jira ${story.key}: ${story.title}`.slice(0, 200), formatHint: 'frd', llm, sourceMethod: 'jira' });
+    await respondImport(req, res, 'jira', story.key, result, { origin: { kind: 'jira', ref: story.key, label: story.title }, sourceText: text.slice(0, 20000) });
+  } catch (err) { fail(res, err); }
+});
+
+/**
+ * Import endpoints from an Azure DevOps work item (Module 1). Reuses the
+ * tenant's existing Azure connection; description + acceptance criteria are
+ * AI-read into endpoints.
+ */
+router.post('/import/azure', async (req: Request, res: Response) => {
+  try {
+    const id = String(req.body?.id || '').trim();
+    if (!id) { res.status(400).json({ error: 'An Azure DevOps work item id is required.' }); return; }
+    const creds = await getAdoCreds(req.user!.tenantId);
+    if (!creds) { res.status(409).json({ error: 'Azure DevOps is not connected. Connect it under System Configuration → Integrations first.' }); return; }
+    let story;
+    try {
+      story = await getAdoStory(creds, id);
+    } catch (e) {
+      res.status(502).json({ error: issueFetchError('Azure DevOps', id, e) }); return;
+    }
+    const text = [story.title, story.description, story.acceptanceCriteria].filter(Boolean).join('\n\n');
+    if (text.trim().length < 10) { res.status(400).json({ error: `Azure work item ${id} has no readable description or acceptance criteria to extract endpoints from.` }); return; }
+    const llm = (await getTenantLlm(req.user!.tenantId)) || undefined;
+    const result = await importFromText(text, { fileName: `Azure ${story.key}: ${story.title}`.slice(0, 200), formatHint: 'frd', llm, sourceMethod: 'ado' });
+    await respondImport(req, res, 'ado', story.key, result, { origin: { kind: 'ado', ref: story.key, label: story.title }, sourceText: text.slice(0, 20000) });
   } catch (err) { fail(res, err); }
 });
 
@@ -2856,6 +2928,264 @@ router.post('/loadtest/cloud-profile', async (req: Request, res: Response) => {
     const result = await runCloudLoadProfile(req.user!.tenantId, { endpoint: { method: endpoint.method, url: endpoint.url, headers: endpoint.headers, auth: endpoint.auth as any, body: endpoint.body }, stages: req.body?.stages, allowWrites: !!req.body?.allowWrites, sla: req.body?.sla });
     void logAudit(req, 'execute', 'api_cloud_load_profile', '', { stages: result.stages.length, peakRps: result.overall.peakThroughputRps, agents: result.agentsUsed });
     res.json(result);
+  } catch (err) { fail(res, err); }
+});
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * BRD (Business Requirements Document) module — Module 2.
+ * Extract STRUCTURED business requirements from an uploaded/pasted BRD and
+ * persist them per tenant for traceability. Distinct from the BRD *import* card
+ * (which extracts API endpoints); this surfaces the requirements themselves.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/** Analyse a BRD (file upload or pasted text) → structured requirements, saved. */
+router.post('/brd/analyze', upload.single('file'), async (req: Request, res: Response) => {
+  try {
+    let text = '';
+    let name = String(req.body?.name || '').trim();
+    if (req.file) {
+      const parsed = await parseDocument(req.file.buffer, req.file.mimetype, req.file.originalname)
+        .catch(() => ({ text: req.file!.buffer.toString('utf8') } as { text: string; warning?: string }));
+      text = parsed.text || '';
+      if (!name) name = req.file.originalname;
+    } else if (typeof req.body?.text === 'string') {
+      text = req.body.text;
+      if (!name) name = 'Pasted BRD';
+    }
+    if (!text.trim()) { res.status(400).json({ error: 'Upload a BRD file or paste its text first.' }); return; }
+
+    const llm = (await getTenantLlm(req.user!.tenantId)) || undefined;
+    const analysis = await analyzeBrd(text, name, llm);
+    const document = await saveBrdAnalysis(req.user!.tenantId, req.user!.username, name, analysis, req.file ? 'upload' : 'paste');
+    void logAudit(req, 'create', 'api_brd', document.id, { name: document.name, requirements: analysis.requirements.length });
+    res.json({ document, requirements: analysis.requirements });
+  } catch (err) { fail(res, err); }
+});
+
+/** List this tenant's analysed BRDs. */
+router.get('/brd', async (req: Request, res: Response) => {
+  try {
+    res.json({ documents: await listBrdDocuments(req.user!.tenantId) });
+  } catch (err) { fail(res, err); }
+});
+
+/** One BRD with its structured requirements. */
+router.get('/brd/:id', async (req: Request, res: Response) => {
+  try {
+    const doc = await getBrdDocument(req.user!.tenantId, String(req.params.id));
+    if (!doc) { res.status(404).json({ error: 'BRD not found.' }); return; }
+    res.json(doc);
+  } catch (err) { fail(res, err); }
+});
+
+/** Delete a BRD and its requirements. */
+router.delete('/brd/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteBrdDocument(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'BRD not found.' }); return; }
+    void logAudit(req, 'delete', 'api_brd', String(req.params.id), {});
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * FRD (Functional Requirements Document) module — Module 3.
+ * Extract STRUCTURED functional requirements (FR-### with endpoints/params/
+ * headers/body/auth/responses/validations/errors) from an uploaded/pasted FRD
+ * and persist them per tenant for traceability and functional-scenario work.
+ * Distinct from the FRD *import* card, which extracts a flat endpoint catalogue.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/** Analyse an FRD (file upload or pasted text) → structured functional requirements, saved. */
+router.post('/frd/analyze', upload.single('file'), async (req: Request, res: Response) => {
+  try {
+    let text = '';
+    let name = String(req.body?.name || '').trim();
+    if (req.file) {
+      const parsed = await parseDocument(req.file.buffer, req.file.mimetype, req.file.originalname)
+        .catch(() => ({ text: req.file!.buffer.toString('utf8') } as { text: string; warning?: string }));
+      text = parsed.text || '';
+      if (!name) name = req.file.originalname;
+    } else if (typeof req.body?.text === 'string') {
+      text = req.body.text;
+      if (!name) name = 'Pasted FRD';
+    }
+    if (!text.trim()) { res.status(400).json({ error: 'Upload an FRD file or paste its text first.' }); return; }
+
+    const llm = (await getTenantLlm(req.user!.tenantId)) || undefined;
+    const analysis = await analyzeFrd(text, name, llm);
+    const document = await saveFrdAnalysis(req.user!.tenantId, req.user!.username, name, analysis, req.file ? 'upload' : 'paste');
+    void logAudit(req, 'create', 'api_frd', document.id, { name: document.name, requirements: analysis.requirements.length });
+    res.json({ document, requirements: analysis.requirements });
+  } catch (err) { fail(res, err); }
+});
+
+/** List this tenant's analysed FRDs. */
+router.get('/frd', async (req: Request, res: Response) => {
+  try {
+    res.json({ documents: await listFrdDocuments(req.user!.tenantId) });
+  } catch (err) { fail(res, err); }
+});
+
+/** One FRD with its structured functional requirements. */
+router.get('/frd/:id', async (req: Request, res: Response) => {
+  try {
+    const doc = await getFrdDocument(req.user!.tenantId, String(req.params.id));
+    if (!doc) { res.status(404).json({ error: 'FRD not found.' }); return; }
+    res.json(doc);
+  } catch (err) { fail(res, err); }
+});
+
+/** Delete an FRD and its requirements. */
+router.delete('/frd/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await deleteFrdDocument(req.user!.tenantId, String(req.params.id));
+    if (!ok) { res.status(404).json({ error: 'FRD not found.' }); return; }
+    void logAudit(req, 'delete', 'api_frd', String(req.params.id), {});
+    res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Jira integration — Module 4 (expanded fetch + defect automation).
+ * Read-only fetch of projects/issues (epics/stories/tasks/subtasks/bugs), and
+ * failure→defect sync with dedupe (signature), update-on-recurrence, defect
+ * links and a sync-history audit trail. A dry run previews with no Jira writes.
+ * Reuses the tenant's existing Jira connection; errors are cleaned (no leaks).
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/** List the connected account's Jira projects. */
+router.get('/jira/projects', async (req: Request, res: Response) => {
+  try {
+    const creds = await getJiraCreds(req.user!.tenantId);
+    if (!creds) { res.status(409).json({ error: 'Jira is not connected. Connect it under System Configuration → Integrations first.' }); return; }
+    try {
+      res.json({ projects: await getJiraProjects(creds) });
+    } catch (e) { res.status(502).json({ error: issueFetchError('Jira', 'projects', e) }); }
+  } catch (err) { fail(res, err); }
+});
+
+/** Fetch Jira issues of any type (epic/story/task/subtask/bug), optionally filtered. */
+router.get('/jira/issues', async (req: Request, res: Response) => {
+  try {
+    const creds = await getJiraCreds(req.user!.tenantId);
+    if (!creds) { res.status(409).json({ error: 'Jira is not connected. Connect it under System Configuration → Integrations first.' }); return; }
+    const types = typeof req.query.types === 'string' && req.query.types.trim()
+      ? req.query.types.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 10) : undefined;
+    const jql = typeof req.query.jql === 'string' ? req.query.jql.slice(0, 500) : undefined;
+    const projectKey = typeof req.query.projectKey === 'string' ? req.query.projectKey.trim() : undefined;
+    const maxResults = Math.min(100, Math.max(1, parseInt(String(req.query.maxResults ?? '50'), 10) || 50));
+    try {
+      res.json({ issues: await getJiraIssues(creds, { types, jql, projectKey, maxResults }) });
+    } catch (e) { res.status(502).json({ error: issueFetchError('Jira', 'issues', e) }); }
+  } catch (err) { fail(res, err); }
+});
+
+/** Sync a run's failures to Jira defects (create / update-on-recurrence / dedupe). */
+router.post('/jira/sync-defects', async (req: Request, res: Response) => {
+  try {
+    const rawFailures = Array.isArray(req.body?.failures) ? req.body.failures : [];
+    const failures = rawFailures.slice(0, 200).map((f: any) => ({
+      title: String(f?.title || '').slice(0, 400),
+      error: typeof f?.error === 'string' ? f.error.slice(0, 4000) : undefined,
+      method: typeof f?.method === 'string' ? f.method.slice(0, 10) : undefined,
+      url: typeof f?.url === 'string' ? f.url.slice(0, 600) : undefined,
+      testId: typeof f?.testId === 'string' ? f.testId.slice(0, 80) : undefined,
+    })).filter((f: any) => f.title);
+    if (!failures.length) { res.status(400).json({ error: 'Send at least one failure with a title.' }); return; }
+    const result = await syncJiraDefects(req.user!.tenantId, req.user!.username, {
+      failures,
+      runId: typeof req.body?.runId === 'string' ? req.body.runId.slice(0, 80) : undefined,
+      runTitle: typeof req.body?.runTitle === 'string' ? req.body.runTitle.slice(0, 400) : undefined,
+      dryRun: req.body?.dryRun === true,
+    });
+    void logAudit(req, 'execute', 'api_jira_defect_sync', result.summary.created ? 'created' : 'synced', { ...result.summary, dryRun: result.dryRun });
+    res.json(result);
+  } catch (err) { fail(res, err); }
+});
+
+/** Defect links (signature → Jira issue), optionally scoped to a run. */
+router.get('/jira/defect-links', async (req: Request, res: Response) => {
+  try {
+    const runId = typeof req.query.runId === 'string' ? req.query.runId.slice(0, 80) : undefined;
+    res.json({ links: await listJiraDefectLinks(req.user!.tenantId, runId) });
+  } catch (err) { fail(res, err); }
+});
+
+/** Defect-sync history (audit trail). */
+router.get('/jira/sync-history', async (req: Request, res: Response) => {
+  try {
+    res.json({ history: await listJiraSyncHistory(req.user!.tenantId) });
+  } catch (err) { fail(res, err); }
+});
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Azure DevOps integration — Module 5 (expanded fetch + defect automation).
+ * Mirrors the Jira routes over the shared defect-sync core (provider 'azure').
+ * Read-only fetch of projects/work-items; failure→defect sync with dedupe,
+ * update-on-recurrence, defect links and a sync-history audit trail. Dry run
+ * previews with no Azure writes. Reuses the tenant's existing Azure connection.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/** List the connected organisation's Azure DevOps projects. */
+router.get('/azure/projects', async (req: Request, res: Response) => {
+  try {
+    const creds = await getAdoCreds(req.user!.tenantId);
+    if (!creds) { res.status(409).json({ error: 'Azure DevOps is not connected. Connect it under System Configuration → Integrations first.' }); return; }
+    try {
+      res.json({ projects: await getAdoProjects(creds) });
+    } catch (e) { res.status(502).json({ error: issueFetchError('Azure DevOps', 'projects', e) }); }
+  } catch (err) { fail(res, err); }
+});
+
+/** Fetch Azure work items of any type (epic/feature/user story/task/bug), optionally filtered. */
+router.get('/azure/work-items', async (req: Request, res: Response) => {
+  try {
+    const creds = await getAdoCreds(req.user!.tenantId);
+    if (!creds) { res.status(409).json({ error: 'Azure DevOps is not connected. Connect it under System Configuration → Integrations first.' }); return; }
+    const types = typeof req.query.types === 'string' && req.query.types.trim()
+      ? req.query.types.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 10) : undefined;
+    try {
+      res.json({ issues: await getAdoWorkItems(creds, types ? { types } : undefined) });
+    } catch (e) { res.status(502).json({ error: issueFetchError('Azure DevOps', 'work items', e) }); }
+  } catch (err) { fail(res, err); }
+});
+
+/** Sync a run's failures to Azure DevOps defects (create / update-on-recurrence / dedupe). */
+router.post('/azure/sync-defects', async (req: Request, res: Response) => {
+  try {
+    const rawFailures = Array.isArray(req.body?.failures) ? req.body.failures : [];
+    const failures = rawFailures.slice(0, 200).map((f: any) => ({
+      title: String(f?.title || '').slice(0, 400),
+      error: typeof f?.error === 'string' ? f.error.slice(0, 4000) : undefined,
+      method: typeof f?.method === 'string' ? f.method.slice(0, 10) : undefined,
+      url: typeof f?.url === 'string' ? f.url.slice(0, 600) : undefined,
+      testId: typeof f?.testId === 'string' ? f.testId.slice(0, 80) : undefined,
+    })).filter((f: any) => f.title);
+    if (!failures.length) { res.status(400).json({ error: 'Send at least one failure with a title.' }); return; }
+    const result = await syncAzureDefects(req.user!.tenantId, req.user!.username, {
+      failures,
+      runId: typeof req.body?.runId === 'string' ? req.body.runId.slice(0, 80) : undefined,
+      runTitle: typeof req.body?.runTitle === 'string' ? req.body.runTitle.slice(0, 400) : undefined,
+      dryRun: req.body?.dryRun === true,
+    });
+    void logAudit(req, 'execute', 'api_azure_defect_sync', result.summary.created ? 'created' : 'synced', { ...result.summary, dryRun: result.dryRun });
+    res.json(result);
+  } catch (err) { fail(res, err); }
+});
+
+/** Azure defect links (signature → work item), optionally scoped to a run. */
+router.get('/azure/defect-links', async (req: Request, res: Response) => {
+  try {
+    const runId = typeof req.query.runId === 'string' ? req.query.runId.slice(0, 80) : undefined;
+    res.json({ links: await listAzureDefectLinks(req.user!.tenantId, runId) });
+  } catch (err) { fail(res, err); }
+});
+
+/** Azure defect-sync history (audit trail). */
+router.get('/azure/sync-history', async (req: Request, res: Response) => {
+  try {
+    res.json({ history: await listAzureSyncHistory(req.user!.tenantId) });
   } catch (err) { fail(res, err); }
 });
 
