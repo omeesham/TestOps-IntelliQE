@@ -7,12 +7,14 @@
  * Every path ends in the same place — endpoints in the catalogue, profiled.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
-import { UploadCloud, CheckCircle2, AlertTriangle, ArrowRight, FileText, X, Plus, Trash2, Layers } from 'lucide-react';
+import { UploadCloud, CheckCircle2, AlertTriangle, ArrowRight, FileText, X, Plus, Trash2, Layers, Plug, KeyRound, ExternalLink } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import {
   importApiFiles, importApiText, importApiUrl, importApiEndpoint, importApiCurl, importApiGraphql, importApiMcp,
   importApiConnector, importApiWebhook, importApiSource, importApiJira, importApiAzure, type ApiImportResponse,
+  connectJira, getJiraStatus, getJiraStories, connectAzureDevops, getAzureDevopsStatus, getAzureDevopsStories,
 } from '@/services/api';
+import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { IMPORT_METHODS, BULK_ACCEPT, type ImportMethodDef, type ImportInput } from '../importMethods';
 import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, LABEL, CARD, CARD_HOVER, CHIP_3D, TILE, TILE_ACTIVE, THEAD } from '../format';
@@ -324,8 +326,48 @@ function MethodForm({ def, busy, onClose, onRun }: { def: ImportMethodDef; busy:
     Reuses the tenant's existing connection; a missing connection surfaces as a
     clear error from the backend on import. */
 function IssueForm({ kind, busy, onRun }: { kind: 'jira' | 'ado'; busy: boolean; onRun: RunFn }) {
-  const [ref, setRef] = useState('');
   const isJira = kind === 'jira';
+  const { user } = useAuth();
+  const username = user?.username || '';
+
+  const [ref, setRef] = useState('');
+  // Connection state, so this screen can connect inline instead of sending the
+  // user off to System Configuration. 'unknown' until the first status check.
+  const [conn, setConn] = useState<{ connected: boolean; label?: string } | 'unknown'>('unknown');
+  const [showConnect, setShowConnect] = useState(false);
+  // The issue/work-item list, so the user can pick instead of typing a key blind.
+  const [issues, setIssues] = useState<{ key: string; summary: string; state?: string }[] | null>(null);
+  const [listLoading, setListLoading] = useState(false);
+  const [listError, setListError] = useState('');
+
+  const loadIssues = useCallback(async () => {
+    setListLoading(true); setListError('');
+    try {
+      const rows = isJira ? await getJiraStories(username) : await getAzureDevopsStories();
+      setIssues(Array.isArray(rows) ? rows : []);
+    } catch (err: any) {
+      setIssues([]);
+      setListError(err?.response?.data?.error || err?.message || 'Could not load the issue list — you can still type a key below.');
+    } finally { setListLoading(false); }
+  }, [isJira, username]);
+
+  const checkStatus = useCallback(async () => {
+    try {
+      let connected = false; let label: string | undefined;
+      if (isJira) {
+        const s = await getJiraStatus(username);
+        connected = !!s?.connected; label = s?.displayName || s?.jiraUrl;
+      } else {
+        const s = await getAzureDevopsStatus();
+        connected = !!s?.connected; label = s?.project || s?.orgUrl;
+      }
+      setConn({ connected, label });
+      if (connected) void loadIssues(); else setIssues(null);
+    } catch { setConn({ connected: false }); setIssues(null); }
+  }, [isJira, username, loadIssues]);
+
+  useEffect(() => { void checkStatus(); }, [checkStatus]);
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     const v = ref.trim();
@@ -333,16 +375,145 @@ function IssueForm({ kind, busy, onRun }: { kind: 'jira' | 'ado'; busy: boolean;
     const ok = await onRun(v, () => (isJira ? importApiJira(v) : importApiAzure(v)));
     if (ok) setRef('');
   };
+
+  const needsConnect = conn !== 'unknown' && !conn.connected;
+  const showConnectPanel = needsConnect || showConnect;
+
   return (
-    <form onSubmit={submit} className="space-y-3">
+    <div className="space-y-3">
+      {/* Connection banner — connected state, or the reason to connect here */}
+      {conn === 'unknown' ? (
+        <div className="flex items-center gap-2 text-[11px] text-gray-400 px-3 py-2"><Spinner className="w-3.5 h-3.5 animate-spin" /> Checking {isJira ? 'Jira' : 'Azure DevOps'} connection…</div>
+      ) : conn.connected ? (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-[11.5px] text-emerald-800">
+          <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0 text-emerald-600" />
+          <span className="truncate">Connected{conn.label ? ` · ${conn.label}` : ''}</span>
+          <button type="button" onClick={() => setShowConnect((v) => !v)} className="ml-auto text-[11px] font-medium text-emerald-700 hover:text-emerald-900 underline">{showConnect ? 'Hide' : 'Change'}</button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-[11.5px] text-amber-800">
+          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 text-amber-600" />
+          <span>Not connected — enter your {isJira ? 'Jira site, email and API token' : 'Azure DevOps org, project and PAT'} below to connect.</span>
+        </div>
+      )}
+
+      {/* Inline connect (with API token) — reuses the existing /jira/connect and
+          /azure-devops/connect endpoints; the token is encrypted in transit and
+          stored encrypted at rest, tenant-scoped. */}
+      {showConnectPanel && (
+        <ConnectPanel kind={kind} username={username} onConnected={() => { setShowConnect(false); void checkStatus(); }} />
+      )}
+
+      {/* Issue import — only once connected */}
+      {conn !== 'unknown' && conn.connected && (
+        <form onSubmit={submit} className="space-y-3">
+          {/* Picker — list the connected tracker's issues so a key can be chosen,
+              not typed blind. Selecting one fills the key field below. */}
+          <div>
+            <label className={`${LABEL} flex items-center gap-1.5`}>
+              {isJira ? 'Choose a Jira issue' : 'Choose an Azure DevOps work item'}
+              {listLoading && <Spinner className="w-3 h-3 animate-spin text-gray-400" />}
+              <button type="button" onClick={() => void loadIssues()} disabled={listLoading} className="ml-auto text-[10.5px] font-medium text-[#7C3AED] hover:text-[#5B21B6] disabled:opacity-50">Refresh</button>
+            </label>
+            <select
+              value={issues?.some((i) => i.key === ref) ? ref : ''}
+              onChange={(e) => setRef(e.target.value)}
+              disabled={listLoading || !issues}
+              className={INPUT}
+            >
+              <option value="">{listLoading ? 'Loading…' : issues && issues.length === 0 ? '— no items found —' : '— choose an item —'}</option>
+              {(issues || []).map((i) => (
+                <option key={i.key} value={i.key}>{i.key} — {i.summary}{i.state ? ` (${i.state})` : ''}</option>
+              ))}
+            </select>
+            {listError && <p className="text-[10.5px] text-amber-600 mt-1 leading-snug">{listError}</p>}
+          </div>
+
+          <div>
+            <label className={LABEL}>or type the {isJira ? 'issue key' : 'work item id'}</label>
+            <input value={ref} onChange={(e) => setRef(e.target.value)} placeholder={isJira ? 'PROJ-123' : '12345'} className={INPUT} spellCheck={false} />
+            <p className="text-[10.5px] text-gray-400 mt-2 leading-relaxed">
+              The issue's description and acceptance criteria are read by AI for the API endpoints they describe. The issue itself is not stored here.
+            </p>
+          </div>
+          <div className="flex justify-end"><SubmitBtn busy={busy} label="Import" disabled={!ref.trim()} /></div>
+        </form>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Inline connect form for a tracker, keyed by provider. Jira takes site URL +
+ * email + API token; Azure DevOps takes org URL + project + PAT. On success it
+ * calls back so the parent re-checks status and reveals the issue-key field.
+ */
+function ConnectPanel({ kind, username, onConnected }: { kind: 'jira' | 'ado'; username: string; onConnected: () => void }) {
+  const isJira = kind === 'jira';
+  const toast = useToast();
+  const [url, setUrl] = useState('');
+  const [email, setEmail] = useState('');   // Jira only
+  const [project, setProject] = useState(''); // Azure only
+  const [token, setToken] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const ready = isJira
+    ? url.trim() && email.trim() && token.trim()
+    : url.trim() && project.trim() && token.trim();
+
+  const connect = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ready || saving) return;
+    setSaving(true); setError('');
+    try {
+      if (isJira) await connectJira(username, url.trim(), email.trim(), token.trim());
+      else await connectAzureDevops(url.trim(), project.trim(), token.trim());
+      toast.success(`${isJira ? 'Jira' : 'Azure DevOps'} connected`);
+      setToken('');
+      onConnected();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || err?.message || 'Could not connect. Check the details and try again.');
+    } finally { setSaving(false); }
+  };
+
+  const tokenHelp = isJira
+    ? { label: 'API token', href: 'https://id.atlassian.com/manage-profile/security/api-tokens', hint: 'Create one at id.atlassian.com → Security → API tokens' }
+    : { label: 'Personal access token (PAT)', href: 'https://dev.azure.com', hint: 'Create one in Azure DevOps → User settings → Personal access tokens (Work Items: Read & Write)' };
+
+  return (
+    <form onSubmit={connect} className="space-y-2.5 rounded-lg border border-[#DDD6FE] bg-[#FAFAFE] p-3">
+      <div className="flex items-center gap-1.5 text-[11.5px] font-semibold text-[#5B21B6]"><Plug className="w-3.5 h-3.5" /> Connect {isJira ? 'Jira' : 'Azure DevOps'} with an API token</div>
       <div>
-        <label className={LABEL}>{isJira ? 'Jira issue key' : 'Azure DevOps work item id'}</label>
-        <input value={ref} onChange={(e) => setRef(e.target.value)} placeholder={isJira ? 'PROJ-123' : '12345'} className={INPUT} spellCheck={false} />
-        <p className="text-[10.5px] text-gray-400 mt-2 leading-relaxed">
-          Uses your {isJira ? 'Jira' : 'Azure DevOps'} connection from System Configuration → Integrations. The issue's description and acceptance criteria are read by AI for the API endpoints they describe.
-        </p>
+        <label className={LABEL}>{isJira ? 'Jira site URL' : 'Organization URL'}</label>
+        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={isJira ? 'https://your-site.atlassian.net' : 'https://dev.azure.com/your-org'} className={INPUT} spellCheck={false} autoComplete="off" />
       </div>
-      <div className="flex justify-end"><SubmitBtn busy={busy} label="Import" disabled={!ref.trim()} /></div>
+      {isJira ? (
+        <div>
+          <label className={LABEL}>Email</label>
+          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" className={INPUT} spellCheck={false} autoComplete="off" type="email" />
+        </div>
+      ) : (
+        <div>
+          <label className={LABEL}>Project</label>
+          <input value={project} onChange={(e) => setProject(e.target.value)} placeholder="MyProject" className={INPUT} spellCheck={false} autoComplete="off" />
+        </div>
+      )}
+      <div>
+        <label className={`${LABEL} flex items-center gap-1`}><KeyRound className="w-3 h-3" /> {tokenHelp.label}</label>
+        <input value={token} onChange={(e) => setToken(e.target.value)} placeholder="••••••••••••" className={INPUT} spellCheck={false} autoComplete="off" type="password" />
+        <a href={tokenHelp.href} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[10.5px] text-[#7C3AED] hover:text-[#5B21B6] mt-1.5">
+          {tokenHelp.hint} <ExternalLink className="w-3 h-3" />
+        </a>
+      </div>
+      {error && <p className="text-[11px] text-red-600 leading-snug">{error}</p>}
+      <p className="text-[10.5px] text-gray-400 leading-relaxed">The token is encrypted in transit and stored encrypted, scoped to your tenant. You can manage it later in System Configuration → Integrations.</p>
+      <div className="flex justify-end">
+        <button type="submit" disabled={!ready || saving} className={PRIMARY_BTN}>
+          {saving ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Plug className="w-3.5 h-3.5" />}
+          {saving ? 'Connecting…' : 'Connect & test'}
+        </button>
+      </div>
     </form>
   );
 }

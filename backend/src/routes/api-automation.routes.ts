@@ -40,6 +40,7 @@ import { getCredsForTenant as getJiraCreds, getStory as getJiraStory, getProject
 import { syncDefects as syncJiraDefects, listSyncHistory as listJiraSyncHistory, listDefectLinks as listJiraDefectLinks } from '../services/api-jira-sync.service.js';
 import { getCredsForTenant as getAdoCreds, getStory as getAdoStory, getProjects as getAdoProjects, getWorkItems as getAdoWorkItems } from '../services/azure-devops.service.js';
 import { syncDefects as syncAzureDefects, listSyncHistory as listAzureSyncHistory, listDefectLinks as listAzureDefectLinks } from '../services/api-azure-sync.service.js';
+import { publishRunResults as publishAzureResults, runJUnit } from '../services/api-azure-results.service.js';
 import {
   importFromText, importFromUrl, parseCurlCommands, parseHar, introspectGraphql, discoverMcpTools,
   parseConnectorManifest, endpointsFromWebhook, probeEndpoint, parseStructured, dedupeEndpoints,
@@ -135,7 +136,7 @@ import { getCiConfig, rotateCiToken, setCiEnabled } from '../services/api-ci.ser
 import { listQueue, saveQueueConfig, enqueueRun, cancelQueued } from '../services/api-exec-queue.service.js';
 import { listCloudLabs, saveCloudLab, deleteCloudLab, testCloudLab, runCloudMatrix } from '../services/api-cloud-lab.service.js';
 import { listSuites, saveSuite, deleteSuite, listPlans, savePlan, deletePlan, listCycles, startCycle, deleteCycle, listAssignments, saveAssignment, setAssignmentStatus, deleteAssignment, listTenantMembers, getPlanProgress } from '../services/api-test-management.service.js';
-import { listRequirements, saveRequirement, deleteRequirement, buildMatrix, buildIntegratedMatrix } from '../services/api-traceability.service.js';
+import { listRequirements, saveRequirement, deleteRequirement, buildMatrix, buildIntegratedMatrix, mapBrdFrd, listBrdFrdLinks, exportRtmXlsx } from '../services/api-traceability.service.js';
 import { getIntegrationDashboard } from '../services/api-integration-dashboard.service.js';
 import { listConnectors, saveConnector, deleteConnector, testConnector, exportRun, importCases } from '../services/api-tm-connectors.service.js';
 import { listConnectors as listCiConnectors, saveConnector as saveCiConnector, deleteConnector as deleteCiConnector, testConnector as testCiConnector, listRepos as listCiRepos } from '../services/api-cicd-connectors.service.js';
@@ -2236,6 +2237,26 @@ router.get('/traceability/matrix', async (req: Request, res: Response) => {
 router.get('/traceability/integrated', async (req: Request, res: Response) => {
   try { res.json(await buildIntegratedMatrix(req.user!.tenantId, { runId: req.query.runId ? String(req.query.runId) : undefined })); } catch (err) { fail(res, err, 500); }
 });
+/* Gap A: (re)build the BRD↔FRD requirement mapping for this tenant, then read it. */
+router.post('/traceability/map-brd-frd', async (req: Request, res: Response) => {
+  try {
+    const result = await mapBrdFrd(req.user!.tenantId, req.user!.username);
+    void logAudit(req, 'update', 'brd_frd_mapping', req.user!.tenantId, { mapped: result.summary.mapped, frTotal: result.summary.frTotal });
+    res.json(result);
+  } catch (err) { fail(res, err, 500); }
+});
+router.get('/traceability/brd-frd-links', async (req: Request, res: Response) => {
+  try { res.json({ links: await listBrdFrdLinks(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
+});
+/* Gap C: RTM export as a true .xlsx (BRD→FRD→API→case→script→status→defect + summary). */
+router.get('/traceability/export.xlsx', async (req: Request, res: Response) => {
+  try {
+    const buf = await exportRtmXlsx(req.user!.tenantId, req.query.runId ? String(req.query.runId) : undefined);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="rtm.xlsx"');
+    res.send(buf);
+  } catch (err) { fail(res, err, 500); }
+});
 /* Unified integration dashboard (Module 7): requirement counts, coverage, defect
    automation stats, run success rates and imports — one aggregate for reporting. */
 router.get('/integration-dashboard', async (req: Request, res: Response) => {
@@ -3207,6 +3228,33 @@ router.get('/azure/sync-history', async (req: Request, res: Response) => {
   try {
     res.json({ history: await listAzureSyncHistory(req.user!.tenantId) });
   } catch (err) { fail(res, err); }
+});
+
+/* Gap D: publish a run's execution results to an Azure DevOps Test Run. A real
+   publish is an integration write — admin only; a dry run previews the mapping. */
+router.post('/azure/publish-results', async (req: Request, res: Response) => {
+  try {
+    const runId = typeof req.body?.runId === 'string' ? req.body.runId.slice(0, 80) : '';
+    if (!runId) { res.status(400).json({ error: 'A runId is required.' }); return; }
+    if (req.body?.dryRun !== true && req.user!.role !== 'admin') {
+      res.status(403).json({ error: 'Admin access required to publish results to Azure DevOps. Use a dry run to preview.' }); return;
+    }
+    const result = await publishAzureResults(req.user!.tenantId, { runId, dryRun: req.body?.dryRun === true });
+    void logAudit(req, 'execute', 'api_azure_test_run', result.adoRunId ? String(result.adoRunId) : 'preview', { ...result.summary, dryRun: result.dryRun });
+    res.json(result);
+  } catch (err) { fail(res, err); }
+});
+
+/* Gap D: a run's results as JUnit XML — a CI pipeline can publish this to ADO. */
+router.get('/azure/junit.xml', async (req: Request, res: Response) => {
+  try {
+    const runId = typeof req.query.runId === 'string' ? req.query.runId.slice(0, 80) : '';
+    if (!runId) { res.status(400).json({ error: 'A runId is required.' }); return; }
+    const { xml } = await runJUnit(req.user!.tenantId, runId);
+    res.setHeader('Content-Type', 'application/xml');
+    res.setHeader('Content-Disposition', 'attachment; filename="junit.xml"');
+    res.send(xml);
+  } catch (err) { fail(res, err, 500); }
 });
 
 export default router;

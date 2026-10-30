@@ -12,11 +12,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   LayoutDashboard, X, RefreshCw, Loader2, AlertTriangle, Download, FileText, ClipboardCheck,
-  ClipboardList, Bug, Target, Radar,
+  ClipboardList, Bug, Target, Radar, FileSpreadsheet, Printer, Cloud, FileCode2,
 } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
+import { useToast } from '@/components/feedback/ToastProvider';
 import {
-  getIntegrationDashboard, listApiRuns,
+  getIntegrationDashboard, listApiRuns, downloadRtmXlsx, publishAzureResults, downloadRunJUnit,
   type IntegrationDashboard as Dash, type TraceSource, type TraceStatus,
 } from '@/services/api';
 import { CARD, STRIP, FIELD, LABEL, SECONDARY_BTN, THEAD } from './format';
@@ -41,6 +42,8 @@ export default function IntegrationDashboard({ onClose }: { onClose: () => void 
   const [error, setError] = useState('');
   const [srcFilter, setSrcFilter] = useState<TraceSource | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<TraceStatus | 'all'>('all');
+  const [xlsxBusy, setXlsxBusy] = useState(false);
+  const toast = useToast();
 
   const load = async (rid?: string) => {
     setLoading(true); setError('');
@@ -101,6 +104,78 @@ export default function IntegrationDashboard({ onClose }: { onClose: () => void 
     a.click(); URL.revokeObjectURL(url);
   };
 
+  // Gap C: true .xlsx — built server-side (SheetJS) with the full RTM + summary.
+  const exportXlsx = async () => {
+    setXlsxBusy(true);
+    try {
+      const blob = await downloadRtmXlsx(runId || undefined);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `rtm-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.click(); URL.revokeObjectURL(url);
+    } catch (e: any) { toast.fromError(e); }
+    finally { setXlsxBusy(false); }
+  };
+
+  // Gap C: PDF via a print-optimized RTM window (browser Save as PDF — no new dep).
+  const printRtm = () => {
+    if (!dash) return;
+    const esc = (v: unknown) => String(v ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] || c));
+    const body = dash.rows.map((r) => `<tr>
+      <td>${esc(r.source === 'brd' ? r.reqKey : r.brdRef || '')}</td>
+      <td>${esc(r.source === 'frd' ? r.reqKey : (r.frdRefs || []).join(', '))}</td>
+      <td>${esc(r.title)}</td>
+      <td>${esc(r.endpoints.map((e) => `${e.method} ${e.url}`).join('<br>'))}</td>
+      <td>${esc(r.cases.map((c) => c.id).join(', '))}</td>
+      <td>${esc((r.scriptPaths || []).join('<br>'))}</td>
+      <td>${esc(r.status)}</td>
+      <td>${esc([...r.trackerDefects.map((d) => d.key), ...r.caseDefects.map((d) => d.key)].join(', '))}</td>
+    </tr>`).join('');
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Requirement Traceability Matrix</title>
+      <style>body{font:12px system-ui,Segoe UI,sans-serif;color:#1f2937;padding:24px}h1{font-size:18px;color:#5B21B6}
+      .sub{color:#6b7280;margin:4px 0 16px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #e5e7eb;padding:6px 8px;text-align:left;vertical-align:top}
+      th{background:#F5F3FF;color:#4338CA;font-size:11px;text-transform:uppercase}tr:nth-child(even) td{background:#fafafe}</style></head>
+      <body><h1>Requirement Traceability Matrix</h1>
+      <div class="sub">Coverage ${dash.coverage.coveragePct}% · ${dash.requirements.total} requirements (${dash.requirements.brdReqs} BRD · ${dash.requirements.frdReqs} FRD · ${dash.requirements.manual} manual) · Run: ${esc(dash.runTitle || dash.runId || 'latest')} · ${new Date().toLocaleString()}</div>
+      <table><thead><tr><th>BRD ID</th><th>FRD ID</th><th>Requirement</th><th>API endpoint(s)</th><th>Test cases</th><th>Automation script</th><th>Status</th><th>Defects</th></tr></thead>
+      <tbody>${body || '<tr><td colspan="8">No requirements yet.</td></tr>'}</tbody></table>
+      <script>window.onload=()=>{window.print()}</script></body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) { toast.error('Allow pop-ups to print the RTM.'); return; }
+    w.document.write(html); w.document.close();
+  };
+
+  // Gap D: publish this run's outcomes to an Azure DevOps Test Run. Always previews
+  // with a dry run first; the real publish is confirmed by the user and admin-gated
+  // server-side. Needs a concrete run (the selected one, else the most recent).
+  const [adoBusy, setAdoBusy] = useState(false);
+  const effectiveRunId = () => runId || (runs[0]?.runId ?? runs[0]?.id ?? '');
+  const publishToAzure = async () => {
+    const rid = String(effectiveRunId() || '');
+    if (!rid) { toast.error('No run to publish', 'Select a run first.'); return; }
+    setAdoBusy(true);
+    try {
+      const preview = await publishAzureResults(rid, true);
+      if (!preview.connected) { toast.error('Azure DevOps not connected', 'Connect it in System Configuration.'); return; }
+      const ok = window.confirm(`Publish ${preview.summary.total} results (${preview.summary.passed} passed, ${preview.summary.failed} failed, ${preview.summary.notExecuted} not executed) to Azure DevOps as a Test Run?`);
+      if (!ok) { toast.info('Preview only', `${preview.summary.total} results would be published.`); return; }
+      const done = await publishAzureResults(rid, false);
+      toast.success('Published to Azure DevOps', done.webUrl ? `Test Run #${done.adoRunId}` : undefined);
+      if (done.webUrl) window.open(done.webUrl, '_blank');
+    } catch (e: any) { toast.fromError(e); }
+    finally { setAdoBusy(false); }
+  };
+  const downloadJUnit = async () => {
+    const rid = String(effectiveRunId() || '');
+    if (!rid) { toast.error('No run selected', 'Select a run first.'); return; }
+    try {
+      const blob = await downloadRunJUnit(rid);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `junit-${rid}.xml`; a.click(); URL.revokeObjectURL(url);
+    } catch (e: any) { toast.fromError(e); }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#1E1B4B]/45 backdrop-blur-md p-4" onClick={onClose}>
       <div className={`${CARD} w-full max-w-5xl h-[88vh] flex flex-col overflow-hidden`} onClick={(e) => e.stopPropagation()}>
@@ -126,6 +201,18 @@ export default function IntegrationDashboard({ onClose }: { onClose: () => void 
             </button>
             <button type="button" onClick={exportCsv} disabled={!dash} className={`${SECONDARY_BTN} ml-auto`}>
               <Download className="w-3.5 h-3.5" />Export CSV
+            </button>
+            <button type="button" onClick={() => void exportXlsx()} disabled={!dash || xlsxBusy} className={SECONDARY_BTN} title="Download the RTM as a native Excel file">
+              {xlsxBusy ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />}Export XLSX
+            </button>
+            <button type="button" onClick={printRtm} disabled={!dash} className={SECONDARY_BTN} title="Open a print-ready RTM — use the browser's Save as PDF">
+              <Printer className="w-3.5 h-3.5" />RTM PDF
+            </button>
+            <button type="button" onClick={downloadJUnit} disabled={!dash} className={SECONDARY_BTN} title="Download this run's results as JUnit XML (for a CI pipeline to publish)">
+              <FileCode2 className="w-3.5 h-3.5" />JUnit
+            </button>
+            <button type="button" onClick={() => void publishToAzure()} disabled={!dash || adoBusy} className={SECONDARY_BTN} title="Publish this run's results to an Azure DevOps Test Run (previews first)">
+              {adoBusy ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Cloud className="w-3.5 h-3.5" />}Publish to Azure
             </button>
           </div>
 

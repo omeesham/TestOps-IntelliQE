@@ -13,6 +13,7 @@
  */
 import pool from '../db.js';
 import { runLLM, parseJsonFromResponse, coerceJsonArray, salvageJsonArrayObjects, type LlmConfig } from '../agents/claude-runner.js';
+import { annotateBrReviewFlags, type ReviewFlag } from '../utils/requirement-review.js';
 
 export interface BusinessRequirement {
   brId: string;
@@ -26,6 +27,7 @@ export interface BusinessRequirement {
   dependencies?: string[];
   positiveScenarios?: string[];
   negativeScenarios?: string[];
+  reviewFlags?: ReviewFlag[]; // Gap B — derived human-review flags
 }
 
 export interface BrdAnalysis {
@@ -132,7 +134,7 @@ export async function analyzeBrd(text: string, fileName: string, llm: LlmConfig 
   if (requirements.length === 0) {
     throw new Error('No business requirements could be identified in the document.');
   }
-  return { summary: summary.slice(0, 4000), requirements };
+  return { summary: summary.slice(0, 4000), requirements: annotateBrReviewFlags(requirements) };
 }
 
 /** Persist an analysed BRD and its requirements for a tenant. Returns the doc id. */
@@ -202,12 +204,12 @@ export async function getBrdDocument(tenantId: string, id: string): Promise<{ do
      FROM business_requirements WHERE tenant_id = $1 AND document_id = $2 ORDER BY sort_order`,
     [tenantId, id],
   );
-  const requirements: BusinessRequirement[] = rows.map((r: any) => ({
+  const requirements: BusinessRequirement[] = annotateBrReviewFlags(rows.map((r: any) => ({
     brId: r.br_id, title: r.title, description: r.description || undefined, objective: r.objective || undefined,
     rules: parseArr(r.rules), workflows: parseArr(r.workflows), acceptanceCriteria: parseArr(r.acceptance_criteria),
     validations: parseArr(r.validations), dependencies: parseArr(r.dependencies),
     positiveScenarios: parseArr(r.positive_scenarios), negativeScenarios: parseArr(r.negative_scenarios),
-  }));
+  })));
   return {
     document: {
       id: d.id, name: d.name, summary: d.summary || undefined, source: d.source,

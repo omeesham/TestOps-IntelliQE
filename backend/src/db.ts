@@ -1764,6 +1764,24 @@ export async function initDb(): Promise<void> {
         created_at          DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
       )`);
 
+    // Gap A — BRD ↔ FRD requirement mapping. One edge per functional requirement
+    // to the business requirement it realises, so the RTM chains BRD → FRD → API
+    // → case → defect. Additive and tenant-scoped; keys are the human-readable
+    // BR-###/FR-### so the matrix (which reads those keys) joins without extra
+    // lookups. Rebuilt wholesale per tenant by the mapping step, so no uniqueness
+    // constraint is needed.
+    await createTable('brd_frd_links', `
+      CREATE TABLE ${SCHEMA}.brd_frd_links (
+        id           UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        tenant_id    UNIQUEIDENTIFIER NOT NULL,
+        br_key       NVARCHAR(40) NOT NULL,
+        fr_key       NVARCHAR(40) NOT NULL,
+        confidence   FLOAT NOT NULL DEFAULT 0,
+        rationale    NVARCHAR(600),
+        created_by   NVARCHAR(200),
+        created_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
+
     // Module 4 — Jira defect automation. A stable per-failure signature links a
     // test failure to the tracker defect it raised, so recurring failures update
     // the existing issue instead of filing duplicates. Provider-agnostic (jira
@@ -1874,6 +1892,7 @@ export async function initDb(): Promise<void> {
     await createIndex('idx_business_requirements_doc', 'business_requirements', '(tenant_id, document_id, sort_order)');
     await createIndex('idx_frd_documents_tenant', 'frd_documents', '(tenant_id, created_at DESC)');
     await createIndex('idx_functional_requirements_doc', 'functional_requirements', '(tenant_id, document_id, sort_order)');
+    await createIndex('idx_brd_frd_links_tenant', 'brd_frd_links', '(tenant_id)');
     await createIndex('idx_jira_defect_links_sig', 'jira_defect_links', '(tenant_id, provider, signature)');
     await createIndex('idx_jira_sync_history_tenant', 'jira_sync_history', '(tenant_id, created_at DESC)');
     await createIndex('idx_users_tenant', 'users', '(tenant_id)');

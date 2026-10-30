@@ -869,7 +869,9 @@ export interface BusinessRequirement {
   dependencies?: string[];
   positiveScenarios?: string[];
   negativeScenarios?: string[];
+  reviewFlags?: ReviewFlag[];
 }
+export interface ReviewFlag { code: 'incomplete' | 'ambiguous' | 'conflict'; message: string }
 export interface BrdDocument {
   id: string;
   name: string;
@@ -926,6 +928,7 @@ export interface FunctionalRequirement {
   dependencies?: string[];
   positiveScenarios?: string[];
   negativeScenarios?: string[];
+  reviewFlags?: ReviewFlag[];
 }
 export interface FrdDocument {
   id: string;
@@ -1790,7 +1793,7 @@ export async function getTraceMatrix(runId?: string): Promise<TraceMatrix> { con
 
 // Integrated traceability (Module 6): all requirement sources → endpoints → cases → tracker defects, with orphans.
 export type TraceSource = 'manual' | 'frd' | 'brd';
-export interface IntegratedRow { source: TraceSource; reqKey: string; title: string; endpoints: LinkedEndpoint[]; cases: MatrixCase[]; passed: number; failed: number; notRun: number; status: TraceStatus; trackerDefects: DefectRef[]; caseDefects: { key: string; status: string }[] }
+export interface IntegratedRow { source: TraceSource; reqKey: string; title: string; endpoints: LinkedEndpoint[]; cases: MatrixCase[]; passed: number; failed: number; notRun: number; status: TraceStatus; trackerDefects: DefectRef[]; caseDefects: { key: string; status: string }[]; brdRef?: string; frdRefs?: string[]; scriptPaths?: string[] }
 export interface OrphanTest { id: string; title: string; status: string; endpoint?: string }
 export interface IntegratedMatrix {
   runId: string | null; runTitle: string | null;
@@ -1798,6 +1801,32 @@ export interface IntegratedMatrix {
   summary: { total: number; linkable: number; covered: number; partial: number; failing: number; uncovered: number; coveragePct: number; bySource: { manual: number; frd: number; brd: number }; trackerDefects: number; orphanTests: number; orphanDefects: number };
 }
 export async function getIntegratedMatrix(runId?: string): Promise<IntegratedMatrix> { const { data } = await api.get('/api-automation/traceability/integrated', { params: runId ? { runId } : {} }); return data; }
+
+// Gap A: BRD ↔ FRD requirement mapping
+export interface BrdFrdLink { brKey: string; frKey: string; confidence: number; rationale: string }
+export async function mapBrdFrd(): Promise<{ links: BrdFrdLink[]; summary: { frTotal: number; mapped: number; unmapped: number; brTotal: number } }> {
+  const { data } = await api.post('/api-automation/traceability/map-brd-frd'); return data;
+}
+export async function getBrdFrdLinks(): Promise<BrdFrdLink[]> {
+  const { data } = await api.get('/api-automation/traceability/brd-frd-links'); return data.links || [];
+}
+
+// Gap C: download the RTM as a true .xlsx (auth header carried via the axios client)
+export async function downloadRtmXlsx(runId?: string): Promise<Blob> {
+  const { data } = await api.get('/api-automation/traceability/export.xlsx', { params: runId ? { runId } : {}, responseType: 'blob' });
+  return data as Blob;
+}
+
+// Gap D: publish a run's results to an Azure DevOps Test Run (dryRun previews; real publish is admin-only)
+export interface AzurePublishResult { dryRun: boolean; connected: boolean; runTitle: string; summary: { total: number; passed: number; failed: number; notExecuted: number }; adoRunId?: number; webUrl?: string; published?: boolean }
+export async function publishAzureResults(runId: string, dryRun = true): Promise<AzurePublishResult> {
+  const { data } = await api.post('/api-automation/azure/publish-results', { runId, dryRun });
+  return data;
+}
+export async function downloadRunJUnit(runId: string): Promise<Blob> {
+  const { data } = await api.get('/api-automation/azure/junit.xml', { params: { runId }, responseType: 'blob' });
+  return data as Blob;
+}
 
 // Unified integration dashboard (Module 7)
 export interface IntegrationDashboard {

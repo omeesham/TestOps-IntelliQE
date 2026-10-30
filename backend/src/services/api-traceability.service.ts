@@ -11,6 +11,7 @@
  * Fully additive and read-mostly — it reads the existing run reports via the
  * dashboard service and never touches the pipeline.
  */
+import * as XLSX from 'xlsx';
 import pool from '../db.js';
 import { getApiRunDetail, listApiRuns } from './api-dashboard.service.js';
 
@@ -206,6 +207,13 @@ export interface IntegratedRow {
   status: TraceStatus;
   trackerDefects: DefectRef[];
   caseDefects: { key: string; status: string }[];
+  /** Gap A: for an FRD row, the BRD requirement it realises; for a BRD row, the
+   *  FRD requirements mapped under it. Populated from brd_frd_links. */
+  brdRef?: string;
+  frdRefs?: string[];
+  /** Gap C: automation script file names for this row's matched cases (from
+   *  automation_scripts, joined by tc_number within the reference run). */
+  scriptPaths?: string[];
 }
 
 export interface OrphanTest { id: string; title: string; status: string; endpoint?: string }
@@ -261,8 +269,137 @@ async function gatherReqNodes(tenantId: string): Promise<ReqNode[]> {
   return nodes;
 }
 
+// ─── Gap A: BRD ↔ FRD requirement mapping ─────────────────────────────────────
+// Each functional requirement is mapped to the business requirement it realises,
+// so the RTM chains BRD → FRD → API → case → defect. Deterministic matcher (no
+// LLM dependency, so it is verifiable and never flaky): (1) an explicit BR-###
+// mention anywhere in the FR's text wins; else (2) the BR with the highest
+// token-overlap score above a floor. Rebuilt wholesale per tenant on each call.
+
+export interface BrdFrdLink { brKey: string; frKey: string; confidence: number; rationale: string }
+
+const STOP = new Set(['the', 'a', 'an', 'to', 'of', 'and', 'or', 'for', 'in', 'on', 'with', 'is', 'are', 'be', 'by', 'as', 'at', 'it', 'this', 'that', 'shall', 'should', 'must', 'will', 'can', 'api', 'user', 'system', 'data']);
+function tokens(s: string): Set<string> {
+  return new Set(String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w)));
+}
+function overlap(a: Set<string>, b: Set<string>): number {
+  if (!a.size || !b.size) return 0;
+  let hits = 0; for (const t of a) if (b.has(t)) hits++;
+  return hits / Math.sqrt(a.size * b.size); // cosine-ish, 0..1
+}
+
+interface BrRow { br_key: string; blob: string }
+interface FrRow { fr_key: string; blob: string }
+
+/** Rebuild the tenant's BRD↔FRD links and return them. Pure DB + heuristics. */
+export async function mapBrdFrd(tenantId: string, username: string): Promise<{ links: BrdFrdLink[]; summary: { frTotal: number; mapped: number; unmapped: number; brTotal: number } }> {
+  const brs = await pool.query(
+    `SELECT br_id, title, description, objective, rules FROM business_requirements WHERE tenant_id = $1`,
+    [tenantId],
+  ).catch(() => ({ rows: [] as any[] }));
+  const frs = await pool.query(
+    `SELECT fr_id, title, description, dependencies FROM functional_requirements WHERE tenant_id = $1 ORDER BY sort_order`,
+    [tenantId],
+  ).catch(() => ({ rows: [] as any[] }));
+
+  const brRows: (BrRow & { tok: Set<string>; keyUpper: string })[] = brs.rows
+    .filter((b: any) => b.br_id)
+    .map((b: any) => {
+      const blob = [b.title, b.description, b.objective, b.rules].filter(Boolean).join(' ');
+      return { br_key: String(b.br_id), blob, tok: tokens(blob), keyUpper: String(b.br_id).toUpperCase() };
+    });
+  const frRows: (FrRow & { tok: Set<string>; text: string })[] = frs.rows
+    .filter((f: any) => f.fr_id)
+    .map((f: any) => {
+      const blob = [f.title, f.description, Array.isArray(f.dependencies) ? f.dependencies.join(' ') : f.dependencies].filter(Boolean).join(' ');
+      return { fr_key: String(f.fr_id), blob, tok: tokens(blob), text: blob.toUpperCase() };
+    });
+
+  const links: BrdFrdLink[] = [];
+  const MIN_SCORE = 0.12;
+  for (const fr of frRows) {
+    // (1) explicit mention of a BR key in the FR text
+    const explicit = brRows.find((br) => fr.text.includes(br.keyUpper));
+    if (explicit) { links.push({ brKey: explicit.br_key, frKey: fr.fr_key, confidence: 1, rationale: `FR text references ${explicit.br_key}` }); continue; }
+    // (2) best token overlap
+    let best: { br: string; score: number } | null = null;
+    for (const br of brRows) {
+      const score = overlap(fr.tok, br.tok);
+      if (!best || score > best.score) best = { br: br.br_key, score };
+    }
+    if (best && best.score >= MIN_SCORE) {
+      links.push({ brKey: best.br, frKey: fr.fr_key, confidence: Math.round(best.score * 100) / 100, rationale: `Best keyword overlap (${Math.round(best.score * 100)}%)` });
+    }
+  }
+
+  // rebuild wholesale for this tenant
+  await pool.query(`DELETE FROM brd_frd_links WHERE tenant_id = $1`, [tenantId]);
+  for (const l of links) {
+    await pool.query(
+      `INSERT INTO brd_frd_links (tenant_id, br_key, fr_key, confidence, rationale, created_by) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [tenantId, l.brKey, l.frKey, l.confidence, l.rationale.slice(0, 600), username],
+    );
+  }
+
+  const mapped = new Set(links.map((l) => l.frKey)).size;
+  return { links, summary: { frTotal: frRows.length, mapped, unmapped: frRows.length - mapped, brTotal: brRows.length } };
+}
+
+// ─── Gap C: RTM export (true .xlsx, via SheetJS already in deps) ───────────────
+// One row per requirement with the full chain: BRD → FRD → API (endpoint+method)
+// → test case → automation script path → status → defect. Plus a summary sheet.
+export async function exportRtmXlsx(tenantId: string, runId?: string): Promise<Buffer> {
+  const m = await buildIntegratedMatrix(tenantId, { runId });
+  const rows = m.rows.map((r) => ({
+    'BRD ID': r.source === 'brd' ? r.reqKey : (r.brdRef || ''),
+    'FRD ID': r.source === 'frd' ? r.reqKey : (r.frdRefs ? r.frdRefs.join(', ') : ''),
+    'Source': r.source.toUpperCase(),
+    'Requirement': r.title,
+    'API endpoint(s)': r.endpoints.map((e) => `${e.method} ${e.url}`).join('\n'),
+    'Test case IDs': r.cases.map((c) => c.id).join(', '),
+    'Automation script path': (r.scriptPaths || []).join('\n'),
+    'Execution status': r.status,
+    'Passed/Failed/NotRun': `${r.passed}/${r.failed}/${r.notRun}`,
+    'Defect IDs': [...r.trackerDefects.map((d) => d.key), ...r.caseDefects.map((d) => d.key)].join(', '),
+  }));
+  const s = m.summary;
+  const summary = [
+    { Metric: 'Coverage %', Value: s.coveragePct },
+    { Metric: 'Requirements (total)', Value: s.total },
+    { Metric: 'BRD / FRD / manual', Value: `${s.bySource.brd} / ${s.bySource.frd} / ${s.bySource.manual}` },
+    { Metric: 'Covered / Partial / Failing / Uncovered', Value: `${s.covered} / ${s.partial} / ${s.failing} / ${s.uncovered}` },
+    { Metric: 'Tracker defects', Value: s.trackerDefects },
+    { Metric: 'Orphan tests / Orphan defects', Value: `${s.orphanTests} / ${s.orphanDefects}` },
+    { Metric: 'Run', Value: m.runTitle || m.runId || '(none)' },
+    { Metric: 'Generated', Value: new Date().toISOString() },
+  ];
+  const wb = XLSX.utils.book_new();
+  const wsRtm = XLSX.utils.json_to_sheet(rows.length ? rows : [{ 'BRD ID': '', 'FRD ID': '', Source: '', Requirement: '(no requirements)', 'API endpoint(s)': '', 'Test case IDs': '', 'Automation script path': '', 'Execution status': '', 'Passed/Failed/NotRun': '', 'Defect IDs': '' }]);
+  wsRtm['!cols'] = [{ wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 40 }, { wch: 32 }, { wch: 18 }, { wch: 28 }, { wch: 14 }, { wch: 16 }, { wch: 20 }];
+  XLSX.utils.book_append_sheet(wb, wsRtm, 'RTM');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), 'Summary');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+}
+
+export async function listBrdFrdLinks(tenantId: string): Promise<BrdFrdLink[]> {
+  const { rows } = await pool.query(
+    `SELECT br_key, fr_key, confidence, rationale FROM brd_frd_links WHERE tenant_id = $1 ORDER BY br_key, fr_key`,
+    [tenantId],
+  ).catch(() => ({ rows: [] as any[] }));
+  return rows.map((r: any) => ({ brKey: r.br_key, frKey: r.fr_key, confidence: Number(r.confidence || 0), rationale: r.rationale || '' }));
+}
+
 export async function buildIntegratedMatrix(tenantId: string, opts: { runId?: string } = {}): Promise<IntegratedMatrix> {
   const nodes = await gatherReqNodes(tenantId);
+
+  // Gap A: BRD↔FRD edges, so FRD rows show their parent BR and BR rows list children.
+  const links = await listBrdFrdLinks(tenantId);
+  const brOfFr = new Map<string, string>();      // fr_key → br_key
+  const frsOfBr = new Map<string, string[]>();    // br_key → [fr_key]
+  for (const l of links) {
+    brOfFr.set(l.frKey, l.brKey);
+    const arr = frsOfBr.get(l.brKey) || []; arr.push(l.frKey); frsOfBr.set(l.brKey, arr);
+  }
 
   // reference run
   let runId = opts.runId || null;
@@ -272,6 +409,16 @@ export async function buildIntegratedMatrix(tenantId: string, opts: { runId?: st
   }
   const detail = runId ? await getApiRunDetail(tenantId, runId) : null;
   const runCases = detail?.cases || [];
+
+  // Gap C: automation script file names for this run, keyed by tc_number (= case id).
+  const scriptByTc = new Map<string, string>();
+  if (runId) {
+    const scripts = await pool.query(
+      `SELECT tc_number, file_name FROM automation_scripts WHERE tenant_id = $1 AND test_run_id = $2`,
+      [tenantId, runId],
+    ).catch(() => ({ rows: [] as any[] }));
+    for (const s of scripts.rows) { if (s.tc_number && s.file_name) scriptByTc.set(String(s.tc_number).toUpperCase(), String(s.file_name)); }
+  }
 
   // index run cases by endpoint signature and title
   const byEndpoint = new Map<string, typeof runCases>();
@@ -332,7 +479,10 @@ export async function buildIntegratedMatrix(tenantId: string, opts: { runId?: st
     else if (passed === cases.length) status = 'covered';
     else status = 'partial';
 
-    return { source: node.source, reqKey: node.reqKey, title: node.title, endpoints: node.endpoints, cases, passed, failed, notRun, status, trackerDefects, caseDefects };
+    const brdRef = node.source === 'frd' ? brOfFr.get(node.reqKey) : undefined;
+    const frdRefs = node.source === 'brd' ? frsOfBr.get(node.reqKey) : undefined;
+    const scriptPaths = [...new Set(cases.map((c) => scriptByTc.get(c.id.toUpperCase())).filter((v): v is string => !!v))];
+    return { source: node.source, reqKey: node.reqKey, title: node.title, endpoints: node.endpoints, cases, passed, failed, notRun, status, trackerDefects, caseDefects, brdRef, frdRefs, scriptPaths };
   });
 
   // orphans: tested cases tied to no requirement; tracker defects tied to no requirement

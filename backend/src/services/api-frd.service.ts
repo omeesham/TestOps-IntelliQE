@@ -15,6 +15,7 @@
  */
 import pool from '../db.js';
 import { runLLM, parseJsonFromResponse, coerceJsonArray, salvageJsonArrayObjects, type LlmConfig } from '../agents/claude-runner.js';
+import { annotateFrReviewFlags, type ReviewFlag } from '../utils/requirement-review.js';
 
 export interface FrEndpoint { method: string; path: string; description?: string }
 export interface FrResponse { status: string; description?: string }
@@ -37,6 +38,7 @@ export interface FunctionalRequirement {
   dependencies?: string[];
   positiveScenarios?: string[];
   negativeScenarios?: string[];
+  reviewFlags?: ReviewFlag[]; // Gap B — derived human-review flags
 }
 
 export interface FrdAnalysis {
@@ -220,7 +222,7 @@ export async function analyzeFrd(text: string, fileName: string, llm: LlmConfig 
   if (requirements.length === 0) {
     throw new Error('No functional requirements could be identified in the document.');
   }
-  return { summary: summary.slice(0, 4000), requirements };
+  return { summary: summary.slice(0, 4000), requirements: annotateFrReviewFlags(requirements) };
 }
 
 /** Persist an analysed FRD and its requirements for a tenant. Returns the doc row. */
@@ -296,7 +298,7 @@ export async function getFrdDocument(tenantId: string, id: string): Promise<{ do
      FROM functional_requirements WHERE tenant_id = $1 AND document_id = $2 ORDER BY sort_order`,
     [tenantId, id],
   );
-  const requirements: FunctionalRequirement[] = rows.map((r: any) => ({
+  const requirements: FunctionalRequirement[] = annotateFrReviewFlags(rows.map((r: any) => ({
     frId: r.fr_id, title: r.title, description: r.description || undefined,
     actors: parseStrArr(r.actors), preconditions: parseStrArr(r.preconditions),
     endpoints: parseArr(r.endpoints) as FrEndpoint[], parameters: parseStrArr(r.parameters),
@@ -305,7 +307,7 @@ export async function getFrdDocument(tenantId: string, id: string): Promise<{ do
     errorHandling: parseStrArr(r.error_handling), acceptanceCriteria: parseStrArr(r.acceptance_criteria),
     dependencies: parseStrArr(r.dependencies), positiveScenarios: parseStrArr(r.positive_scenarios),
     negativeScenarios: parseStrArr(r.negative_scenarios),
-  }));
+  })));
   return {
     document: {
       id: d.id, name: d.name, summary: d.summary || undefined, source: d.source,

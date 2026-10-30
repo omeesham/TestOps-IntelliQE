@@ -193,6 +193,25 @@ function Stat({ label, value }: { label: string; value: number }) {
   return <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-[#DDD6FE] bg-[#F5F3FF] text-[11.5px] font-semibold text-[#6D28D9] tabular-nums">{value}<span className="font-normal text-gray-500">{label}</span></span>;
 }
 
+/** Gap B: human-review flags (incomplete / ambiguous / conflict) for a requirement. */
+function ReviewFlags({ flags }: { flags?: { code: string; message: string }[] }) {
+  if (!flags || flags.length === 0) return null;
+  const style: Record<string, string> = {
+    incomplete: 'bg-amber-50 text-amber-700 border-amber-200',
+    ambiguous: 'bg-orange-50 text-orange-700 border-orange-200',
+    conflict: 'bg-red-50 text-red-700 border-red-200',
+  };
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {flags.map((f, i) => (
+        <span key={i} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-medium ${style[f.code] || style.incomplete}`} title={f.message}>
+          <AlertTriangle className="w-2.5 h-2.5" />{f.code}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function RequirementCard({ r }: { r: BusinessRequirement }) {
   return (
     <div className={`${CARD} p-4`}>
@@ -201,6 +220,7 @@ function RequirementCard({ r }: { r: BusinessRequirement }) {
         <div className="min-w-0 flex-1">
           <h4 className="text-[13.5px] font-semibold text-gray-900 leading-snug">{r.title}</h4>
           {r.description && <p className="text-[12px] text-gray-600 mt-1 leading-relaxed">{r.description}</p>}
+          <ReviewFlags flags={r.reviewFlags} />
         </div>
       </div>
       {r.objective && (

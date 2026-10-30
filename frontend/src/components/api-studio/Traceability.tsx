@@ -10,9 +10,10 @@ import { Waypoints, X, Plus, Trash2, Save, Play, AlertTriangle } from 'lucide-re
 import Spinner from '@/components/feedback/Spinner';
 import { useToast } from '@/components/feedback/ToastProvider';
 import {
-  listRequirements, saveRequirement, deleteRequirement, getTraceMatrix, getIntegratedMatrix, listApiRuns,
+  listRequirements, saveRequirement, deleteRequirement, getTraceMatrix, getIntegratedMatrix, listApiRuns, mapBrdFrd,
   type Requirement, type LinkedEndpoint, type TraceMatrix, type TraceStatus, type IntegratedMatrix, type TraceSource,
 } from '@/services/api';
+import { Link2 } from 'lucide-react';
 import { CARD, STRIP, INPUT, FIELD, LABEL, PRIMARY_BTN, SECONDARY_BTN, THEAD } from './format';
 import type { CatalogEndpoint } from './types';
 
@@ -159,7 +160,7 @@ export default function Traceability({ endpoints, onClose }: { endpoints: Catalo
                 </div>
               </>
             )}
-            {view === 'integrated' && integrated && <IntegratedView m={integrated} />}
+            {view === 'integrated' && integrated && <IntegratedView m={integrated} onRemap={async () => { const r = await mapBrdFrd(); await build(); return r.summary; }} />}
           </div>
 
           {/* Requirements list */}
@@ -235,8 +236,16 @@ export default function Traceability({ endpoints, onClose }: { endpoints: Catalo
 }
 
 /** The integrated matrix: every requirement source → cases → tracker defects, plus orphans. */
-function IntegratedView({ m }: { m: IntegratedMatrix }) {
+function IntegratedView({ m, onRemap }: { m: IntegratedMatrix; onRemap: () => Promise<{ frTotal: number; mapped: number; unmapped: number; brTotal: number }> }) {
   const s = m.summary;
+  const toast = useToast();
+  const [remapping, setRemapping] = useState(false);
+  const remap = async () => {
+    setRemapping(true);
+    try { const sum = await onRemap(); toast.success(`Mapped ${sum.mapped}/${sum.frTotal} FRs to ${sum.brTotal} BRs`); }
+    catch (e: any) { toast.fromError(e); }
+    finally { setRemapping(false); }
+  };
   return (
     <>
       <div className="flex flex-wrap gap-2 text-[11.5px]">
@@ -254,6 +263,9 @@ function IntegratedView({ m }: { m: IntegratedMatrix }) {
         <span className="px-2 py-0.5 rounded border border-rose-200 bg-rose-50 text-rose-700 tabular-nums">{s.trackerDefects} tracker defects</span>
         <span className="px-2 py-0.5 rounded border border-orange-200 bg-orange-50 text-orange-700 tabular-nums">{s.orphanTests} orphan tests</span>
         <span className="px-2 py-0.5 rounded border border-orange-200 bg-orange-50 text-orange-700 tabular-nums">{s.orphanDefects} orphan defects</span>
+        <button type="button" onClick={() => void remap()} disabled={remapping} className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded border border-[#DDD6FE] bg-[#F5F3FF] text-[#6D28D9] hover:bg-[#EDE9FE] disabled:opacity-50" title="Match each FRD requirement to its parent BRD requirement">
+          {remapping ? <Spinner className="w-3 h-3 animate-spin" /> : <Link2 className="w-3 h-3" />} Map BRD↔FRD
+        </button>
       </div>
       <div className="border border-[#E9E5FB] rounded-lg overflow-hidden">
         <table className="w-full text-[11.5px]">
@@ -270,7 +282,11 @@ function IntegratedView({ m }: { m: IntegratedMatrix }) {
             {m.rows.map((row, i) => (
               <tr key={`${row.source}-${row.reqKey}-${i}`} className="align-top">
                 <td className="px-2.5 py-1.5"><span className={`inline-flex px-1.5 py-0.5 rounded border text-[9.5px] font-bold uppercase ${SOURCE_STYLE[row.source]}`}>{row.source}</span></td>
-                <td className="px-2.5 py-1.5"><span className="text-gray-700">{row.reqKey ? <b className="font-mono text-[#6D28D9]">{row.reqKey} </b> : null}{row.title}</span></td>
+                <td className="px-2.5 py-1.5">
+                  <span className="text-gray-700">{row.reqKey ? <b className="font-mono text-[#6D28D9]">{row.reqKey} </b> : null}{row.title}</span>
+                  {row.brdRef && <span className="ml-1.5 inline-flex items-center gap-0.5 text-[9.5px] text-[#4338CA]" title="Mapped business requirement"><Link2 className="w-2.5 h-2.5" />{row.brdRef}</span>}
+                  {row.frdRefs && row.frdRefs.length > 0 && <span className="ml-1.5 inline-flex items-center gap-0.5 text-[9.5px] text-[#4338CA]" title="Mapped functional requirements"><Link2 className="w-2.5 h-2.5" />{row.frdRefs.join(', ')}</span>}
+                </td>
                 <td className="px-2.5 py-1.5 text-right font-mono tabular-nums text-gray-500">{row.endpoints.length}</td>
                 <td className="px-2.5 py-1.5"><span className={`inline-flex px-1.5 py-0.5 rounded border text-[10.5px] font-semibold ${STATUS_STYLE[row.status]}`}>{row.status}</span></td>
                 <td className="px-2.5 py-1.5 text-right font-mono tabular-nums text-gray-600">{row.passed}✓ {row.failed}✗ {row.notRun}·</td>
