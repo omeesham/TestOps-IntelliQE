@@ -307,7 +307,21 @@ if (missingSettings.length) {
   process.exit(1);
 }
 
-initDb()
+// The database can still be starting (or briefly unreachable) when the app
+// boots; retry before giving up, so schema upgrades are not silently skipped.
+async function initDbWithRetry(attempts = 6, waitMs = 10_000): Promise<void> {
+  for (let i = 1; ; i++) {
+    try {
+      return await initDb();
+    } catch (err) {
+      if (i >= attempts) throw err;
+      logger.warn('DB init failed, retrying', { attempt: i, of: attempts, err: (err as Error).message });
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
+  }
+}
+
+initDbWithRetry(NODE_ENV === 'production' ? 6 : 1)
   .then(() => {
     app.listen(PORT, () => {
       logger.info(`JBS IntelliQE API listening`, { port: PORT, env: NODE_ENV });
