@@ -14,6 +14,8 @@
  *      the test's intent (see agents/healing-prompt.ts). Failures that point at the
  *      app (answer-key mismatch, or code that passed before) are left for a person,
  *      and a fix that weakens the test is rejected (see heal-guard.service.ts).
+ *      Healing can be switched off, and each script gets at most MAX_HEAL_ATTEMPTS
+ *      AI attempts until it passes again or a person edits it.
  *   3. RE-RUN the targeted scripts via Playwright (in a throwaway workspace) to
  *      get a real pass/fail verdict for each, keyed by test_case_id so the
  *      frontend can map results 1:1.
@@ -35,8 +37,22 @@ import { isDocumentFinding, maskDocumentValues } from './document-accuracy.servi
 import { weakerFixReason } from './heal-guard.service.js';
 import { specUsesDocumentHelper, TEST_DATA_ENV } from './test-data.service.js';
 import { errorWithBlocked, prepareGuardedRun, specForRun, type SafetySettings } from './uat-safety.service.js';
+import { getConfigsForTenant } from './configurations.service.js';
 
 const execFileAsync = promisify(execFile);
+
+/** AI repair attempts per script before a person must look; deliberately low so healing cannot hide a defect. */
+const MAX_HEAL_ATTEMPTS = 2;
+
+/** Self-healing settings from System Configuration → AI Self-Healing (on unless switched off). */
+async function healSettings(tenantId: string): Promise<{ enabled: boolean; maxAttempts: number }> {
+  const cfg = (await getConfigsForTenant(tenantId)).find((c) => c.integrationId === 'ai-self-healing')?.configData || {};
+  const n = Number(cfg.maxHealingAttempts);
+  return {
+    enabled: cfg.autoHealLocators !== false,
+    maxAttempts: Number.isInteger(n) && n >= 1 ? Math.min(n, MAX_HEAL_ATTEMPTS) : MAX_HEAL_ATTEMPTS,
+  };
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -84,6 +100,8 @@ interface FailingRow {
   expected_result?: string | null;
   test_data?: Record<string, unknown> | null;
   last_passed_at?: string | null;
+  /** AI repair attempts since the script last passed or was edited by a person. */
+  heal_attempts?: number | null;
 }
 
 /**
@@ -231,7 +249,7 @@ export async function healRunScripts(
   const { rows } = await pool.query<FailingRow>(
     // NOTE: the test_cases column is `expected` (not `expected_result`); alias it
     // so the rest of this file can keep using `expected_result`.
-    `SELECT s.id, s.tc_number, s.test_case_id, s.test_case_title, s.file_name, s.code, s.last_passed_at,
+    `SELECT s.id, s.tc_number, s.test_case_id, s.test_case_title, s.file_name, s.code, s.last_passed_at, s.heal_attempts,
             tc.title, tc.feature, tc.type, tc.precondition, tc.steps, tc.expected AS expected_result, tc.test_data
      FROM ${SCHEMA}.automation_scripts s
      LEFT JOIN ${SCHEMA}.test_cases tc ON tc.id = s.test_case_id
@@ -249,6 +267,15 @@ export async function healRunScripts(
     });
   }
 
+  const settings = await healSettings(tenantId);
+  if (!settings.enabled) {
+    throw new PlaywrightRunError({
+      code: 'HEALING_OFF',
+      httpStatus: 409,
+      message: 'Self-healing is turned off.',
+      hint: 'Turn it on in System Configuration → AI Self-Healing, or review the failing scripts by hand.',
+    });
+  }
   const canUseAi = isClaudeCliAuthenticated();
   const specOf = (row: FailingRow, code: string) => ({
     testCaseId: row.test_case_id,
@@ -267,7 +294,7 @@ export async function healRunScripts(
 
   // ── 2. AI-fix each script that still fails and is safe to heal (in parallel — the set is small). ──
   const healed = await Promise.all(
-    rows.map(async (row): Promise<{ row: FailingRow; newCode: string; healFix: string; healed: boolean }> => {
+    rows.map(async (row): Promise<{ row: FailingRow; newCode: string; healFix: string; healed: boolean; attempted?: boolean }> => {
       const realError = errorById.get(row.test_case_id) || 'Test failed during execution (no error message was captured).';
 
       if (plainRun.get(row.test_case_id)?.status === 'passed') {
@@ -281,10 +308,14 @@ export async function healRunScripts(
       if (row.last_passed_at) {
         return { row, newCode: row.code, healFix: 'Not auto-healed: this script passed before without changes, so the app has likely changed. Check whether it is a defect or an intended change.', healed: false };
       }
+      if ((row.heal_attempts || 0) >= settings.maxAttempts) {
+        return { row, newCode: row.code, healFix: `Not auto-healed: this script already had ${settings.maxAttempts} repair attempt(s), the limit. A person should review it.`, healed: false };
+      }
       if (!canUseAi) {
         return { row, newCode: row.code, healFix: 'Could not auto-fix: AI engine not connected.', healed: false };
       }
 
+      // Every AI attempt below counts toward the limit, accepted or not.
       try {
         const prompt = buildHealingPrompt({
           title: row.title || row.test_case_title || row.tc_number || 'Test',
@@ -308,17 +339,17 @@ export async function healRunScripts(
         // Only accept a real, non-trivial change. If Claude echoed the same code
         // or returned nothing usable, treat it as "no fix produced".
         if (!newCode || newCode === row.code.trim()) {
-          return { row, newCode: row.code, healFix: `Could not auto-fix: ${fix?.diagnosis || 'AI did not produce a different script.'}`, healed: false };
+          return { row, newCode: row.code, healFix: `Could not auto-fix: ${fix?.diagnosis || 'AI did not produce a different script.'}`, healed: false, attempted: true };
         }
         const caseText = [row.title, row.precondition, ...(Array.isArray(row.steps) ? row.steps : []), row.expected_result, JSON.stringify(row.test_data || {})].join('\n');
         const weaker = weakerFixReason(row.code, newCode, caseText, realError);
         if (weaker) {
-          return { row, newCode: row.code, healFix: `Not auto-healed: the AI fix was rejected because ${weaker}. ${fix?.diagnosis || ''}`.trim(), healed: false };
+          return { row, newCode: row.code, healFix: `Not auto-healed: the AI fix was rejected because ${weaker}. ${fix?.diagnosis || ''}`.trim(), healed: false, attempted: true };
         }
         const summary = [fix?.diagnosis, fix?.fix].filter(Boolean).join(' → ') || 'Applied an AI fix to the failing script.';
-        return { row, newCode, healFix: summary, healed: true };
+        return { row, newCode, healFix: summary, healed: true, attempted: true };
       } catch (err: any) {
-        return { row, newCode: row.code, healFix: `Could not auto-fix: heal attempt failed: ${err?.message || 'unknown error'}.`, healed: false };
+        return { row, newCode: row.code, healFix: `Could not auto-fix: heal attempt failed: ${err?.message || 'unknown error'}.`, healed: false, attempted: true };
       }
     }),
   );
@@ -375,13 +406,20 @@ export async function healRunScripts(
     };
   });
 
+  for (const h of healed.filter((x) => x.attempted)) {
+    try {
+      await pool.query(`UPDATE ${SCHEMA}.automation_scripts SET heal_attempts = heal_attempts + 1 WHERE id = $1`, [h.row.id]);
+    } catch { /* best-effort */ }
+  }
+
   for (const d of details) {
     if (d.status === 'not_run') continue;
     try {
       await pool.query(
         `UPDATE ${SCHEMA}.automation_scripts
          SET last_run_at = $1, last_run_result = $2, updated_at = NOW(),
-             last_passed_at = CASE WHEN $2 = 'passed' THEN $1 ELSE last_passed_at END
+             last_passed_at = CASE WHEN $2 = 'passed' THEN $1 ELSE last_passed_at END,
+             heal_attempts = CASE WHEN $2 = 'passed' THEN 0 ELSE heal_attempts END
          WHERE test_run_id = $3 AND test_case_id = $4`,
         [new Date().toISOString(), d.status, runId, d.testCaseId],
       );
