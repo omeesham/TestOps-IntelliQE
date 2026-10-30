@@ -136,6 +136,7 @@ import { listQueue, saveQueueConfig, enqueueRun, cancelQueued } from '../service
 import { listCloudLabs, saveCloudLab, deleteCloudLab, testCloudLab, runCloudMatrix } from '../services/api-cloud-lab.service.js';
 import { listSuites, saveSuite, deleteSuite, listPlans, savePlan, deletePlan, listCycles, startCycle, deleteCycle, listAssignments, saveAssignment, setAssignmentStatus, deleteAssignment, listTenantMembers, getPlanProgress } from '../services/api-test-management.service.js';
 import { listRequirements, saveRequirement, deleteRequirement, buildMatrix, buildIntegratedMatrix } from '../services/api-traceability.service.js';
+import { getIntegrationDashboard } from '../services/api-integration-dashboard.service.js';
 import { listConnectors, saveConnector, deleteConnector, testConnector, exportRun, importCases } from '../services/api-tm-connectors.service.js';
 import { listConnectors as listCiConnectors, saveConnector as saveCiConnector, deleteConnector as deleteCiConnector, testConnector as testCiConnector, listRepos as listCiRepos } from '../services/api-cicd-connectors.service.js';
 import { listConnectors as listAtConnectors, saveConnector as saveAtConnector, deleteConnector as deleteAtConnector, testConnector as testAtConnector, listRepos as listAtRepos } from '../services/api-apitest-connectors.service.js';
@@ -2235,6 +2236,11 @@ router.get('/traceability/matrix', async (req: Request, res: Response) => {
 router.get('/traceability/integrated', async (req: Request, res: Response) => {
   try { res.json(await buildIntegratedMatrix(req.user!.tenantId, { runId: req.query.runId ? String(req.query.runId) : undefined })); } catch (err) { fail(res, err, 500); }
 });
+/* Unified integration dashboard (Module 7): requirement counts, coverage, defect
+   automation stats, run success rates and imports — one aggregate for reporting. */
+router.get('/integration-dashboard', async (req: Request, res: Response) => {
+  try { res.json(await getIntegrationDashboard(req.user!.tenantId, { runId: req.query.runId ? String(req.query.runId) : undefined })); } catch (err) { fail(res, err, 500); }
+});
 
 /* ── Native TM connectors with bidirectional result export (TestRail/Xray/Zephyr/qTest) ── */
 router.get('/tm-connectors', async (req: Request, res: Response) => {
@@ -3098,6 +3104,11 @@ router.post('/jira/sync-defects', async (req: Request, res: Response) => {
       testId: typeof f?.testId === 'string' ? f.testId.slice(0, 80) : undefined,
     })).filter((f: any) => f.title);
     if (!failures.length) { res.status(400).json({ error: 'Send at least one failure with a title.' }); return; }
+    // RBAC: filing/updating real tracker defects is an integration write — admin only.
+    // Dry-run previews (no external writes) stay open to any authenticated user.
+    if (req.body?.dryRun !== true && req.user!.role !== 'admin') {
+      res.status(403).json({ error: 'Admin access required to create or update Jira defects. Use a dry run to preview.' }); return;
+    }
     const result = await syncJiraDefects(req.user!.tenantId, req.user!.username, {
       failures,
       runId: typeof req.body?.runId === 'string' ? req.body.runId.slice(0, 80) : undefined,
@@ -3168,6 +3179,10 @@ router.post('/azure/sync-defects', async (req: Request, res: Response) => {
       testId: typeof f?.testId === 'string' ? f.testId.slice(0, 80) : undefined,
     })).filter((f: any) => f.title);
     if (!failures.length) { res.status(400).json({ error: 'Send at least one failure with a title.' }); return; }
+    // RBAC: filing/updating real tracker defects is an integration write — admin only.
+    if (req.body?.dryRun !== true && req.user!.role !== 'admin') {
+      res.status(403).json({ error: 'Admin access required to create or update Azure DevOps defects. Use a dry run to preview.' }); return;
+    }
     const result = await syncAzureDefects(req.user!.tenantId, req.user!.username, {
       failures,
       runId: typeof req.body?.runId === 'string' ? req.body.runId.slice(0, 80) : undefined,

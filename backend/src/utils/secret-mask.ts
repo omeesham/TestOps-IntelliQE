@@ -23,6 +23,26 @@ export function isSecretName(name: string): boolean {
   return SECRET_NAME_RE.test(name || '');
 }
 
+/**
+ * Pattern-based scrub of credential-like values from a FREE-TEXT blob (a failure
+ * URL, error message, endpoint) before it is written to an external tracker, a
+ * stored defect link, or a log. Unlike maskResult (which masks a known variable
+ * bag), this redacts secrets embedded in arbitrary text: URL basic-auth
+ * userinfo, sensitive query-string values, and Bearer/Basic auth tokens.
+ */
+export function scrubSecrets(text: string | undefined | null): string {
+  let t = String(text ?? '');
+  if (!t) return t;
+  // URL userinfo: scheme://user:pass@host  →  scheme://••••:••••@host
+  t = t.replace(/:\/\/[^/\s:@]+:[^/\s@]+@/g, '://' + MASK + ':' + MASK + '@');
+  // Sensitive query params: ?token=xxx&api_key=yyy  →  value masked
+  t = t.replace(/([?&](?:api[_-]?key|apikey|access[_-]?token|token|key|password|passwd|secret|authorization|auth|client[_-]?secret|sig|signature)=)[^&\s#]+/gi, '$1' + MASK);
+  // Bearer / Basic tokens in text
+  t = t.replace(/\b(bearer\s+)[A-Za-z0-9._~+/=-]{6,}/gi, '$1' + MASK);
+  t = t.replace(/\b(basic\s+)[A-Za-z0-9+/=]{8,}/gi, '$1' + MASK);
+  return t;
+}
+
 interface StepLike { extracted?: Record<string, string>; bodyPreview?: string }
 interface RunLike { variables?: Record<string, string>; steps?: StepLike[] }
 interface SuiteFlowLike { run?: RunLike }

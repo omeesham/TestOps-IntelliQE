@@ -8,7 +8,7 @@
  */
 import { useEffect, useState } from 'react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Activity, AlertTriangle, ArrowRight, Clock, RefreshCw, Layers, Upload, Gauge, Zap, TrendingUp, ChevronRight, Timer, ShieldCheck, Sparkles, BrainCircuit, ShieldAlert, HeartPulse, Radar } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowRight, Clock, RefreshCw, Layers, Upload, Gauge, Zap, TrendingUp, ChevronRight, Timer, ShieldCheck, Sparkles, BrainCircuit, ShieldAlert, HeartPulse, Radar, ClipboardList, ClipboardCheck, Bug, Waypoints, Workflow } from 'lucide-react';
 import { getApiOverview } from '@/services/api';
 import { CARD, CARD_HOVER, THEAD, BRAND_CHIP, MUTED_CHIP, relativeTime, formatDuration, IMPORT_METHOD_LABELS, methodColor } from '../format';
 import { StatusPill, PassRing } from '../primitives';
@@ -32,6 +32,22 @@ const HERO_FEATURES: { icon: React.ElementType; label: string; color: string; se
   { icon: ShieldCheck, label: 'Contracts & drift', color: '#34D399', seed: 'contract' },
   { icon: HeartPulse, label: 'Self-healing', color: '#F472B6', seed: 'heal' },
   { icon: Radar, label: 'Coverage intelligence', color: '#38BDF8', seed: 'coverage' },
+];
+
+/**
+ * The enterprise-integration suite — the BRD/FRD/tracker/traceability/dashboard
+ * modules surfaced on one panel. Each tile deep-links into its tool in the Tools
+ * gallery via the existing `onNavigate('tools', seed)` search seed (the gallery
+ * filters by label/desc), so this reuses the existing shell — no second app, no
+ * new route. `seed` is a unique substring of the target tool's label.
+ */
+const INTEGRATION_SUITE: { icon: React.ElementType; label: string; desc: string; color: string; seed: string }[] = [
+  { icon: ClipboardList, label: 'Business requirements (BRD)', desc: 'Extract structured BRs → traceability', color: '#8B5CF6', seed: 'business requirements' },
+  { icon: ClipboardCheck, label: 'Functional requirements (FRD)', desc: 'Extract FRs + API shape from an FRD', color: '#6366F1', seed: 'functional requirements' },
+  { icon: Bug, label: 'Jira sync & defects', desc: 'Failures → Jira defects · dedupe · audit', color: '#2563EB', seed: 'jira sync' },
+  { icon: Bug, label: 'Azure DevOps sync & defects', desc: 'Failures → Azure defects · dedupe · audit', color: '#0EA5E9', seed: 'azure devops sync' },
+  { icon: Waypoints, label: 'Traceability matrix', desc: 'Requirement → case → defect', color: '#059669', seed: 'traceability matrix' },
+  { icon: Gauge, label: 'Integration dashboard', desc: 'Requirements · coverage · defects · export', color: '#DB2777', seed: 'integration dashboard' },
 ];
 
 export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKey }: Props) {
@@ -125,7 +141,40 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
             Collapses to a one-line progress strip once the user knows the flow. */}
         <GettingStartedGuide catalog={catalog} kpis={k} onNavigate={onNavigate} />
 
-        {error && <div className="flex items-center gap-2 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg text-[12px] text-red-700"><AlertTriangle className="w-4 h-4" />{error}<button type="button" onClick={() => load(true)} className="ml-auto underline">Retry</button></div>}
+        {/* ── Enterprise integration suite — BRD/FRD · Jira/Azure defects ·
+            traceability · dashboard, each deep-linking into its tool ── */}
+        <div className={`${CARD} p-4`}>
+          <div className="flex items-center gap-2 mb-3">
+            <span className="w-7 h-7 rounded-lg bg-[#F5F3FF] flex items-center justify-center flex-shrink-0"><Workflow className="w-4 h-4 text-[#7C3AED]" /></span>
+            <h3 className="text-[13px] font-semibold text-gray-900">Enterprise integration suite</h3>
+            <span className="text-[11px] text-gray-400">requirements · trackers · traceability</span>
+            <button type="button" onClick={() => onNavigate('tools', 'integration dashboard')} className="ml-auto inline-flex items-center gap-0.5 text-[11px] font-medium text-[#7C3AED] hover:text-[#5B21B6]">Open dashboard<ArrowRight className="w-3 h-3" /></button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+            {INTEGRATION_SUITE.map((t) => (
+              <button
+                key={t.label}
+                type="button"
+                onClick={() => onNavigate('tools', t.seed)}
+                title={`Open ${t.label}`}
+                className="group flex items-start gap-2.5 text-left rounded-xl border border-gray-100 bg-gray-50/40 p-3 hover:bg-white hover:border-[#DDD6FE] hover:shadow-sm hover:-translate-y-0.5 transition-all focus:outline-none focus:ring-2 focus:ring-[#C4B5FD]"
+              >
+                <span className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ backgroundColor: `${t.color}1A` }}>
+                  <t.icon className="w-4 h-4" style={{ color: t.color }} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-1 text-[12px] font-semibold text-gray-800">
+                    <span className="truncate">{t.label}</span>
+                    <ChevronRight className="w-3.5 h-3.5 text-gray-300 group-hover:text-[#7C3AED] flex-shrink-0 transition-colors" />
+                  </span>
+                  <span className="block text-[10.5px] text-gray-500 leading-snug mt-0.5">{t.desc}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {error &&<div className="flex items-center gap-2 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg text-[12px] text-red-700"><AlertTriangle className="w-4 h-4" />{error}<button type="button" onClick={() => load(true)} className="ml-auto underline">Retry</button></div>}
 
         {/* KPIs */}
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">

@@ -97,6 +97,7 @@ import StoryGen from './StoryGen';
 import BrdRequirements from './BrdRequirements';
 import FrdRequirements from './FrdRequirements';
 import DefectSync from './DefectSync';
+import IntegrationDashboard from './IntegrationDashboard';
 import Multimodal from './Multimodal';
 import SuiteOptimizer from './SuiteOptimizer';
 import ImpactAnalysis from './ImpactAnalysis';
@@ -295,6 +296,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
   const [frdOpen, setFrdOpen] = useState(false);
   const [jiraSyncOpen, setJiraSyncOpen] = useState(false);
   const [azureSyncOpen, setAzureSyncOpen] = useState(false);
+  const [intgDashOpen, setIntgDashOpen] = useState(false);
   const [multimodalOpen, setMultimodalOpen] = useState(false);
   const [optimizerOpen, setOptimizerOpen] = useState(false);
   const [impactOpen, setImpactOpen] = useState(false);
@@ -459,6 +461,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
         { icon: FileCheck2, label: 'Evidence export', desc: 'Compliance evidence → PDF', open: () => setEvidenceOpen(true) },
         { icon: ScrollText, label: 'Audit log', desc: 'Filter & export recorded actions', open: () => setAuditOpen(true) },
         { icon: Waypoints, label: 'Traceability matrix', desc: 'Requirement → case → defect', open: () => setTraceMatrixOpen(true) },
+        { icon: Gauge, label: 'Integration dashboard', desc: 'Requirements · coverage · defects · runs · export', open: () => setIntgDashOpen(true) },
         { icon: ClipboardList, label: 'Test management', desc: 'Suites · plans · cycles · assignments', open: () => setTmOpen(true) },
         { icon: Share2, label: 'TM connectors', desc: 'TestRail · Xray · Zephyr · qTest export', open: () => setConnectorsOpen(true) },
         { icon: Stamp, label: 'Approvals', desc: 'Multi-stage release gating', open: () => setApprovalsOpen(true) },
@@ -734,6 +737,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
       {frdOpen && <FrdRequirements onClose={() => setFrdOpen(false)} />}
       {jiraSyncOpen && <DefectSync provider="jira" onClose={() => setJiraSyncOpen(false)} />}
       {azureSyncOpen && <DefectSync provider="azure" onClose={() => setAzureSyncOpen(false)} />}
+      {intgDashOpen && <IntegrationDashboard onClose={() => setIntgDashOpen(false)} />}
       {multimodalOpen && (
         <Multimodal
           endpoints={ep}

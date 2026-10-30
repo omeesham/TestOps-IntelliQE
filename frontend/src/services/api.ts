@@ -1799,6 +1799,18 @@ export interface IntegratedMatrix {
 }
 export async function getIntegratedMatrix(runId?: string): Promise<IntegratedMatrix> { const { data } = await api.get('/api-automation/traceability/integrated', { params: runId ? { runId } : {} }); return data; }
 
+// Unified integration dashboard (Module 7)
+export interface IntegrationDashboard {
+  runId: string | null; runTitle: string | null;
+  kpis: { runs: number; avgPassRate: number | null; lastPassRate: number | null; requirements: number; coveragePct: number; trackerDefects: number; openDefects: number; orphanTests: number };
+  requirements: { brdDocs: number; brdReqs: number; frdDocs: number; frdReqs: number; manual: number; total: number };
+  coverage: { covered: number; partial: number; failing: number; uncovered: number; linkable: number; coveragePct: number };
+  defects: { links: number; open: number; byProvider: { jira: number; azure: number }; syncRuns: number; created: number; updated: number; lastSyncAt: string | null };
+  imports: { total: number; byMethod: Record<string, number> };
+  rows: IntegratedRow[]; orphanTests: number; orphanDefects: number;
+}
+export async function getIntegrationDashboard(runId?: string): Promise<IntegrationDashboard> { const { data } = await api.get('/api-automation/integration-dashboard', { params: runId ? { runId } : {} }); return data; }
+
 // Native TM connectors (item 4)
 export type TmVendor = 'testrail' | 'xray' | 'zephyr' | 'qtest';
 export interface TmConnector { id: string; vendor: TmVendor; name: string; baseUrl: string; projectKey: string; enabled: boolean; authFields: string[]; createdBy: string; createdAt: string; updatedAt: string }

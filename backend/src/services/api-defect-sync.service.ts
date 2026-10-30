@@ -14,6 +14,7 @@
  */
 import { createHash } from 'crypto';
 import pool from '../db.js';
+import { scrubSecrets } from '../utils/secret-mask.js';
 
 export interface RunFailure {
   title: string;
@@ -101,17 +102,19 @@ async function findOpenLink(tenantId: string, provider: string, signature: strin
   return rows.length ? (rows[0] as LinkRow) : null;
 }
 
+// Titles/descriptions are scrubbed of credential-like values (basic-auth
+// userinfo, ?token=/?api_key=, bearer tokens) before they leave for the tracker.
 function bugTitle(f: RunFailure): string {
   const ep = [f.method, f.url].filter(Boolean).join(' ').trim();
   const base = f.title || (ep ? `${ep} failed` : 'API test failure');
-  return base.slice(0, 200);
+  return scrubSecrets(base).slice(0, 200);
 }
 
 function bugDescription(f: RunFailure, runTitle?: string): string {
   const lines: string[] = [];
-  if (f.method || f.url) lines.push(`Endpoint: ${[f.method, f.url].filter(Boolean).join(' ')}`);
-  if (runTitle) lines.push(`Run: ${runTitle}`);
-  lines.push('', f.error || 'An API test failed.');
+  if (f.method || f.url) lines.push(`Endpoint: ${scrubSecrets([f.method, f.url].filter(Boolean).join(' '))}`);
+  if (runTitle) lines.push(`Run: ${scrubSecrets(runTitle)}`);
+  lines.push('', scrubSecrets(f.error) || 'An API test failed.');
   return lines.join('\n');
 }
 
@@ -155,7 +158,7 @@ export async function syncDefects<C>(
           const r: SyncDefectResult = { signature, title: bugTitle(f), action: 'would-update', issueKey: existing.issue_key, issueUrl: existing.issue_url || undefined, occurrence };
           seenInBatch.set(signature, r); results.push(r); updated++; continue;
         }
-        if (creds) await adapter.addComment(creds, existing.issue_key, `Recurred${input.runTitle ? ` in run "${input.runTitle}"` : ''}: ${f.error || f.title}`);
+        if (creds) await adapter.addComment(creds, existing.issue_key, scrubSecrets(`Recurred${input.runTitle ? ` in run "${input.runTitle}"` : ''}: ${f.error || f.title}`));
         await pool.query(
           `UPDATE jira_defect_links SET occurrence_count = $1, last_seen_at = SYSUTCDATETIME(), run_id = $2 WHERE id = $3`,
           [occurrence, input.runId || null, existing.id],
@@ -176,7 +179,7 @@ export async function syncDefects<C>(
           `INSERT INTO jira_defect_links
              (tenant_id, provider, signature, issue_key, issue_url, title, method, url, run_id, status, occurrence_count, created_by)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'open', 1, $10)`,
-          [tenantId, provider, signature, issue.key, issue.url, bugTitle(f), f.method || null, f.url || null, input.runId || null, username],
+          [tenantId, provider, signature, issue.key, issue.url, bugTitle(f), f.method || null, scrubSecrets(f.url) || null, input.runId || null, username],
         );
         const r: SyncDefectResult = { signature, title: bugTitle(f), action: 'created', issueKey: issue.key, issueUrl: issue.url, occurrence: 1 };
         seenInBatch.set(signature, r); results.push(r); created++;
