@@ -1788,6 +1788,17 @@ export async function saveRequirement(input: Partial<Requirement> & { title: str
 export async function deleteRequirement(id: string): Promise<void> { await api.delete(`/api-automation/requirements/${encodeURIComponent(id)}`); }
 export async function getTraceMatrix(runId?: string): Promise<TraceMatrix> { const { data } = await api.get('/api-automation/traceability/matrix', { params: runId ? { runId } : {} }); return data; }
 
+// Integrated traceability (Module 6): all requirement sources → endpoints → cases → tracker defects, with orphans.
+export type TraceSource = 'manual' | 'frd' | 'brd';
+export interface IntegratedRow { source: TraceSource; reqKey: string; title: string; endpoints: LinkedEndpoint[]; cases: MatrixCase[]; passed: number; failed: number; notRun: number; status: TraceStatus; trackerDefects: DefectRef[]; caseDefects: { key: string; status: string }[] }
+export interface OrphanTest { id: string; title: string; status: string; endpoint?: string }
+export interface IntegratedMatrix {
+  runId: string | null; runTitle: string | null;
+  rows: IntegratedRow[]; orphanTests: OrphanTest[]; orphanDefects: DefectRef[];
+  summary: { total: number; linkable: number; covered: number; partial: number; failing: number; uncovered: number; coveragePct: number; bySource: { manual: number; frd: number; brd: number }; trackerDefects: number; orphanTests: number; orphanDefects: number };
+}
+export async function getIntegratedMatrix(runId?: string): Promise<IntegratedMatrix> { const { data } = await api.get('/api-automation/traceability/integrated', { params: runId ? { runId } : {} }); return data; }
+
 // Native TM connectors (item 4)
 export type TmVendor = 'testrail' | 'xray' | 'zephyr' | 'qtest';
 export interface TmConnector { id: string; vendor: TmVendor; name: string; baseUrl: string; projectKey: string; enabled: boolean; authFields: string[]; createdBy: string; createdAt: string; updatedAt: string }

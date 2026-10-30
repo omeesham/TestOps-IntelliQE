@@ -185,3 +185,186 @@ export async function buildMatrix(tenantId: string, opts: { runId?: string } = {
     summary: { total, covered, partial, failing, uncovered, coveragePct: total ? Math.round(((covered + partial + failing) / total) * 100) : 0 },
   };
 }
+
+// ─── integrated matrix (Module 6) ─────────────────────────────────────────────
+// The full chain: a requirement from ANY source (manual api_requirements, FRD
+// functional requirements with their endpoints, BRD business requirements) →
+// its endpoints → a run's cases (execution) → defects (real tracker defects from
+// the Module 4/5 defect links, matched by endpoint signature, plus failing
+// cases). Adds orphan detection: tested endpoints with no requirement, and
+// tracker defects with no requirement. Read-only; reuses the existing builders.
+
+export type TraceSource = 'manual' | 'frd' | 'brd';
+
+export interface IntegratedRow {
+  source: TraceSource;
+  reqKey: string;
+  title: string;
+  endpoints: LinkedEndpoint[];
+  cases: MatrixCase[];
+  passed: number; failed: number; notRun: number;
+  status: TraceStatus;
+  trackerDefects: DefectRef[];
+  caseDefects: { key: string; status: string }[];
+}
+
+export interface OrphanTest { id: string; title: string; status: string; endpoint?: string }
+
+export interface IntegratedMatrix {
+  runId: string | null; runTitle: string | null;
+  rows: IntegratedRow[];
+  orphanTests: OrphanTest[];
+  orphanDefects: DefectRef[];
+  summary: {
+    total: number; linkable: number;
+    covered: number; partial: number; failing: number; uncovered: number;
+    coveragePct: number;
+    bySource: { manual: number; frd: number; brd: number };
+    trackerDefects: number; orphanTests: number; orphanDefects: number;
+  };
+}
+
+interface ReqNode { source: TraceSource; reqKey: string; title: string; endpoints: LinkedEndpoint[]; scenarios: string[] }
+
+function sigOf(method: string, url: string): string { return `${norm(method || 'GET')} ${norm(pathOf(url))}`; }
+
+/** Gather requirement nodes from every source (manual + FRD + BRD). */
+async function gatherReqNodes(tenantId: string): Promise<ReqNode[]> {
+  const nodes: ReqNode[] = [];
+
+  const manual = await listRequirements(tenantId);
+  for (const r of manual) {
+    nodes.push({ source: 'manual', reqKey: r.reqKey, title: r.title, endpoints: r.linkedEndpoints, scenarios: r.linkedScenarios });
+  }
+
+  // FRD functional requirements carry the endpoints they imply.
+  const frd = await pool.query(
+    `SELECT fr_id, title, endpoints FROM functional_requirements WHERE tenant_id = $1 ORDER BY sort_order`,
+    [tenantId],
+  ).catch(() => ({ rows: [] as any[] }));
+  for (const r of frd.rows) {
+    const eps = jArr(r.endpoints)
+      .map((e: any) => ({ method: String(e?.method || 'GET').toUpperCase(), url: String(e?.path || e?.url || '') }))
+      .filter((e: LinkedEndpoint) => e.url);
+    nodes.push({ source: 'frd', reqKey: r.fr_id || '', title: r.title || '', endpoints: eps, scenarios: [] });
+  }
+
+  // BRD business requirements sit at the top of the chain (no endpoints of their own).
+  const brd = await pool.query(
+    `SELECT br_id, title FROM business_requirements WHERE tenant_id = $1 ORDER BY sort_order`,
+    [tenantId],
+  ).catch(() => ({ rows: [] as any[] }));
+  for (const r of brd.rows) {
+    nodes.push({ source: 'brd', reqKey: r.br_id || '', title: r.title || '', endpoints: [], scenarios: [] });
+  }
+
+  return nodes;
+}
+
+export async function buildIntegratedMatrix(tenantId: string, opts: { runId?: string } = {}): Promise<IntegratedMatrix> {
+  const nodes = await gatherReqNodes(tenantId);
+
+  // reference run
+  let runId = opts.runId || null;
+  if (!runId) {
+    const recent = await listApiRuns(tenantId, 1, 1);
+    runId = recent.items[0]?.runId || null;
+  }
+  const detail = runId ? await getApiRunDetail(tenantId, runId) : null;
+  const runCases = detail?.cases || [];
+
+  // index run cases by endpoint signature and title
+  const byEndpoint = new Map<string, typeof runCases>();
+  const byTitle = new Map<string, typeof runCases[number]>();
+  const caseSig = new Map<string, string>(); // caseId → endpoint sig (for orphan endpoint label)
+  for (const c of runCases) {
+    const ep = c.api && typeof c.api === 'object' ? c.api : null;
+    if (ep?.endpoint) {
+      const sig = sigOf(ep.method || 'GET', ep.endpoint);
+      const arr = byEndpoint.get(sig) || []; arr.push(c); byEndpoint.set(sig, arr);
+      caseSig.set(c.id, `${String(ep.method || 'GET').toUpperCase()} ${pathOf(ep.endpoint)}`);
+    }
+    byTitle.set(norm(c.title), c);
+  }
+
+  // tracker defects (Jira + Azure) indexed by endpoint signature
+  const defectLinks = await pool.query(
+    `SELECT provider, signature, issue_key, issue_url, title, method, url, status FROM jira_defect_links WHERE tenant_id = $1`,
+    [tenantId],
+  ).catch(() => ({ rows: [] as any[] }));
+  const defectsBySig = new Map<string, DefectRef[]>();
+  for (const d of defectLinks.rows) {
+    if (!d.url && !d.method) continue;
+    const sig = sigOf(d.method || 'GET', d.url || '');
+    const ref: DefectRef = { key: d.issue_key || d.signature, url: d.issue_url || undefined, status: d.status || undefined };
+    const arr = defectsBySig.get(sig) || []; arr.push(ref); defectsBySig.set(sig, arr);
+  }
+
+  const matchedCaseIds = new Set<string>();
+  const matchedDefectSigs = new Set<string>();
+
+  const rows: IntegratedRow[] = nodes.map((node) => {
+    const sigs = node.endpoints.map((e) => sigOf(e.method, e.url));
+    const matched = new Map<string, MatrixCase>();
+    for (const sig of sigs) {
+      for (const c of byEndpoint.get(sig) || []) { matched.set(c.id, { id: c.id, title: c.title, status: c.status }); matchedCaseIds.add(c.id); }
+    }
+    for (const sc of node.scenarios) {
+      const c = byTitle.get(norm(sc));
+      if (c) { matched.set(c.id, { id: c.id, title: c.title, status: c.status }); matchedCaseIds.add(c.id); }
+    }
+    const cases = [...matched.values()];
+    const passed = cases.filter((c) => c.status === 'passed').length;
+    const failed = cases.filter((c) => c.status === 'failed' || c.status === 'broken').length;
+    const notRun = cases.length - passed - failed;
+
+    const trackerDefects: DefectRef[] = [];
+    for (const sig of sigs) {
+      for (const d of defectsBySig.get(sig) || []) trackerDefects.push(d);
+      if (defectsBySig.has(sig)) matchedDefectSigs.add(sig);
+    }
+    const caseDefects = cases.filter((c) => c.status === 'failed' || c.status === 'broken').map((c) => ({ key: c.id, status: c.status }));
+
+    const linkable = node.endpoints.length > 0 || node.scenarios.length > 0;
+    let status: TraceStatus;
+    if (!linkable || !cases.length) status = 'uncovered';
+    else if (failed > 0) status = 'failing';
+    else if (passed === cases.length) status = 'covered';
+    else status = 'partial';
+
+    return { source: node.source, reqKey: node.reqKey, title: node.title, endpoints: node.endpoints, cases, passed, failed, notRun, status, trackerDefects, caseDefects };
+  });
+
+  // orphans: tested cases tied to no requirement; tracker defects tied to no requirement
+  const orphanTests: OrphanTest[] = runCases
+    .filter((c) => !matchedCaseIds.has(c.id))
+    .map((c) => ({ id: c.id, title: c.title, status: c.status, endpoint: caseSig.get(c.id) }));
+  const orphanDefects: DefectRef[] = [];
+  for (const [sig, refs] of defectsBySig) {
+    if (!matchedDefectSigs.has(sig)) orphanDefects.push(...refs);
+  }
+
+  const linkableRows = rows.filter((r) => r.endpoints.length > 0 || r.source === 'manual');
+  const covered = rows.filter((r) => r.status === 'covered').length;
+  const partial = rows.filter((r) => r.status === 'partial').length;
+  const failing = rows.filter((r) => r.status === 'failing').length;
+  const uncovered = rows.filter((r) => r.status === 'uncovered').length;
+  const linkableCount = linkableRows.length;
+  const linkableCoveredish = linkableRows.filter((r) => r.status !== 'uncovered').length;
+
+  return {
+    runId, runTitle: detail?.title || null, rows, orphanTests, orphanDefects,
+    summary: {
+      total: rows.length, linkable: linkableCount,
+      covered, partial, failing, uncovered,
+      coveragePct: linkableCount ? Math.round((linkableCoveredish / linkableCount) * 100) : 0,
+      bySource: {
+        manual: rows.filter((r) => r.source === 'manual').length,
+        frd: rows.filter((r) => r.source === 'frd').length,
+        brd: rows.filter((r) => r.source === 'brd').length,
+      },
+      trackerDefects: rows.reduce((n, r) => n + r.trackerDefects.length, 0),
+      orphanTests: orphanTests.length, orphanDefects: orphanDefects.length,
+    },
+  };
+}

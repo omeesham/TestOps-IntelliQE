@@ -135,7 +135,7 @@ import { getCiConfig, rotateCiToken, setCiEnabled } from '../services/api-ci.ser
 import { listQueue, saveQueueConfig, enqueueRun, cancelQueued } from '../services/api-exec-queue.service.js';
 import { listCloudLabs, saveCloudLab, deleteCloudLab, testCloudLab, runCloudMatrix } from '../services/api-cloud-lab.service.js';
 import { listSuites, saveSuite, deleteSuite, listPlans, savePlan, deletePlan, listCycles, startCycle, deleteCycle, listAssignments, saveAssignment, setAssignmentStatus, deleteAssignment, listTenantMembers, getPlanProgress } from '../services/api-test-management.service.js';
-import { listRequirements, saveRequirement, deleteRequirement, buildMatrix } from '../services/api-traceability.service.js';
+import { listRequirements, saveRequirement, deleteRequirement, buildMatrix, buildIntegratedMatrix } from '../services/api-traceability.service.js';
 import { listConnectors, saveConnector, deleteConnector, testConnector, exportRun, importCases } from '../services/api-tm-connectors.service.js';
 import { listConnectors as listCiConnectors, saveConnector as saveCiConnector, deleteConnector as deleteCiConnector, testConnector as testCiConnector, listRepos as listCiRepos } from '../services/api-cicd-connectors.service.js';
 import { listConnectors as listAtConnectors, saveConnector as saveAtConnector, deleteConnector as deleteAtConnector, testConnector as testAtConnector, listRepos as listAtRepos } from '../services/api-apitest-connectors.service.js';
@@ -2229,6 +2229,11 @@ router.delete('/requirements/:id', async (req: Request, res: Response) => {
 });
 router.get('/traceability/matrix', async (req: Request, res: Response) => {
   try { res.json(await buildMatrix(req.user!.tenantId, { runId: req.query.runId ? String(req.query.runId) : undefined })); } catch (err) { fail(res, err, 500); }
+});
+/* Integrated matrix (Module 6): all requirement sources (manual + FRD + BRD) →
+   endpoints → run cases → real tracker defects (Jira/Azure), with orphan detection. */
+router.get('/traceability/integrated', async (req: Request, res: Response) => {
+  try { res.json(await buildIntegratedMatrix(req.user!.tenantId, { runId: req.query.runId ? String(req.query.runId) : undefined })); } catch (err) { fail(res, err, 500); }
 });
 
 /* ── Native TM connectors with bidirectional result export (TestRail/Xray/Zephyr/qTest) ── */

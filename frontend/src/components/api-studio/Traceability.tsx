@@ -10,8 +10,8 @@ import { Waypoints, X, Plus, Trash2, Save, Play, AlertTriangle } from 'lucide-re
 import Spinner from '@/components/feedback/Spinner';
 import { useToast } from '@/components/feedback/ToastProvider';
 import {
-  listRequirements, saveRequirement, deleteRequirement, getTraceMatrix, listApiRuns,
-  type Requirement, type LinkedEndpoint, type TraceMatrix, type TraceStatus,
+  listRequirements, saveRequirement, deleteRequirement, getTraceMatrix, getIntegratedMatrix, listApiRuns,
+  type Requirement, type LinkedEndpoint, type TraceMatrix, type TraceStatus, type IntegratedMatrix, type TraceSource,
 } from '@/services/api';
 import { CARD, STRIP, INPUT, FIELD, LABEL, PRIMARY_BTN, SECONDARY_BTN, THEAD } from './format';
 import type { CatalogEndpoint } from './types';
@@ -23,6 +23,11 @@ const STATUS_STYLE: Record<TraceStatus, string> = {
   partial: 'bg-amber-50 text-amber-700 border-amber-200',
   failing: 'bg-red-50 text-red-700 border-red-200',
   uncovered: 'bg-gray-100 text-gray-500 border-gray-200',
+};
+const SOURCE_STYLE: Record<TraceSource, string> = {
+  brd: 'bg-[#F5F3FF] text-[#6D28D9] border-[#DDD6FE]',
+  frd: 'bg-[#E0E7FF] text-[#4338CA] border-[#C7D2FE]',
+  manual: 'bg-gray-100 text-gray-600 border-gray-200',
 };
 
 interface Form { id?: string; reqKey: string; title: string; description: string; priority: Priority; source: string; linkedEndpoints: LinkedEndpoint[]; scenariosText: string; defects: { key: string; url: string }[] }
@@ -37,7 +42,9 @@ export default function Traceability({ endpoints, onClose }: { endpoints: Catalo
 
   const [runs, setRuns] = useState<any[]>([]);
   const [runId, setRunId] = useState('');
+  const [view, setView] = useState<'manual' | 'integrated'>('manual');
   const [matrix, setMatrix] = useState<TraceMatrix | null>(null);
+  const [integrated, setIntegrated] = useState<IntegratedMatrix | null>(null);
   const [building, setBuilding] = useState(false);
   const [epSel, setEpSel] = useState('');
 
@@ -83,7 +90,10 @@ export default function Traceability({ endpoints, onClose }: { endpoints: Catalo
 
   const build = async () => {
     setBuilding(true); setError('');
-    try { setMatrix(await getTraceMatrix(runId || undefined)); }
+    try {
+      if (view === 'integrated') setIntegrated(await getIntegratedMatrix(runId || undefined));
+      else setMatrix(await getTraceMatrix(runId || undefined));
+    }
     catch (e: any) { setError(e?.response?.data?.error || e?.message || 'Request failed.'); }
     finally { setBuilding(false); }
   };
@@ -103,6 +113,10 @@ export default function Traceability({ endpoints, onClose }: { endpoints: Catalo
 
           {/* Matrix */}
           <div className={`${CARD} p-3 space-y-2`}>
+            <div className="inline-flex rounded-lg border border-[#E7E3F5] overflow-hidden text-[11.5px] font-semibold">
+              <button type="button" onClick={() => setView('manual')} className={`px-3 py-1 ${view === 'manual' ? 'bg-[#7C3AED] text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>Manual</button>
+              <button type="button" onClick={() => setView('integrated')} className={`px-3 py-1 border-l border-[#E7E3F5] ${view === 'integrated' ? 'bg-[#7C3AED] text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>Integrated (BRD·FRD·defects)</button>
+            </div>
             <div className="flex flex-wrap items-end gap-2">
               <div className="flex-1 min-w-[180px]"><label className={LABEL}>Run to trace against</label>
                 <select value={runId} onChange={(e) => setRunId(e.target.value)} className={FIELD}>
@@ -112,7 +126,7 @@ export default function Traceability({ endpoints, onClose }: { endpoints: Catalo
               </div>
               <button type="button" onClick={() => void build()} disabled={building} className={PRIMARY_BTN}>{building ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}Build matrix</button>
             </div>
-            {matrix && (
+            {view === 'manual' && matrix && (
               <>
                 <div className="flex flex-wrap gap-2 text-[11.5px]">
                   <span className="px-2 py-0.5 rounded border bg-gray-50 border-gray-200 font-mono tabular-nums">{matrix.summary.coveragePct}% covered</span>
@@ -145,6 +159,7 @@ export default function Traceability({ endpoints, onClose }: { endpoints: Catalo
                 </div>
               </>
             )}
+            {view === 'integrated' && integrated && <IntegratedView m={integrated} />}
           </div>
 
           {/* Requirements list */}
@@ -216,5 +231,74 @@ export default function Traceability({ endpoints, onClose }: { endpoints: Catalo
         </div>
       </div>
     </div>
+  );
+}
+
+/** The integrated matrix: every requirement source → cases → tracker defects, plus orphans. */
+function IntegratedView({ m }: { m: IntegratedMatrix }) {
+  const s = m.summary;
+  return (
+    <>
+      <div className="flex flex-wrap gap-2 text-[11.5px]">
+        <span className="px-2 py-0.5 rounded border bg-gray-50 border-gray-200 font-mono tabular-nums">{s.coveragePct}% covered</span>
+        <span className="px-2 py-0.5 rounded border bg-emerald-50 border-emerald-200 text-emerald-700 tabular-nums">{s.covered} covered</span>
+        <span className="px-2 py-0.5 rounded border bg-amber-50 border-amber-200 text-amber-700 tabular-nums">{s.partial} partial</span>
+        <span className="px-2 py-0.5 rounded border bg-red-50 border-red-200 text-red-700 tabular-nums">{s.failing} failing</span>
+        <span className="px-2 py-0.5 rounded border bg-gray-50 border-gray-200 text-gray-500 tabular-nums">{s.uncovered} uncovered</span>
+        {m.runTitle && <span className="text-gray-400 ml-auto truncate max-w-[40%]">{m.runTitle}</span>}
+      </div>
+      <div className="flex flex-wrap gap-2 text-[11px]">
+        <span className="px-2 py-0.5 rounded border border-[#DDD6FE] bg-[#F5F3FF] text-[#6D28D9]">{s.bySource.brd} BRD</span>
+        <span className="px-2 py-0.5 rounded border border-[#C7D2FE] bg-[#E0E7FF] text-[#4338CA]">{s.bySource.frd} FRD</span>
+        <span className="px-2 py-0.5 rounded border border-gray-200 bg-gray-100 text-gray-600">{s.bySource.manual} manual</span>
+        <span className="px-2 py-0.5 rounded border border-rose-200 bg-rose-50 text-rose-700 tabular-nums">{s.trackerDefects} tracker defects</span>
+        <span className="px-2 py-0.5 rounded border border-orange-200 bg-orange-50 text-orange-700 tabular-nums">{s.orphanTests} orphan tests</span>
+        <span className="px-2 py-0.5 rounded border border-orange-200 bg-orange-50 text-orange-700 tabular-nums">{s.orphanDefects} orphan defects</span>
+      </div>
+      <div className="border border-[#E9E5FB] rounded-lg overflow-hidden">
+        <table className="w-full text-[11.5px]">
+          <thead className={THEAD}><tr className="text-gray-500 text-left">
+            <th className="font-semibold px-2.5 py-1.5">Src</th>
+            <th className="font-semibold px-2.5 py-1.5">Requirement</th>
+            <th className="font-semibold px-2.5 py-1.5 text-right">EP</th>
+            <th className="font-semibold px-2.5 py-1.5">Status</th>
+            <th className="font-semibold px-2.5 py-1.5 text-right">Cases</th>
+            <th className="font-semibold px-2.5 py-1.5 text-right">Defects</th>
+          </tr></thead>
+          <tbody className="divide-y divide-gray-100">
+            {m.rows.length === 0 && <tr><td colSpan={6} className="px-2.5 py-4 text-center text-gray-400">No requirements from any source yet — add BRD/FRD documents or manual requirements.</td></tr>}
+            {m.rows.map((row, i) => (
+              <tr key={`${row.source}-${row.reqKey}-${i}`} className="align-top">
+                <td className="px-2.5 py-1.5"><span className={`inline-flex px-1.5 py-0.5 rounded border text-[9.5px] font-bold uppercase ${SOURCE_STYLE[row.source]}`}>{row.source}</span></td>
+                <td className="px-2.5 py-1.5"><span className="text-gray-700">{row.reqKey ? <b className="font-mono text-[#6D28D9]">{row.reqKey} </b> : null}{row.title}</span></td>
+                <td className="px-2.5 py-1.5 text-right font-mono tabular-nums text-gray-500">{row.endpoints.length}</td>
+                <td className="px-2.5 py-1.5"><span className={`inline-flex px-1.5 py-0.5 rounded border text-[10.5px] font-semibold ${STATUS_STYLE[row.status]}`}>{row.status}</span></td>
+                <td className="px-2.5 py-1.5 text-right font-mono tabular-nums text-gray-600">{row.passed}✓ {row.failed}✗ {row.notRun}·</td>
+                <td className="px-2.5 py-1.5 text-right font-mono tabular-nums">{row.trackerDefects.length ? <span className="text-rose-600" title="tracker defects">{row.trackerDefects.length}⛓</span> : null}{row.caseDefects.length ? <span className="text-red-600 ml-1">{row.caseDefects.length}✗</span> : null}{!row.trackerDefects.length && !row.caseDefects.length ? <span className="text-gray-300">0</span> : null}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {(m.orphanTests.length > 0 || m.orphanDefects.length > 0) && (
+        <div className="rounded-lg border border-orange-200 bg-orange-50/50 p-2.5 space-y-1.5">
+          <div className="text-[11px] font-bold text-orange-800 uppercase tracking-wide">Orphans — tested or defected, but tied to no requirement</div>
+          {m.orphanTests.slice(0, 20).map((o) => (
+            <div key={o.id} className="flex items-center gap-2 text-[11px]">
+              <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-orange-200 bg-white text-orange-700 flex-shrink-0">test</span>
+              <span className="text-gray-700 min-w-0 flex-1 truncate" title={o.title}>{o.title}</span>
+              {o.endpoint && <code className="text-[10px] text-gray-500 flex-shrink-0">{o.endpoint}</code>}
+            </div>
+          ))}
+          {m.orphanDefects.slice(0, 20).map((d, i) => (
+            <div key={`d${i}`} className="flex items-center gap-2 text-[11px]">
+              <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-rose-200 bg-white text-rose-700 flex-shrink-0">defect</span>
+              <span className="text-gray-700 min-w-0 flex-1 truncate">{d.key}</span>
+              {d.url && <a href={d.url} target="_blank" rel="noreferrer" className="text-[10px] text-[#6D28D9] hover:underline flex-shrink-0">open</a>}
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
