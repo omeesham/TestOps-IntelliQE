@@ -1,5 +1,15 @@
 # IntelliQE release notes
 
+## poc-v1 (30 Oct 2026)
+
+Image: `jbsintelliqe-app:poc-v1`. Everything in poc-v1-rc1, plus:
+
+- Explore reads fields captioned without a label (a caption beside the box), with their mandatory "*" mark and confidence, and reports a failed sign-in as failed.
+- Self-healing can be switched off in System Configuration → AI Self-Healing; each script gets at most two AI repair attempts, reset when it passes or a person edits it.
+- In production, database setup at start-up is retried for about a minute, so a database that is still starting does not skip schema upgrades.
+
+Verified in the container (production mode): the poc-v1-rc1 checks, the self-healing switch and limit, and a start-up with the database coming up 20 seconds after the app.
+
 ## poc-v1-rc1 (29 Oct 2026)
 
 Image: `jbsintelliqe-app:poc-v1-rc1` (container image, Linux, Chromium test browser).
