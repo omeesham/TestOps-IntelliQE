@@ -1252,8 +1252,12 @@ export default function ChatPage() {
 
     let scripts: any[] = [];
     let scriptErr: string | null = null;
+    let failedTcs: string[] = [];
     try {
-      const scriptRes = await generateScriptsForRun(savedTestRunId);
+      const scriptRes = await generateScriptsForRun(savedTestRunId, false, ({ done, total }) => {
+        if (total) updatePipeline('script-gen', 'running', `Producing automation scripts... ${done}/${total}`);
+      });
+      failedTcs = scriptRes?.failed || [];
       const rows = Array.isArray(scriptRes?.scripts) ? scriptRes.scripts : [];
       scripts = rows.map((s: any) => ({
         testCaseId: s.test_case_id || s.testCaseId,
@@ -1282,6 +1286,9 @@ export default function ChatPage() {
     updatePipeline('script-gen', 'completed', `${scripts.length} scripts created`);
 
     push('tessa', `Generated ${scripts.length} test scripts. Review the code below, then click "Execute Test Suite" to run them.`);
+    if (failedTcs.length) {
+      push('tessa', `⚠️ No script was generated for ${failedTcs.length} test case(s): ${failedTcs.join(', ')}. Generate scripts again from Generated Test Cases to retry them.`);
+    }
     setStep('script-review');
   };
 
@@ -1356,7 +1363,12 @@ export default function ChatPage() {
     // run, we show "not_run" — we do NOT pretend it passed.
     // ─────────────────────────────────────────────────────────────
     const backendDetails: any[] = Array.isArray(execRes?.executionDetails) ? execRes.executionDetails : [];
-    const detailByTcId = new Map<string, any>(backendDetails.map((d) => [d.testCaseId, d]));
+    // A script can hold several tests (one per test document): any failure fails the test case.
+    const detailByTcId = new Map<string, any>();
+    for (const d of backendDetails) {
+      const prev = detailByTcId.get(d.testCaseId);
+      if (!prev || (prev.status !== 'failed' && d.status === 'failed')) detailByTcId.set(d.testCaseId, d);
+    }
 
     let passed = 0;
     let failed = 0;
@@ -1399,6 +1411,10 @@ export default function ChatPage() {
       push('tessa', `Execution complete: ${passed} passed, ${failed} failed out of ${finalResults.length} tests. You can auto-heal failing tests or skip to report.`);
     } else {
       push('tessa', `All ${passed} tests passed! Proceed to generate the execution report.`);
+    }
+    const accuracy = execRes?.documentAccuracy;
+    if (accuracy) {
+      push('tessa', `Document accuracy: ${accuracy.accuracy}% of ${accuracy.checked} values correct across ${accuracy.documents} documents — ${accuracy.meetsThreshold ? 'every field meets' : 'some fields are below'} the ${accuracy.settings.threshold}% threshold. ${accuracy.flags.length} read(s) flagged for review; the full scorecard is in the report.`);
     }
     setStep('execution-results');
   };

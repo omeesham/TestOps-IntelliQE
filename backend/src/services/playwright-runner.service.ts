@@ -5,8 +5,9 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import pool from '../db.js';
-import { appTestDataDir, materializeTestData, specUsesTestData, TEST_DATA_ENV } from './test-data.service.js';
+import { ANSWER_KEY_FILE, appTestDataDir, installDocumentHelper, materializeTestData, specUsesDocumentHelper, specUsesTestData, TEST_DATA_ENV } from './test-data.service.js';
 import { getConfigsForTenant } from './configurations.service.js';
+import { accuracySettings, answerKeyValues, collectDocumentChecks, summariseDocumentChecks, writeAllureScorecard, type AccuracyScorecard } from './document-accuracy.service.js';
 import { appEnvironments, pickEnvironment } from './app-environments.js';
 import { errorWithBlocked, prepareGuardedRun, specForRun, type SafetySettings } from './uat-safety.service.js';
 
@@ -15,6 +16,8 @@ const execFileAsync = promisify(execFile);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
+/** Limit for one whole Playwright run; document checks over many test documents need more than the default. */
+const RUN_TIMEOUT_MS = Number(process.env.PLAYWRIGHT_RUN_TIMEOUT_MS) || 600_000;
 
 function sanitizeFileName(raw: string): string {
   return (raw || 'test').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120);
@@ -26,17 +29,30 @@ function sanitizeFileName(raw: string): string {
  * which the runner passes to the specs as IQE_TEST_DATA_DIR. Returns null when
  * no spec uses test files. Re-runs work the same way: the app comes from the run.
  */
-async function prepareRunTestData(tenantId: string, runId: string, workspace: string, codes: string[]): Promise<string | null> {
+export async function prepareRunTestData(tenantId: string, runId: string, workspace: string, codes: string[]): Promise<string | null> {
   if (!codes.some(specUsesTestData)) return null;
   const dir = path.join(workspace, 'test-data');
   try {
     const { rows } = await pool.query(`SELECT app_id FROM test_runs WHERE id = $1`, [runId]);
     const appId: string | null = rows[0]?.app_id || null;
     await materializeTestData(appId ? appTestDataDir(tenantId, appId) : path.join(workspace, 'no-app-files'), dir);
+    if (codes.some(specUsesDocumentHelper)) await installDocumentHelper(workspace);
     return dir;
   } catch (err) {
     console.warn(`[runner] test files not prepared for run ${runId}: ${(err as Error).message}`);
     return null;
+  }
+}
+
+/** The expected values in the answer key of a run's app; empty when it has none. */
+export async function runAnswerKeyValues(tenantId: string, runId: string): Promise<string[]> {
+  try {
+    const { rows } = await pool.query(`SELECT app_id FROM test_runs WHERE id = $1`, [runId]);
+    const appId: string | null = rows[0]?.app_id || null;
+    if (!appId) return [];
+    return answerKeyValues(JSON.parse(await fs.readFile(path.join(appTestDataDir(tenantId, appId), ANSWER_KEY_FILE), 'utf-8')));
+  } catch {
+    return [];
   }
 }
 
@@ -365,7 +381,7 @@ module.exports = defineConfig({
     const result = await execFileAsync(
       isWindows ? 'npx.cmd' : 'npx',
       ['playwright', 'test', '--config', configPath],
-      { cwd: BACKEND_ROOT, env, timeout: 600_000, maxBuffer: 50 * 1024 * 1024, shell: isWindows },
+      { cwd: BACKEND_ROOT, env, timeout: RUN_TIMEOUT_MS, maxBuffer: 50 * 1024 * 1024, shell: isWindows },
     );
     stdout = result.stdout;
     stderr = result.stderr;
@@ -432,7 +448,7 @@ export async function executeRunScripts(
   tenantId: string,
   isPlatform: boolean,
   runId: string,
-): Promise<{ details: RunSpecResult[]; passed: number; failed: number }> {
+): Promise<{ details: RunSpecResult[]; passed: number; failed: number; documentAccuracy: AccuracyScorecard | null }> {
   if (!runId) throw new Error('runId is required to execute Playwright tests');
 
   const query = isPlatform
@@ -500,7 +516,7 @@ module.exports = defineConfig({
   try {
     const r = await execFileAsync(isWindows ? 'npx.cmd' : 'npx',
       ['playwright', 'test', '--config', configPath],
-      { cwd: BACKEND_ROOT, env, timeout: 600_000, maxBuffer: 50 * 1024 * 1024, shell: isWindows });
+      { cwd: BACKEND_ROOT, env, timeout: RUN_TIMEOUT_MS, maxBuffer: 50 * 1024 * 1024, shell: isWindows });
     stdout = r.stdout; stderr = r.stderr;
   } catch (err: any) {
     stdout = err.stdout || ''; stderr = err.stderr || err.message || '';
@@ -517,11 +533,14 @@ module.exports = defineConfig({
     throw classifyPlaywrightFailure(stdout, stderr, logPath);
   }
 
+  const documentAccuracy = summariseDocumentChecks(collectDocumentChecks(summary), accuracySettings());
+
   // Persist the real allure-results for this run so the Reports page can build
   // the Allure report from this SAME execution (no slow re-run). Best-effort —
   // a copy failure must never fail the execution itself.
   try {
     const srcAllure = path.join(workspace, 'allure-results');
+    if (documentAccuracy) await writeAllureScorecard(srcAllure, documentAccuracy);
     const files = await fs.readdir(srcAllure).catch(() => [] as string[]);
     if (files.length > 0) {
       const dest = storedAllureResultsDir(tenantId, runId);
@@ -560,15 +579,32 @@ module.exports = defineConfig({
   const passed = details.filter((d) => d.status === 'passed').length;
   const failed = details.filter((d) => d.status === 'failed').length;
 
-  // Best-effort last-run stamp.
-  try {
-    await pool.query(
-      `UPDATE "JBSTestOpsAI".automation_scripts SET last_run_at = $1, last_run_result = $2, updated_at = NOW()
-       WHERE test_run_id = $3${isPlatform ? '' : ' AND tenant_id = $4'}`,
-      isPlatform ? [new Date().toISOString(), failed > 0 ? 'failed' : 'passed', runId]
-                 : [new Date().toISOString(), failed > 0 ? 'failed' : 'passed', runId, tenantId],
-    );
-  } catch { /* ignore */ }
+  // Each script's own result: failed when any of its tests failed (a document spec runs one test per document).
+  const failedIds = new Set(details.filter((d) => d.status !== 'passed').map((d) => d.testCaseId));
+  const passedIds = [...new Set(details.filter((d) => d.status === 'passed' && d.testCaseId && !failedIds.has(d.testCaseId)).map((d) => d.testCaseId))];
+  const nowIso = new Date().toISOString();
+  for (const [result, ids] of [['passed', passedIds], ['failed', [...failedIds].filter(Boolean)]] as const) {
+    if (ids.length === 0) continue;
+    try {
+      await pool.query(
+        `UPDATE "JBSTestOpsAI".automation_scripts SET last_run_at = $1, last_run_result = $2, updated_at = NOW()
+         WHERE test_run_id = $3${isPlatform ? '' : ' AND tenant_id = $4'}
+           AND test_case_id IN (${ids.map((_, i) => `$${i + (isPlatform ? 4 : 5)}`).join(', ')})`,
+        [nowIso, result, runId, ...(isPlatform ? [] : [tenantId]), ...ids],
+      );
+    } catch { /* best effort */ }
+  }
 
-  return { details, passed, failed };
+  // Remember which scripts passed as they are: if the same code fails later, the app changed.
+  if (passedIds.length > 0) {
+    try {
+      await pool.query(
+        `UPDATE "JBSTestOpsAI".automation_scripts SET last_passed_at = NOW()
+         WHERE test_run_id = $1 AND test_case_id IN (${passedIds.map((_, i) => `$${i + 2}`).join(', ')})`,
+        [runId, ...passedIds],
+      );
+    } catch { /* ignore */ }
+  }
+
+  return { details, passed, failed, documentAccuracy };
 }

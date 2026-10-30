@@ -38,7 +38,7 @@ export function normaliseTags(input: unknown): string[] {
   return Array.from(new Set(arr.map((t) => String(t).toUpperCase().trim()).filter((t) => TAG_VOCAB.includes(t))));
 }
 
-export const TEST_CASE_CATEGORIES = ['positive', 'negative', 'boundary', 'business-rule', 'edge', 'security', 'accessibility'];
+export const TEST_CASE_CATEGORIES = ['positive', 'negative', 'boundary', 'business-rule', 'edge', 'security', 'accessibility', 'accuracy', 'confidence'];
 
 /** A known test-design category, or null. */
 export function normaliseCategory(input: unknown): string | null {

@@ -89,3 +89,6 @@ temp/
 # Smoke suite output
 backend/smoke/smoke-report/
 backend/smoke/smoke-results/
+
+# Generated labor tickets
+tools/labor-ticket-generator/output/

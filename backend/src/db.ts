@@ -483,6 +483,8 @@ export async function initDb(): Promise<void> {
         updated_at      DATETIMEOFFSET DEFAULT SYSUTCDATETIME(),
         CONSTRAINT automation_scripts_unique_tc_per_run UNIQUE (test_run_id, test_case_id)
       )`);
+    // When the current code last passed; cleared on any code edit.
+    await addColumn('automation_scripts', 'last_passed_at', 'DATETIMEOFFSET');
 
     // ─── 7b. TestRail integration (synced from TestRail; tenant-scoped) ───
     await createTable('testrail_projects', `

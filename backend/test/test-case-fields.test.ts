@@ -24,6 +24,6 @@ test('normaliseTags keeps known tags (including auth, security, data-validation)
 test('normaliseCategory accepts known categories only', () => {
   assert.equal(normaliseCategory('Boundary'), 'boundary');
   assert.equal(normaliseCategory('business-rule'), 'business-rule');
-  assert.equal(normaliseCategory('accuracy'), null);
+  assert.equal(normaliseCategory('performance'), null);
   assert.equal(normaliseCategory(undefined), null);
 });

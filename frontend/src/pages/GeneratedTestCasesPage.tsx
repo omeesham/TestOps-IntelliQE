@@ -8,12 +8,12 @@ import {
 } from 'lucide-react';
 import {
   listTestRuns, getTestRun, updateTestCase, addTestCase, deleteTestCase, deleteTestRun, exportTestCases,
-  generateScriptsForRun, downloadArtifactZip, listTestCaseFacets,
+  generateScriptsForRun, downloadArtifactZip, listTestCaseFacets, type ScriptProgress,
 } from '@/services/api';
 
 const TAG_VOCAB = ['POSITIVE', 'NEGATIVE', 'E2E', 'UI', 'API', 'SMOKE', 'REGRESSION', 'SANITY', 'AUTH', 'SECURITY', 'ACCESSIBILITY', 'DATA-VALIDATION'] as const;
 /** Test-design categories, as assigned by the generator (editable). */
-const CATEGORIES = ['positive', 'negative', 'boundary', 'business-rule', 'edge', 'security', 'accessibility'] as const;
+const CATEGORIES = ['positive', 'negative', 'boundary', 'business-rule', 'edge', 'security', 'accessibility', 'accuracy', 'confidence'] as const;
 type TagName = typeof TAG_VOCAB[number];
 import { Code2, Loader2, Database, BarChart3 } from 'lucide-react';
 import TestDataTab from '@/components/test-data/TestDataTab';
@@ -111,6 +111,7 @@ export default function GeneratedTestCasesPage() {
   const [actionMenuId, setActionMenuId] = useState<string | null>(null);
   const [selectedTcIds, setSelectedTcIds] = useState<Set<string>>(new Set());
   const [generatingScripts, setGeneratingScripts] = useState(false);
+  const [scriptProgress, setScriptProgress] = useState<ScriptProgress | null>(null);
   const [detailTab, setDetailTab] = useState<'cases' | 'data' | 'reports'>('cases');
 
   /* ── Fetch test runs ── */
@@ -209,20 +210,27 @@ export default function GeneratedTestCasesPage() {
   const handleGenerateScripts = async () => {
     if (!selectedRun) return;
     setGeneratingScripts(true);
+    setScriptProgress(null);
     try {
-      const result = await generateScriptsForRun(selectedRun.id);
+      const result = await generateScriptsForRun(selectedRun.id, false, setScriptProgress);
       if (result.ok) {
         // Refresh test cases (status updated to 'scripted')
         const res = await getTestRun(selectedRun.id);
         setTestCases(res.testCases || []);
+        const failed: string[] = result.failed || [];
+        if (failed.length) {
+          alert(`No script was generated for ${failed.length} test case(s): ${failed.join(', ')}. Click Generate Scripts again to retry them.`);
+          return;
+        }
         // Navigate to automation scripts page filtered by this run
         navigate(`/automation-scripts?runId=${selectedRun.id}`);
       }
     } catch (err: any) {
       console.error('Generate scripts failed:', err);
-      alert(err?.response?.data?.error || 'Failed to generate scripts. Make sure test cases are reviewed first.');
+      alert(err?.response?.data?.error || `Failed to generate scripts: ${err?.message || 'unknown error'}`);
     } finally {
       setGeneratingScripts(false);
+      setScriptProgress(null);
     }
   };
 
@@ -386,7 +394,9 @@ export default function GeneratedTestCasesPage() {
                 title={reviewedCount === 0 ? 'Review test cases first' : `Generate scripts for ${reviewedCount} reviewed test cases`}
               >
                 {generatingScripts ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Code2 className="w-3.5 h-3.5" />}
-                {generatingScripts ? 'Generating...' : 'Generate Scripts'}
+                {generatingScripts
+                  ? (scriptProgress?.total ? `Generating ${scriptProgress.done}/${scriptProgress.total}...` : 'Generating...')
+                  : 'Generate Scripts'}
               </button>
               <div className="relative">
                 <button onClick={() => setActionMenuId(actionMenuId === 'export' ? null : 'export')} className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-white border border-[#C5D6FF] text-[#2143A8] rounded-lg hover:bg-[#EEF4FF]">
