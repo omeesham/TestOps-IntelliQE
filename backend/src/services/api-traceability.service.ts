@@ -232,7 +232,7 @@ export interface IntegratedMatrix {
   };
 }
 
-interface ReqNode { source: TraceSource; reqKey: string; title: string; endpoints: LinkedEndpoint[]; scenarios: string[] }
+interface ReqNode { source: TraceSource; reqKey: string; title: string; endpoints: LinkedEndpoint[]; scenarios: string[]; dbId?: string }
 
 function sigOf(method: string, url: string): string { return `${norm(method || 'GET')} ${norm(pathOf(url))}`; }
 
@@ -247,23 +247,23 @@ async function gatherReqNodes(tenantId: string): Promise<ReqNode[]> {
 
   // FRD functional requirements carry the endpoints they imply.
   const frd = await pool.query(
-    `SELECT fr_id, title, endpoints FROM functional_requirements WHERE tenant_id = $1 ORDER BY sort_order`,
+    `SELECT id, fr_id, title, endpoints FROM functional_requirements WHERE tenant_id = $1 ORDER BY sort_order`,
     [tenantId],
   ).catch(() => ({ rows: [] as any[] }));
   for (const r of frd.rows) {
     const eps = jArr(r.endpoints)
       .map((e: any) => ({ method: String(e?.method || 'GET').toUpperCase(), url: String(e?.path || e?.url || '') }))
       .filter((e: LinkedEndpoint) => e.url);
-    nodes.push({ source: 'frd', reqKey: r.fr_id || '', title: r.title || '', endpoints: eps, scenarios: [] });
+    nodes.push({ source: 'frd', reqKey: r.fr_id || '', title: r.title || '', endpoints: eps, scenarios: [], dbId: String(r.id) });
   }
 
   // BRD business requirements sit at the top of the chain (no endpoints of their own).
   const brd = await pool.query(
-    `SELECT br_id, title FROM business_requirements WHERE tenant_id = $1 ORDER BY sort_order`,
+    `SELECT id, br_id, title FROM business_requirements WHERE tenant_id = $1 ORDER BY sort_order`,
     [tenantId],
   ).catch(() => ({ rows: [] as any[] }));
   for (const r of brd.rows) {
-    nodes.push({ source: 'brd', reqKey: r.br_id || '', title: r.title || '', endpoints: [], scenarios: [] });
+    nodes.push({ source: 'brd', reqKey: r.br_id || '', title: r.title || '', endpoints: [], scenarios: [], dbId: String(r.id) });
   }
 
   return nodes;
@@ -276,7 +276,7 @@ async function gatherReqNodes(tenantId: string): Promise<ReqNode[]> {
 // mention anywhere in the FR's text wins; else (2) the BR with the highest
 // token-overlap score above a floor. Rebuilt wholesale per tenant on each call.
 
-export interface BrdFrdLink { brKey: string; frKey: string; confidence: number; rationale: string }
+export interface BrdFrdLink { brKey: string; frKey: string; brDbId?: string; frDbId?: string; confidence: number; rationale: string }
 
 const STOP = new Set(['the', 'a', 'an', 'to', 'of', 'and', 'or', 'for', 'in', 'on', 'with', 'is', 'are', 'be', 'by', 'as', 'at', 'it', 'this', 'that', 'shall', 'should', 'must', 'will', 'can', 'api', 'user', 'system', 'data']);
 function tokens(s: string): Set<string> {
@@ -288,31 +288,28 @@ function overlap(a: Set<string>, b: Set<string>): number {
   return hits / Math.sqrt(a.size * b.size); // cosine-ish, 0..1
 }
 
-interface BrRow { br_key: string; blob: string }
-interface FrRow { fr_key: string; blob: string }
-
 /** Rebuild the tenant's BRD↔FRD links and return them. Pure DB + heuristics. */
 export async function mapBrdFrd(tenantId: string, username: string): Promise<{ links: BrdFrdLink[]; summary: { frTotal: number; mapped: number; unmapped: number; brTotal: number } }> {
   const brs = await pool.query(
-    `SELECT br_id, title, description, objective, rules FROM business_requirements WHERE tenant_id = $1`,
+    `SELECT id, br_id, title, description, objective, rules FROM business_requirements WHERE tenant_id = $1`,
     [tenantId],
   ).catch(() => ({ rows: [] as any[] }));
   const frs = await pool.query(
-    `SELECT fr_id, title, description, dependencies FROM functional_requirements WHERE tenant_id = $1 ORDER BY sort_order`,
+    `SELECT id, fr_id, title, description, dependencies FROM functional_requirements WHERE tenant_id = $1 ORDER BY sort_order`,
     [tenantId],
   ).catch(() => ({ rows: [] as any[] }));
 
-  const brRows: (BrRow & { tok: Set<string>; keyUpper: string })[] = brs.rows
+  const brRows = brs.rows
     .filter((b: any) => b.br_id)
     .map((b: any) => {
       const blob = [b.title, b.description, b.objective, b.rules].filter(Boolean).join(' ');
-      return { br_key: String(b.br_id), blob, tok: tokens(blob), keyUpper: String(b.br_id).toUpperCase() };
+      return { id: String(b.id), br_key: String(b.br_id), tok: tokens(blob), keyUpper: String(b.br_id).toUpperCase() };
     });
-  const frRows: (FrRow & { tok: Set<string>; text: string })[] = frs.rows
+  const frRows = frs.rows
     .filter((f: any) => f.fr_id)
     .map((f: any) => {
       const blob = [f.title, f.description, Array.isArray(f.dependencies) ? f.dependencies.join(' ') : f.dependencies].filter(Boolean).join(' ');
-      return { fr_key: String(f.fr_id), blob, tok: tokens(blob), text: blob.toUpperCase() };
+      return { id: String(f.id), fr_key: String(f.fr_id), tok: tokens(blob), text: blob.toUpperCase() };
     });
 
   const links: BrdFrdLink[] = [];
@@ -320,15 +317,15 @@ export async function mapBrdFrd(tenantId: string, username: string): Promise<{ l
   for (const fr of frRows) {
     // (1) explicit mention of a BR key in the FR text
     const explicit = brRows.find((br) => fr.text.includes(br.keyUpper));
-    if (explicit) { links.push({ brKey: explicit.br_key, frKey: fr.fr_key, confidence: 1, rationale: `FR text references ${explicit.br_key}` }); continue; }
+    if (explicit) { links.push({ brKey: explicit.br_key, frKey: fr.fr_key, brDbId: explicit.id, frDbId: fr.id, confidence: 1, rationale: `FR text references ${explicit.br_key}` }); continue; }
     // (2) best token overlap
-    let best: { br: string; score: number } | null = null;
+    let best: { br: typeof brRows[number]; score: number } | null = null;
     for (const br of brRows) {
       const score = overlap(fr.tok, br.tok);
-      if (!best || score > best.score) best = { br: br.br_key, score };
+      if (!best || score > best.score) best = { br, score };
     }
     if (best && best.score >= MIN_SCORE) {
-      links.push({ brKey: best.br, frKey: fr.fr_key, confidence: Math.round(best.score * 100) / 100, rationale: `Best keyword overlap (${Math.round(best.score * 100)}%)` });
+      links.push({ brKey: best.br.br_key, frKey: fr.fr_key, brDbId: best.br.id, frDbId: fr.id, confidence: Math.round(best.score * 100) / 100, rationale: `Best keyword overlap (${Math.round(best.score * 100)}%)` });
     }
   }
 
@@ -336,8 +333,8 @@ export async function mapBrdFrd(tenantId: string, username: string): Promise<{ l
   await pool.query(`DELETE FROM brd_frd_links WHERE tenant_id = $1`, [tenantId]);
   for (const l of links) {
     await pool.query(
-      `INSERT INTO brd_frd_links (tenant_id, br_key, fr_key, confidence, rationale, created_by) VALUES ($1, $2, $3, $4, $5, $6)`,
-      [tenantId, l.brKey, l.frKey, l.confidence, l.rationale.slice(0, 600), username],
+      `INSERT INTO brd_frd_links (tenant_id, br_key, fr_key, br_db_id, fr_db_id, confidence, rationale, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [tenantId, l.brKey, l.frKey, l.brDbId || null, l.frDbId || null, l.confidence, l.rationale.slice(0, 600), username],
     );
   }
 
@@ -383,22 +380,23 @@ export async function exportRtmXlsx(tenantId: string, runId?: string): Promise<B
 
 export async function listBrdFrdLinks(tenantId: string): Promise<BrdFrdLink[]> {
   const { rows } = await pool.query(
-    `SELECT br_key, fr_key, confidence, rationale FROM brd_frd_links WHERE tenant_id = $1 ORDER BY br_key, fr_key`,
+    `SELECT br_key, fr_key, br_db_id, fr_db_id, confidence, rationale FROM brd_frd_links WHERE tenant_id = $1 ORDER BY br_key, fr_key`,
     [tenantId],
   ).catch(() => ({ rows: [] as any[] }));
-  return rows.map((r: any) => ({ brKey: r.br_key, frKey: r.fr_key, confidence: Number(r.confidence || 0), rationale: r.rationale || '' }));
+  return rows.map((r: any) => ({ brKey: r.br_key, frKey: r.fr_key, brDbId: r.br_db_id ? String(r.br_db_id) : undefined, frDbId: r.fr_db_id ? String(r.fr_db_id) : undefined, confidence: Number(r.confidence || 0), rationale: r.rationale || '' }));
 }
 
 export async function buildIntegratedMatrix(tenantId: string, opts: { runId?: string } = {}): Promise<IntegratedMatrix> {
   const nodes = await gatherReqNodes(tenantId);
 
-  // Gap A: BRD↔FRD edges, so FRD rows show their parent BR and BR rows list children.
+  // Gap A: BRD↔FRD edges, keyed by requirement DB id (FR-###/BR-### keys are only
+  // unique within one document, so a bare key would over-link across documents).
   const links = await listBrdFrdLinks(tenantId);
-  const brOfFr = new Map<string, string>();      // fr_key → br_key
-  const frsOfBr = new Map<string, string[]>();    // br_key → [fr_key]
+  const brOfFr = new Map<string, string>();      // fr_db_id → br_key (display)
+  const frsOfBr = new Map<string, string[]>();    // br_db_id → [fr_key] (display)
   for (const l of links) {
-    brOfFr.set(l.frKey, l.brKey);
-    const arr = frsOfBr.get(l.brKey) || []; arr.push(l.frKey); frsOfBr.set(l.brKey, arr);
+    if (l.frDbId) brOfFr.set(l.frDbId, l.brKey);
+    if (l.brDbId) { const arr = frsOfBr.get(l.brDbId) || []; arr.push(l.frKey); frsOfBr.set(l.brDbId, arr); }
   }
 
   // reference run
@@ -479,8 +477,8 @@ export async function buildIntegratedMatrix(tenantId: string, opts: { runId?: st
     else if (passed === cases.length) status = 'covered';
     else status = 'partial';
 
-    const brdRef = node.source === 'frd' ? brOfFr.get(node.reqKey) : undefined;
-    const frdRefs = node.source === 'brd' ? frsOfBr.get(node.reqKey) : undefined;
+    const brdRef = node.source === 'frd' && node.dbId ? brOfFr.get(node.dbId) : undefined;
+    const frdRefs = node.source === 'brd' && node.dbId ? frsOfBr.get(node.dbId) : undefined;
     const scriptPaths = [...new Set(cases.map((c) => scriptByTc.get(c.id.toUpperCase())).filter((v): v is string => !!v))];
     return { source: node.source, reqKey: node.reqKey, title: node.title, endpoints: node.endpoints, cases, passed, failed, notRun, status, trackerDefects, caseDefects, brdRef, frdRefs, scriptPaths };
   });

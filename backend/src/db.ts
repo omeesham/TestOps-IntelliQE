@@ -1776,11 +1776,17 @@ export async function initDb(): Promise<void> {
         tenant_id    UNIQUEIDENTIFIER NOT NULL,
         br_key       NVARCHAR(40) NOT NULL,
         fr_key       NVARCHAR(40) NOT NULL,
+        br_db_id     UNIQUEIDENTIFIER,
+        fr_db_id     UNIQUEIDENTIFIER,
         confidence   FLOAT NOT NULL DEFAULT 0,
         rationale    NVARCHAR(600),
         created_by   NVARCHAR(200),
         created_at   DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
       )`);
+    // FR-### / BR-### keys are only unique within one document, so joins key off
+    // the requirement's DB id instead (added here for tables created before this).
+    await addColumn('brd_frd_links', 'br_db_id', 'UNIQUEIDENTIFIER');
+    await addColumn('brd_frd_links', 'fr_db_id', 'UNIQUEIDENTIFIER');
 
     // Module 4 — Jira defect automation. A stable per-failure signature links a
     // test failure to the tracker defect it raised, so recurring failures update
