@@ -102,3 +102,16 @@ test('specs using the helper get the test files; the prompt block needs an answe
   assert.equal(documentCheckPromptBlock(['a.pdf']), '');
   assert.match(documentCheckPromptBlock(['a.pdf', 'answer-key.json']), /from '\.\.\/iqe-documents'/);
 });
+
+test('a key column matches the one screen header that starts with it ("ST Hrs" → "ST Hrs Worked")', () => {
+  const key: KeyEntry = { rows: [{ expected: { 'Worker Name': 'Ana Lee', 'ST Hrs': '8', 'OT Hrs': '1' } }] };
+  const results = compareDocument(key, { rows: [{ 'Worker Name': 'Ana Lee', 'ST Hrs Worked': '8', 'OT Hrs Worked': '1.0', 'Time Off (ST)': '0' }] });
+  assert.deepEqual(results.map((r) => `${r.field}:${r.outcome}`), ['Worker Name:correct', 'ST Hrs:correct', 'OT Hrs:correct']);
+
+  // An exact header wins over a longer one; two longer candidates are too unsure to pick.
+  const exact = compareDocument({ rows: [{ expected: { Date: '2026-08-11' } }] }, { rows: [{ Date: '08/11/2026', 'Date Received': '01/01/2026' }] });
+  assert.equal(exact[0].outcome, 'correct');
+  const unsure = compareDocument({ rows: [{ expected: { Time: '07:00' } }] }, { rows: [{ 'Time Start': '07:00', 'Time Stop': '15:00' }] });
+  assert.equal(unsure[0].outcome, 'missed');
+  assert.equal(unsure[0].note, 'not read from the screen');
+});

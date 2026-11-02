@@ -97,8 +97,18 @@ export function sameValue(expected: string, actual: string): boolean {
 
 const valueOf = (r: Reading | undefined): string => (typeof r === 'string' ? r : r?.value ?? '');
 const confidenceOf = (r: Reading | undefined): number | undefined => (typeof r === 'object' ? r.confidence : undefined);
-const find = (record: Record<string, Reading> | undefined, field: string): Reading | undefined =>
-  Object.entries(record || {}).find(([k]) => sameName(k, field))?.[1];
+/**
+ * The reading for a field: same name, else the one screen name that starts with it
+ * (a header "ST Hrs Worked" for the key's "ST Hrs").
+ */
+function find(record: Record<string, Reading> | undefined, field: string): Reading | undefined {
+  const entries = Object.entries(record || {});
+  const exact = entries.find(([k]) => sameName(k, field));
+  if (exact) return exact[1];
+  const prefix = `${norm(field.replace(/\*/g, ''))} `;
+  const longer = entries.filter(([k]) => norm(k.replace(/\*/g, '')).startsWith(prefix));
+  return longer.length === 1 ? longer[0][1] : undefined;
+}
 
 function result(field: string, expected: string, reading: Reading | undefined, row?: number, note?: string): FieldResult {
   const actual = valueOf(reading);
@@ -153,10 +163,10 @@ export async function checkDocument(doc: TestDocument, readings: Readings, only:
 }
 
 const labelPattern = (label: string): RegExp =>
-  new RegExp(`^\\s*${label.replace(/\*/g, '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\*?\\s*:?\\s*$`, 'i');
+  new RegExp(`^\\s*\\*?\\s*${label.replace(/\*/g, '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\*?\\s*:?\\s*$`, 'i');
 
 /**
- * The form control of a field by its visible label (a trailing "*" is ignored),
+ * The form control of a field by its visible label (a "*" before or after it is ignored),
  * also when the label is not linked to its input: then the first control after the label text.
  */
 export function fieldByLabel(page: Page, label: string): Locator {
@@ -190,9 +200,11 @@ export async function readFields(page: Page, labels: string[]): Promise<Record<s
 export async function readTable(page: Page, nth = 0): Promise<Record<string, string>[]> {
   return page.locator('table').nth(nth).evaluate((table) => {
     const clean = (s: string | null): string => (s || '').replace(/\*/g, '').replace(/\s+/g, ' ').trim();
-    const rows = Array.from(table.querySelectorAll('tr'));
+    // A footer (e.g. a "Totals" row) is not a document row.
+    const rows = Array.from(table.querySelectorAll('tr')).filter((tr) => !tr.closest('tfoot'));
     const head = rows.find((tr) => tr.querySelector('th'));
-    const headers = Array.from(head?.querySelectorAll('th') || []).map((th) => clean(th.textContent));
+    // innerText keeps a line break inside a header ("ST Hrs<br>Worked") as a space.
+    const headers = Array.from(head?.querySelectorAll('th') || []).map((th) => clean((th as HTMLElement).innerText || th.textContent));
     return rows.filter((tr) => tr !== head && tr.querySelector('td')).map((tr) => {
       const row: Record<string, string> = {};
       Array.from(tr.querySelectorAll('td')).forEach((td, i) => {
