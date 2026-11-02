@@ -136,7 +136,7 @@ import { getCiConfig, rotateCiToken, setCiEnabled } from '../services/api-ci.ser
 import { listQueue, saveQueueConfig, enqueueRun, cancelQueued } from '../services/api-exec-queue.service.js';
 import { listCloudLabs, saveCloudLab, deleteCloudLab, testCloudLab, runCloudMatrix } from '../services/api-cloud-lab.service.js';
 import { listSuites, saveSuite, deleteSuite, listPlans, savePlan, deletePlan, listCycles, startCycle, deleteCycle, listAssignments, saveAssignment, setAssignmentStatus, deleteAssignment, listTenantMembers, getPlanProgress } from '../services/api-test-management.service.js';
-import { listRequirements, saveRequirement, deleteRequirement, buildMatrix, buildIntegratedMatrix, mapBrdFrd, listBrdFrdLinks, exportRtmXlsx } from '../services/api-traceability.service.js';
+import { listRequirements, saveRequirement, deleteRequirement, buildMatrix, buildIntegratedMatrix, mapBrdFrd, exportRtmXlsx } from '../services/api-traceability.service.js';
 import { getIntegrationDashboard } from '../services/api-integration-dashboard.service.js';
 import { listConnectors, saveConnector, deleteConnector, testConnector, exportRun, importCases } from '../services/api-tm-connectors.service.js';
 import { listConnectors as listCiConnectors, saveConnector as saveCiConnector, deleteConnector as deleteCiConnector, testConnector as testCiConnector, listRepos as listCiRepos } from '../services/api-cicd-connectors.service.js';
@@ -2244,9 +2244,6 @@ router.post('/traceability/map-brd-frd', async (req: Request, res: Response) => 
     void logAudit(req, 'update', 'brd_frd_mapping', req.user!.tenantId, { mapped: result.summary.mapped, frTotal: result.summary.frTotal });
     res.json(result);
   } catch (err) { fail(res, err, 500); }
-});
-router.get('/traceability/brd-frd-links', async (req: Request, res: Response) => {
-  try { res.json({ links: await listBrdFrdLinks(req.user!.tenantId) }); } catch (err) { fail(res, err, 500); }
 });
 /* Gap C: RTM export as a true .xlsx (BRD→FRD→API→case→script→status→defect + summary). */
 router.get('/traceability/export.xlsx', async (req: Request, res: Response) => {

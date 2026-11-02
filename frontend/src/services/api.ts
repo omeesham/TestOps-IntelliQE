@@ -1807,10 +1807,6 @@ export interface BrdFrdLink { brKey: string; frKey: string; confidence: number; 
 export async function mapBrdFrd(): Promise<{ links: BrdFrdLink[]; summary: { frTotal: number; mapped: number; unmapped: number; brTotal: number } }> {
   const { data } = await api.post('/api-automation/traceability/map-brd-frd'); return data;
 }
-export async function getBrdFrdLinks(): Promise<BrdFrdLink[]> {
-  const { data } = await api.get('/api-automation/traceability/brd-frd-links'); return data.links || [];
-}
-
 // Gap C: download the RTM as a true .xlsx (auth header carried via the axios client)
 export async function downloadRtmXlsx(runId?: string): Promise<Blob> {
   const { data } = await api.get('/api-automation/traceability/export.xlsx', { params: runId ? { runId } : {}, responseType: 'blob' });

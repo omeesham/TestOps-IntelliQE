@@ -14,7 +14,7 @@ import {
   type Requirement, type LinkedEndpoint, type TraceMatrix, type TraceStatus, type IntegratedMatrix, type TraceSource,
 } from '@/services/api';
 import { Link2 } from 'lucide-react';
-import { CARD, STRIP, INPUT, FIELD, LABEL, PRIMARY_BTN, SECONDARY_BTN, THEAD } from './format';
+import { CARD, STRIP, INPUT, FIELD, LABEL, PRIMARY_BTN, THEAD } from './format';
 import type { CatalogEndpoint } from './types';
 
 type Priority = Requirement['priority'];
