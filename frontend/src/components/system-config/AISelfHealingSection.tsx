@@ -152,7 +152,7 @@ function getDefaults(): FormState {
     oauthClientId: '', oauthClientSecret: '', oauthTokenUrl: '', oauthScope: '',
     pipelineMode: 'auto', enableWorker: false, workerSecret: 'dev-secret',
     autoHealLocators: true, autoRetryAfterHealing: true, aiRootCauseAnalysis: false,
-    healingConfidence: 75, maxHealingAttempts: 3,
+    healingConfidence: 75, maxHealingAttempts: 2,
   };
 }
 
@@ -565,7 +565,7 @@ export default function AISelfHealingSection({ configs }: Props) {
         </div>
         <div className="space-y-4">
           {([
-            ['autoHealLocators', 'Enable auto-healing for broken locators'],
+            ['autoHealLocators', 'Enable self-healing (Auto-heal)'],
             ['autoRetryAfterHealing', 'Auto-retry failed tests after healing'],
             ['aiRootCauseAnalysis', 'Enable AI root cause analysis'],
           ] as const).map(([key, label]) => (
@@ -585,7 +585,7 @@ export default function AISelfHealingSection({ configs }: Props) {
             </div>
             <div>
               <label className="block text-sm font-medium text-[#1E3A8A] mb-1">Max Healing Attempts</label>
-              <input type="number" value={form.maxHealingAttempts} onChange={(e) => setForm(prev => ({ ...prev, maxHealingAttempts: parseInt(e.target.value) || 3 }))} min={1} max={10} className={INPUT_CLASS} />
+              <input type="number" value={form.maxHealingAttempts} onChange={(e) => setForm(prev => ({ ...prev, maxHealingAttempts: Math.min(2, parseInt(e.target.value) || 2) }))} min={1} max={2} className={INPUT_CLASS} />
             </div>
           </div>
         </div>

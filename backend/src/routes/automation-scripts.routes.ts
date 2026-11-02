@@ -149,7 +149,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     const vals: any[] = [];
     let idx = 1;
 
-    if (code !== undefined) { updates.push(`code = $${idx++}`); vals.push(code); updates.push(`version = version + 1`, `last_passed_at = NULL`); }
+    if (code !== undefined) { updates.push(`code = $${idx++}`); vals.push(code); updates.push(`version = version + 1`, `last_passed_at = NULL`, `heal_attempts = 0`); }
     if (file_name !== undefined) { updates.push(`file_name = $${idx++}`); vals.push(file_name); }
     if (status !== undefined) { updates.push(`status = $${idx++}`); vals.push(status); }
     updates.push(`updated_at = NOW()`);

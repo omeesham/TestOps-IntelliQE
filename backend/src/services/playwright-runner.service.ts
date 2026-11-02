@@ -107,6 +107,7 @@ export type PlaywrightFailureCode =
   | 'COMPILE_ERROR'        // generated specs have TypeScript / syntax errors
   | 'TIMEOUT'              // Playwright run exceeded the per-call timeout
   | 'WORKER_ENV'           // backend can't even spawn npx (Windows shell issue, missing PATH...)
+  | 'HEALING_OFF'          // self-healing is switched off in System Configuration
   | 'UNKNOWN';
 
 export class PlaywrightRunError extends Error {
@@ -599,7 +600,7 @@ module.exports = defineConfig({
   if (passedIds.length > 0) {
     try {
       await pool.query(
-        `UPDATE "JBSTestOpsAI".automation_scripts SET last_passed_at = NOW()
+        `UPDATE "JBSTestOpsAI".automation_scripts SET last_passed_at = NOW(), heal_attempts = 0
          WHERE test_run_id = $1 AND test_case_id IN (${passedIds.map((_, i) => `$${i + 2}`).join(', ')})`,
         [runId, ...passedIds],
       );

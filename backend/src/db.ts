@@ -485,6 +485,8 @@ export async function initDb(): Promise<void> {
       )`);
     // When the current code last passed; cleared on any code edit.
     await addColumn('automation_scripts', 'last_passed_at', 'DATETIMEOFFSET');
+    // AI repair attempts since the script last passed or was edited (capped by healing).
+    await addColumn('automation_scripts', 'heal_attempts', 'INT NOT NULL DEFAULT 0');
 
     // ─── 7b. TestRail integration (synced from TestRail; tenant-scoped) ───
     await createTable('testrail_projects', `
