@@ -583,4 +583,36 @@ export async function deleteIssue(creds: JiraCreds, issueKey: string): Promise<v
   });
 }
 
-export default { testConnection, getStories, getStory, getCredsForTenant, saveCredsForTenant, deleteCredsForTenant, getConnectionStatus, createBug, deleteIssue, getProjects, getIssues, addComment };
+export interface JiraAttachmentMeta {
+  /** Jira attachment id. */
+  id: string;
+  /** Original file name (e.g. api-tests.xlsx, swagger.json). */
+  name: string;
+  /** File size in bytes, when Jira reports it. */
+  sizeBytes?: number;
+  /** Upload date, when Jira reports it. */
+  createdDate?: string;
+}
+
+/**
+ * List the files attached to a Jira issue WITHOUT downloading them — metadata
+ * only (name, size, id), read from the issue's `attachment` field. Read-only.
+ */
+export async function listIssueAttachments(creds: JiraCreds, key: string): Promise<JiraAttachmentMeta[]> {
+  const url = `${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}`;
+  const data = await request<any>(creds, url, { fields: 'attachment' });
+  const atts = Array.isArray(data?.fields?.attachment) ? data.fields.attachment : [];
+  return atts
+    .map((a: any): JiraAttachmentMeta => {
+      const size = Number(a?.size);
+      return {
+        id: String(a?.id ?? ''),
+        name: String(a?.filename || `attachment-${a?.id ?? ''}`),
+        sizeBytes: Number.isFinite(size) && size >= 0 ? size : undefined,
+        createdDate: a?.created || undefined,
+      };
+    })
+    .filter((a: JiraAttachmentMeta) => a.id);
+}
+
+export default { testConnection, getStories, getStory, getCredsForTenant, saveCredsForTenant, deleteCredsForTenant, getConnectionStatus, createBug, deleteIssue, getProjects, getIssues, addComment, listIssueAttachments };

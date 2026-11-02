@@ -38,7 +38,7 @@ import { getTenantLlm } from '../services/llm.service.js';
 import { getConfigsForTenant, upsertConfig } from '../services/configurations.service.js';
 import { getCredsForTenant as getJiraCreds, getStory as getJiraStory, getProjects as getJiraProjects, getIssues as getJiraIssues } from '../services/jira.service.js';
 import { syncDefects as syncJiraDefects, listSyncHistory as listJiraSyncHistory, listDefectLinks as listJiraDefectLinks } from '../services/api-jira-sync.service.js';
-import { getCredsForTenant as getAdoCreds, getStory as getAdoStory, getProjects as getAdoProjects, getWorkItems as getAdoWorkItems } from '../services/azure-devops.service.js';
+import { getCredsForTenant as getAdoCreds, getStory as getAdoStory, getStoryAttachments as getAdoAttachments, getProjects as getAdoProjects, getWorkItems as getAdoWorkItems } from '../services/azure-devops.service.js';
 import { syncDefects as syncAzureDefects, listSyncHistory as listAzureSyncHistory, listDefectLinks as listAzureDefectLinks } from '../services/api-azure-sync.service.js';
 import { publishRunResults as publishAzureResults, runJUnit } from '../services/api-azure-results.service.js';
 import {
@@ -392,8 +392,12 @@ router.post('/import/jira', async (req: Request, res: Response) => {
 
 /**
  * Import endpoints from an Azure DevOps work item (Module 1). Reuses the
- * tenant's existing Azure connection; description + acceptance criteria are
- * AI-read into endpoints.
+ * tenant's existing Azure connection. Prefers any API-spec files ATTACHED to
+ * the work item (OpenAPI/Swagger, Postman, HAR, an .xlsx endpoint sheet…) —
+ * including files on directly-linked items such as a Test Case — and only
+ * falls back to AI-reading the description + acceptance criteria when no spec
+ * attachment yields endpoints. This is what lets a user attach a Swagger file
+ * in Azure DevOps and have IntelliQE pick it up here.
  */
 router.post('/import/azure', async (req: Request, res: Response) => {
   try {
@@ -407,9 +411,51 @@ router.post('/import/azure', async (req: Request, res: Response) => {
     } catch (e) {
       res.status(502).json({ error: issueFetchError('Azure DevOps', id, e) }); return;
     }
-    const text = [story.title, story.description, story.acceptanceCriteria].filter(Boolean).join('\n\n');
-    if (text.trim().length < 10) { res.status(400).json({ error: `Azure work item ${id} has no readable description or acceptance criteria to extract endpoints from.` }); return; }
     const llm = (await getTenantLlm(req.user!.tenantId)) || undefined;
+
+    // 1) Attachments first — a real spec file beats AI-reading prose. Follows
+    // one hop of links so a spec attached to a linked Test Case is still found.
+    const attachments = await getAdoAttachments(creds, id, { followLinks: true }).catch(() => []);
+    const fromFiles: ImportedEndpoint[] = [];
+    const warnings: string[] = [];
+    const notices: string[] = [];
+    let parser: string | undefined;
+    let format: string | undefined;
+    for (const att of attachments) {
+      try {
+        const parsed = await parseDocument(att.buffer, '', att.name);
+        if (!parsed.text?.trim()) continue;
+        const r = await importFromText(parsed.text, { fileName: att.name, formatHint: 'auto', llm, sourceMethod: 'ado' });
+        if (r.endpoints.length) {
+          fromFiles.push(...r.endpoints);
+          parser = parser || r.parser;
+          format = format || r.format;
+          if (r.notice) notices.push(r.notice);
+          warnings.push(...r.warnings.map((w) => `${att.name}: ${w}`));
+        }
+      } catch { /* a non-spec attachment (screenshot, etc.) is skipped, not fatal */ }
+    }
+
+    if (fromFiles.length) {
+      const endpoints = dedupeEndpoints(fromFiles);
+      await recordImport(req.user!.tenantId, req.user!.username, { method: 'ado', name: `Azure ${story.key}: ${story.title}`.slice(0, 200), format: format || 'mixed', parser: parser || 'llm', endpointCount: endpoints.length, warnings });
+      res.json({
+        endpoints, count: endpoints.length, parser: parser || 'llm', format,
+        warnings, notice: [`Imported from ${attachments.length === 1 ? 'the attachment' : `${attachments.length} attachments`} on work item ${story.key}.`, ...notices].join(' '),
+        profile: endpoints.length ? analyzeApiSurface(endpoints) : null,
+        origin: { kind: 'ado', ref: story.key, label: story.title },
+      });
+      return;
+    }
+
+    // 2) No usable spec attachment — fall back to the description/ACs prose.
+    const text = [story.title, story.description, story.acceptanceCriteria].filter(Boolean).join('\n\n');
+    if (text.trim().length < 10) {
+      res.status(400).json({ error: attachments.length
+        ? `Work item ${id} has ${attachments.length} attachment(s) but none contained a usable API spec, and the item has no readable description or acceptance criteria to fall back on. Attach an OpenAPI/Swagger, Postman, or documented-endpoint file.`
+        : `Azure work item ${id} has no attachments and no readable description or acceptance criteria to extract endpoints from.` });
+      return;
+    }
     const result = await importFromText(text, { fileName: `Azure ${story.key}: ${story.title}`.slice(0, 200), formatHint: 'frd', llm, sourceMethod: 'ado' });
     await respondImport(req, res, 'ado', story.key, result, { origin: { kind: 'ado', ref: story.key, label: story.title }, sourceText: text.slice(0, 20000) });
   } catch (err) { fail(res, err); }

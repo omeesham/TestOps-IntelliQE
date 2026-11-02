@@ -2408,8 +2408,29 @@ export async function getJiraStatus(username: string) {
 }
 
 export async function getJiraStories(username: string) {
-  const { data } = await api.get('/jira/stories', { params: { username } });
+  // `_t` cache-buster + no-cache header force a live read so the picker never
+  // shows a stale list after the user changes issues in JIRA.
+  const { data } = await api.get('/jira/stories', {
+    params: { username, _t: Date.now() },
+    headers: { 'Cache-Control': 'no-cache' },
+  });
   return data;
+}
+
+export interface JiraAttachmentMeta {
+  id: string;
+  name: string;
+  sizeBytes?: number;
+  createdDate?: string;
+}
+
+/** Files attached to a JIRA issue (metadata only, read live). */
+export async function getJiraAttachments(issueKey: string) {
+  const { data } = await api.get(
+    `/jira/issue/${encodeURIComponent(issueKey)}/attachments`,
+    { params: { _t: Date.now() }, headers: { 'Cache-Control': 'no-cache' } },
+  );
+  return data as JiraAttachmentMeta[];
 }
 
 export async function getJiraStoryDetails(username: string, issueKey: string) {
@@ -2442,10 +2463,33 @@ export async function getAzureDevopsStatus() {
   return data;
 }
 
-/** Requirement-type work items (User Story, Bug, Feature, Epic, …). */
+/** Requirement-type work items (User Story, Bug, Feature, Epic, …). The `_t`
+    cache-buster + no-cache header force a live read so the picker never shows a
+    stale board after the user changes items in Azure DevOps. */
 export async function getAzureDevopsStories() {
-  const { data } = await api.get('/azure-devops/stories');
+  const { data } = await api.get('/azure-devops/stories', {
+    params: { _t: Date.now() },
+    headers: { 'Cache-Control': 'no-cache' },
+  });
   return data as { key: string; summary: string; type: string; state?: string }[];
+}
+
+export interface AdoAttachmentMeta {
+  id: string;
+  name: string;
+  sizeBytes?: number;
+  workItemId: string;
+  linked: boolean;
+  createdDate?: string;
+}
+
+/** Files attached to an Azure DevOps work item (metadata only, read live). */
+export async function getAzureDevopsAttachments(workItemId: string) {
+  const { data } = await api.get(
+    `/azure-devops/work-item/${encodeURIComponent(workItemId)}/attachments`,
+    { params: { _t: Date.now() }, headers: { 'Cache-Control': 'no-cache' } },
+  );
+  return data as AdoAttachmentMeta[];
 }
 
 /** All work items, or one type via `?type=`. */

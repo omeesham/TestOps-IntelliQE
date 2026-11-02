@@ -6,6 +6,7 @@ import {
   getStory,
   getWorkItems,
   getTestCases,
+  listStoryAttachments,
   getCredsForTenant,
   saveCredsForTenant,
   deleteCredsForTenant,
@@ -82,10 +83,31 @@ router.get('/stories', async (req: Request, res: Response) => {
   try {
     const creds = await getCredsForTenant(req.user!.tenantId);
     if (!creds) { res.status(400).json({ error: 'Not connected to Azure DevOps. Connect first.' }); return; }
+    // Always serve the live board — never a cached copy — so the picker reflects
+    // what's currently in Azure DevOps.
+    res.set('Cache-Control', 'no-store');
     res.json(await getStories(creds));
   } catch (err: any) {
     const { status, body } = adoError(err);
     console.error('Azure DevOps stories error:', { status, data: err?.response?.data, message: err?.message });
+    res.status(status).json(body);
+  }
+});
+
+// GET /api/azure-devops/work-item/:id/attachments — files attached to a work
+// item (metadata only, no download), following one hop of direct links so a
+// parent item still shows a spec attached to a linked child. Read-only.
+router.get('/work-item/:id/attachments', async (req: Request, res: Response) => {
+  try {
+    const creds = await getCredsForTenant(req.user!.tenantId);
+    if (!creds) { res.status(400).json({ error: 'Not connected to Azure DevOps. Connect first.' }); return; }
+    const id = String(req.params.id || '').trim();
+    if (!id) { res.status(400).json({ error: 'Work item id is required' }); return; }
+    res.set('Cache-Control', 'no-store');
+    res.json(await listStoryAttachments(creds, id));
+  } catch (err: any) {
+    const { status, body } = adoError(err);
+    console.error(`Azure DevOps attachments error [${req.params.id}]:`, { status, message: err?.message });
     res.status(status).json(body);
   }
 });

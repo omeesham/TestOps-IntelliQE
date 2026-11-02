@@ -281,6 +281,164 @@ export async function getStory(creds: AdoCreds, id: string): Promise<StoryDetail
   return { key: String(id), title, description, acceptanceCriteria, type: f['System.WorkItemType'] };
 }
 
+export interface AdoAttachment {
+  /** Original file name (e.g. swagger.json, api-tests.xlsx). */
+  name: string;
+  /** Raw file bytes. */
+  buffer: Buffer;
+  /** Id of the work item this attachment hangs off (the one asked for, or a linked one). */
+  workItemId: string;
+}
+
+/** Pull the attachment id out of an Azure attachment relation URL. */
+function attachmentIdFromUrl(url: string): string | null {
+  const m = String(url || '').match(/\/attachments\/([0-9a-f-]+)/i);
+  return m ? m[1]! : null;
+}
+
+/** Pull a linked work item id out of a relation URL (…/workItems/123). */
+function linkedWorkItemId(url: string): string | null {
+  const m = String(url || '').match(/\/(?:workitems|workItems)\/(\d+)(?:$|[/?#])/i);
+  return m ? m[1]! : null;
+}
+
+async function relationsFor(creds: AdoCreds, id: string): Promise<any[]> {
+  const url = `${creds.baseUrl}/_apis/wit/workitems/${encodeURIComponent(id)}?api-version=${API_VERSION}&$expand=relations`;
+  const resp = await axios.get(url, { headers: authHeaders(creds) });
+  return Array.isArray(resp.data?.relations) ? resp.data.relations : [];
+}
+
+/**
+ * Download every file attached to a work item. By default this also follows
+ * the work item's direct links one hop out (e.g. a User Story that links to a
+ * Test Case which carries the Swagger/Postman attachment) so an import on the
+ * parent item still finds a spec attached to a linked child. Returns the raw
+ * bytes; the caller decides how to parse them (OpenAPI/Postman/xlsx/etc.).
+ */
+export async function getStoryAttachments(
+  creds: AdoCreds,
+  id: string,
+  opts: { followLinks?: boolean; maxFiles?: number } = {},
+): Promise<AdoAttachment[]> {
+  const followLinks = opts.followLinks !== false;
+  const maxFiles = opts.maxFiles ?? 20;
+
+  const rootRelations = await relationsFor(creds, id);
+
+  // Collect (workItemId, relations) pairs to scan for attachments: the item
+  // itself, plus — when following links — each directly-linked work item (one
+  // hop, de-duplicated, capped so a densely-linked item can't fan out forever).
+  const scopes: { wid: string; relations: any[] }[] = [{ wid: String(id), relations: rootRelations }];
+
+  if (followLinks) {
+    const linkedIds = Array.from(new Set(
+      rootRelations
+        .filter((r: any) => typeof r?.rel === 'string' && r.rel !== 'AttachedFile' && /^https?:\/\//i.test(r?.url || ''))
+        .map((r: any) => linkedWorkItemId(r.url))
+        .filter((x: string | null): x is string => !!x && x !== String(id)),
+    )).slice(0, 10);
+    for (const wid of linkedIds) {
+      try {
+        scopes.push({ wid, relations: await relationsFor(creds, wid) });
+      } catch { /* a link we can't read is skipped, not fatal */ }
+    }
+  }
+
+  const out: AdoAttachment[] = [];
+  const seen = new Set<string>();
+  for (const { wid, relations } of scopes) {
+    for (const rel of relations) {
+      if (out.length >= maxFiles) break;
+      if (rel?.rel !== 'AttachedFile' || typeof rel?.url !== 'string') continue;
+      const attId = attachmentIdFromUrl(rel.url);
+      if (!attId || seen.has(attId)) continue;
+      seen.add(attId);
+      const name = String(rel?.attributes?.name || `attachment-${attId}`);
+      try {
+        const dl = await axios.get(
+          `${creds.baseUrl}/_apis/wit/attachments/${attId}?api-version=${API_VERSION}&download=true`,
+          { headers: { Authorization: creds.authHeader }, responseType: 'arraybuffer' },
+        );
+        out.push({ name, buffer: Buffer.from(dl.data), workItemId: wid });
+      } catch { /* one unreadable attachment shouldn't fail the whole import */ }
+    }
+  }
+  return out;
+}
+
+export interface AdoAttachmentMeta {
+  /** Azure attachment id (GUID). */
+  id: string;
+  /** Original file name (e.g. api-tests.xlsx, swagger.json). */
+  name: string;
+  /** File size in bytes, when Azure reports it on the relation. */
+  sizeBytes?: number;
+  /** Work item the file hangs off — the one asked for, or a linked one. */
+  workItemId: string;
+  /** True when the file came from a linked work item rather than this one. */
+  linked: boolean;
+  /** Upload date, when Azure reports it. */
+  createdDate?: string;
+}
+
+/**
+ * List the files attached to a work item WITHOUT downloading them — metadata
+ * only (name, size, id), read straight from the work item's relations. Mirrors
+ * getStoryAttachments' one-hop link following so a parent item still surfaces a
+ * spec attached to a linked child, but costs one request per scanned item
+ * instead of downloading every blob. Read-only.
+ */
+export async function listStoryAttachments(
+  creds: AdoCreds,
+  id: string,
+  opts: { followLinks?: boolean; maxFiles?: number } = {},
+): Promise<AdoAttachmentMeta[]> {
+  const followLinks = opts.followLinks !== false;
+  const maxFiles = opts.maxFiles ?? 50;
+
+  const rootRelations = await relationsFor(creds, id);
+  const scopes: { wid: string; relations: any[]; linked: boolean }[] = [
+    { wid: String(id), relations: rootRelations, linked: false },
+  ];
+
+  if (followLinks) {
+    const linkedIds = Array.from(new Set(
+      rootRelations
+        .filter((r: any) => typeof r?.rel === 'string' && r.rel !== 'AttachedFile' && /^https?:\/\//i.test(r?.url || ''))
+        .map((r: any) => linkedWorkItemId(r.url))
+        .filter((x: string | null): x is string => !!x && x !== String(id)),
+    )).slice(0, 10);
+    for (const wid of linkedIds) {
+      try {
+        scopes.push({ wid, relations: await relationsFor(creds, wid), linked: true });
+      } catch { /* a link we can't read is skipped, not fatal */ }
+    }
+  }
+
+  const out: AdoAttachmentMeta[] = [];
+  const seen = new Set<string>();
+  for (const { wid, relations, linked } of scopes) {
+    for (const rel of relations) {
+      if (out.length >= maxFiles) break;
+      if (rel?.rel !== 'AttachedFile' || typeof rel?.url !== 'string') continue;
+      const attId = attachmentIdFromUrl(rel.url);
+      if (!attId || seen.has(attId)) continue;
+      seen.add(attId);
+      const sizeRaw = rel?.attributes?.resourceSize;
+      const size = Number(sizeRaw);
+      out.push({
+        id: attId,
+        name: String(rel?.attributes?.name || `attachment-${attId}`),
+        sizeBytes: Number.isFinite(size) && size >= 0 ? size : undefined,
+        workItemId: wid,
+        linked,
+        createdDate: rel?.attributes?.resourceCreatedDate || undefined,
+      });
+    }
+  }
+  return out;
+}
+
 /** IntelliQE priority (P0–P3) → Azure DevOps Microsoft.VSTS.Common.Priority (1–4). */
 function mapPriority(p?: string): number | undefined {
   const m: Record<string, number> = { P0: 1, P1: 2, P2: 3, P3: 4 };

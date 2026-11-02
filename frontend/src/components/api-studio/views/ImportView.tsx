@@ -7,13 +7,17 @@
  * Every path ends in the same place — endpoints in the catalogue, profiled.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
-import { UploadCloud, CheckCircle2, AlertTriangle, ArrowRight, FileText, X, Plus, Trash2, Layers, Plug, KeyRound, ExternalLink } from 'lucide-react';
+import { UploadCloud, CheckCircle2, AlertTriangle, ArrowRight, FileText, X, Plus, Trash2, Layers, Plug, KeyRound, ExternalLink, Paperclip, FileSpreadsheet, RotateCw, Link2 } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import {
   importApiFiles, importApiText, importApiUrl, importApiEndpoint, importApiCurl, importApiGraphql, importApiMcp,
   importApiConnector, importApiWebhook, importApiSource, importApiJira, importApiAzure, type ApiImportResponse,
   connectJira, getJiraStatus, getJiraStories, connectAzureDevops, getAzureDevopsStatus, getAzureDevopsStories,
+  getAzureDevopsAttachments, getJiraAttachments,
 } from '@/services/api';
+
+/** Provider-agnostic attachment shape — ADO adds `linked`/`workItemId`; Jira doesn't. */
+type AnyAttachment = { id: string; name: string; sizeBytes?: number; linked?: boolean; workItemId?: string; createdDate?: string };
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { IMPORT_METHODS, BULK_ACCEPT, type ImportMethodDef, type ImportInput } from '../importMethods';
@@ -340,6 +344,16 @@ function IssueForm({ kind, busy, onRun }: { kind: 'jira' | 'ado'; busy: boolean;
   const [listLoading, setListLoading] = useState(false);
   const [listError, setListError] = useState('');
 
+  // Attachments on the selected Jira issue / ADO work item (read live, metadata
+  // only). `attachFor` records which item the current list belongs to, so a stale
+  // list never shows against a newly-picked item. `hidden` are files the user
+  // chose to hide from this view — a local-only exclude, no change in the tracker.
+  const [attachments, setAttachments] = useState<AnyAttachment[] | null>(null);
+  const [attachFor, setAttachFor] = useState('');
+  const [attachLoading, setAttachLoading] = useState(false);
+  const [attachError, setAttachError] = useState('');
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+
   const loadIssues = useCallback(async () => {
     setListLoading(true); setListError('');
     try {
@@ -367,6 +381,33 @@ function IssueForm({ kind, busy, onRun }: { kind: 'jira' | 'ado'; busy: boolean;
   }, [isJira, username, loadIssues]);
 
   useEffect(() => { void checkStatus(); }, [checkStatus]);
+
+  const loadAttachments = useCallback(async (id: string) => {
+    const wid = id.trim();
+    if (!wid) { setAttachments(null); setAttachError(''); setAttachFor(''); return; }
+    setAttachLoading(true); setAttachError(''); setAttachFor(wid);
+    try {
+      const rows = isJira ? await getJiraAttachments(wid) : await getAzureDevopsAttachments(wid);
+      setAttachments(Array.isArray(rows) ? rows : []);
+    } catch (err: any) {
+      setAttachments([]);
+      setAttachError(err?.response?.data?.error || err?.message || `Could not load attachments for this ${isJira ? 'issue' : 'work item'}.`);
+    } finally { setAttachLoading(false); }
+  }, [isJira]);
+
+  // Whenever an issue/work item is chosen or typed, read its files live
+  // (debounced so typing an id doesn't fire a request per keystroke). A new
+  // selection clears any locally-hidden files.
+  useEffect(() => {
+    if (conn === 'unknown' || !conn.connected) { setAttachments(null); setAttachFor(''); setAttachError(''); return; }
+    const wid = ref.trim();
+    if (!wid) { setAttachments(null); setAttachFor(''); setAttachError(''); return; }
+    setHidden(new Set());
+    const t = setTimeout(() => { void loadAttachments(wid); }, 350);
+    return () => clearTimeout(t);
+  }, [ref, conn, loadAttachments]);
+
+  const hideAttachment = (id: string) => setHidden((prev) => { const next = new Set(prev); next.add(id); return next; });
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -436,8 +477,113 @@ function IssueForm({ kind, busy, onRun }: { kind: 'jira' | 'ado'; busy: boolean;
               The issue's description and acceptance criteria are read by AI for the API endpoints they describe. The issue itself is not stored here.
             </p>
           </div>
+
+          {/* Attachments on the selected issue / work item — read live (metadata
+              only). Delete hides a file from THIS view only; nothing changes in
+              Jira or Azure DevOps. */}
+          {ref.trim() && (
+            <IssueAttachments
+              provider={isJira ? 'JIRA' : 'Azure DevOps'}
+              itemId={ref.trim()}
+              loadedFor={attachFor}
+              attachments={attachments}
+              loading={attachLoading}
+              error={attachError}
+              hidden={hidden}
+              onRefresh={() => void loadAttachments(ref.trim())}
+              onHide={hideAttachment}
+              onShowAll={() => setHidden(new Set())}
+            />
+          )}
+
           <div className="flex justify-end"><SubmitBtn busy={busy} label="Import" disabled={!ref.trim()} /></div>
         </form>
+      )}
+    </div>
+  );
+}
+
+function formatBytes(n?: number): string {
+  if (n == null || !Number.isFinite(n)) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function AttachmentIcon({ name }: { name: string }) {
+  const ext = name.split('.').pop()?.toLowerCase() || '';
+  const isSheet = ['xlsx', 'xls', 'xlsm', 'csv', 'tsv'].includes(ext);
+  const Icon = isSheet ? FileSpreadsheet : FileText;
+  return <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${isSheet ? 'text-emerald-600' : 'text-gray-400'}`} />;
+}
+
+/**
+ * Live list of the files attached to the selected Jira issue / ADO work item
+ * (metadata only — nothing is downloaded until import). Shows a spinner while
+ * reading, an empty state when the item has no files, and a per-file Delete that
+ * hides the file from THIS view only — it never touches the tracker.
+ */
+function IssueAttachments({ provider, itemId, loadedFor, attachments, loading, error, hidden, onRefresh, onHide, onShowAll }: {
+  provider: 'JIRA' | 'Azure DevOps';
+  itemId: string;
+  loadedFor: string;
+  attachments: AnyAttachment[] | null;
+  loading: boolean;
+  error: string;
+  hidden: Set<string>;
+  onRefresh: () => void;
+  onHide: (id: string) => void;
+  onShowAll: () => void;
+}) {
+  const noun = provider === 'JIRA' ? 'issue' : 'work item';
+  // The loaded list belongs to a different item than the one now shown — treat
+  // as still-loading so a stale list never flashes against a new selection.
+  const stale = loadedFor !== itemId;
+  const all = attachments || [];
+  const visible = all.filter((a) => !hidden.has(a.id));
+  const hiddenCount = all.length - visible.length;
+
+  return (
+    <div>
+      <label className={`${LABEL} flex items-center gap-1.5`}>
+        <Paperclip className="w-3 h-3" /> Attachments
+        {!loading && !stale && attachments && <span className="text-gray-400 font-normal">({visible.length})</span>}
+        {(loading || stale) && <Spinner className="w-3 h-3 animate-spin text-gray-400" />}
+        <button type="button" onClick={onRefresh} disabled={loading} className="ml-auto inline-flex items-center gap-1 text-[10.5px] font-medium text-[#7C3AED] hover:text-[#5B21B6] disabled:opacity-50">
+          <RotateCw className="w-3 h-3" /> Refresh
+        </button>
+      </label>
+
+      {error ? (
+        <p className="text-[10.5px] text-amber-600 leading-snug">{error}</p>
+      ) : (loading || stale) ? (
+        <div className="flex items-center gap-2 px-3 py-2 text-[11px] text-gray-400"><Spinner className="w-3 h-3 animate-spin" /> Reading files from {provider}…</div>
+      ) : visible.length === 0 ? (
+        <div className="px-3 py-3 rounded-lg border border-dashed border-gray-200 bg-gray-50 text-[11px] text-gray-400 text-center">
+          {all.length > 0
+            ? <>All {all.length} file{all.length > 1 ? 's' : ''} hidden · <button type="button" onClick={onShowAll} className="underline hover:text-gray-600">show all</button></>
+            : `No attachments on this ${noun}.`}
+        </div>
+      ) : (
+        <>
+          <ul className="space-y-1">
+            {visible.map((a) => (
+              <li key={a.id} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-[11.5px]">
+                <AttachmentIcon name={a.name} />
+                <span className="flex-1 min-w-0 truncate text-gray-700" title={a.name}>{a.name}</span>
+                {a.linked && <span className="inline-flex items-center gap-0.5 text-[9.5px] text-gray-400" title={`Attached to linked work item #${a.workItemId}`}><Link2 className="w-2.5 h-2.5" />#{a.workItemId}</span>}
+                {a.sizeBytes != null && <span className="text-[10px] text-gray-400 flex-shrink-0">{formatBytes(a.sizeBytes)}</span>}
+                <button type="button" onClick={() => onHide(a.id)} title={`Hide from this view (does not change ${provider})`} className="flex-shrink-0 text-gray-300 hover:text-rose-500">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="text-[10px] text-gray-400 mt-1.5 leading-snug">
+            Delete hides a file from this view only — it stays on the {noun} in {provider}.
+            {hiddenCount > 0 && <> {hiddenCount} hidden · <button type="button" onClick={onShowAll} className="underline hover:text-gray-600">show all</button></>}
+          </p>
+        </>
       )}
     </div>
   );

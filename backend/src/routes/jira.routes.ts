@@ -4,6 +4,7 @@ import {
   testConnection,
   getStories,
   getStory,
+  listIssueAttachments,
   getCredsForTenant,
   saveCredsForTenant,
   deleteCredsForTenant,
@@ -105,6 +106,9 @@ router.get('/stories', async (req: Request, res: Response) => {
     if (!creds) { res.status(400).json({ error: 'Not connected to JIRA. Connect first.' }); return; }
 
     const stories = await getStories(creds);
+    // Always serve the live issue list — never a cached copy — so the picker
+    // reflects what's currently in JIRA.
+    res.set('Cache-Control', 'no-store');
     res.json(stories);
   } catch (err: any) {
     // No masking — return exactly what JIRA (or the network layer) reported.
@@ -151,6 +155,31 @@ router.get('/story/:key', async (req: Request, res: Response) => {
     console.error(`JIRA story detail error [${req.params.key}]:`, {
       status, code: err?.code, data: err?.response?.data, message: err?.message,
     });
+    res.status(status || 500).json({ error: detail, status, code: err?.code ?? null });
+  }
+});
+
+// GET /api/jira/issue/:key/attachments — files attached to an issue
+// (metadata only, no download). Read-only.
+router.get('/issue/:key/attachments', async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const key = String(req.params.key || '').trim();
+    if (!key) { res.status(400).json({ error: 'Issue key is required' }); return; }
+    const creds = await getCredsForTenant(user.tenantId);
+    if (!creds) { res.status(400).json({ error: 'Not connected to JIRA. Connect first.' }); return; }
+    res.set('Cache-Control', 'no-store');
+    res.json(await listIssueAttachments(creds, key));
+  } catch (err: any) {
+    const status = err?.response?.status ?? null;
+    const detail =
+      err?.response?.data?.errorMessages?.join('; ') ||
+      err?.response?.data?.message ||
+      (err?.response?.data ? JSON.stringify(err.response.data) : '') ||
+      err?.code ||
+      err?.message ||
+      'Unknown error';
+    console.error(`JIRA attachments error [${req.params.key}]:`, { status, code: err?.code, data: err?.response?.data, message: err?.message });
     res.status(status || 500).json({ error: detail, status, code: err?.code ?? null });
   }
 });
