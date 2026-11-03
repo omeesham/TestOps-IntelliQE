@@ -89,7 +89,7 @@ Every DB query filters by `tenant_id`. Auth middleware attaches tenant context f
 
 ### Agent Definitions
 
-`.github/agents/` contains 6 agent markdown files (playwright-requirements, playwright-test-planner, playwright-test-generator, playwright-test-healer, playwright-pipeline-audit, playwright-framework-maintainer) loaded by the orchestrator at runtime.
+`backend/.github/agents/` contains 6 agent markdown files (playwright-requirements, playwright-test-planner, playwright-test-generator, playwright-test-healer, playwright-pipeline-audit, playwright-framework-maintainer) loaded by the orchestrator at runtime.
 
 ### Key Patterns
 

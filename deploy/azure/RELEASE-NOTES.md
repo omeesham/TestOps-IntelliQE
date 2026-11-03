@@ -1,5 +1,14 @@
 # IntelliQE release notes
 
+## poc-v1.1 (3 Nov 2026)
+
+Image: `jbsintelliqe-app:poc-v1.1`. Everything in poc-v1, plus:
+
+- Document checks read Mobility's layout: a "*" before the label, two-line hour headers, and a totals row under the table.
+- Trial period: the image runs until 12 Nov 2026 (UTC). After that the container does not start, and a copy that is already running stops serving requests. The health check shows the date. JBS extends it by releasing a new image.
+
+Verified in the container (production mode): the poc-v1 checks, and an image past its date refusing to start.
+
 ## poc-v1 (30 Oct 2026)
 
 Image: `jbsintelliqe-app:poc-v1`. Everything in poc-v1-rc1, plus:
