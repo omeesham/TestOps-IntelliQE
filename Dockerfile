@@ -61,8 +61,16 @@ COPY --from=api-builder /api/node_modules  ./backend/node_modules
 COPY --from=api-builder /api/package.json  ./backend/package.json
 # Pipeline definition + other runtime config (loaded at ../../config from dist/)
 COPY --from=api-builder /api/config        ./backend/config
-# Agent prompt definitions — worker resolves AGENTS_DIR to backend/.github/agents
-COPY client-deliverable/.github/agents     ./backend/.github/agents
+# Agent prompt definitions — worker resolves AGENTS_DIR to backend/.github/agents.
+# Kept outside client-deliverable/ so they are never handed over with it.
+COPY backend/.github/agents                ./backend/.github/agents
+
+# Trial/license expiry (YYYY-MM-DD). Baked into a file, not an env var, so it
+# can only be changed by building a new image. entrypoint.sh refuses to start
+# past this date; license-expiry.middleware.ts enforces the same cutoff for a
+# container that was already running when the date rolled over.
+ARG LICENSE_EXPIRY=2026-11-12
+RUN echo "$LICENSE_EXPIRY" > ./backend/LICENSE_EXPIRY
 
 # Built React UI -> nginx web root
 COPY --from=ui-builder /ui/dist /usr/share/nginx/html

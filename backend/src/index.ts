@@ -56,6 +56,7 @@ import { missingProductionSettings } from './utils/startup-check.js';
 import { authMiddleware } from './middleware/auth.middleware.js';
 import { requestContext } from './middleware/request-context.middleware.js';
 import { auditMutations } from './middleware/audit.middleware.js';
+import { licenseExpiryGuard, isLicenseExpired, LICENSE_EXPIRY_DATE } from './middleware/license-expiry.middleware.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.middleware.js';
 import { logger } from './utils/logger.js';
 import { setEventCallback } from './orchestrator/orchestrator.js';
@@ -126,8 +127,16 @@ app.use('/api/', generalLimiter);
    Public routes (no auth)
    ───────────────────────────────────────────────────────────── */
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString(), version: '1.0.0' });
+  res.json({
+    status: 'ok', timestamp: new Date().toISOString(), version: '1.0.0',
+    licenseExpiry: LICENSE_EXPIRY_DATE, expired: isLicenseExpired(),
+  });
 });
+
+/* Trial/license expiry gate: kept after the health check so the platform
+   probe still sees the container; every other /api route stops once the
+   baked-in date has passed. */
+app.use('/api', licenseExpiryGuard);
 
 app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {

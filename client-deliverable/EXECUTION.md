@@ -1,6 +1,6 @@
 # Execution & Configuration Guide
 
-This package contains Playwright end-to-end tests in two forms:
+This package contains automated end-to-end test scripts in two forms:
 
 - `src/` — human-readable TypeScript source (for engineers who want to read, extend, or debug the tests)
 - `dist/` — minified JavaScript distribution (for running the tests without a TypeScript toolchain)
@@ -10,7 +10,7 @@ Both are self-contained, environment-agnostic, and contain no credentials or pro
 ## 1. Prerequisites
 
 - Node.js **18 or newer** (`node -v`)
-- ~500 MB disk space for Playwright browsers
+- ~500 MB disk space for the test browsers
 - Network access to the application under test (`BASE_URL`)
 
 ## 2. Choose a build
@@ -53,7 +53,7 @@ cp .env.example .env
 ```bash
 npm test              # all browsers, headless
 npm run test:headed   # watch the browser as it runs
-npm run test:ui       # interactive Playwright UI
+npm run test:ui       # interactive test runner UI
 npm run test:chromium # only Chromium
 npm run report        # open the HTML report from the last run
 ```
@@ -80,7 +80,7 @@ steps:
   - uses: actions/upload-artifact@v4
     if: always()
     with:
-      name: playwright-report
+      name: test-report
       path: client-deliverable/dist/reports
 ```
 
@@ -96,7 +96,7 @@ steps:
 
 ## 8. Extending
 
-Add new tests under `src/tests/*.spec.ts`. Each file is a standard Playwright
-test module — no framework-specific base classes required. Non-sensitive
+Add new tests under `src/tests/*.spec.ts`. Each file is a standard test
+module — no framework-specific base classes required. Non-sensitive
 fixtures can live in `src/data/*.json` and be loaded via `loadData()` from
 `utils/test-data.ts`.
