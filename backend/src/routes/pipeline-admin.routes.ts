@@ -1,11 +1,19 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
 import pool from '../db.js';
 import { loadPipelineDefinition, loadPipelineDefinitionForClient, savePipelineDefinition } from '../orchestrator/orchestrator.js';
 import { getUsageStats, isWorkerConnected, getLastHeartbeat, setPendingWorkerCommand } from '../services/pipeline-queries.js';
 
 const SCHEMA = '"JBSTestOpsAI"';
 const router = Router();
+
+// Agent prompt files live at repo-root/.github/agents. __dirname here is
+// backend/src/routes, so three levels up is the repo root.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const AGENTS_BASE = path.resolve(__dirname, '../../..', '.github', 'agents');
 
 // GET /pipeline-definition
 router.get('/pipeline-definition', async (req: Request, res: Response) => {
@@ -35,6 +43,37 @@ router.get('/agent-types', async (_req: Request, res: Response) => {
     const { rows } = await pool.query(`SELECT * FROM ${SCHEMA}.qa_agent_types ORDER BY sort_order`);
     res.json(rows);
   } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /agent-prompt?file=... — read-only fetch of an agent's on-disk
+// instructions to seed the Pipeline Studio editor. The path is constrained to
+// .github/agents/*.md (no traversal, no absolute paths) to prevent arbitrary
+// file reads. Frontmatter is stripped, matching what the worker feeds the model.
+router.get('/agent-prompt', async (req: Request, res: Response) => {
+  try {
+    const file = String(req.query.file || '');
+    const rel = file
+      .replace(/^\.?\/?\.github\/agents\//, '')
+      .replace(/^\.?\/?agents\//, '');
+    if (!rel || rel.includes('..') || path.isAbsolute(rel) || !/^[\w./-]+\.md$/.test(rel)) {
+      res.status(400).json({ error: 'Invalid agent file.' });
+      return;
+    }
+    const full = path.resolve(AGENTS_BASE, rel);
+    if (full !== AGENTS_BASE && !full.startsWith(AGENTS_BASE + path.sep)) {
+      res.status(400).json({ error: 'Invalid agent file path.' });
+      return;
+    }
+    let content = await fs.promises.readFile(full, 'utf-8');
+    if (content.startsWith('---')) {
+      const endIdx = content.indexOf('---', 3);
+      if (endIdx !== -1) content = content.slice(endIdx + 3).trim();
+    }
+    res.json({ file, content });
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') { res.status(404).json({ error: 'Agent file not found.' }); return; }
     res.status(500).json({ error: err.message });
   }
 });

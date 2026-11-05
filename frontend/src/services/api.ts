@@ -1622,6 +1622,36 @@ export async function sendApiRequest(input: { method: string; url: string; heade
   return data;
 }
 
+/* ── "Heal it" for one manually-sent request — proposes a corrected request to
+      auto-fill in the Manual HTTP Request drawer. Re-fires nothing server-side. ── */
+export interface RequestFix {
+  classification: 'auth' | 'headers' | 'body' | 'url' | 'contract' | 'environment' | 'none' | 'unknown';
+  confidence: 'high' | 'medium' | 'low';
+  changed: boolean;
+  summary: string;
+  rationale: string;
+  fix: {
+    method?: string;
+    url?: string;
+    headers?: { key: string; value: string }[];
+    auth?: { type?: string; value?: string; headerName?: string; in?: 'header' | 'query' };
+    body?: string;
+    expectedStatus?: number;
+    expectedResponse?: string;
+  };
+}
+export async function healApiRequest(input: {
+  method: string; url: string;
+  headers?: { key: string; value: string }[];
+  auth?: ApiHttpAuth;
+  body?: string; bodyMode?: string;
+  expectedStatus?: number; expectedResponse?: string;
+  observed?: { status?: number | null; ok?: boolean; error?: string; bodyText?: string };
+}): Promise<RequestFix> {
+  const { data } = await api.post('/api-automation/heal/fix-request', input, { timeout: 60_000 });
+  return data;
+}
+
 /* ── G2. Reusable step groups (flows reference them via groupId) ── */
 export interface ApiStepGroup { id: string; name: string; steps: FlowStep[]; createdBy: string; createdAt: string; updatedAt: string }
 export async function listStepGroups(): Promise<{ groups: ApiStepGroup[] }> { const { data } = await api.get('/api-automation/step-groups'); return data; }
@@ -2771,6 +2801,34 @@ export async function getWorkerStatus() {
 export async function getPipelineUsage() {
   const { data } = await api.get('/pipeline-admin/usage');
   return data;
+}
+
+/** Save the whole pipeline definition for the current tenant. The server
+ *  versions it (qa_pipeline_definitions.version++), so a previous version is
+ *  always recoverable. */
+export async function savePipelineDefinition(definition: any) {
+  const { data } = await api.put('/pipeline-admin/pipeline-definition', definition);
+  return data as { saved: boolean };
+}
+
+/** Read-only fetch of an agent's on-disk instructions (to seed the editor when a
+ *  stage has no saved override yet). Path is server-constrained to agent files. */
+export async function getAgentPrompt(file: string) {
+  const { data } = await api.get('/pipeline-admin/agent-prompt', { params: { file } });
+  return data as { file: string; content: string };
+}
+
+/** Validate an AI provider/model/key (or the Claude CLI) without saving. */
+export async function testAiConnection(payload: {
+  provider?: string;
+  authMethod?: string;
+  apiKey?: string;
+  model?: string;
+  baseUrl?: string;
+  cliPath?: string;
+}) {
+  const { data } = await api.post('/pipeline-admin/test-ai-connection', payload);
+  return data as { ok?: boolean; message?: string; resolvedPath?: string };
 }
 
 /* ─────────────────────────────────────────────────────────────

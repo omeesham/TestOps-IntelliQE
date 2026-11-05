@@ -59,6 +59,7 @@ interface TaskResponse {
     timeoutSeconds: number;
     budgetCap: number;
     agentFile: string;
+    promptOverride?: string | null;
     mcpConfig: string | null;
     allowedTools?: string[];
     effort?: 'low' | 'medium' | 'high' | 'max';
@@ -169,9 +170,14 @@ async function executeTask(task: TaskResponse): Promise<{
   }
 
   const isDryRun = task.context?.dryRun === true;
-  const agentInstructions = (!isDryRun && task.stageConfig?.agentFile)
-    ? loadAgentFile(task.stageConfig.agentFile)
-    : null;
+  // A non-empty prompt override (set in Pipeline Studio) wins over the on-disk
+  // agent file; otherwise fall back to reading the agent file as before.
+  const override = task.stageConfig?.promptOverride?.trim();
+  const agentInstructions = isDryRun
+    ? null
+    : (override
+        ? task.stageConfig!.promptOverride!
+        : (task.stageConfig?.agentFile ? loadAgentFile(task.stageConfig.agentFile) : null));
   const systemMessage = agentInstructions
     ? agentInstructions + '\n\n---\n\nPipeline Stage: ' + task.stageId
     : `Pipeline Stage: ${task.stageId}`;

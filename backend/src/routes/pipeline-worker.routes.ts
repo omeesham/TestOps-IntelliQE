@@ -57,6 +57,7 @@ router.get('/next-task', async (req: Request, res: Response) => {
           timeoutSeconds: stageDef.timeoutSeconds,
           budgetCap: stageDef.budgetCap,
           agentFile: stageDef.agentFile,
+          promptOverride: stageDef.promptOverride || null,
           mcpConfig: stageDef.mcpConfig || null,
           allowedTools: stageDef.allowedTools,
           effort: stageDef.effort,

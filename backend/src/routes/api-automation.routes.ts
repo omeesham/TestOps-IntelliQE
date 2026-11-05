@@ -107,6 +107,7 @@ import { listSignoffs, createSignoff, deleteSignoff, latestSignoffForEnvironment
 import { analyzeMultimodal } from '../services/api-multimodal.service.js';
 import { optimizeSuite } from '../services/api-suite-optimizer.service.js';
 import { proposeHeal } from '../services/api-heal.service.js';
+import { proposeRequestFix } from '../services/api-request-heal.service.js';
 import { analyzeImpactDeep } from '../services/api-impact.service.js';
 import { buildBugReport } from '../services/api-bug-report.service.js';
 import { getMonitorConfig, saveMonitorConfig, listMonitorEvents, runMonitorNow } from '../services/api-monitor.service.js';
@@ -1830,6 +1831,17 @@ router.post('/heal/propose', async (req: Request, res: Response) => {
     const llm = await getTenantLlm(req.user!.tenantId);
     if (!llm) { res.status(400).json({ error: 'Configure an LLM (System Configuration → LLM) or an API-automation provider to self-heal tests.' }); return; }
     res.json(await proposeHeal(req.body?.failures, llm, { allowWrites: !!req.body?.allowWrites }));
+  } catch (err) { fail(res, err); }
+});
+
+// "Heal it" for a single manually-sent request — proposes a corrected request
+// (auth/headers/body/url/expected) to auto-fill in the Manual HTTP Request drawer.
+// Re-fires nothing; reasons from the client-observed response. LLM-gated.
+router.post('/heal/fix-request', async (req: Request, res: Response) => {
+  try {
+    const llm = await getTenantLlm(req.user!.tenantId);
+    if (!llm) { res.status(400).json({ error: 'Configure an LLM (System Configuration → LLM) or an API-automation provider to heal requests.' }); return; }
+    res.json(await proposeRequestFix(req.body, llm));
   } catch (err) { fail(res, err); }
 });
 

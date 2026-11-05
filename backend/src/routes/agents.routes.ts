@@ -115,7 +115,7 @@ router.post('/queue', async (req: Request, res: Response) => {
     const prompt = `Stage: ${firstStage.name}\nFeature: ${feature}\nModule: ${module}\nIntent: ${intent}\n${firstStage.description}`;
     await createWorkerTask(pool, run.id, tenantId || null, firstStage.id, prompt, {
       targetUrl, module, feature,
-      stageConfig: { model: firstStage.model, maxTurns: firstStage.maxTurns, timeoutSeconds: firstStage.timeoutSeconds, budgetCap: firstStage.budgetCap, agentFile: firstStage.agentFile, mcpConfig: firstStage.mcpConfig || null },
+      stageConfig: { model: firstStage.model, maxTurns: firstStage.maxTurns, timeoutSeconds: firstStage.timeoutSeconds, budgetCap: firstStage.budgetCap, agentFile: firstStage.agentFile, promptOverride: firstStage.promptOverride || null, mcpConfig: firstStage.mcpConfig || null },
     });
 
     res.json({ message: 'Pipeline run created', runId: run.id });

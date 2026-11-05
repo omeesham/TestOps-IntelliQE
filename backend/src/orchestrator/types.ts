@@ -7,6 +7,11 @@ export interface StageDefinition {
   name: string;
   agent: string;
   agentFile: string;
+  /** Optional per-tenant prompt override. When present (and non-empty), the
+   *  worker uses this text as the agent's instructions instead of reading
+   *  `agentFile` from disk. Edited in Pipeline Studio; persisted in the
+   *  tenant's saved pipeline definition. */
+  promptOverride?: string;
   model: string;
   enabled: boolean;
   maxTurns: number;

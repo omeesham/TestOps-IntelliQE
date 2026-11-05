@@ -4,11 +4,11 @@
  * headers, auth, body and the expected response as collapsible sections.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { X, Plus, Trash2, Save, Send, Paperclip, Zap, GripVertical, UploadCloud, Folder, ChevronDown, ChevronRight, FileSearch, Wand2, History, AlertTriangle } from 'lucide-react';
+import { X, Plus, Trash2, Save, Send, Paperclip, Zap, GripVertical, UploadCloud, Folder, ChevronDown, ChevronRight, FileSearch, Wand2, History, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { Section, RequiredMark, MethodBadge } from './primitives';
 import Spinner from '@/components/feedback/Spinner';
 import { parseQueryParams, buildUrlWithParams, pathOf, newEndpointId, relativeTime, PRIMARY_BTN, SECONDARY_BTN, INPUT, LABEL, BAR_3D, STRIP, CHIP_3D } from './format';
-import { sendApiRequest, importApiFiles, type SendRequestResult } from '@/services/api';
+import { sendApiRequest, importApiFiles, healApiRequest, type SendRequestResult, type RequestFix } from '@/services/api';
 import { toCatalogEndpoint } from './hooks/useCatalog';
 import { BULK_ACCEPT } from './importMethods';
 import type { CatalogEndpoint, AuthType, HeaderPair, QueryParamRow, OAuth2Config, DigestConfig, AwsSigV4Config, OAuth1Config, MtlsConfig, EndpointFormField } from './types';
@@ -108,6 +108,8 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
   const [sending, setSending] = useState(false);
   const [sendResult, setSendResult] = useState<SendRequestResult | null>(null);
   const [sendError, setSendError] = useState('');
+  const [healing, setHealing] = useState(false);
+  const [healResult, setHealResult] = useState<RequestFix | null>(null);
 
   // ── Import & auto-fill (manual mode) ──
   const [importOpen, setImportOpen] = useState(true);
@@ -266,7 +268,7 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
 
   const doSend = async () => {
     if (!canSend) { setShowRequired(true); return; }
-    setSending(true); setSendError(''); setSendResult(null);
+    setSending(true); setSendError(''); setSendResult(null); setHealResult(null);
     try {
       const b = buildBodyFields();
       setSendResult(await sendApiRequest({
@@ -284,6 +286,64 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
     } catch (e: any) {
       setSendError(e?.response?.data?.error || e?.message || 'The request could not be sent.');
     } finally { setSending(false); }
+  };
+
+  /** Apply the healer's auth patch to the split auth form state. */
+  const applyAuthFix = (a: NonNullable<RequestFix['fix']['auth']>) => {
+    if (!a.type) return;
+    setAuthType(a.type as AuthType);
+    if (a.headerName) setHeaderName(a.headerName);
+    if (a.in === 'query' || a.in === 'header') setApiKeyIn(a.in);
+    if (typeof a.value === 'string' && a.value) setAuthValue(a.value);
+  };
+
+  /** Merge the healer's proposed fields into the form (auto-fill). Headers are
+   *  merged by name so corrections don't drop the ones the model left alone. */
+  const applyFix = (fix: RequestFix['fix']) => {
+    if (fix.method) setMethod(fix.method.toUpperCase());
+    if (fix.url) changeUrl(fix.url);
+    if (fix.headers?.length) {
+      setHeaders((prev) => {
+        const map = new Map(prev.filter((h) => h.key.trim()).map((h) => [h.key.trim().toLowerCase(), { key: h.key.trim(), value: h.value }]));
+        for (const h of fix.headers!) map.set(h.key.trim().toLowerCase(), { key: h.key.trim(), value: h.value });
+        return [...map.values(), { key: '', value: '' }];
+      });
+    }
+    if (typeof fix.body === 'string') {
+      setBody(fix.body);
+      setBodyMode((prev) => (prev === 'json' || prev === 'raw' ? prev : 'raw'));
+    }
+    if (fix.auth) applyAuthFix(fix.auth);
+    if (fix.expectedStatus != null) setExpectedStatus(String(fix.expectedStatus));
+    if (typeof fix.expectedResponse === 'string') setExpectedResponse(fix.expectedResponse);
+  };
+
+  /** "Heal it" — ask the healer to diagnose the last failed Send and, when it
+   *  finds a safe fix, auto-fill the corrected request so the next Send passes. */
+  const healIt = async () => {
+    if (!sendResult && !sendError) return;
+    setHealing(true); setHealResult(null);
+    try {
+      const b = buildBodyFields();
+      const status = parseInt(expectedStatus, 10);
+      const res = await healApiRequest({
+        method,
+        url: url.trim(),
+        headers: headers.filter((h) => h.key.trim()).map((h) => ({ key: h.key.trim(), value: h.value })),
+        auth: buildAuth(),
+        body: b.body,
+        bodyMode: b.bodyMode,
+        expectedStatus: Number.isFinite(status) ? status : undefined,
+        expectedResponse: expectedResponse.trim() || undefined,
+        observed: sendResult
+          ? { status: sendResult.status ?? null, ok: sendResult.ok, error: sendResult.error, bodyText: sendResult.bodyText }
+          : { status: null, ok: false, error: sendError },
+      });
+      setHealResult(res);
+      if (res.changed) applyFix(res.fix);
+    } catch (e: any) {
+      setHealResult({ classification: 'unknown', confidence: 'low', changed: false, summary: 'Heal failed', rationale: e?.response?.data?.error || e?.message || 'The healer could not run.', fix: {} });
+    } finally { setHealing(false); }
   };
 
   /** The complete endpoint payload for both Save and Automate. */
@@ -319,6 +379,8 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
   /** A live Send that came back with a real response (any status, no transport
       error) counts as "manually tested" — the request is proven against the API. */
   const tested = !!sendResult && sendResult.status != null && !sendResult.error;
+  /** The last Send failed — a transport error, or a non-2xx response. */
+  const sendFailed = (!!sendResult && (sendResult.ok === false || !!sendResult.error)) || !!sendError;
 
   const automate = () => {
     if (!urlValid) { setShowRequired(true); return; }
@@ -658,6 +720,27 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
                   {sendResult.error && <span className="text-red-600 truncate">{sendResult.error}</span>}
                 </div>
                 <pre className="max-h-56 overflow-auto rounded-md border border-[#E9E5FB] bg-[#FCFBFF] p-2 font-mono text-[11px] text-gray-700 whitespace-pre-wrap break-words">{sendResult.bodyText || '(empty body)'}</pre>
+              </div>
+            )}
+            {sendFailed && (
+              <div className="mt-2 flex items-center gap-2">
+                <button type="button" onClick={() => void healIt()} disabled={healing} className={SECONDARY_BTN}>
+                  {healing ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}{healing ? 'Healing…' : 'Heal it'}
+                </button>
+                <span className="text-[10.5px] text-gray-400">Diagnoses the failure and auto-fills a corrected request.</span>
+              </div>
+            )}
+            {healResult && (
+              <div className={`mt-2 rounded-md border p-2 text-[11px] ${healResult.changed ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
+                <div className={`flex items-center gap-1.5 font-semibold ${healResult.changed ? 'text-emerald-800' : 'text-amber-800'}`}>
+                  {healResult.changed ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+                  {healResult.changed ? 'Healed & auto-filled' : 'No safe auto-fix'}
+                  <span className="uppercase text-[9.5px] px-1 py-0.5 rounded bg-white/70 text-gray-600">{healResult.classification}</span>
+                  <span className="text-[9.5px] text-gray-500">{healResult.confidence} confidence</span>
+                </div>
+                {healResult.summary && <p className="mt-1 text-gray-700">{healResult.summary}</p>}
+                {healResult.rationale && <p className="mt-0.5 text-gray-500">{healResult.rationale}</p>}
+                {healResult.changed && <p className="mt-1 text-emerald-700">Review the updated fields and Send again to confirm.</p>}
               </div>
             )}
           </Section>

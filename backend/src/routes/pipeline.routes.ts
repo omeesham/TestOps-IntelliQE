@@ -88,7 +88,8 @@ router.post('/run', async (req: Request, res: Response) => {
       stageConfig: {
         model: stageDef.model, maxTurns: stageDef.maxTurns,
         timeoutSeconds: stageDef.timeoutSeconds, budgetCap: stageDef.budgetCap,
-        agentFile: stageDef.agentFile, mcpConfig: stageDef.mcpConfig || null,
+        agentFile: stageDef.agentFile, promptOverride: stageDef.promptOverride || null,
+        mcpConfig: stageDef.mcpConfig || null,
         allowedTools: stageDef.allowedTools, effort: stageDef.effort,
       },
     });
