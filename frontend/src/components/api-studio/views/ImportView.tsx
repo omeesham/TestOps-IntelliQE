@@ -7,13 +7,13 @@
  * Every path ends in the same place — endpoints in the catalogue, profiled.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
-import { UploadCloud, CheckCircle2, AlertTriangle, ArrowRight, FileText, X, Plus, Trash2, Layers, Plug, KeyRound, ExternalLink, Paperclip, FileSpreadsheet, RotateCw, Link2 } from 'lucide-react';
+import { UploadCloud, CheckCircle2, AlertTriangle, ArrowRight, FileText, X, Plus, Trash2, Layers, Plug, KeyRound, ExternalLink, Paperclip, FileSpreadsheet, RotateCw, Link2, CheckSquare, Square } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import {
   importApiFiles, importApiText, importApiUrl, importApiEndpoint, importApiCurl, importApiGraphql, importApiMcp,
   importApiConnector, importApiWebhook, importApiSource, importApiJira, importApiAzure, type ApiImportResponse,
   connectJira, getJiraStatus, getJiraStories, connectAzureDevops, getAzureDevopsStatus, getAzureDevopsStories,
-  getAzureDevopsAttachments, getJiraAttachments,
+  getAzureDevopsAttachments, getJiraAttachments, getImportAttachmentCounts, type AttachmentCount,
 } from '@/services/api';
 
 /** Provider-agnostic attachment shape — ADO adds `linked`/`workItemId`; Jira doesn't. */
@@ -353,6 +353,13 @@ function IssueForm({ kind, busy, onRun }: { kind: 'jira' | 'ado'; busy: boolean;
   const [attachLoading, setAttachLoading] = useState(false);
   const [attachError, setAttachError] = useState('');
   const [hidden, setHidden] = useState<Set<string>>(new Set());
+  // Per-attachment test-case / endpoint counts (lazy; deterministic server count)
+  // and the set of files the user has ticked to import. Both are keyed by the
+  // tracker's attachment id; a new selection re-reads counts and ticks everything.
+  const [counts, setCounts] = useState<Record<string, AttachmentCount>>({});
+  const [countsLoading, setCountsLoading] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const attachReq = useRef(0);
 
   const loadIssues = useCallback(async () => {
     setListLoading(true); setListError('');
@@ -384,15 +391,35 @@ function IssueForm({ kind, busy, onRun }: { kind: 'jira' | 'ado'; busy: boolean;
 
   const loadAttachments = useCallback(async (id: string) => {
     const wid = id.trim();
-    if (!wid) { setAttachments(null); setAttachError(''); setAttachFor(''); return; }
-    setAttachLoading(true); setAttachError(''); setAttachFor(wid);
+    const reqId = ++attachReq.current; // guard against a stale response from a previously-selected item
+    if (!wid) { setAttachments(null); setAttachError(''); setAttachFor(''); setCounts({}); setSelected(new Set()); setCountsLoading(false); return; }
+    setAttachLoading(true); setAttachError(''); setAttachFor(wid); setCounts({}); setCountsLoading(false);
     try {
       const rows = isJira ? await getJiraAttachments(wid) : await getAzureDevopsAttachments(wid);
-      setAttachments(Array.isArray(rows) ? rows : []);
+      const list: AnyAttachment[] = Array.isArray(rows) ? rows : [];
+      if (reqId !== attachReq.current) return;
+      setAttachments(list);
+      // Default: every file ticked, so "Import" brings in all of them unless the
+      // user unticks some. Then fetch each file's test-case count in the
+      // background (non-blocking — the list is usable before counts land).
+      setSelected(new Set(list.map((a) => a.id)));
+      if (list.length) {
+        setCountsLoading(true);
+        getImportAttachmentCounts(isJira ? 'jira' : 'ado', wid)
+          .then((cs) => {
+            if (reqId !== attachReq.current) return;
+            const map: Record<string, AttachmentCount> = {};
+            for (const c of cs) map[c.id] = c;
+            setCounts(map);
+          })
+          .catch(() => { /* counts are a nicety — a failure just hides the badges */ })
+          .finally(() => { if (reqId === attachReq.current) setCountsLoading(false); });
+      }
     } catch (err: any) {
-      setAttachments([]);
+      if (reqId !== attachReq.current) return;
+      setAttachments([]); setSelected(new Set());
       setAttachError(err?.response?.data?.error || err?.message || `Could not load attachments for this ${isJira ? 'issue' : 'work item'}.`);
-    } finally { setAttachLoading(false); }
+    } finally { if (reqId === attachReq.current) setAttachLoading(false); }
   }, [isJira]);
 
   // Whenever an issue/work item is chosen or typed, read its files live
@@ -407,13 +434,31 @@ function IssueForm({ kind, busy, onRun }: { kind: 'jira' | 'ado'; busy: boolean;
     return () => clearTimeout(t);
   }, [ref, conn, loadAttachments]);
 
-  const hideAttachment = (id: string) => setHidden((prev) => { const next = new Set(prev); next.add(id); return next; });
+  const hideAttachment = (id: string) => {
+    setHidden((prev) => { const next = new Set(prev); next.add(id); return next; });
+    setSelected((prev) => { const next = new Set(prev); next.delete(id); return next; }); // a hidden file can't be imported
+  };
+  const toggleSelected = (id: string) => setSelected((prev) => {
+    const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
+  });
+  const setAllSelected = (on: boolean) => setSelected(() => {
+    if (!on) return new Set();
+    return new Set((attachments || []).filter((a) => !hidden.has(a.id)).map((a) => a.id));
+  });
+
+  // The files the user has ticked (and not hidden) — what Import will pull in.
+  const selectedIds = useMemo(
+    () => (attachments || []).filter((a) => !hidden.has(a.id) && selected.has(a.id)).map((a) => a.id),
+    [attachments, hidden, selected],
+  );
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     const v = ref.trim();
     if (!v) return;
-    const ok = await onRun(v, () => (isJira ? importApiJira(v) : importApiAzure(v)));
+    // Pass the ticked attachment ids; an empty array tells the backend to read
+    // the issue's description/prose instead (back-compat when there are no files).
+    const ok = await onRun(v, () => (isJira ? importApiJira(v, selectedIds) : importApiAzure(v, selectedIds)));
     if (ok) setRef('');
   };
 
@@ -490,13 +535,24 @@ function IssueForm({ kind, busy, onRun }: { kind: 'jira' | 'ado'; busy: boolean;
               loading={attachLoading}
               error={attachError}
               hidden={hidden}
+              counts={counts}
+              countsLoading={countsLoading}
+              selected={selected}
+              onToggle={toggleSelected}
+              onSelectAll={setAllSelected}
               onRefresh={() => void loadAttachments(ref.trim())}
               onHide={hideAttachment}
               onShowAll={() => setHidden(new Set())}
             />
           )}
 
-          <div className="flex justify-end"><SubmitBtn busy={busy} label="Import" disabled={!ref.trim()} /></div>
+          <div className="flex justify-end">
+            <SubmitBtn
+              busy={busy}
+              label={selectedIds.length > 0 ? `Import ${selectedIds.length} selected` : 'Import'}
+              disabled={!ref.trim()}
+            />
+          </div>
         </form>
       )}
     </div>
@@ -523,7 +579,20 @@ function AttachmentIcon({ name }: { name: string }) {
  * reading, an empty state when the item has no files, and a per-file Delete that
  * hides the file from THIS view only — it never touches the tracker.
  */
-function IssueAttachments({ provider, itemId, loadedFor, attachments, loading, error, hidden, onRefresh, onHide, onShowAll }: {
+/** Small chip showing how many test cases / endpoints a file holds. */
+function CountBadge({ info, loading }: { info?: AttachmentCount; loading: boolean }) {
+  if (info && info.count != null) {
+    return (
+      <span className="flex-shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-[#F5F3FF] border border-[#DDD6FE] text-[9.5px] font-semibold text-[#6D28D9] tabular-nums" title={`${info.count} ${info.kind || 'items'} in this file`}>
+        {info.count} {info.kind || 'items'}
+      </span>
+    );
+  }
+  if (loading) return <Spinner className="w-3 h-3 animate-spin text-gray-300 flex-shrink-0" />;
+  return null; // a file we can't count cheaply simply shows no badge
+}
+
+function IssueAttachments({ provider, itemId, loadedFor, attachments, loading, error, hidden, counts, countsLoading, selected, onToggle, onSelectAll, onRefresh, onHide, onShowAll }: {
   provider: 'JIRA' | 'Azure DevOps';
   itemId: string;
   loadedFor: string;
@@ -531,6 +600,11 @@ function IssueAttachments({ provider, itemId, loadedFor, attachments, loading, e
   loading: boolean;
   error: string;
   hidden: Set<string>;
+  counts: Record<string, AttachmentCount>;
+  countsLoading: boolean;
+  selected: Set<string>;
+  onToggle: (id: string) => void;
+  onSelectAll: (on: boolean) => void;
   onRefresh: () => void;
   onHide: (id: string) => void;
   onShowAll: () => void;
@@ -542,6 +616,10 @@ function IssueAttachments({ provider, itemId, loadedFor, attachments, loading, e
   const all = attachments || [];
   const visible = all.filter((a) => !hidden.has(a.id));
   const hiddenCount = all.length - visible.length;
+  const selectedCount = visible.filter((a) => selected.has(a.id)).length;
+  const allSelected = visible.length > 0 && selectedCount === visible.length;
+  // Total test cases across the files that are ticked AND countable.
+  const selectedCaseTotal = visible.reduce((n, a) => (selected.has(a.id) && counts[a.id]?.count != null ? n + (counts[a.id]!.count as number) : n), 0);
 
   return (
     <div>
@@ -566,21 +644,38 @@ function IssueAttachments({ provider, itemId, loadedFor, attachments, loading, e
         </div>
       ) : (
         <>
+          {/* Select-all / none bar — only the ticked files get imported. */}
+          <div className="flex items-center gap-2 px-1 mb-1.5">
+            <button type="button" onClick={() => onSelectAll(!allSelected)} className="inline-flex items-center gap-1.5 text-[10.5px] font-semibold text-gray-600 hover:text-[#7C3AED]">
+              {allSelected ? <CheckSquare className="w-3.5 h-3.5 text-[#7C3AED]" /> : <Square className="w-3.5 h-3.5 text-gray-400" />}
+              {allSelected ? 'Deselect all' : 'Select all'}
+            </button>
+            <span className="text-[10.5px] text-gray-400">
+              {selectedCount} of {visible.length} selected{selectedCaseTotal > 0 && <> · {selectedCaseTotal} test case{selectedCaseTotal === 1 ? '' : 's'}</>}
+            </span>
+          </div>
           <ul className="space-y-1">
-            {visible.map((a) => (
-              <li key={a.id} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-[11.5px]">
-                <AttachmentIcon name={a.name} />
-                <span className="flex-1 min-w-0 truncate text-gray-700" title={a.name}>{a.name}</span>
-                {a.linked && <span className="inline-flex items-center gap-0.5 text-[9.5px] text-gray-400" title={`Attached to linked work item #${a.workItemId}`}><Link2 className="w-2.5 h-2.5" />#{a.workItemId}</span>}
-                {a.sizeBytes != null && <span className="text-[10px] text-gray-400 flex-shrink-0">{formatBytes(a.sizeBytes)}</span>}
-                <button type="button" onClick={() => onHide(a.id)} title={`Hide from this view (does not change ${provider})`} className="flex-shrink-0 text-gray-300 hover:text-rose-500">
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </li>
-            ))}
+            {visible.map((a) => {
+              const isSel = selected.has(a.id);
+              return (
+                <li key={a.id} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-[11.5px] transition-colors ${isSel ? 'border-[#DDD6FE] bg-[#FBFAFF]' : 'border-gray-200 bg-white'}`}>
+                  <button type="button" onClick={() => onToggle(a.id)} title={isSel ? 'Deselect — exclude from import' : 'Select — include in import'} className="flex-shrink-0">
+                    {isSel ? <CheckSquare className="w-4 h-4 text-[#7C3AED]" /> : <Square className="w-4 h-4 text-gray-300 hover:text-gray-400" />}
+                  </button>
+                  <AttachmentIcon name={a.name} />
+                  <span className="flex-1 min-w-0 truncate text-gray-700" title={a.name}>{a.name}</span>
+                  <CountBadge info={counts[a.id]} loading={countsLoading} />
+                  {a.linked && <span className="inline-flex items-center gap-0.5 text-[9.5px] text-gray-400" title={`Attached to linked work item #${a.workItemId}`}><Link2 className="w-2.5 h-2.5" />#{a.workItemId}</span>}
+                  {a.sizeBytes != null && <span className="text-[10px] text-gray-400 flex-shrink-0">{formatBytes(a.sizeBytes)}</span>}
+                  <button type="button" onClick={() => onHide(a.id)} title={`Hide from this view (does not change ${provider})`} className="flex-shrink-0 text-gray-300 hover:text-rose-500">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </li>
+              );
+            })}
           </ul>
           <p className="text-[10px] text-gray-400 mt-1.5 leading-snug">
-            Delete hides a file from this view only — it stays on the {noun} in {provider}.
+            Tick the files to import; counts show how many test cases each holds. Delete hides a file from this view only — it stays on the {noun} in {provider}.
             {hiddenCount > 0 && <> {hiddenCount} hidden · <button type="button" onClick={onShowAll} className="underline hover:text-gray-600">show all</button></>}
           </p>
         </>

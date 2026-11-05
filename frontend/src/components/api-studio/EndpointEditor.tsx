@@ -3,13 +3,18 @@
  * catalogued endpoint. A right-hand drawer: method + URL, then params,
  * headers, auth, body and the expected response as collapsible sections.
  */
-import { useEffect, useMemo, useState } from 'react';
-import { X, Plus, Trash2, Save, Send, Paperclip } from 'lucide-react';
-import { Section, RequiredMark } from './primitives';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { X, Plus, Trash2, Save, Send, Paperclip, Zap, GripVertical, UploadCloud, Folder, ChevronDown, ChevronRight, FileSearch, Wand2 } from 'lucide-react';
+import { Section, RequiredMark, MethodBadge } from './primitives';
 import Spinner from '@/components/feedback/Spinner';
-import { parseQueryParams, buildUrlWithParams, PRIMARY_BTN, SECONDARY_BTN, INPUT, LABEL, BAR_3D, STRIP, CHIP_3D } from './format';
-import { sendApiRequest, type SendRequestResult } from '@/services/api';
+import { parseQueryParams, buildUrlWithParams, pathOf, PRIMARY_BTN, SECONDARY_BTN, INPUT, LABEL, BAR_3D, STRIP, CHIP_3D } from './format';
+import { sendApiRequest, importApiFiles, type SendRequestResult } from '@/services/api';
+import { toCatalogEndpoint } from './hooks/useCatalog';
+import { BULK_ACCEPT } from './importMethods';
 import type { CatalogEndpoint, AuthType, HeaderPair, QueryParamRow, OAuth2Config, EndpointFormField } from './types';
+
+/** An imported group of endpoints the user can pick one from to auto-fill. */
+interface ImportFolder { name: string; endpoints: CatalogEndpoint[]; open: boolean }
 
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 type BodyMode = 'json' | 'raw' | 'form-data' | 'urlencoded' | 'binary';
@@ -35,10 +40,19 @@ interface Props {
   initial?: Partial<CatalogEndpoint> | null;
   title?: string;
   onSave: (endpoint: Omit<CatalogEndpoint, 'id' | 'importedAt'>) => void;
+  /** When provided, a primary "Automate" action is shown: it saves this request
+      and immediately kicks off the regular API automation pipeline for it. */
+  onAutomate?: (endpoint: Omit<CatalogEndpoint, 'id' | 'importedAt'>) => void;
+  /** When true, the drawer shows an "Import & auto-fill" panel: import an API
+      from a file/collection into a named folder, then pick one to fill the form. */
+  allowImport?: boolean;
+  /** Persist an imported folder to the catalogue (so it joins the regular flow).
+      Called with the raw extracted endpoints and the folder name. */
+  onImported?: (endpoints: any[], folderName: string) => void;
   onClose: () => void;
 }
 
-export default function EndpointEditor({ initial, title, onSave, onClose }: Props) {
+export default function EndpointEditor({ initial, title, onSave, onAutomate, allowImport, onImported, onClose }: Props) {
   const [name, setName] = useState(initial?.title || '');
   const [method, setMethod] = useState((initial?.method || 'GET').toUpperCase());
   const [url, setUrl] = useState(initial?.url || '');
@@ -62,11 +76,92 @@ export default function EndpointEditor({ initial, title, onSave, onClose }: Prop
   const [sendResult, setSendResult] = useState<SendRequestResult | null>(null);
   const [sendError, setSendError] = useState('');
 
+  // ── Import & auto-fill (manual mode) ──
+  const [importOpen, setImportOpen] = useState(true);
+  const [folders, setFolders] = useState<ImportFolder[]>([]);
+  const [folderName, setFolderName] = useState('');
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState('');
+  const [pickedKey, setPickedKey] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Horizontal drag (dock right ↔ drag toward the centre/left) ──
+  const [offsetX, setOffsetX] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const dragStart = useRef<{ mouseX: number; baseX: number } | null>(null);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  useEffect(() => {
+    if (!dragging) return;
+    const move = (e: MouseEvent) => {
+      const s = dragStart.current; if (!s) return;
+      // Negative moves the right-docked panel toward the centre/left; clamp so a
+      // sliver always stays on-screen either side.
+      const next = s.baseX + (e.clientX - s.mouseX);
+      const min = -(window.innerWidth - 160);
+      setOffsetX(Math.max(min, Math.min(40, next)));
+    };
+    const up = () => setDragging(false);
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+    return () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+  }, [dragging]);
+
+  const startDrag = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    dragStart.current = { mouseX: e.clientX, baseX: offsetX };
+    setDragging(true);
+    e.preventDefault();
+  };
+
+  /** Fill every form field from a chosen endpoint (import pick or re-pick). */
+  const applyEndpoint = (ep: CatalogEndpoint, key: string) => {
+    setPickedKey(key);
+    setName(ep.title || '');
+    setMethod((ep.method || 'GET').toUpperCase());
+    setUrl(ep.url || '');
+    setParams(parseQueryParams(ep.url || ''));
+    setHeaders(ep.headers?.length ? ep.headers.map((h) => ({ key: h.key, value: h.value })) : [{ key: '', value: '' }]);
+    setAuthType(ep.auth?.type || 'none');
+    setAuthValue(ep.auth?.value || '');
+    setHeaderName(ep.auth?.headerName || 'X-API-Key');
+    setOauth2(ep.auth?.oauth2 || { grant: 'client_credentials', clientAuthBasic: true });
+    setBody(ep.body || '');
+    setBodyMode((ep.bodyMode as BodyMode) || 'json');
+    setFormFields(ep.formFields?.length ? ep.formFields : [{ key: '', value: '', type: 'text' }]);
+    setBodyBase64(ep.bodyBase64 || '');
+    setBinaryMeta({ filename: '', contentType: ep.bodyContentType || '' });
+    setExpectedStatus(String(ep.expectedStatus || 200));
+    setExpectedResponse(ep.expectedResponse || '');
+    setDescription(ep.description || '');
+    setShowRequired(false);
+  };
+
+  /** Import a file/collection → a named folder of endpoints to pick from. */
+  const doImport = async (files: File[]) => {
+    if (!files.length) return;
+    const base = files[0]!.name.replace(/\.[^.]+$/, '').replace(/\.postman_collection$/i, '');
+    const fname = folderName.trim() || base || 'Imported API';
+    setImporting(true); setImportError('');
+    try {
+      const res = await importApiFiles(files, 'auto');
+      const raw = res.endpoints || [];
+      if (raw.length === 0) { setImportError(res.warnings?.[0] || 'No endpoints could be read from that file.'); return; }
+      const eps = raw.map((e: any) => toCatalogEndpoint(e, 'manual'));
+      setFolders((prev) => [{ name: fname, endpoints: eps, open: true }, ...prev]);
+      setFolderName('');
+      onImported?.(raw, fname); // persist the folder to the catalogue (regular flow)
+      // Auto-fill the first endpoint so the user can test immediately.
+      if (eps[0]) applyEndpoint(eps[0], `${fname}:0`);
+    } catch (e: any) {
+      setImportError(e?.response?.data?.error || e?.message || 'Import failed.');
+    } finally { setImporting(false); }
+  };
 
   const hasBody = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
   const urlValid = useMemo(() => { try { const u = new URL(url); return u.protocol === 'http:' || u.protocol === 'https:'; } catch { return false; } }, [url]);
@@ -120,11 +215,11 @@ export default function EndpointEditor({ initial, title, onSave, onClose }: Prop
     } finally { setSending(false); }
   };
 
-  const submit = () => {
-    if (!urlValid) { setShowRequired(true); return; }
+  /** The complete endpoint payload for both Save and Automate. */
+  const buildEndpoint = (): Omit<CatalogEndpoint, 'id' | 'importedAt'> => {
     const status = parseInt(expectedStatus, 10);
     const b = buildBodyFields();
-    onSave({
+    return {
       title: name.trim() || `${method} ${url}`,
       method,
       url: url.trim(),
@@ -142,19 +237,97 @@ export default function EndpointEditor({ initial, title, onSave, onClose }: Prop
       source: initial?.source || { method: 'manual', name: 'Manual request' },
       operationId: initial?.operationId, tags: initial?.tags, resource: initial?.resource, pathTemplate: initial?.pathTemplate,
       pathParams: initial?.pathParams, queryParams: initial?.queryParams, deprecated: initial?.deprecated, discovered: initial?.discovered,
-    });
+    };
+  };
+
+  const submit = () => {
+    if (!urlValid) { setShowRequired(true); return; }
+    onSave(buildEndpoint());
+  };
+
+  const automate = () => {
+    if (!urlValid) { setShowRequired(true); return; }
+    onAutomate?.(buildEndpoint());
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end">
+    <div className={`fixed inset-0 z-40 flex justify-end ${dragging ? 'select-none cursor-grabbing' : ''}`}>
       <div className="absolute inset-0 bg-[#1E1B4B]/30 backdrop-blur-[1px]" onClick={onClose} />
-      <aside className="relative w-full max-w-[520px] h-full bg-white flex flex-col border-l border-[#E9E5FB] shadow-[-24px_0_60px_-24px_rgba(30,27,75,0.55),inset_1px_0_0_rgba(255,255,255,0.9)]">
-        <header className={`flex items-center gap-2 px-4 h-12 border-b border-[#E9E5FB] flex-shrink-0 ${STRIP}`}>
+      <aside
+        style={{ transform: `translateX(${offsetX}px)` }}
+        className={`relative w-full ${allowImport ? 'max-w-[600px]' : 'max-w-[520px]'} h-full bg-white flex flex-col border-l border-[#E9E5FB] shadow-[-24px_0_60px_-24px_rgba(30,27,75,0.55),inset_1px_0_0_rgba(255,255,255,0.9)]`}
+      >
+        <header
+          onMouseDown={startDrag}
+          title="Drag to move the panel toward the centre or left"
+          className={`flex items-center gap-2 px-4 h-12 border-b border-[#E9E5FB] flex-shrink-0 ${STRIP} ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        >
+          <GripVertical className="w-4 h-4 text-gray-300 flex-shrink-0" />
           <h2 className="text-[13px] font-semibold text-gray-900">{title || (initial?.url ? 'Edit endpoint' : 'Manual HTTP request')}</h2>
-          <button type="button" onClick={onClose} className="ml-auto p-1.5 rounded-md text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]"><X className="w-4 h-4" /></button>
+          {offsetX !== 0 && <button type="button" onMouseDown={(e) => e.stopPropagation()} onClick={() => setOffsetX(0)} className="text-[10.5px] font-medium text-[#7C3AED] hover:text-[#5B21B6]">Dock right</button>}
+          <button type="button" onMouseDown={(e) => e.stopPropagation()} onClick={onClose} className="ml-auto p-1.5 rounded-md text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]"><X className="w-4 h-4" /></button>
         </header>
 
         <div className="flex-1 overflow-y-auto min-h-0">
+          {allowImport && (
+            <div className="border-b border-[#EDE9FE] bg-[#FBFAFF]">
+              <button type="button" onClick={() => setImportOpen((o) => !o)} className="w-full flex items-center gap-2 px-4 py-2.5 text-left">
+                <span className="w-6 h-6 rounded-md bg-[#F5F3FF] border border-[#DDD6FE] flex items-center justify-center flex-shrink-0"><FileSearch className="w-3.5 h-3.5 text-[#7C3AED]" /></span>
+                <span className="text-[12.5px] font-semibold text-gray-900">Import API &amp; auto-fill</span>
+                <span className="text-[10.5px] text-gray-400">from a collection, PDF, Excel, Word, OpenAPI…</span>
+                {importOpen ? <ChevronDown className="w-4 h-4 text-gray-400 ml-auto" /> : <ChevronRight className="w-4 h-4 text-gray-400 ml-auto" />}
+              </button>
+              {importOpen && (
+                <div className="px-4 pb-3 space-y-2.5">
+                  <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
+                    <div>
+                      <label className={LABEL}>Folder name</label>
+                      <input value={folderName} onChange={(e) => setFolderName(e.target.value)} placeholder="Orders API (defaults to the file name)" className={INPUT} />
+                    </div>
+                    <button type="button" onClick={() => fileInputRef.current?.click()} disabled={importing} className={PRIMARY_BTN}>
+                      {importing ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}{importing ? 'Importing…' : 'Choose file'}
+                    </button>
+                    <input ref={fileInputRef} type="file" multiple accept={BULK_ACCEPT} className="hidden" onChange={(e) => { void doImport(Array.from(e.target.files || [])); e.target.value = ''; }} />
+                  </div>
+                  {importError && <p className="text-[11px] text-red-600">{importError}</p>}
+
+                  {folders.map((f, fi) => (
+                    <div key={`${f.name}-${fi}`} className="rounded-lg border border-[#E9E5FB] bg-white overflow-hidden">
+                      <button type="button" onClick={() => setFolders((prev) => prev.map((x, j) => (j === fi ? { ...x, open: !x.open } : x)))} className="w-full flex items-center gap-2 px-2.5 py-1.5 bg-[#FAFAFE]">
+                        {f.open ? <ChevronDown className="w-3.5 h-3.5 text-gray-400" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-400" />}
+                        <Folder className="w-3.5 h-3.5 text-[#7C3AED]" />
+                        <span className="text-[12px] font-semibold text-gray-800 truncate">{f.name}</span>
+                        <span className="ml-auto font-mono text-[10.5px] text-gray-400 tabular-nums">{f.endpoints.length}</span>
+                      </button>
+                      {f.open && (
+                        <ul className="max-h-52 overflow-y-auto divide-y divide-gray-50">
+                          {f.endpoints.map((ep, ei) => {
+                            const key = `${f.name}:${ei}`;
+                            const on = pickedKey === key;
+                            return (
+                              <li key={key}>
+                                <button type="button" onClick={() => applyEndpoint(ep, key)} title="Auto-fill this request" className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors ${on ? 'bg-[#F5F3FF]' : 'hover:bg-[#FBFAFF]'}`}>
+                                  <MethodBadge method={ep.method} />
+                                  <span className="min-w-0 flex-1">
+                                    <span className="block font-mono text-[11px] text-gray-800 truncate" title={ep.url}>{pathOf(ep.url)}</span>
+                                    <span className="block text-[10px] text-gray-400 truncate">{ep.title}</span>
+                                  </span>
+                                  {on ? <span className="text-[9.5px] font-semibold text-[#6D28D9] flex-shrink-0">filled</span> : <Wand2 className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />}
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
+                  ))}
+                  {folders.length === 0 && !importing && (
+                    <p className="text-[10.5px] text-gray-400 leading-relaxed">Import a file to create a folder of endpoints, then pick one to auto-fill the form below — do manual testing (Send) or Automate it with the regular pipeline.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           <div className="px-4 pt-3 pb-2 space-y-2.5">
             <div>
               <label className={LABEL}>Name</label>
@@ -307,9 +480,12 @@ export default function EndpointEditor({ initial, title, onSave, onClose }: Prop
         </div>
 
         <footer className={`flex items-center gap-2 px-4 h-14 border-t border-[#E9E5FB] flex-shrink-0 ${STRIP} shadow-[inset_0_1px_0_#EDE9FE,0_-8px_20px_-16px_rgba(30,27,75,0.35)]`}>
-          <p className="text-[11px] text-gray-400 min-w-0 truncate">Saved to the catalogue; scenarios are designed when you run.</p>
+          <p className="text-[11px] text-gray-400 min-w-0 truncate">{onAutomate ? 'Automate designs & runs the full suite for this request.' : 'Saved to the catalogue; scenarios are designed when you run.'}</p>
           <button type="button" onClick={onClose} className={`ml-auto ${SECONDARY_BTN}`}>Cancel</button>
-          <button type="button" onClick={submit} className={PRIMARY_BTN}><Save className="w-3.5 h-3.5" />{initial?.url ? 'Save changes' : 'Add to catalogue'}</button>
+          <button type="button" onClick={submit} className={onAutomate ? SECONDARY_BTN : PRIMARY_BTN}><Save className="w-3.5 h-3.5" />{initial?.url ? 'Save changes' : 'Add to catalogue'}</button>
+          {onAutomate && (
+            <button type="button" onClick={automate} disabled={!urlValid} title="Add this request and run the full API automation pipeline for it" className={PRIMARY_BTN}><Zap className="w-3.5 h-3.5" />Automate</button>
+          )}
         </footer>
       </aside>
     </div>

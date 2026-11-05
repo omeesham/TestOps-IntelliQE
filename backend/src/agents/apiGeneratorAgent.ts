@@ -24,14 +24,14 @@ import { runLLM, parseJsonFromResponse, coerceJsonArray, salvageJsonArrayObjects
 import { cleanAuthValue, isPlaceholderSecret } from '../utils/api-auth.js';
 import { analyzeApiSurface, profileContextFor, type ApiProfile, type ApiFlow } from '../services/api-intelligence.service.js';
 import type { ImportedEndpoint } from '../services/api-import.service.js';
-import { resolveApiCase, type ApiEnvironment } from '../services/api-environments.service.js';
+import { resolveApiCase, spansMultipleHosts, type ApiEnvironment } from '../services/api-environments.service.js';
 
 let counter = 0;
 function nextId() { return `TC-${String(++counter).padStart(3, '0')}`; }
 
 /** The test layers a reviewer can switch off — see api-intelligence StrategyLayerId. */
-type LayerId = 'smoke' | 'contract' | 'schema' | 'negative' | 'auth' | 'security' | 'performance' | 'flow';
-const ALL_LAYERS: LayerId[] = ['smoke', 'contract', 'schema', 'negative', 'auth', 'security', 'performance', 'flow'];
+type LayerId = 'smoke' | 'contract' | 'schema' | 'negative' | 'boundary' | 'auth' | 'security' | 'performance' | 'flow';
+const ALL_LAYERS: LayerId[] = ['smoke', 'contract', 'schema', 'negative', 'boundary', 'auth', 'security', 'performance', 'flow'];
 
 /** One request of a multi-step flow, plus what it extracts for later steps. */
 export interface FlowStep {
@@ -104,6 +104,7 @@ function buildApiPrompt(spec: ApiSpec, requirements: string, opts: { context?: s
   // matrix below stays complete so the model knows what it is NOT doing.
   const exclusions: string[] = [];
   if (off('negative')) exclusions.push('SKIP the entire NEGATIVE / VALIDATION and PAYLOAD blocks — the reviewer disabled negative testing for this run.');
+  if (off('boundary')) exclusions.push('SKIP the entire BOUNDARY block — the reviewer disabled boundary testing for this run.');
   if (off('auth')) exclusions.push('SKIP the AUTH block entirely.');
   if (off('schema')) exclusions.push('SKIP the "Response schema" row — assert only status and content-type on the happy path.');
   if (off('performance')) exclusions.push('Do NOT emit any responseTimeUnderMs check.');
@@ -223,6 +224,20 @@ NEGATIVE / VALIDATION
   [wide] Wrong HTTP method against the same URL → 405 (or a documented 4xx).
   [wide] Unknown query parameter — confirm it is ignored (2xx) rather than 500.
   [deep] Trailing-slash / case variance on the path — assert it does not 500.
+
+BOUNDARY (every bounded parameter this endpoint exposes — category "edge")
+  [core] Numeric id / path param at the edge — 0, a negative value, and a huge
+         out-of-range value (e.g. 99999999999) → 4xx or 404, never 500.
+  [core] Pagination/size params (page, limit, offset, per_page, size, cursor) —
+         page/offset 0, a negative value, a non-numeric value, and an oversized
+         limit → a clean 4xx or a safely clamped 2xx, never 500.
+  [wide] String field at its edges (write methods) — empty string, a single
+         character, and a value far longer than expected → 4xx or accepted
+         deterministically; assert the response is not a 500.
+  [wide] Numeric field at its edges (write methods) — the minimum, the maximum,
+         zero, and a negative where only positives are valid → 4xx or accepted.
+  [deep] Off-by-one around any documented min/max (length, count, amount) — one
+         inside the limit passes, one outside is rejected with a 4xx.
 
 PAYLOAD (write methods — POST/PUT/PATCH only; skip entirely for GET/HEAD/DELETE)
   [core] Missing required field — drop one field the sample body carries → 4xx.
@@ -1237,10 +1252,18 @@ export async function apiGeneratorAgent(state: TestOpsState): Promise<TestOpsSta
 
   // Every endpoint's model call runs in the pool; a failure on one endpoint
   // never sinks the run — it is reported and skipped.
+  // High-risk endpoints (write/delete/payment/auth) earn one depth level more
+  // than the reviewer's baseline, so they genuinely get more cases — not just a
+  // louder prompt note. The reviewer's own per-spec coverage still wins when set.
+  const bumpCoverage = (c: ApiSpec['coverage']): ApiSpec['coverage'] =>
+    c === 'essential' ? 'standard' : c === 'standard' ? 'exhaustive' : 'exhaustive';
   const results = await mapWithConcurrency(specs, ENDPOINT_CONCURRENCY, async (spec, i) => {
     const context = profileContextFor(profile, specs as unknown as ImportedEndpoint[], i) + insightBlock;
+    const genSpec: ApiSpec = profile.endpointRisk[i] === 'high'
+      ? { ...spec, coverage: bumpCoverage(spec.coverage || 'standard') }
+      : spec;
     try {
-      return await generateRawForSpec(spec, state.requirements || '', llm, { context, layers });
+      return await generateRawForSpec(genSpec, state.requirements || '', llm, { context, layers });
     } catch (err) {
       console.warn(`[apiGenerator] ${spec.method} ${spec.url}: ${(err as Error).message}`);
       return { raw: [] as RawApiCase[], lastHead: `error: ${(err as Error).message}` };
@@ -1290,7 +1313,10 @@ export async function apiGeneratorAgent(state: TestOpsState): Promise<TestOpsSta
   // `apiEnvironment` unset, so their rendered output is byte-identical to before.
   const templatedCases = normalized;
   const env = (state as any).apiEnvironment as ApiEnvironment | null | undefined;
-  const forRender = env ? templatedCases.map((nc) => resolveApiCase(nc, env)) : templatedCases;
+  // A multi-host catalogue keeps each endpoint's own host; a single-service
+  // catalogue still retargets onto the environment's base URL exactly as before.
+  const preserveRealHosts = spansMultipleHosts(templatedCases);
+  const forRender = env ? templatedCases.map((nc) => resolveApiCase(nc, env, { preserveRealHosts })) : templatedCases;
   const { testCases, automationScripts, pageObjects } = renderApiCases(forRender);
 
   return {

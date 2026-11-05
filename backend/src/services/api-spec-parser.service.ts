@@ -42,6 +42,41 @@ const VALID_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 
 const VALID_AUTH = new Set(['none', 'bearer', 'basic', 'apikey']);
 const MAX_ENDPOINTS = 60;
 
+/** Host attached to endpoints a source listed by path only — mirrors the
+ *  deterministic parsers' PLACEHOLDER_HOST so a path-only spec still imports
+ *  instead of failing with "no usable endpoint". */
+export const PLACEHOLDER_API_HOST = 'https://api.example.com';
+
+/**
+ * Coerce whatever the model returned in `url` to an absolute http(s) URL, or
+ * null when it is not a usable endpoint reference.
+ *
+ * Spreadsheets, CSV exports, test-case sheets and prose API docs routinely list
+ * endpoints by PATH only ("/users/{id}", "GET /pet 200"), with the base URL
+ * stated once elsewhere or not at all. Hard-rejecting a non-absolute URL meant
+ * every such row was dropped and the whole file imported nothing. Instead we
+ * salvage: an absolute URL passes through; a protocol-relative `//host/x` gets
+ * https; a bare `host.tld/path` gets https://; a bare path is hung off the
+ * placeholder host (the user re-points it with an Environment before running).
+ * Anything with whitespace or no path-like shape is still rejected as prose.
+ */
+export function toAbsoluteApiUrl(raw: string): string | null {
+  let url = (raw || '').trim();
+  // Strip quotes/backticks/angle-brackets the model sometimes leaves attached.
+  url = url.replace(/^['"`<\s]+/, '').replace(/['"`>\s]+$/, '').trim();
+  if (!url || /\s/.test(url)) return null; // a real URL reference has no spaces
+  if (/^https?:\/\//i.test(url)) return url.slice(0, 4000);
+  if (/^\/\//.test(url)) return `https:${url}`.slice(0, 4000); // //host/path
+  const firstSeg = url.replace(/^\/+/, '').split('/')[0] || '';
+  // A bare host like "api.example.com" or "api.example.com:8080".
+  if (/^(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?$/i.test(firstSeg)) {
+    return `https://${url.replace(/^\/+/, '')}`.slice(0, 4000);
+  }
+  const path = url.replace(/^\/+/, '');
+  if (!path) return null;
+  return `${PLACEHOLDER_API_HOST}/${path}`.slice(0, 4000);
+}
+
 /** Loose shape the model is asked to return; normalised into ParsedApiSpec. */
 interface RawSpec {
   title?: string;
@@ -137,9 +172,10 @@ function normalizeHeaders(h: unknown): { key: string; value: string }[] {
 /** Coerce one loose endpoint object into a validated ParsedApiSpec, or null. */
 function normalize(raw: RawSpec): ParsedApiSpec | null {
   const method = String(raw.method || 'GET').toUpperCase().trim();
-  const url = String(raw.url || '').trim();
-  // Every endpoint needs an absolute URL — anything else can't be executed.
-  if (!/^https?:\/\//i.test(url)) return null;
+  // Salvage path-only endpoints (the common case for spreadsheet/CSV/prose
+  // sources) by attaching the placeholder host, instead of dropping them.
+  const url = toAbsoluteApiUrl(String(raw.url || ''));
+  if (!url) return null;
 
   const authTypeRaw = String(raw.auth?.type || 'none').toLowerCase().trim();
   const authType = (VALID_AUTH.has(authTypeRaw) ? authTypeRaw : 'none') as ParsedApiSpec['auth']['type'];

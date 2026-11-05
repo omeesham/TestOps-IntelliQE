@@ -1,0 +1,991 @@
+{
+  "info": {
+    "name": "IntelliQE - REST APIs by Authentication Type",
+    "_postman_id": "b7f5484c-f1f1-434f-a47f-c4269cfd7cef",
+    "description": "30 real, public REST APIs organised into 12 folders by authentication type - No Auth, API Key (query + header), Bearer, Basic, Digest, OAuth 1.0, OAuth 2.0 (client-credentials + auth-code), JWT, Hawk and AWS SigV4.\n\nHOW TO USE\n- API Studio: Import panel -> Postman Collection -> upload this file. Requests load into the catalogue.\n- Flow builder: import to get runnable steps; bearer/basic/apikey/oauth2 auth carry over automatically.\n- Fill the collection variables below for the 'free signup' / 'sandbox' APIs. 15 requests run immediately with the credentials already baked in.\n\nVerified 2026-11-04.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1 - No Auth",
+      "description": "Open endpoints - no credentials. All run immediately.",
+      "item": [
+        {
+          "name": "JSONPlaceholder - list posts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://jsonplaceholder.typicode.com/posts"
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Ready to run. No auth."
+          }
+        },
+        {
+          "name": "Cat Facts - random fact",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://catfact.ninja/fact"
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Ready to run. No auth."
+          }
+        },
+        {
+          "name": "REST Countries - India",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://restcountries.com/v3.1/name/india"
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Ready to run. No auth."
+          }
+        },
+        {
+          "name": "Open-Meteo - current weather",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&current=temperature_2m"
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Ready to run. No auth."
+          }
+        },
+        {
+          "name": "httpbin - GET echo",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://httpbin.org/get"
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Ready to run. No auth."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 - API Key (Query Param)",
+      "description": "API key passed as a URL query parameter.",
+      "item": [
+        {
+          "name": "NASA APOD - DEMO_KEY",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.nasa.gov/planetary/apod?api_key=DEMO_KEY"
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Ready to run. Key DEMO_KEY is public (low rate limit)."
+          }
+        },
+        {
+          "name": "Alpha Vantage - demo key (IBM)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=IBM&apikey=demo"
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Ready to run. The 'demo' key only returns data for symbol IBM."
+          }
+        },
+        {
+          "name": "OpenWeatherMap - current weather",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.openweathermap.org/data/2.5/weather?q=London&appid={{openweather_key}}"
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Free signup. Set {{openweather_key}}."
+          }
+        },
+        {
+          "name": "TMDB v3 - popular movies",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.themoviedb.org/3/movie/popular?api_key={{tmdb_key}}"
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Free signup. Set {{tmdb_key}}."
+          }
+        },
+        {
+          "name": "Giphy - trending",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.giphy.com/v1/gifs/trending?api_key={{giphy_key}}"
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Free signup. Set {{giphy_key}}."
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 - API Key (Header)",
+      "description": "API key passed in a custom request header.",
+      "item": [
+        {
+          "name": "API Ninjas - quotes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.api-ninjas.com/v1/quotes"
+            },
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                {
+                  "key": "key",
+                  "value": "X-Api-Key",
+                  "type": "string"
+                },
+                {
+                  "key": "value",
+                  "value": "{{apininjas_key}}",
+                  "type": "string"
+                },
+                {
+                  "key": "in",
+                  "value": "header",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Free signup. Header X-Api-Key."
+          }
+        },
+        {
+          "name": "Finnhub - stock quote",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://finnhub.io/api/v1/quote?symbol=AAPL"
+            },
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                {
+                  "key": "key",
+                  "value": "X-Finnhub-Token",
+                  "type": "string"
+                },
+                {
+                  "key": "value",
+                  "value": "{{finnhub_token}}",
+                  "type": "string"
+                },
+                {
+                  "key": "in",
+                  "value": "header",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Free signup. Header X-Finnhub-Token."
+          }
+        },
+        {
+          "name": "ReqRes - list users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://reqres.in/api/users?page=2"
+            },
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                {
+                  "key": "key",
+                  "value": "x-api-key",
+                  "type": "string"
+                },
+                {
+                  "key": "value",
+                  "value": "{{reqres_key}}",
+                  "type": "string"
+                },
+                {
+                  "key": "in",
+                  "value": "header",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Free signup. ReqRes now requires header x-api-key (default free key pre-filled)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 - Bearer Token",
+      "description": "Opaque or JWT token in the Authorization: Bearer header.",
+      "item": [
+        {
+          "name": "httpbin - bearer",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://httpbin.org/bearer"
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{bearer_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Ready to run. httpbin accepts any non-empty bearer token."
+          }
+        },
+        {
+          "name": "GitHub - authenticated user (PAT)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.github.com/user"
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{github_pat}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Free signup. Create a personal access token at github.com/settings/tokens."
+          }
+        },
+        {
+          "name": "TMDB v4 - movie by id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.themoviedb.org/3/movie/550"
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{tmdb_v4_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Free signup. Use the TMDB v4 read access token."
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 - Basic Auth",
+      "description": "Base64(username:password) in the Authorization: Basic header.",
+      "item": [
+        {
+          "name": "httpbin - basic auth",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://httpbin.org/basic-auth/user/passwd"
+            },
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "user",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "passwd",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Ready to run. Credentials user / passwd."
+          }
+        },
+        {
+          "name": "Postman Echo - basic auth",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://postman-echo.com/basic-auth"
+            },
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "postman",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "password",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Ready to run. Credentials postman / password."
+          }
+        },
+        {
+          "name": "Stripe - list charges (key as user)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.stripe.com/v1/charges"
+            },
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{stripe_test_key}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Sandbox. Stripe uses your TEST secret key as the Basic username, blank password."
+          }
+        }
+      ]
+    },
+    {
+      "name": "6 - Digest Auth",
+      "description": "Challenge-response auth; the password is hashed with a server nonce (never sent in the clear). Not natively modelled by the flow engine - imports as a plain request; runs in Postman/Newman.",
+      "item": [
+        {
+          "name": "httpbin - digest auth",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://httpbin.org/digest-auth/auth/user/passwd"
+            },
+            "auth": {
+              "type": "digest",
+              "digest": [
+                {
+                  "key": "username",
+                  "value": "user",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "passwd",
+                  "type": "string"
+                },
+                {
+                  "key": "algorithm",
+                  "value": "MD5",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Ready to run. qop=auth, user / passwd."
+          }
+        },
+        {
+          "name": "Postman Echo - digest auth",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://postman-echo.com/digest-auth"
+            },
+            "auth": {
+              "type": "digest",
+              "digest": [
+                {
+                  "key": "username",
+                  "value": "postman",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "password",
+                  "type": "string"
+                },
+                {
+                  "key": "algorithm",
+                  "value": "MD5",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Ready to run. Credentials postman / password."
+          }
+        }
+      ]
+    },
+    {
+      "name": "7 - OAuth 2.0 (Client Credentials)",
+      "description": "Machine-to-machine: the app trades client_id/secret for an access token, then calls the API with Bearer.",
+      "item": [
+        {
+          "name": "Spotify - get token",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "https://accounts.spotify.com/api/token"
+            },
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{spotify_client_id}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{spotify_client_secret}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Free signup. Returns access_token; use it as a Bearer token for api.spotify.com.",
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials",
+                  "type": "text"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Spotify - new releases (Bearer)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.spotify.com/v1/browse/new-releases"
+            },
+            "auth": {
+              "type": "oauth2",
+              "oauth2": [
+                {
+                  "key": "accessToken",
+                  "value": "{{spotify_token}}",
+                  "type": "string"
+                },
+                {
+                  "key": "tokenType",
+                  "value": "Bearer",
+                  "type": "string"
+                },
+                {
+                  "key": "addTokenTo",
+                  "value": "header",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Free signup. Paste the access_token from the 'get token' call into {{spotify_token}}."
+          }
+        },
+        {
+          "name": "PayPal Sandbox - get token",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "https://api-m.sandbox.paypal.com/v1/oauth2/token"
+            },
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{paypal_client_id}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{paypal_client_secret}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Sandbox. Create a sandbox app at developer.paypal.com.",
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials",
+                  "type": "text"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "8 - OAuth 2.0 (Authorization Code)",
+      "description": "3-legged: the user authorizes in a browser, the app swaps the returned code for a token. These requests hit the protected resource with that token.",
+      "item": [
+        {
+          "name": "Google - userinfo (OAuth token)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://www.googleapis.com/oauth2/v3/userinfo"
+            },
+            "auth": {
+              "type": "oauth2",
+              "oauth2": [
+                {
+                  "key": "accessToken",
+                  "value": "{{google_oauth_token}}",
+                  "type": "string"
+                },
+                {
+                  "key": "tokenType",
+                  "value": "Bearer",
+                  "type": "string"
+                },
+                {
+                  "key": "addTokenTo",
+                  "value": "header",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Free signup. Token obtained via accounts.google.com/o/oauth2/v2/auth -> oauth2.googleapis.com/token."
+          }
+        },
+        {
+          "name": "GitHub - user (OAuth app token)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://api.github.com/user"
+            },
+            "auth": {
+              "type": "oauth2",
+              "oauth2": [
+                {
+                  "key": "accessToken",
+                  "value": "{{github_oauth_token}}",
+                  "type": "string"
+                },
+                {
+                  "key": "tokenType",
+                  "value": "Bearer",
+                  "type": "string"
+                },
+                {
+                  "key": "addTokenTo",
+                  "value": "header",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Free signup. Token from an OAuth App flow: github.com/login/oauth/authorize -> access_token."
+          }
+        }
+      ]
+    },
+    {
+      "name": "9 - OAuth 1.0",
+      "description": "Each request is signed with a consumer key/secret and an HMAC-SHA1 signature.",
+      "item": [
+        {
+          "name": "Postman Echo - OAuth 1.0",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://postman-echo.com/oauth1"
+            },
+            "auth": {
+              "type": "oauth1",
+              "oauth1": [
+                {
+                  "key": "consumerKey",
+                  "value": "RKCGzna7bv9YD57c",
+                  "type": "string"
+                },
+                {
+                  "key": "consumerSecret",
+                  "value": "D+EdQ-gs$-%@2Nu7",
+                  "type": "string"
+                },
+                {
+                  "key": "signatureMethod",
+                  "value": "HMAC-SHA1",
+                  "type": "string"
+                },
+                {
+                  "key": "addParamsToHeader",
+                  "value": true,
+                  "type": "boolean"
+                },
+                {
+                  "key": "version",
+                  "value": "1.0",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Ready to run. Shared Postman test consumer key/secret."
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 - JWT (login -> token)",
+      "description": "POST credentials to a login endpoint, receive a signed JWT, then send it as a Bearer token.",
+      "item": [
+        {
+          "name": "DummyJSON - login",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "https://dummyjson.com/auth/login"
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Ready to run. Returns accessToken (a JWT).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"username\": \"emilys\", \"password\": \"emilyspass\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "DummyJSON - current user (Bearer JWT)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://dummyjson.com/auth/me"
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{dummyjson_jwt}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Ready to run. Paste the accessToken from 'login' into {{dummyjson_jwt}}."
+          }
+        },
+        {
+          "name": "ReqRes - login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{reqres_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "https://reqres.in/api/login"
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Free signup. Returns a token; ReqRes requires the x-api-key header.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"eve.holt@reqres.in\", \"password\": \"cityslicka\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 - Hawk Auth",
+      "description": "MAC-based auth using an id/key pair plus an optional payload hash. Imports as a plain request in the flow engine; runs in Postman/Newman.",
+      "item": [
+        {
+          "name": "Postman Echo - Hawk",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://postman-echo.com/auth/hawk"
+            },
+            "auth": {
+              "type": "hawk",
+              "hawk": [
+                {
+                  "key": "authId",
+                  "value": "dh37fgj492je",
+                  "type": "string"
+                },
+                {
+                  "key": "authKey",
+                  "value": "werxhqb98rpaxn39848xrunpaw3489ruxnpa98w4rxn",
+                  "type": "string"
+                },
+                {
+                  "key": "algorithm",
+                  "value": "sha256",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Ready to run. Shared Postman Hawk test id/key (SHA256)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "12 - AWS Signature v4",
+      "description": "Request signed with an AWS access/secret key, scoped to a region and service. Imports as a plain request in the flow engine; runs in Postman/Newman.",
+      "item": [
+        {
+          "name": "AWS DynamoDB - ListTables (SigV4)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Amz-Target",
+                "value": "DynamoDB_20120810.ListTables",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/x-amz-json-1.0",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "https://dynamodb.us-east-1.amazonaws.com/"
+            },
+            "auth": {
+              "type": "awsv4",
+              "awsv4": [
+                {
+                  "key": "accessKey",
+                  "value": "{{aws_access_key}}",
+                  "type": "string"
+                },
+                {
+                  "key": "secretKey",
+                  "value": "{{aws_secret_key}}",
+                  "type": "string"
+                },
+                {
+                  "key": "region",
+                  "value": "us-east-1",
+                  "type": "string"
+                },
+                {
+                  "key": "service",
+                  "value": "dynamodb",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Free AWS account. Signed with your AWS access/secret key.",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "bearer_token",
+      "value": "any-non-empty-token-works",
+      "type": "string"
+    },
+    {
+      "key": "openweather_key",
+      "value": "YOUR_OPENWEATHERMAP_KEY",
+      "type": "string"
+    },
+    {
+      "key": "tmdb_key",
+      "value": "YOUR_TMDB_V3_KEY",
+      "type": "string"
+    },
+    {
+      "key": "tmdb_v4_token",
+      "value": "YOUR_TMDB_V4_READ_ACCESS_TOKEN",
+      "type": "string"
+    },
+    {
+      "key": "giphy_key",
+      "value": "YOUR_GIPHY_KEY",
+      "type": "string"
+    },
+    {
+      "key": "apininjas_key",
+      "value": "YOUR_API_NINJAS_KEY",
+      "type": "string"
+    },
+    {
+      "key": "finnhub_token",
+      "value": "YOUR_FINNHUB_TOKEN",
+      "type": "string"
+    },
+    {
+      "key": "reqres_key",
+      "value": "reqres-free-v1",
+      "type": "string"
+    },
+    {
+      "key": "github_pat",
+      "value": "YOUR_GITHUB_PERSONAL_ACCESS_TOKEN",
+      "type": "string"
+    },
+    {
+      "key": "stripe_test_key",
+      "value": "sk_test_YOUR_STRIPE_TEST_KEY",
+      "type": "string"
+    },
+    {
+      "key": "spotify_client_id",
+      "value": "YOUR_SPOTIFY_CLIENT_ID",
+      "type": "string"
+    },
+    {
+      "key": "spotify_client_secret",
+      "value": "YOUR_SPOTIFY_CLIENT_SECRET",
+      "type": "string"
+    },
+    {
+      "key": "spotify_token",
+      "value": "PASTE_ACCESS_TOKEN_FROM_TOKEN_CALL",
+      "type": "string"
+    },
+    {
+      "key": "paypal_client_id",
+      "value": "YOUR_PAYPAL_SANDBOX_CLIENT_ID",
+      "type": "string"
+    },
+    {
+      "key": "paypal_client_secret",
+      "value": "YOUR_PAYPAL_SANDBOX_SECRET",
+      "type": "string"
+    },
+    {
+      "key": "google_oauth_token",
+      "value": "YOUR_GOOGLE_OAUTH_ACCESS_TOKEN",
+      "type": "string"
+    },
+    {
+      "key": "github_oauth_token",
+      "value": "YOUR_GITHUB_OAUTH_APP_TOKEN",
+      "type": "string"
+    },
+    {
+      "key": "dummyjson_jwt",
+      "value": "PASTE_ACCESSTOKEN_FROM_LOGIN",
+      "type": "string"
+    },
+    {
+      "key": "aws_access_key",
+      "value": "YOUR_AWS_ACCESS_KEY_ID",
+      "type": "string"
+    },
+    {
+      "key": "aws_secret_key",
+      "value": "YOUR_AWS_SECRET_ACCESS_KEY",
+      "type": "string"
+    }
+  ]
+}

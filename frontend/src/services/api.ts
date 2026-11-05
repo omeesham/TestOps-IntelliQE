@@ -405,14 +405,21 @@ export async function importApiEndpoint(input: { url: string; method?: string; h
   return data;
 }
 
-export async function importApiJira(key: string): Promise<ApiImportResponse> {
-  const { data } = await api.post('/api-automation/import/jira', { key }, { timeout: IMPORT_TIMEOUT });
+export async function importApiJira(key: string, attachmentIds?: string[]): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/jira', { key, ...(attachmentIds ? { attachmentIds } : {}) }, { timeout: IMPORT_TIMEOUT });
   return data;
 }
 
-export async function importApiAzure(id: string): Promise<ApiImportResponse> {
-  const { data } = await api.post('/api-automation/import/azure', { id }, { timeout: IMPORT_TIMEOUT });
+export async function importApiAzure(id: string, attachmentIds?: string[]): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/azure', { id, ...(attachmentIds ? { attachmentIds } : {}) }, { timeout: IMPORT_TIMEOUT });
   return data;
+}
+
+/** Per-attachment test-case / endpoint counts for the import picker (deterministic, no LLM). */
+export interface AttachmentCount { id: string; name: string; count: number | null; kind: string }
+export async function getImportAttachmentCounts(provider: 'jira' | 'ado', id: string): Promise<AttachmentCount[]> {
+  const { data } = await api.post('/api-automation/import/attachment-counts', { provider, id }, { timeout: 60000 });
+  return Array.isArray(data?.counts) ? data.counts : [];
 }
 
 export async function importApiCurl(curl: string): Promise<ApiImportResponse> {
@@ -1094,6 +1101,34 @@ export async function toggleMockServer(id: string, enabled: boolean): Promise<{ 
 }
 export async function deleteMockServer(id: string): Promise<{ ok: boolean }> {
   const { data } = await api.delete(`/api-automation/mocks/${encodeURIComponent(id)}`);
+  return data;
+}
+
+/* ── External mock connector: WireMock & Prism (API-013) ── */
+export interface WireMockMapping {
+  request: { method: string; urlPath?: string; urlPathPattern?: string };
+  response: { status: number; headers?: Record<string, string>; jsonBody?: unknown; body?: string };
+  metadata?: { source: string };
+}
+export interface WireMockPushResult { method: string; path: string; ok: boolean; status?: number; error?: string }
+export async function exportWireMock(endpoints: any[]): Promise<{ mappings: WireMockMapping[] }> {
+  const { data } = await api.post('/api-automation/wiremock/export', { endpoints });
+  return data;
+}
+export async function importWireMock(mappings: string): Promise<{ endpoints: any[] }> {
+  const { data } = await api.post('/api-automation/wiremock/import', { mappings });
+  return data;
+}
+export async function pushWireMock(baseUrl: string, endpoints: any[], reset: boolean): Promise<{ pushed: number; failed: number; reset: boolean; results: WireMockPushResult[] }> {
+  const { data } = await api.post('/api-automation/wiremock/push', { baseUrl, endpoints, reset });
+  return data;
+}
+export async function pingWireMock(baseUrl: string): Promise<{ ok: boolean; count?: number; error?: string }> {
+  const { data } = await api.post('/api-automation/wiremock/ping', { baseUrl });
+  return data;
+}
+export async function exportPrism(endpoints: any[], title?: string): Promise<{ spec: Record<string, unknown>; command: string; endpointCount: number }> {
+  const { data } = await api.post('/api-automation/prism/export', { endpoints, title });
   return data;
 }
 

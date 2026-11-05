@@ -36,7 +36,8 @@ import multer from 'multer';
 import { parseDocument } from '../services/document-parser.service.js';
 import { getTenantLlm } from '../services/llm.service.js';
 import { getConfigsForTenant, upsertConfig } from '../services/configurations.service.js';
-import { getCredsForTenant as getJiraCreds, getStory as getJiraStory, getProjects as getJiraProjects, getIssues as getJiraIssues } from '../services/jira.service.js';
+import { getCredsForTenant as getJiraCreds, getStory as getJiraStory, getProjects as getJiraProjects, getIssues as getJiraIssues, downloadIssueAttachments as downloadJiraAttachments } from '../services/jira.service.js';
+import { countFileItems } from '../services/api-attachment-count.service.js';
 import { syncDefects as syncJiraDefects, listSyncHistory as listJiraSyncHistory, listDefectLinks as listJiraDefectLinks } from '../services/api-jira-sync.service.js';
 import { getCredsForTenant as getAdoCreds, getStory as getAdoStory, getStoryAttachments as getAdoAttachments, getProjects as getAdoProjects, getWorkItems as getAdoWorkItems } from '../services/azure-devops.service.js';
 import { syncDefects as syncAzureDefects, listSyncHistory as listAzureSyncHistory, listDefectLinks as listAzureDefectLinks } from '../services/api-azure-sync.service.js';
@@ -66,6 +67,7 @@ import {
   captureToEndpoints, closeCaptureSession, deleteCaptureSession,
 } from '../services/api-capture.service.js';
 import { listMocks, createMock, setMockEnabled, deleteMock } from '../services/api-mock.service.js';
+import { toWireMock, fromWireMock, toPrism, pushToWireMock, pingWireMock } from '../services/api-wiremock.service.js';
 import { analyzeCoverageGaps } from '../services/api-coverage-gaps.service.js';
 import { runSemanticAssertion } from '../services/api-semantic.service.js';
 import { analyzeFailureClusters } from '../services/api-failure-clusters.service.js';
@@ -165,7 +167,7 @@ import { runUnified } from '../services/api-unified.service.js';
 import { grpcClientStream, grpcBidi } from '../services/api-messaging.service.js';
 import { logAudit } from '../utils/audit.js';
 import {
-  listEnvironments, getEnvironment, createEnvironment, updateEnvironment, deleteEnvironment, applyEnvironment, resolveApiCase,
+  listEnvironments, getEnvironment, createEnvironment, updateEnvironment, deleteEnvironment, applyEnvironment, resolveApiCase, spansMultipleHosts,
 } from '../services/api-environments.service.js';
 import {
   getReadinessConfig, saveReadinessConfig, evaluateReadiness, enforceReadiness, listReadinessHistory,
@@ -367,13 +369,20 @@ router.post('/import/url', async (req: Request, res: Response) => {
 
 /**
  * Import endpoints from a Jira issue (Module 1 — requirement-driven source).
- * Reuses the tenant's existing Jira connection (System Configuration); the
- * issue's title + description + acceptance criteria are AI-read into endpoints.
+ * Reuses the tenant's existing Jira connection (System Configuration).
+ *
+ * When the caller passes `attachmentIds` (the files the user ticked in the
+ * import picker), ONLY those attachments are downloaded and read for endpoints —
+ * a real spec/test-case file beats AI-reading prose. An EMPTY array means "none
+ * selected — read the issue text instead", and omitting the field keeps the
+ * original text-only behaviour. When a selection yields nothing usable we fall
+ * back to the issue's title + description + acceptance criteria.
  */
 router.post('/import/jira', async (req: Request, res: Response) => {
   try {
     const key = String(req.body?.key || '').trim();
     if (!key) { res.status(400).json({ error: 'A Jira issue key is required (e.g. PROJ-123).' }); return; }
+    const attachmentIds = Array.isArray(req.body?.attachmentIds) ? req.body.attachmentIds.map((x: unknown) => String(x)) : undefined;
     const creds = await getJiraCreds(req.user!.tenantId);
     if (!creds) { res.status(409).json({ error: 'Jira is not connected. Connect it under System Configuration → Integrations first.' }); return; }
     let story;
@@ -382,9 +391,52 @@ router.post('/import/jira', async (req: Request, res: Response) => {
     } catch (e) {
       res.status(502).json({ error: issueFetchError('Jira', key, e) }); return;
     }
-    const text = [story.title, story.description, story.acceptanceCriteria].filter(Boolean).join('\n\n');
-    if (text.trim().length < 10) { res.status(400).json({ error: `Jira issue ${key} has no readable description or acceptance criteria to extract endpoints from.` }); return; }
     const llm = (await getTenantLlm(req.user!.tenantId)) || undefined;
+
+    // 1) Selected attachments first — import only the files the user ticked.
+    //    (attachmentIds undefined → skip straight to text, preserving old behaviour.)
+    if (attachmentIds && attachmentIds.length) {
+      const files = await downloadJiraAttachments(creds, key, { ids: attachmentIds }).catch(() => []);
+      const fromFiles: ImportedEndpoint[] = [];
+      const warnings: string[] = [];
+      const notices: string[] = [];
+      let parser: string | undefined;
+      let format: string | undefined;
+      for (const att of files) {
+        try {
+          const parsed = await parseDocument(att.buffer, '', att.name);
+          if (!parsed.text?.trim()) continue;
+          const r = await importFromText(parsed.text, { fileName: att.name, formatHint: 'auto', llm, sourceMethod: 'jira' });
+          if (r.endpoints.length) {
+            fromFiles.push(...r.endpoints);
+            parser = parser || r.parser;
+            format = format || r.format;
+            if (r.notice) notices.push(r.notice);
+            warnings.push(...r.warnings.map((w) => `${att.name}: ${w}`));
+          }
+        } catch { /* a non-spec attachment (screenshot, etc.) is skipped, not fatal */ }
+      }
+      if (fromFiles.length) {
+        const endpoints = dedupeEndpoints(fromFiles);
+        await recordImport(req.user!.tenantId, req.user!.username, { method: 'jira', name: `Jira ${story.key}: ${story.title}`.slice(0, 200), format: format || 'mixed', parser: parser || 'llm', endpointCount: endpoints.length, warnings });
+        res.json({
+          endpoints, count: endpoints.length, parser: parser || 'llm', format,
+          warnings, notice: [`Imported from ${files.length === 1 ? 'the selected file' : `${files.length} selected files`} on Jira issue ${story.key}.`, ...notices].join(' '),
+          profile: endpoints.length ? analyzeApiSurface(endpoints) : null,
+          origin: { kind: 'jira', ref: story.key, label: story.title },
+        });
+        return;
+      }
+    }
+
+    // 2) No selection, or the selected files held no usable spec — read the prose.
+    const text = [story.title, story.description, story.acceptanceCriteria].filter(Boolean).join('\n\n');
+    if (text.trim().length < 10) {
+      res.status(400).json({ error: attachmentIds && attachmentIds.length
+        ? `None of the ${attachmentIds.length} selected file(s) on Jira issue ${key} contained a usable API spec or test-case table, and the issue has no readable description to fall back on.`
+        : `Jira issue ${key} has no readable description or acceptance criteria to extract endpoints from.` });
+      return;
+    }
     const result = await importFromText(text, { fileName: `Jira ${story.key}: ${story.title}`.slice(0, 200), formatHint: 'frd', llm, sourceMethod: 'jira' });
     await respondImport(req, res, 'jira', story.key, result, { origin: { kind: 'jira', ref: story.key, label: story.title }, sourceText: text.slice(0, 20000) });
   } catch (err) { fail(res, err); }
@@ -403,6 +455,10 @@ router.post('/import/azure', async (req: Request, res: Response) => {
   try {
     const id = String(req.body?.id || '').trim();
     if (!id) { res.status(400).json({ error: 'An Azure DevOps work item id is required.' }); return; }
+    // The files the user ticked in the import picker. A non-empty list imports
+    // ONLY those; an empty array means "none selected — read the prose"; omitting
+    // the field keeps the original "all attachments, then prose" behaviour.
+    const attachmentIds: string[] | undefined = Array.isArray(req.body?.attachmentIds) ? req.body.attachmentIds.map((x: unknown) => String(x)) : undefined;
     const creds = await getAdoCreds(req.user!.tenantId);
     if (!creds) { res.status(409).json({ error: 'Azure DevOps is not connected. Connect it under System Configuration → Integrations first.' }); return; }
     let story;
@@ -415,7 +471,14 @@ router.post('/import/azure', async (req: Request, res: Response) => {
 
     // 1) Attachments first — a real spec file beats AI-reading prose. Follows
     // one hop of links so a spec attached to a linked Test Case is still found.
-    const attachments = await getAdoAttachments(creds, id, { followLinks: true }).catch(() => []);
+    // When the caller sent a selection, import only those ids (an empty selection
+    // skips attachments entirely and goes straight to the prose fallback).
+    const allAttachments = (attachmentIds && attachmentIds.length === 0)
+      ? []
+      : await getAdoAttachments(creds, id, { followLinks: true }).catch(() => []);
+    const attachments = (attachmentIds && attachmentIds.length)
+      ? allAttachments.filter((a) => attachmentIds.includes(a.id))
+      : allAttachments;
     const fromFiles: ImportedEndpoint[] = [];
     const warnings: string[] = [];
     const notices: string[] = [];
@@ -458,6 +521,42 @@ router.post('/import/azure', async (req: Request, res: Response) => {
     }
     const result = await importFromText(text, { fileName: `Azure ${story.key}: ${story.title}`.slice(0, 200), formatHint: 'frd', llm, sourceMethod: 'ado' });
     await respondImport(req, res, 'ado', story.key, result, { origin: { kind: 'ado', ref: story.key, label: story.title }, sourceText: text.slice(0, 20000) });
+  } catch (err) { fail(res, err); }
+});
+
+/**
+ * Count the test cases / endpoints inside each file attached to a Jira issue or
+ * Azure DevOps work item, so the import picker can label every file (e.g.
+ * "120 cases") and let the user tick which ones to import. Deterministic and
+ * cheap — downloads each attachment and counts its structural rows/requests/
+ * operations; it never runs the LLM. Files it can't count cheaply report null.
+ */
+router.post('/import/attachment-counts', async (req: Request, res: Response) => {
+  try {
+    const provider = String(req.body?.provider || '').toLowerCase();
+    const id = String(req.body?.id || '').trim();
+    if (!id) { res.status(400).json({ error: 'An issue / work-item id is required.' }); return; }
+
+    let files: { id: string; name: string; buffer: Buffer }[] = [];
+    if (provider === 'jira') {
+      const creds = await getJiraCreds(req.user!.tenantId);
+      if (!creds) { res.status(409).json({ error: 'Jira is not connected.' }); return; }
+      files = await downloadJiraAttachments(creds, id).catch(() => []);
+    } else if (provider === 'ado' || provider === 'azure') {
+      const creds = await getAdoCreds(req.user!.tenantId);
+      if (!creds) { res.status(409).json({ error: 'Azure DevOps is not connected.' }); return; }
+      files = (await getAdoAttachments(creds, id, { followLinks: true }).catch(() => []))
+        .map((a) => ({ id: a.id, name: a.name, buffer: a.buffer }));
+    } else {
+      res.status(400).json({ error: "provider must be 'jira' or 'ado'." }); return;
+    }
+
+    const counts = [] as { id: string; name: string; count: number | null; kind: string }[];
+    for (const f of files) {
+      const c = await countFileItems(f.buffer, f.name);
+      counts.push({ id: f.id, name: f.name, count: c.count, kind: c.kind });
+    }
+    res.json({ counts });
   } catch (err) { fail(res, err); }
 });
 
@@ -1000,6 +1099,37 @@ router.delete('/mocks/:id', async (req: Request, res: Response) => {
 });
 
 /* ═══════════════════════════════════════════════════════════════
+   External mock connector — WireMock & Prism (API-013)
+   Stateless format bridges + live WireMock admin sync. Tenant-auth'd
+   like every other route here; the pipeline is never involved.
+   ═══════════════════════════════════════════════════════════════ */
+
+router.post('/wiremock/export', async (req: Request, res: Response) => {
+  try { res.json(toWireMock(req.body?.endpoints)); }
+  catch (err) { fail(res, err); }
+});
+
+router.post('/wiremock/import', async (req: Request, res: Response) => {
+  try { res.json(fromWireMock(req.body?.mappings)); }
+  catch (err) { fail(res, err); }
+});
+
+router.post('/wiremock/push', async (req: Request, res: Response) => {
+  try { res.json(await pushToWireMock(String(req.body?.baseUrl || ''), req.body?.endpoints, req.body?.reset === true)); }
+  catch (err) { fail(res, err); }
+});
+
+router.post('/wiremock/ping', async (req: Request, res: Response) => {
+  try { res.json(await pingWireMock(String(req.body?.baseUrl || ''))); }
+  catch (err) { fail(res, err); }
+});
+
+router.post('/prism/export', async (req: Request, res: Response) => {
+  try { res.json(toPrism(req.body?.endpoints, req.body?.title)); }
+  catch (err) { fail(res, err); }
+});
+
+/* ═══════════════════════════════════════════════════════════════
    Environments
    ═══════════════════════════════════════════════════════════════ */
 
@@ -1038,7 +1168,9 @@ router.post('/environments/:id/resolve', async (req: Request, res: Response) => 
   try {
     const env = await getEnvironment(req.user!.tenantId, String(req.params.id), { reveal: true });
     if (!env) { res.status(404).json({ error: 'Environment not found.' }); return; }
-    const endpoints = endpointsFromBody(req.body?.endpoints).map((e) => applyEnvironment(e, env));
+    const rawEndpoints = endpointsFromBody(req.body?.endpoints);
+    const preserveRealHosts = spansMultipleHosts(rawEndpoints);
+    const endpoints = rawEndpoints.map((e) => applyEnvironment(e, env, { preserveRealHosts }));
     res.json({ endpoints, environment: { id: env.id, name: env.name, baseUrl: env.baseUrl } });
   } catch (err) { fail(res, err); }
 });
@@ -1198,7 +1330,8 @@ router.post('/render', async (req: Request, res: Response) => {
     const environmentId = typeof req.body?.environmentId === 'string' ? req.body.environmentId : undefined;
     const env = environmentId ? await getEnvironment(tenantId, environmentId, { reveal: true }) : null;
     if (environmentId && !env) { res.status(404).json({ error: 'Environment not found.' }); return; }
-    const resolved = (cases as any[]).map((nc) => resolveApiCase(nc, env));
+    const preserveRealHosts = spansMultipleHosts(cases as any[]);
+    const resolved = (cases as any[]).map((nc) => resolveApiCase(nc, env, { preserveRealHosts }));
     const { testCases, automationScripts, pageObjects } = renderApiCases(resolved);
     res.json({
       testCases,

@@ -89,7 +89,10 @@ export interface ApiRisk {
   endpoints?: number[];
 }
 
-export type StrategyLayerId = 'smoke' | 'contract' | 'schema' | 'negative' | 'auth' | 'security' | 'performance' | 'flow';
+export type StrategyLayerId = 'smoke' | 'contract' | 'schema' | 'negative' | 'boundary' | 'auth' | 'security' | 'performance' | 'flow';
+
+/** Per-endpoint risk, used to weight how much coverage each endpoint earns. */
+export type RiskLevel = 'high' | 'medium' | 'low';
 
 export interface StrategyLayer {
   id: StrategyLayerId;
@@ -115,6 +118,10 @@ export interface ApiProfile {
   dependencies: ApiDependency[];
   flows: ApiFlow[];
   risks: ApiRisk[];
+  /** Risk level per endpoint, aligned by index with the analysed endpoint list. */
+  endpointRisk: RiskLevel[];
+  /** Indices of the endpoints classified high-risk (write/delete/payment/auth). */
+  highRiskEndpoints: number[];
   /** Short, human-readable statements of what was recognised. */
   patterns: string[];
   strategy: {
@@ -222,6 +229,31 @@ function findBodyKey(body: string | undefined, fkNames: Set<string>): string | n
     }
     return null;
   }
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Per-endpoint risk
+   ────────────────────────────────────────────────────────────────
+   High-value / blast-radius signals: destructive methods and anything that
+   touches money, authentication or privilege. High-risk endpoints earn extra
+   negative, boundary, auth-abuse and security coverage in the strategy below,
+   and a louder note in the per-endpoint generator context. */
+const MONEY_PATH_RE = /(payment|\bpay\b|charge|refund|billing|invoice|checkout|transfer|withdraw|deposit|payout|\border\b|purchase|wallet|transaction|\bfund)/i;
+const AUTH_PATH_RE = /(auth|login|logout|sign-?in|sign-?up|register|token|password|credential|session|oauth|\bmfa\b|\botp\b|\bsso\b|verify|reset-?password|permission|\brole\b|\bgrant\b|privilege|\bkey\b|secret)/i;
+
+export function classifyEndpointRisk(e: ImportedEndpoint): RiskLevel {
+  const method = (e.method || 'GET').toUpperCase();
+  const path = safePath(e.url).toLowerCase();
+  const isWrite = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+  const money = MONEY_PATH_RE.test(path);
+  const authy = AUTH_PATH_RE.test(path);
+  // Destructive, any auth/privilege surface, or a write to a money surface: high.
+  if (method === 'DELETE') return 'high';
+  if (authy && (isWrite || /login|logout|token|password|session|oauth|mfa|otp|verify|reset/.test(path))) return 'high';
+  if (money && isWrite) return 'high';
+  // Other writes, or reads of a sensitive surface: medium.
+  if (isWrite || money || authy) return 'medium';
+  return 'low';
 }
 
 export function analyzeApiSurface(endpoints: ImportedEndpoint[]): ApiProfile {
@@ -439,26 +471,52 @@ export function analyzeApiSurface(endpoints: ImportedEndpoint[]): ApiProfile {
   if (contentTypes.size) patterns.push(`Content types: ${[...contentTypes].join(', ')}`);
   if (flows.length) patterns.push(`${flows.length} end-to-end flow${flows.length === 1 ? '' : 's'} inferred from create/read/update/delete chains`);
 
+  /* ── Per-endpoint risk ── */
+  const endpointRisk: RiskLevel[] = endpoints.map(classifyEndpointRisk);
+  const highRiskEndpoints = endpointRisk.map((r, i) => (r === 'high' ? i : -1)).filter((i) => i >= 0);
+  const highRiskCount = highRiskEndpoints.length;
+  // How many EXTRA cases an endpoint's risk justifies on top of the base per-type count.
+  const riskBump = (i: number) => (endpointRisk[i] === 'high' ? 2 : endpointRisk[i] === 'medium' ? 1 : 0);
+  // Bounded parameters per endpoint — the surfaces a boundary case targets.
+  const boundaryCountFor = (e: ImportedEndpoint, i: number): number => {
+    let c = 0;
+    const path = splitUrl(e.url).path;
+    if (/\{|:/.test(e.pathTemplate || '') || /\/\d+(\/|$)/.test(path) || (e.pathParams?.length || 0) > 0) c += 1; // id: 0, negative, overflow
+    const qNames = [...splitUrl(e.url).query.keys(), ...(e.queryParams || []).map((q) => q.name)].map((k) => k.toLowerCase());
+    if (qNames.some((k) => PAGINATION_PARAMS.includes(k))) c += 2; // page 0 / negative limit / oversized limit
+    if (['POST', 'PUT', 'PATCH'].includes((e.method || 'GET').toUpperCase()) && e.body) c += 2; // min/max/empty/oversized field
+    return c + (endpointRisk[i] === 'high' ? 1 : 0);
+  };
+
   /* ── Strategy ── */
   const writes = endpoints.filter((e) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(e.method)).length;
   const reads = n - writes;
   const withParams = endpoints.filter((e) => /[?{:]/.test(e.pathTemplate || '') || splitUrl(e.url).query.toString() || (e.pathParams?.length || 0) > 0 || /\/\d+(\/|$)/.test(splitUrl(e.url).path)).length;
+  const negativeEst = endpoints.reduce((s, e, i) => s + (['POST', 'PUT', 'PATCH', 'DELETE'].includes((e.method || 'GET').toUpperCase()) ? 3 : 2) + riskBump(i), 0);
+  const boundaryEst = endpoints.reduce((s, e, i) => s + boundaryCountFor(e, i), 0);
+  const boundaryEndpoints = endpoints.filter((e, i) => boundaryCountFor(e, i) > 0).length;
+  const authEst = protectedCount * 2 + highRiskEndpoints.filter((i) => (endpoints[i]!.auth?.type || 'none') !== 'none').length;
+  const securityEst = withParams + highRiskCount;
+  const riskNote = highRiskCount ? ` High-risk endpoints (${highRiskCount}) earn extra cases.` : '';
   const layers: StrategyLayer[] = [
     { id: 'smoke', label: 'Smoke', enabled: true, estimatedCases: n, rationale: 'One documented happy-path request per endpoint — proves reachability and the expected status.' },
     { id: 'contract', label: 'Contract', enabled: true, estimatedCases: n, rationale: 'Status code, content-type and response-time guard on every endpoint.' },
     { id: 'schema', label: 'Schema', enabled: withExamples > 0, estimatedCases: withExamples, rationale: withExamples ? `Field-level type and value assertions for the ${withExamples} endpoints that carry an example response.` : 'No example responses were imported — schema checks are inferred on the first run.' },
-    { id: 'negative', label: 'Negative', enabled: true, estimatedCases: writes * 3 + reads * 2, rationale: 'Unknown ids, malformed input, missing required fields, wrong method, malformed JSON on writes.' },
-    { id: 'auth', label: 'Auth', enabled: protectedCount > 0, estimatedCases: protectedCount * 2, rationale: protectedCount ? `Missing and malformed credentials on the ${protectedCount} protected endpoints → 401/403.` : 'Nothing is protected — no auth scenarios apply.' },
-    { id: 'security', label: 'Security', enabled: withParams > 0, estimatedCases: withParams, rationale: 'Injection-shaped values in path/query/body must be rejected cleanly and never echoed back.' },
+    { id: 'negative', label: 'Negative', enabled: true, estimatedCases: negativeEst, rationale: `Unknown ids, malformed input, missing required fields, wrong method, malformed JSON on writes.${riskNote}` },
+    { id: 'boundary', label: 'Boundary', enabled: boundaryEndpoints > 0, estimatedCases: boundaryEst, rationale: boundaryEndpoints ? `Min/max, zero, negative, off-by-one and oversized values on every bounded parameter (ids, pagination, numeric & string fields) across ${boundaryEndpoints} endpoint${boundaryEndpoints === 1 ? '' : 's'}.${riskNote}` : 'No bounded parameters (ids, pagination, sized fields) were detected to probe.' },
+    { id: 'auth', label: 'Auth', enabled: protectedCount > 0, estimatedCases: authEst, rationale: protectedCount ? `Missing and malformed credentials on the ${protectedCount} protected endpoints → 401/403.${riskNote}` : 'Nothing is protected — no auth scenarios apply.' },
+    { id: 'security', label: 'Security', enabled: withParams > 0, estimatedCases: securityEst, rationale: `Injection-shaped values in path/query/body must be rejected cleanly and never echoed back.${riskNote}` },
     { id: 'performance', label: 'Performance', enabled: true, estimatedCases: n, rationale: 'Response-time ceiling on the happy path of every endpoint; trends surface on the dashboard.' },
     { id: 'flow', label: 'Flows', enabled: flows.length > 0, estimatedCases: flows.length, rationale: flows.length ? `${flows.length} lifecycle flow${flows.length === 1 ? '' : 's'} chaining create → read → update → delete on real ids.` : 'No create/read/update/delete chains were detected.' },
   ];
   const recommendedCoverage: ApiProfile['strategy']['recommendedCoverage'] = n <= 6 ? 'exhaustive' : n <= 40 ? 'standard' : 'essential';
   const estimatedTotal = layers.filter((l) => l.enabled).reduce((s, l) => s + l.estimatedCases, 0);
   const strategyRationale =
-    recommendedCoverage === 'exhaustive' ? 'A small surface — every validation angle is affordable, so exhaustive depth is recommended.'
+    (recommendedCoverage === 'exhaustive' ? 'A small surface — every validation angle is affordable, so exhaustive depth is recommended.'
     : recommendedCoverage === 'standard' ? 'A medium surface — a professional regression suite per endpoint keeps the run under control.'
-    : 'A large surface — start with the critical path per endpoint (essential depth) and widen once the smoke layer is green.';
+    : 'A large surface — start with the critical path per endpoint (essential depth) and widen once the smoke layer is green.')
+    + (highRiskCount ? ` ${highRiskCount} of ${n} endpoints are high-risk (destructive, payment or auth/privilege surfaces) and are weighted up — they receive extra negative, boundary, auth-abuse and security cases.` : '');
+  if (highRiskCount) patterns.push(`${highRiskCount} high-risk endpoint${highRiskCount === 1 ? '' : 's'} (write/delete/payment/auth) weighted up for deeper coverage`);
 
   const summary = `${n} endpoint${n === 1 ? '' : 's'} across ${resources.length} resource${resources.length === 1 ? '' : 's'} on ${hosts.size || 1} host${hosts.size === 1 || hosts.size === 0 ? '' : 's'} — ${labelStyle(style)}, ${schemeNames.length ? schemeNames.map(labelAuth).join('/') : 'no'} auth, ${flows.length} flow${flows.length === 1 ? '' : 's'}, ${risks.filter((r) => r.level === 'high').length} high-risk finding${risks.filter((r) => r.level === 'high').length === 1 ? '' : 's'}.`;
 
@@ -478,6 +536,8 @@ export function analyzeApiSurface(endpoints: ImportedEndpoint[]): ApiProfile {
     dependencies,
     flows,
     risks,
+    endpointRisk,
+    highRiskEndpoints,
     patterns,
     strategy: { layers, recommendedCoverage, estimatedTotal, rationale: strategyRationale },
     summary,
@@ -521,6 +581,9 @@ export function profileContextFor(profile: ApiProfile, endpoints: ImportedEndpoi
     const deps = profile.dependencies.filter((d) => d.to === index || d.from === index);
     if (deps.length) lines.push(`- Dependencies: ${deps.slice(0, 4).map((d) => `${d.from === index ? 'this endpoint' : `${endpoints[d.from]!.method} ${splitUrl(endpoints[d.from]!.url).path}`} → ${d.to === index ? 'this endpoint' : `${endpoints[d.to]!.method} ${splitUrl(endpoints[d.to]!.url).path}`} (${d.reason})`).join('; ')}`);
   }
+  const level = profile.endpointRisk?.[index];
+  if (level === 'high') lines.push('- ⚠ HIGH-RISK endpoint (destructive, payment, or auth/privilege surface). Widen coverage: design EXTRA negative, boundary (min/max/zero/negative/oversized) and auth-abuse cases, assert failures are clean (no stack traces, no echoed payload, no data leak), and never leave data mutated by a passing case.');
+  else if (level === 'medium') lines.push('- Risk: medium (write or sensitive-surface endpoint) — include boundary and negative cases, not just the happy path.');
   const risk = profile.risks.find((r) => r.endpoints?.includes(index));
   if (risk) lines.push(`- Reviewer note: ${risk.text}`);
   lines.push('Use this context to choose REALISTIC ids, parameters and negative variations; never invent endpoints that are not listed.');

@@ -39,7 +39,7 @@ interface Persisted {
 
 const DEFAULT_STRATEGY: Strategy = {
   coverage: 'standard',
-  layers: ['smoke', 'contract', 'schema', 'negative', 'auth', 'security', 'performance', 'flow'],
+  layers: ['smoke', 'contract', 'schema', 'negative', 'boundary', 'auth', 'security', 'performance', 'flow'],
 };
 
 function load(): Persisted | null {

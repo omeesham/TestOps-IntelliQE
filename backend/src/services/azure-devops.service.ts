@@ -282,6 +282,9 @@ export async function getStory(creds: AdoCreds, id: string): Promise<StoryDetail
 }
 
 export interface AdoAttachment {
+  /** Azure attachment id (GUID) — matches the id from listStoryAttachments so a
+      caller can import only the files the user selected. */
+  id: string;
   /** Original file name (e.g. swagger.json, api-tests.xlsx). */
   name: string;
   /** Raw file bytes. */
@@ -359,7 +362,7 @@ export async function getStoryAttachments(
           `${creds.baseUrl}/_apis/wit/attachments/${attId}?api-version=${API_VERSION}&download=true`,
           { headers: { Authorization: creds.authHeader }, responseType: 'arraybuffer' },
         );
-        out.push({ name, buffer: Buffer.from(dl.data), workItemId: wid });
+        out.push({ id: attId, name, buffer: Buffer.from(dl.data), workItemId: wid });
       } catch { /* one unreadable attachment shouldn't fail the whole import */ }
     }
   }

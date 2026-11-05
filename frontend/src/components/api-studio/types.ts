@@ -68,7 +68,8 @@ export interface CatalogEndpoint {
    ═══════════════════════════════════════════════════════════════ */
 
 export type CrudOp = 'list' | 'create' | 'read' | 'update' | 'delete';
-export type StrategyLayerId = 'smoke' | 'contract' | 'schema' | 'negative' | 'auth' | 'security' | 'performance' | 'flow';
+export type StrategyLayerId = 'smoke' | 'contract' | 'schema' | 'negative' | 'boundary' | 'auth' | 'security' | 'performance' | 'flow';
+export type RiskLevel = 'high' | 'medium' | 'low';
 
 export interface ApiResource {
   name: string;
@@ -103,6 +104,8 @@ export interface ApiProfile {
   dependencies: ApiDependency[];
   flows: ApiFlow[];
   risks: ApiRisk[];
+  endpointRisk?: RiskLevel[];
+  highRiskEndpoints?: number[];
   patterns: string[];
   strategy: { layers: StrategyLayer[]; recommendedCoverage: 'essential' | 'standard' | 'exhaustive'; estimatedTotal: number; rationale: string };
   summary: string;

@@ -17,6 +17,7 @@ import {
   Zap, Spline, Rss, Microscope, Cloud, Lock, ClipboardCheck, KeyRound, GitMerge, FolderGit2, Combine,
   GitBranchPlus, Rocket, ListChecks, MonitorSmartphone, ClipboardList, Waypoints, Share2, Stamp,
   FileCheck2, HardDrive, Wallet, Scale, FileCode2, Gavel, FileSearch, GitFork, Fingerprint, FlaskConical,
+  Container,
 } from 'lucide-react';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useAuth } from '@/contexts/AuthContext';
@@ -40,6 +41,7 @@ import ContractDrift from './ContractDrift';
 import AsyncProbe from './AsyncProbe';
 import TrafficCapture from './TrafficCapture';
 import MockServer from './MockServer';
+import WireMockConnector from './WireMockConnector';
 import CoverageGaps from './CoverageGaps';
 import SemanticAssert from './SemanticAssert';
 import CallbackVerify from './CallbackVerify';
@@ -252,6 +254,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
   const [asyncOpen, setAsyncOpen] = useState(false);
   const [captureOpen, setCaptureOpen] = useState(false);
   const [mockOpen, setMockOpen] = useState(false);
+  const [wmConnectorOpen, setWmConnectorOpen] = useState(false);
   const [gapsOpen, setGapsOpen] = useState(false);
   const [semanticOpen, setSemanticOpen] = useState(false);
   const [callbackOpen, setCallbackOpen] = useState(false);
@@ -388,6 +391,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
         { icon: Rss, label: 'AsyncAPI contracts', desc: 'Event channels & message validation', open: () => setAsyncApiOpen(true) },
         { icon: Boxes, label: 'Service virtualization', desc: 'Stateful, fault-injecting virtual deps', open: () => setVirtualOpen(true) },
         { icon: ServerCog, label: 'Hosted mock server', desc: 'Publish endpoints as a live stub URL', open: () => setMockOpen(true) },
+        { icon: Container, label: 'WireMock / Prism connector', desc: 'Export · push · import stubs to WireMock or Prism', open: () => setWmConnectorOpen(true) },
         { icon: Network, label: 'Contract proxy', desc: 'Validate live traffic · simulate deps', open: () => setProxyOpen(true) },
       ],
     },
@@ -461,7 +465,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
         { icon: FileCheck2, label: 'Evidence export', desc: 'Compliance evidence → PDF', open: () => setEvidenceOpen(true) },
         { icon: ScrollText, label: 'Audit log', desc: 'Filter & export recorded actions', open: () => setAuditOpen(true) },
         { icon: Waypoints, label: 'Traceability matrix', desc: 'Requirement → case → defect', open: () => setTraceMatrixOpen(true) },
-        { icon: Gauge, label: 'Integration dashboard', desc: 'Requirements · coverage · defects · runs · export', open: () => setIntgDashOpen(true) },
+        { icon: Gauge, label: 'Requirements Management', desc: 'BRD · FRD · analysis · API mapping · test generation · traceability', open: () => setIntgDashOpen(true) },
         { icon: ClipboardList, label: 'Test management', desc: 'Suites · plans · cycles · assignments', open: () => setTmOpen(true) },
         { icon: Share2, label: 'TM connectors', desc: 'TestRail · Xray · Zephyr · qTest export', open: () => setConnectorsOpen(true) },
         { icon: Stamp, label: 'Approvals', desc: 'Multi-stage release gating', open: () => setApprovalsOpen(true) },
@@ -671,6 +675,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
       {asyncOpen && <AsyncProbe initialUrl={(ep[0] || endpoints[0])?.url || ''} onClose={() => setAsyncOpen(false)} />}
       {captureOpen && <TrafficCapture catalog={catalog} onClose={() => setCaptureOpen(false)} />}
       {mockOpen && <MockServer endpoints={ep} onClose={() => setMockOpen(false)} />}
+      {wmConnectorOpen && <WireMockConnector endpoints={ep} catalog={catalog} onClose={() => setWmConnectorOpen(false)} />}
       {gapsOpen && <CoverageGaps catalog={catalog} onClose={() => setGapsOpen(false)} />}
       {semanticOpen && <SemanticAssert endpoints={ep} onClose={() => setSemanticOpen(false)} />}
       {callbackOpen && <CallbackVerify onClose={() => setCallbackOpen(false)} />}

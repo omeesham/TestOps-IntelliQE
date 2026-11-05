@@ -189,12 +189,40 @@ function envVarMap(env: ApiEnvironment): Record<string, string> {
   return vars;
 }
 
+/** Hosts that stand in for "no real base URL" — a relative path salvaged to an
+ *  absolute URL at import time (see api-spec-parser's PLACEHOLDER_API_HOST).
+ *  These SHOULD fall back to the environment's base URL even on a multi-host
+ *  run; an endpoint's own real host should not. */
+const PLACEHOLDER_HOSTS = new Set<string>(['api.example.com', 'example.com']);
+
+/** True when a batch of endpoints/cases spans more than one distinct REAL origin
+ *  (placeholder hosts ignored) — i.e. a multi-host catalogue that must NOT be
+ *  collapsed onto a single environment base URL. A single-service catalogue
+ *  (one origin) returns false, preserving the dev→staging→prod retarget flow. */
+export function spansMultipleHosts(items: ReadonlyArray<{ url?: string }>): boolean {
+  const origins = new Set<string>();
+  for (const it of items) {
+    const u = it?.url;
+    if (typeof u !== 'string' || !/^https?:\/\//i.test(u)) continue;
+    try {
+      const p = new URL(u);
+      if (!PLACEHOLDER_HOSTS.has(p.host)) origins.add(p.origin);
+    } catch { /* skip an unparseable url */ }
+    if (origins.size > 1) return true;
+  }
+  return false;
+}
+
 /** Re-home an absolute URL onto the environment's origin, keeping the path and
- *  query and prepending the environment's base path unless already present. */
-function rehomeUrl(url: string, baseUrl: string | undefined): string {
+ *  query and prepending the environment's base path unless already present.
+ *  When `preserveRealHosts` is set (a multi-host run), an endpoint that already
+ *  carries its own real host keeps it — only a placeholder host falls back to
+ *  the environment's base URL. */
+function rehomeUrl(url: string, baseUrl: string | undefined, preserveRealHosts = false): string {
   if (!baseUrl || !/^https?:\/\//i.test(url)) return url;
   try {
     const u = new URL(url);
+    if (preserveRealHosts && !PLACEHOLDER_HOSTS.has(u.host)) return url; // keep the endpoint's own host
     const b = new URL(baseUrl);
     const basePath = b.pathname.replace(/\/+$/, '');
     const path = basePath && !u.pathname.startsWith(basePath) ? `${basePath}${u.pathname}` : u.pathname;
@@ -232,8 +260,10 @@ function encodeBasicIfNeeded(key: string, value: string): string {
 export function resolveApiCase<T extends { url: string; headers: Record<string, string>; body?: string; steps?: unknown[] }>(
   nc: T,
   env: ApiEnvironment | null | undefined,
+  opts?: { preserveRealHosts?: boolean },
 ): T {
   if (!env) return nc;
+  const preserveRealHosts = !!opts?.preserveRealHosts;
   const vars = envVarMap(env);
   const resolveHeaders = (h: Record<string, string> | undefined): Record<string, string> => {
     const out: Record<string, string> = {};
@@ -243,14 +273,14 @@ export function resolveApiCase<T extends { url: string; headers: Record<string, 
   const steps = Array.isArray(nc.steps)
     ? nc.steps.map((st: any) => ({
         ...st,
-        url: rehomeUrl(fillTemplate(st.url, vars) || st.url, env.baseUrl),
+        url: rehomeUrl(fillTemplate(st.url, vars) || st.url, env.baseUrl, preserveRealHosts),
         headers: resolveHeaders(st.headers),
         body: fillTemplate(st.body, vars),
       }))
     : nc.steps;
   return {
     ...nc,
-    url: rehomeUrl(fillTemplate(nc.url, vars) || nc.url, env.baseUrl),
+    url: rehomeUrl(fillTemplate(nc.url, vars) || nc.url, env.baseUrl, preserveRealHosts),
     headers: resolveHeaders(nc.headers),
     body: fillTemplate(nc.body, vars),
     ...(steps ? { steps } : {}),
@@ -265,10 +295,11 @@ export function resolveApiCase<T extends { url: string; headers: Record<string, 
 export function applyEnvironment<T extends { url: string; headers?: { key: string; value: string }[]; body?: string; auth?: { type: string; value?: string; headerName?: string } }>(
   endpoint: T,
   env: ApiEnvironment | null | undefined,
+  opts?: { preserveRealHosts?: boolean },
 ): T {
   if (!env) return endpoint;
   const vars = envVarMap(env);
-  const url = rehomeUrl(fillTemplate(endpoint.url, vars) || endpoint.url, env.baseUrl);
+  const url = rehomeUrl(fillTemplate(endpoint.url, vars) || endpoint.url, env.baseUrl, !!opts?.preserveRealHosts);
   const headers = (endpoint.headers || []).map((h) => ({ key: h.key, value: fillTemplate(h.value, vars) || '' }));
   const auth = endpoint.auth
     ? { ...endpoint.auth, value: endpoint.auth.value ? fillTemplate(endpoint.auth.value, vars) : resolveAuthFromEnv(endpoint.auth.type, vars) }

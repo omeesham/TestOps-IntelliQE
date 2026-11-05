@@ -1564,11 +1564,18 @@ export async function importFromText(text: string, opts: TextImportOptions = {})
   const endpoints = llmEndpoints
     .map((e) => finalizeEndpoint({ ...e, style, source: { method: opts.sourceMethod || 'file', name } }))
     .filter((e): e is ImportedEndpoint => e !== null);
+  // The AI reader salvages path-only endpoints (common in spreadsheets, CSV
+  // exports and prose docs) onto a placeholder host — tell the user so they can
+  // point them at a real base URL via an Environment before running.
+  const warnings = result?.warnings ? [...result.warnings] : [];
+  if (endpoints.some((e) => e.url.startsWith(PLACEHOLDER_HOST))) {
+    warnings.push(`Some endpoints were listed by path only — ${PLACEHOLDER_HOST} is used as a placeholder host. Set the real base URL in an Environment before running.`);
+  }
   return {
     endpoints: dedupeEndpoints(endpoints),
     parser: 'llm',
     format: sniffed === 'wsdl' ? 'WSDL / SOAP' : sniffed === 'graphql-sdl' ? 'GraphQL SDL' : hint !== 'auto' ? hint.toUpperCase() : 'Document (AI-read)',
-    warnings: result?.warnings || [],
+    warnings,
     notice: `${endpoints.length} endpoint${endpoints.length === 1 ? '' : 's'} understood from ${name} by the AI reader.`,
   };
 }

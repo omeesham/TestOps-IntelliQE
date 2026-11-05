@@ -13,6 +13,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/user-management': 'User Management',
   '/generated-tests': 'Generated Test Cases',
   '/automation': 'API Automation',
+  '/requirements': 'Requirements Management',
   '/web-lab': 'Web Lab',
   '/bug-tracker': 'Bug Tracker',
 };

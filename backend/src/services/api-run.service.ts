@@ -20,7 +20,7 @@ import { runGenerationOnly } from '../agents/pipeline.js';
 import { getTenantLlm } from './llm.service.js';
 import { sanitizeApiSpec } from '../utils/api-spec.js';
 import { analyzeApiSurface, type ApiProfile } from './api-intelligence.service.js';
-import { applyEnvironment, getEnvironment, listEnvironments } from './api-environments.service.js';
+import { applyEnvironment, getEnvironment, listEnvironments, spansMultipleHosts } from './api-environments.service.js';
 import { executeStage, healStage } from '../routes/pipeline-flow.routes.js';
 import { setJobProgress } from './async-jobs.service.js';
 import type { ImportedEndpoint } from './api-import.service.js';
@@ -109,7 +109,8 @@ export async function runHeadlessApiRun(
     const def = all.find((e) => e.isDefault);
     if (def) env = await getEnvironment(tenantId, def.id, { reveal: true });
   }
-  const resolved = input.endpoints.map((e) => applyEnvironment(e, env));
+  const preserveRealHosts = spansMultipleHosts(input.endpoints);
+  const resolved = input.endpoints.map((e) => applyEnvironment(e, env, { preserveRealHosts }));
   mark('environment', env ? `Resolved ${resolved.length} endpoints against "${env.name}"` : `No environment applied (${resolved.length} endpoints as imported)`);
 
   /* 2. Understand */

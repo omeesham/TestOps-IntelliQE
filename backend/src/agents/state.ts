@@ -401,7 +401,7 @@ export interface TestOpsState {
   apiProfile?: Record<string, any> | null;
   /**
    * API Automation — which test layers the reviewer switched on for this run
-   * (smoke, contract, schema, negative, auth, security, performance, flow).
+   * (smoke, contract, schema, negative, boundary, auth, security, performance, flow).
    * Absent = every layer that applies.
    */
   apiLayers?: string[] | null;

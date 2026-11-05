@@ -615,4 +615,39 @@ export async function listIssueAttachments(creds: JiraCreds, key: string): Promi
     .filter((a: JiraAttachmentMeta) => a.id);
 }
 
-export default { testConnection, getStories, getStory, getCredsForTenant, saveCredsForTenant, deleteCredsForTenant, getConnectionStatus, createBug, deleteIssue, getProjects, getIssues, addComment, listIssueAttachments };
+/** An attachment downloaded from a Jira issue — metadata plus its raw bytes. */
+export interface JiraAttachmentFile {
+  id: string;
+  name: string;
+  buffer: Buffer;
+}
+
+/**
+ * Download the files attached to a Jira issue (optionally only the given
+ * attachment ids). Reads the issue's attachment metadata, then fetches each
+ * file's bytes from `/rest/api/3/attachment/content/{id}`. One unreadable
+ * attachment is skipped, not fatal. `maxFiles` caps how many are pulled.
+ */
+export async function downloadIssueAttachments(
+  creds: JiraCreds,
+  key: string,
+  opts: { ids?: string[]; maxFiles?: number } = {},
+): Promise<JiraAttachmentFile[]> {
+  const meta = await listIssueAttachments(creds, key);
+  const wanted = opts.ids && opts.ids.length ? new Set(opts.ids.map(String)) : null;
+  const picked = (wanted ? meta.filter((m) => wanted.has(m.id)) : meta).slice(0, opts.maxFiles ?? 20);
+  const out: JiraAttachmentFile[] = [];
+  for (const m of picked) {
+    try {
+      const dl = await axios.get(`${creds.baseUrl}/rest/api/3/attachment/content/${encodeURIComponent(m.id)}`, {
+        headers: { Authorization: creds.authHeader },
+        responseType: 'arraybuffer',
+        maxRedirects: 5,
+      });
+      out.push({ id: m.id, name: m.name, buffer: Buffer.from(dl.data) });
+    } catch { /* one unreadable attachment shouldn't fail the whole import */ }
+  }
+  return out;
+}
+
+export default { testConnection, getStories, getStory, getCredsForTenant, saveCredsForTenant, deleteCredsForTenant, getConnectionStatus, createBug, deleteIssue, getProjects, getIssues, addComment, listIssueAttachments, downloadIssueAttachments };

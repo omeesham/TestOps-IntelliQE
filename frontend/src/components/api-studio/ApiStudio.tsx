@@ -17,8 +17,9 @@ import {
   RotateCcw, AlertTriangle, X, ListChecks, ArrowRight, Upload,
   LayoutDashboard, Layers, FileCheck2, PlayCircle, BarChart3, Server, RefreshCw, Wrench,
 } from 'lucide-react';
-import { useCatalog } from './hooks/useCatalog';
+import { useCatalog, toCatalogEndpoint } from './hooks/useCatalog';
 import { useApiRun } from './hooks/useApiRun';
+import EndpointEditor from './EndpointEditor';
 import { useApiEnvironments, envRunKey } from './hooks/useApiEnvironments';
 import StageRail from './StageRail';
 import ScenariosTab from './ScenariosTab';
@@ -36,7 +37,7 @@ import { EmptyState } from './primitives';
 import { PRIMARY_BTN, SECONDARY_BTN } from './format';
 import PageTabs, { type TabItem } from '@/components/ui/PageTabs';
 import Loader from '@/components/feedback/Loader';
-import type { NavView, Phase } from './types';
+import type { NavView, Phase, CatalogEndpoint } from './types';
 
 /** The tabs, left to right, in the order you walk the workflow. */
 const TAB_IDS = new Set<NavView>(['overview', 'endpoints', 'scenarios', 'runs', 'report', 'environments', 'tools']);
@@ -50,6 +51,7 @@ export default function ApiStudio() {
   });
   const [openRunId, setOpenRunId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);
   const [overviewKey, setOverviewKey] = useState(0);
   /** Seed for the Tools gallery search — set when a caller deep-links to a
       capability (e.g. an Overview feature chip), cleared on a plain Tools visit. */
@@ -77,16 +79,29 @@ export default function ApiStudio() {
   const openRun = (id: string) => { setOpenRunId(id); setView('runs'); };
 
   /* The actual kickoff — split out so the validation gate can defer it. */
-  const startGeneration = () => run.runScenarios({ endpoints: catalog.selectedEndpoints, strategy: catalog.strategy, profile: catalog.profile, environment: envStore.activeEnvironment });
+  const startGeneration = (endpoints: CatalogEndpoint[]) => run.runScenarios({ endpoints, strategy: catalog.strategy, profile: catalog.profile, environment: envStore.activeEnvironment });
 
-  /* Generation gate — re-validate the selected endpoints against the active
-     environment before a run starts. Clean selection runs straight through;
-     anything with errors/warnings opens the "proceed anyway" dialog. */
-  const [genGate, setGenGate] = useState<ApiValidationReport | null>(null);
-  const design = () => {
-    const report = validateApiEndpoints(catalog.selectedEndpoints, envStore.activeEnvironment);
-    if (report.errorCount > 0 || report.warningCount > 0) { setGenGate(report); return; }
-    startGeneration();
+  /* Generation gate — re-validate the endpoints against the active environment
+     before a run starts. A clean set runs straight through; anything with
+     errors/warnings opens the "proceed anyway" dialog, which carries the exact
+     endpoint list it validated so proceeding runs precisely that set. */
+  const [genGate, setGenGate] = useState<{ report: ApiValidationReport; endpoints: CatalogEndpoint[] } | null>(null);
+  /* `endpoints` defaults to the catalogue selection; the Array.isArray guard lets
+     this double as an onClick handler (which would pass a SyntheticEvent). The
+     manual "Automate" path calls it with its own single-endpoint list. */
+  const design = (endpoints: CatalogEndpoint[] = catalog.selectedEndpoints) => {
+    const list = Array.isArray(endpoints) ? endpoints : catalog.selectedEndpoints;
+    const report = validateApiEndpoints(list, envStore.activeEnvironment);
+    if (report.errorCount > 0 || report.warningCount > 0) { setGenGate({ report, endpoints: list }); return; }
+    startGeneration(list);
+  };
+
+  /* Manual "Automate": save the hand-authored request to the catalogue, then run
+     the regular pipeline for exactly that endpoint (through the same gate). */
+  const automateManual = (ep: Omit<CatalogEndpoint, 'id' | 'importedAt'>) => {
+    setManualOpen(false);
+    catalog.addEndpoints([ep], { method: 'manual', name: ep.title, format: 'manual', parser: 'manual' });
+    design([toCatalogEndpoint(ep, 'manual')]);
   };
 
   const sel = catalog.selectedEndpoints.length;
@@ -171,14 +186,14 @@ export default function ApiStudio() {
 
       {/* ── Active tab ── */}
       <div role="tabpanel" id={`panel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="flex-1 min-h-0 mt-4">
-        {view === 'overview' && <OverviewView catalog={catalog} onNavigate={navigate} onOpenRun={openRun} refreshKey={overviewKey} />}
+        {view === 'overview' && <OverviewView catalog={catalog} onNavigate={navigate} onOpenRun={openRun} onOpenManual={() => setManualOpen(true)} refreshKey={overviewKey} />}
         {view === 'endpoints' && <EndpointsView catalog={catalog} running={run.running} onDesign={design} onImport={() => setImportOpen(true)} scenarios={run.scenarios} />}
         {view === 'scenarios' && (
           run.scenarios.length === 0 && run.phase !== 'generating' ? (
             <div className="h-full flex flex-col">
               <EmptyState icon={FileCheck2} title="No scenarios designed yet" hint={sel ? `${sel} endpoints are selected — design scenarios and they land here for review before anything is automated.` : 'Select endpoints in the catalogue, then design scenarios. Every scenario stops here for review before anything is automated.'} />
               <div className="flex justify-center -mt-10 pb-10">
-                {sel ? <button type="button" onClick={design} className={PRIMARY_BTN}>Testcase generation for {sel}</button> : <button type="button" onClick={() => setView('endpoints')} className={PRIMARY_BTN}>Open the catalogue<ArrowRight className="w-3.5 h-3.5" /></button>}
+                {sel ? <button type="button" onClick={() => design()} className={PRIMARY_BTN}>Testcase generation for {sel}</button> : <button type="button" onClick={() => setView('endpoints')} className={PRIMARY_BTN}>Open the catalogue<ArrowRight className="w-3.5 h-3.5" /></button>}
               </div>
             </div>
           ) : run.phase === 'generating' && run.scenarios.length === 0 ? (
@@ -204,11 +219,31 @@ export default function ApiStudio() {
         </ImportModal>
       )}
 
+      {/* ── Manual HTTP request — a right-hand drawer; "Automate" runs the pipeline ── */}
+      {manualOpen && (
+        <EndpointEditor
+          title="Manual HTTP request"
+          allowImport
+          onImported={(eps, folderName) => {
+            const r = catalog.addEndpoints(eps, { method: 'manual', name: folderName, format: 'imported', parser: 'imported' });
+            run.log('import', `${folderName}: ${r.added} endpoint${r.added === 1 ? '' : 's'} imported`, 'ok');
+          }}
+          onClose={() => setManualOpen(false)}
+          onSave={(ep) => {
+            const r = catalog.addEndpoints([ep], { method: 'manual', name: ep.title, format: 'manual', parser: 'manual' });
+            setManualOpen(false);
+            run.log('import', `${ep.method} ${ep.url} added to the catalogue`, 'ok');
+            if (r.added) setView('endpoints');
+          }}
+          onAutomate={automateManual}
+        />
+      )}
+
       {/* ── Generation gate — validate selected endpoints before a run ── */}
       {genGate && (
         <ValidationGateModal
-          report={genGate}
-          onProceed={() => { setGenGate(null); startGeneration(); }}
+          report={genGate.report}
+          onProceed={() => { const eps = genGate.endpoints; setGenGate(null); startGeneration(eps); }}
           onCancel={() => { setGenGate(null); setView('endpoints'); }}
         />
       )}

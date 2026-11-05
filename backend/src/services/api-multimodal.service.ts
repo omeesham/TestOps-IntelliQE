@@ -41,7 +41,7 @@ export interface MultimodalResult {
   brief: NlBrief;
 }
 
-const LAYERS = ['smoke', 'contract', 'schema', 'negative', 'auth', 'security', 'performance', 'flow'];
+const LAYERS = ['smoke', 'contract', 'schema', 'negative', 'boundary', 'auth', 'security', 'performance', 'flow'];
 const COVERAGE = ['essential', 'standard', 'exhaustive'];
 const ALLOWED_MEDIA = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 const MAX_IMAGES = 6;

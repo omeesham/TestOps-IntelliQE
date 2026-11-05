@@ -170,7 +170,7 @@ export interface StoryContext {
   sources?: ReqSourceRef[];
 }
 
-const LAYERS = ['smoke', 'contract', 'schema', 'negative', 'auth', 'security', 'performance', 'flow'];
+const LAYERS = ['smoke', 'contract', 'schema', 'negative', 'boundary', 'auth', 'security', 'performance', 'flow'];
 const COVERAGE = ['essential', 'standard', 'exhaustive'];
 const KINDS = ['happy-path', 'negative', 'auth', 'validation', 'edge', 'other'];
 const PARAM_IN = ['path', 'query', 'header', 'body'];

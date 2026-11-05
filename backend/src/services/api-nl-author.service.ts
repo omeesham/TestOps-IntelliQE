@@ -22,7 +22,7 @@ export interface NlBrief {
   outline: string[];
 }
 
-const LAYERS = ['smoke', 'contract', 'schema', 'negative', 'auth', 'security', 'performance', 'flow'];
+const LAYERS = ['smoke', 'contract', 'schema', 'negative', 'boundary', 'auth', 'security', 'performance', 'flow'];
 const COVERAGE = ['essential', 'standard', 'exhaustive'];
 
 function endpointLines(endpoints: NlBriefEndpoint[]): string {

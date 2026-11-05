@@ -8,16 +8,15 @@
  */
 import { useEffect, useState } from 'react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Activity, AlertTriangle, ArrowRight, Clock, RefreshCw, Layers, Upload, Gauge, Zap, TrendingUp, ChevronRight, Timer, ShieldCheck, Sparkles, BrainCircuit, ShieldAlert, HeartPulse, Radar, ClipboardList, ClipboardCheck, Bug, Waypoints, Workflow } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowRight, Clock, RefreshCw, Layers, Upload, Gauge, Zap, TrendingUp, ChevronRight, Timer, ShieldCheck, Sparkles, BrainCircuit, ShieldAlert, HeartPulse, Radar, ClipboardList, ClipboardCheck, Bug, Waypoints, Workflow, PlusCircle } from 'lucide-react';
 import { getApiOverview } from '@/services/api';
 import { CARD, CARD_HOVER, THEAD, BRAND_CHIP, MUTED_CHIP, relativeTime, formatDuration, IMPORT_METHOD_LABELS, methodColor } from '../format';
 import { StatusPill, PassRing } from '../primitives';
-import GettingStartedGuide from './GettingStartedGuide';
 import type { ApiOverview, NavView } from '../types';
 import type { Catalog } from '../hooks/useCatalog';
 
 import Loader from '@/components/feedback/Loader';
-interface Props { catalog: Catalog; onNavigate: (v: NavView, toolsSearch?: string) => void; onOpenRun: (runId: string) => void; refreshKey: number }
+interface Props { catalog: Catalog; onNavigate: (v: NavView, toolsSearch?: string) => void; onOpenRun: (runId: string) => void; onOpenManual: () => void; refreshKey: number }
 
 /**
  * The capability strip in the hero — the platform's headline features as vivid,
@@ -26,12 +25,12 @@ interface Props { catalog: Catalog; onNavigate: (v: NavView, toolsSearch?: strin
  * capability, they are not outcome colours.
  */
 const HERO_FEATURES: { icon: React.ElementType; label: string; color: string; seed: string }[] = [
-  { icon: BrainCircuit, label: 'AI test generation', color: '#C4B5FD', seed: 'generation' },
-  { icon: ShieldAlert, label: 'Security & OWASP', color: '#FB7185', seed: 'security' },
-  { icon: Gauge, label: 'Load & performance', color: '#FBBF24', seed: 'load' },
-  { icon: ShieldCheck, label: 'Contracts & drift', color: '#34D399', seed: 'contract' },
-  { icon: HeartPulse, label: 'Self-healing', color: '#F472B6', seed: 'heal' },
-  { icon: Radar, label: 'Coverage intelligence', color: '#38BDF8', seed: 'coverage' },
+  { icon: BrainCircuit, label: 'AI test generation', color: '#7C3AED', seed: 'generation' },
+  { icon: ShieldAlert, label: 'Security & OWASP', color: '#F43F5E', seed: 'security' },
+  { icon: Gauge, label: 'Load & performance', color: '#F59E0B', seed: 'load' },
+  { icon: ShieldCheck, label: 'Contracts & drift', color: '#10B981', seed: 'contract' },
+  { icon: HeartPulse, label: 'Self-healing', color: '#EC4899', seed: 'heal' },
+  { icon: Radar, label: 'Coverage intelligence', color: '#0EA5E9', seed: 'coverage' },
 ];
 
 /**
@@ -50,7 +49,7 @@ const INTEGRATION_SUITE: { icon: React.ElementType; label: string; desc: string;
   { icon: Gauge, label: 'Integration dashboard', desc: 'Requirements · coverage · defects · export', color: '#DB2777', seed: 'integration dashboard' },
 ];
 
-export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKey }: Props) {
+export default function OverviewView({ catalog, onNavigate, onOpenRun, onOpenManual, refreshKey }: Props) {
   const [data, setData] = useState<ApiOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -73,32 +72,35 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-[1280px] mx-auto px-6 py-5 space-y-4">
-        {/* ── Hero banner — the first-look showcase ── */}
-        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#5B21B6] via-[#7C3AED] to-[#4338CA] px-6 py-6 sm:px-8 sm:py-7 shadow-[0_24px_60px_-24px_rgba(76,29,149,0.8)]">
-          {/* vivid light pools + a faint dotted grid give the panel colourful depth */}
-          <div className="pointer-events-none absolute -top-24 -right-10 w-80 h-80 rounded-full bg-[#E879F9]/30 blur-3xl" />
-          <div className="pointer-events-none absolute top-10 right-40 w-64 h-64 rounded-full bg-[#818CF8]/30 blur-3xl" />
-          <div className="pointer-events-none absolute -bottom-28 -left-16 w-80 h-80 rounded-full bg-[#22D3EE]/25 blur-3xl" />
-          <div className="pointer-events-none absolute inset-0 opacity-[0.06]" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 0)', backgroundSize: '22px 22px' }} />
+        {/* ── Hero banner — the first-look showcase (light, airy, on-brand) ── */}
+        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#F6F4FF] via-[#EEF1FF] to-[#FBF4FF] border border-[#E7E3F8] px-6 py-6 sm:px-8 sm:py-7 shadow-[0_18px_50px_-30px_rgba(124,58,237,0.5)]">
+          {/* soft tinted light pools + a faint dotted grid keep the panel colourful without the weight */}
+          <div className="pointer-events-none absolute -top-24 -right-10 w-80 h-80 rounded-full bg-[#C4B5FD]/40 blur-3xl" />
+          <div className="pointer-events-none absolute top-10 right-40 w-64 h-64 rounded-full bg-[#A5B4FC]/35 blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-28 -left-16 w-80 h-80 rounded-full bg-[#F0ABFC]/25 blur-3xl" />
+          <div className="pointer-events-none absolute inset-0 opacity-[0.05]" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, #7C3AED 1px, transparent 0)', backgroundSize: '22px 22px' }} />
           <div className="relative flex items-center gap-6 flex-wrap">
             <div className="min-w-0 flex-1">
-              <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2.5 py-1 rounded-full bg-white/15 border border-white/25 text-[10.5px] font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
-                <Sparkles className="w-3 h-3 flex-shrink-0" /> AI-powered API quality
+              <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2.5 py-1 rounded-full bg-white/80 border border-[#DDD6FE] text-[10.5px] font-semibold uppercase tracking-wide text-[#6D28D9] backdrop-blur-sm shadow-sm">
+                <Sparkles className="w-3 h-3 flex-shrink-0 text-[#7C3AED]" /> AI-powered API quality
               </span>
-              <h1 className="mt-3 text-[26px] sm:text-[31px] font-extrabold text-white leading-[1.08] tracking-tight">
+              <h1 className="mt-3 text-[26px] sm:text-[31px] font-extrabold leading-[1.08] tracking-tight bg-gradient-to-r from-[#6D28D9] via-[#7C3AED] to-[#4F46E5] bg-clip-text text-transparent">
                 {catalog.endpoints.length > 0 ? 'Your API test workspace' : 'Ship APIs the world can trust'}
               </h1>
-              <p className="mt-2 text-[13px] text-white/80 max-w-xl leading-relaxed">
+              <p className="mt-2 text-[13px] text-gray-500 max-w-xl leading-relaxed">
                 {catalog.endpoints.length > 0
                   ? `${catalog.endpoints.length} endpoint${catalog.endpoints.length === 1 ? '' : 's'} in the catalogue · ${catalog.selected.size} selected. Generate, run and self-heal your suite end to end.`
                   : 'Autonomous agents generate, execute and self-heal API tests — from OpenAPI, Postman, cURL, GraphQL, MCP and more.'}
               </p>
               <div className="mt-4 flex items-center gap-2.5 flex-wrap">
-                <button type="button" onClick={() => onNavigate('import')} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white text-[#6D28D9] text-[13px] font-semibold shadow-lg shadow-black/15 hover:shadow-xl hover:-translate-y-0.5 transition-all">
+                <button type="button" onClick={() => onNavigate('import')} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-[#7C3AED] to-[#6366F1] hover:from-[#6D28D9] hover:to-[#4F46E5] text-white text-[13px] font-semibold shadow-md shadow-purple-500/25 hover:-translate-y-0.5 transition-all">
                   <Upload className="w-4 h-4" /> Import an API
                 </button>
+                <button type="button" onClick={onOpenManual} title="Describe a single HTTP request by hand, then automate it" className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white border border-[#DDD6FE] text-[#6D28D9] text-[13px] font-semibold hover:border-[#C4B5FD] hover:bg-[#F5F3FF] hover:-translate-y-0.5 transition-all shadow-sm">
+                  <PlusCircle className="w-4 h-4" /> Manual request
+                </button>
                 {catalog.endpoints.length > 0 && (
-                  <button type="button" onClick={() => onNavigate('endpoints')} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/10 border border-white/30 text-white text-[13px] font-semibold hover:bg-white/20 transition-all backdrop-blur-sm">
+                  <button type="button" onClick={() => onNavigate('endpoints')} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white border border-[#E7E3F5] text-gray-700 text-[13px] font-semibold hover:border-[#DDD6FE] hover:text-[#7C3AED] transition-all shadow-sm">
                     Review & design <ArrowRight className="w-4 h-4" />
                   </button>
                 )}
@@ -106,40 +108,36 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, refreshKe
             </div>
             {/* Headline stats — a confident, glanceable product read (mirrored in
                 the KPI grid below, so it hides when the banner gets tight) */}
-            <div className="relative hidden lg:flex items-center gap-4 sm:gap-5 flex-shrink-0 rounded-2xl bg-white/10 border border-white/15 px-5 py-3.5 backdrop-blur-sm">
+            <div className="relative hidden lg:flex items-center gap-4 sm:gap-5 flex-shrink-0 rounded-2xl bg-white/75 border border-[#ECE9F8] px-5 py-3.5 backdrop-blur-sm shadow-sm">
               <HeroStat value={k?.avgPassRate != null ? `${k.avgPassRate}%` : '—'} label="Pass rate" loading={loading} />
-              <div className="w-px h-10 bg-white/20" />
+              <div className="w-px h-10 bg-gray-200" />
               <HeroStat value={k ? k.runs : '—'} label="Runs" loading={loading} />
-              <div className="w-px h-10 bg-white/20" />
+              <div className="w-px h-10 bg-gray-200" />
               <HeroStat value={k ? k.scenarios : '—'} label="Scenarios" loading={loading} />
             </div>
           </div>
 
           {/* Capability strip — the headline features, each in its own vivid hue */}
-          <div className="relative mt-4 pt-3.5 border-t border-white/10 flex flex-wrap items-center gap-2">
+          <div className="relative mt-4 pt-3.5 border-t border-[#ECE9F8] flex flex-wrap items-center gap-2">
             {HERO_FEATURES.map((f) => (
               <button
                 key={f.label}
                 type="button"
                 onClick={() => onNavigate('tools', f.seed)}
                 title={`Open ${f.label} tools`}
-                className="group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/10 border border-white/15 backdrop-blur-sm hover:bg-white/20 hover:border-white/30 hover:-translate-y-0.5 transition-all active:translate-y-0 focus:outline-none focus:ring-2 focus:ring-white/40"
+                className="group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white border border-[#ECE9F8] shadow-sm hover:border-[#DDD6FE] hover:-translate-y-0.5 transition-all active:translate-y-0 focus:outline-none focus:ring-2 focus:ring-[#DDD6FE]"
               >
-                <span className="w-4 h-4 rounded-md flex items-center justify-center flex-shrink-0" style={{ backgroundColor: `${f.color}26` }}>
+                <span className="w-4 h-4 rounded-md flex items-center justify-center flex-shrink-0" style={{ backgroundColor: `${f.color}1F` }}>
                   <f.icon className="w-3 h-3" style={{ color: f.color }} />
                 </span>
-                <span className="text-[11px] font-medium text-white/90 whitespace-nowrap">{f.label}</span>
+                <span className="text-[11px] font-medium text-gray-700 whitespace-nowrap">{f.label}</span>
               </button>
             ))}
-            <button type="button" onClick={() => onNavigate('tools')} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/15 border border-white/25 text-[11px] font-semibold text-white hover:bg-white/25 transition-colors">
+            <button type="button" onClick={() => onNavigate('tools')} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#F5F3FF] border border-[#DDD6FE] text-[11px] font-semibold text-[#6D28D9] hover:bg-[#EDE9FE] transition-colors">
               +80 more tools <ArrowRight className="w-3 h-3" />
             </button>
           </div>
         </div>
-
-        {/* Beginner roadmap — plain-language path from "I have an API" to a report.
-            Collapses to a one-line progress strip once the user knows the flow. */}
-        <GettingStartedGuide catalog={catalog} kpis={k} onNavigate={onNavigate} />
 
         {/* ── Enterprise integration suite — BRD/FRD · Jira/Azure defects ·
             traceability · dashboard, each deep-linking into its tool ── */}
@@ -402,10 +400,10 @@ function EmptyCard({ icon: Icon, title, hint }: { icon: React.ElementType; title
 function HeroStat({ value, label, loading }: { value: string | number; label: string; loading: boolean }) {
   return (
     <div className="text-center">
-      <div className="text-[22px] sm:text-[24px] font-extrabold text-white tabular-nums leading-none tracking-tight">
-        {loading && value === '—' ? <span className="inline-block w-8 h-5 rounded bg-white/20 animate-pulse align-middle" /> : value}
+      <div className="text-[22px] sm:text-[24px] font-extrabold text-gray-900 tabular-nums leading-none tracking-tight">
+        {loading && value === '—' ? <span className="inline-block w-8 h-5 rounded bg-gray-200 animate-pulse align-middle" /> : value}
       </div>
-      <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-white/60">{label}</div>
+      <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400">{label}</div>
     </div>
   );
 }

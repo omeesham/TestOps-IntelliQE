@@ -16,6 +16,7 @@ const LAYER_FALLBACK: { id: StrategyLayerId; label: string; rationale: string }[
   { id: 'contract', label: 'Contract', rationale: 'Status, headers and response shape' },
   { id: 'schema', label: 'Schema', rationale: 'Field types, required fields, formats' },
   { id: 'negative', label: 'Negative', rationale: 'Invalid input, missing fields, bad ids' },
+  { id: 'boundary', label: 'Boundary', rationale: 'Min/max, zero, negative, oversized on every bounded param' },
   { id: 'auth', label: 'Auth', rationale: 'Missing, expired and wrong-scope credentials' },
   { id: 'security', label: 'Security', rationale: 'Injection, IDOR, verbose errors' },
   { id: 'performance', label: 'Performance', rationale: 'Response-time budgets' },
@@ -31,7 +32,7 @@ const COVERAGE: { id: Strategy['coverage']; label: string; hint: string }[] = [
 /** The violet–indigo ramp, one shade per layer, for the contribution bar. */
 const SHADE: Record<StrategyLayerId, string> = {
   smoke: '#7C3AED', contract: '#8B5CF6', schema: '#A78BFA', negative: '#6366F1',
-  auth: '#818CF8', security: '#4F46E5', performance: '#C4B5FD', flow: '#A5B4FC',
+  boundary: '#7E74F1', auth: '#818CF8', security: '#4F46E5', performance: '#C4B5FD', flow: '#A5B4FC',
 };
 
 export default function StrategyBar({ strategy, profile, onCoverage, onToggleLayer, onAdopt }: {
