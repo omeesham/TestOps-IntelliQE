@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { useCatalog, toCatalogEndpoint } from './hooks/useCatalog';
 import { useApiRun } from './hooks/useApiRun';
-import EndpointEditor from './EndpointEditor';
+import EndpointEditor, { clearImportHistory } from './EndpointEditor';
 import { useApiEnvironments, envRunKey } from './hooks/useApiEnvironments';
 import StageRail from './StageRail';
 import ScenariosTab from './ScenariosTab';
@@ -31,8 +31,9 @@ import RunsView from './views/RunsView';
 import EnvironmentsView from './views/EnvironmentsView';
 import EnvironmentPicker from './views/EnvironmentPicker';
 import ApiToolsLauncher from './ApiToolsLauncher';
-import { validateApiEndpoints, type ApiValidationReport } from './apiValidation';
+import { validateApiEndpoints, buildReadinessReview, type ApiValidationReport } from './apiValidation';
 import { ValidationGateModal } from './ValidationReport';
+import ReadinessReview from './ReadinessReview';
 import { EmptyState } from './primitives';
 import { PRIMARY_BTN, SECONDARY_BTN } from './format';
 import PageTabs, { type TabItem } from '@/components/ui/PageTabs';
@@ -67,6 +68,26 @@ export default function ApiStudio() {
 
   useEffect(() => { try { sessionStorage.setItem('intelliqe_api_view', view); } catch { /* ignore */ } }, [view]);
 
+  /* Once an end-to-end run completes (the flow reaches the Report stage), wipe the
+     cached workspace — catalogue, selection, derived profile, strategy and the
+     import history — so the next API starts from a clean slate. Fires once per
+     completion (latched, reset when a new run starts); the on-screen report, held
+     in the run's own in-memory state, is untouched, as are auth, the active
+     environment and UI preferences. */
+  const clearedForRunRef = useRef(false);
+  useEffect(() => {
+    if (run.phase === 'report') {
+      if (!clearedForRunRef.current) {
+        clearedForRunRef.current = true;
+        catalog.clearCache();
+        clearImportHistory();
+        run.log('run', 'End-to-end run complete — cleared the cached workspace (catalogue, selection, imports). The report below is kept.', 'ok');
+      }
+    } else if (run.phase === 'idle' || run.phase === 'generating') {
+      clearedForRunRef.current = false;
+    }
+  }, [run.phase]); // eslint-disable-line react-hooks/exhaustive-deps
+
   /* One navigator for tabs and for in-view links. Import is a modal, not a tab,
      so a request to "go to import" opens the modal over whatever tab is showing. */
   const navigate = (v: NavView, toolsSearch?: string) => {
@@ -86,22 +107,48 @@ export default function ApiStudio() {
      errors/warnings opens the "proceed anyway" dialog, which carries the exact
      endpoint list it validated so proceeding runs precisely that set. */
   const [genGate, setGenGate] = useState<{ report: ApiValidationReport; endpoints: CatalogEndpoint[] } | null>(null);
-  /* `endpoints` defaults to the catalogue selection; the Array.isArray guard lets
-     this double as an onClick handler (which would pass a SyntheticEvent). The
-     manual "Automate" path calls it with its own single-endpoint list. */
-  const design = (endpoints: CatalogEndpoint[] = catalog.selectedEndpoints) => {
-    const list = Array.isArray(endpoints) ? endpoints : catalog.selectedEndpoints;
+  /* The strict readiness review — the reviewer gate that must pass before any
+     planning. Holds the ids under review so the modal re-grades the live
+     catalogue as the reviewer edits or removes items. */
+  const [review, setReview] = useState<{ ids: string[] } | null>(null);
+
+  /* Once endpoints are readiness-approved, the lighter env gate still runs so a
+     run never starts on unresolved {{vars}} or a placeholder host. */
+  const proceedToPlan = (list: CatalogEndpoint[]) => {
+    if (list.length === 0) return;
     const report = validateApiEndpoints(list, envStore.activeEnvironment);
     if (report.errorCount > 0 || report.warningCount > 0) { setGenGate({ report, endpoints: list }); return; }
     startGeneration(list);
   };
 
+  /* `endpoints` defaults to the catalogue selection; the Array.isArray guard lets
+     this double as an onClick handler (which would pass a SyntheticEvent). The
+     manual "Automate" path calls it with its own single-endpoint list. Strict
+     gate: anything not fully documented opens the readiness review first. */
+  const design = (endpoints: CatalogEndpoint[] = catalog.selectedEndpoints) => {
+    const list = Array.isArray(endpoints) ? endpoints : catalog.selectedEndpoints;
+    if (list.length === 0) return;
+    const readiness = buildReadinessReview(list);
+    if (!readiness.allReady) { setReview({ ids: list.map((e) => e.id) }); return; }
+    proceedToPlan(list);
+  };
+  /** Open the readiness review explicitly (from the import outcome panel). */
+  const openReview = (list: CatalogEndpoint[]) => {
+    if (list.length) setReview({ ids: list.map((e) => e.id) });
+  };
+
   /* Manual "Automate": save the hand-authored request to the catalogue, then run
-     the regular pipeline for exactly that endpoint (through the same gate). */
-  const automateManual = (ep: Omit<CatalogEndpoint, 'id' | 'importedAt'>) => {
+     the regular pipeline for exactly that endpoint. A request the user already
+     fired a successful live Send against (`opts.tested`) is proven against the
+     real API, so it bypasses the strict readiness review and goes straight to the
+     lighter env gate — automation proceeds as usual. An untested request still
+     goes through the full readiness review first. */
+  const automateManual = (ep: Omit<CatalogEndpoint, 'id' | 'importedAt'>, opts?: { tested?: boolean }) => {
     setManualOpen(false);
     catalog.addEndpoints([ep], { method: 'manual', name: ep.title, format: 'manual', parser: 'manual' });
-    design([toCatalogEndpoint(ep, 'manual')]);
+    const entry = toCatalogEndpoint(ep, 'manual');
+    if (opts?.tested) proceedToPlan([entry]);
+    else design([entry]);
   };
 
   const sel = catalog.selectedEndpoints.length;
@@ -215,7 +262,7 @@ export default function ApiStudio() {
       {/* ── Import API — modal ── */}
       {importOpen && (
         <ImportModal onClose={() => setImportOpen(false)}>
-          <ImportView catalog={catalog} onOpenCatalogue={() => { setImportOpen(false); setView('endpoints'); }} log={run.log} environment={envStore.activeEnvironment} onOpenStory={() => { setImportOpen(false); navigate('tools', 'story'); }} />
+          <ImportView catalog={catalog} onOpenCatalogue={() => { setImportOpen(false); setView('endpoints'); }} log={run.log} environment={envStore.activeEnvironment} onOpenStory={() => { setImportOpen(false); navigate('tools', 'story'); }} onReview={(ids) => { setImportOpen(false); setView('endpoints'); if (ids && ids.length) setReview({ ids }); else openReview(catalog.selectedEndpoints); }} />
         </ImportModal>
       )}
 
@@ -224,6 +271,7 @@ export default function ApiStudio() {
         <EndpointEditor
           title="Manual HTTP request"
           allowImport
+          environment={envStore.activeEnvironment}
           onImported={(eps, folderName) => {
             const r = catalog.addEndpoints(eps, { method: 'manual', name: folderName, format: 'imported', parser: 'imported' });
             run.log('import', `${folderName}: ${r.added} endpoint${r.added === 1 ? '' : 's'} imported`, 'ok');
@@ -236,6 +284,16 @@ export default function ApiStudio() {
             if (r.added) setView('endpoints');
           }}
           onAutomate={automateManual}
+        />
+      )}
+
+      {/* ── Strict readiness review — the reviewer gate before planning ── */}
+      {review && (
+        <ReadinessReview
+          catalog={catalog}
+          endpointIds={review.ids}
+          onClose={() => setReview(null)}
+          onProceed={(eps) => { setReview(null); proceedToPlan(eps); }}
         />
       )}
 

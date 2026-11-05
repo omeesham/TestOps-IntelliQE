@@ -35,6 +35,8 @@ export const SENSITIVE_CONFIG_KEYS = new Set([
   'anthropic_api_key', 'anthropicApiKey',
   // CI/CD pipeline connector credentials (Jenkins/GitHub/GitLab/Azure/CircleCI)
   'pat', 'personalAccessToken', 'circleToken', 'gitlabToken', 'jenkinsToken',
+  // Advanced request-auth secrets (OAuth1 / mTLS) for the manual Send path
+  'consumerSecret', 'tokenSecret', 'sessionToken', 'passphrase',
 ]);
 
 // =====================================================================

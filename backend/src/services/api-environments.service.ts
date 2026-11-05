@@ -292,7 +292,7 @@ export function resolveApiCase<T extends { url: string; headers: Record<string, 
  * can carry them, and re-home the URL on the environment's base URL when one
  * is set (the path and query are kept; only scheme + host + base path move).
  */
-export function applyEnvironment<T extends { url: string; headers?: { key: string; value: string }[]; body?: string; auth?: { type: string; value?: string; headerName?: string } }>(
+export function applyEnvironment<T extends { url: string; headers?: { key: string; value: string }[]; body?: string; auth?: { type: string; value?: string; headerName?: string; in?: 'header' | 'query' } }>(
   endpoint: T,
   env: ApiEnvironment | null | undefined,
   opts?: { preserveRealHosts?: boolean },
@@ -301,10 +301,24 @@ export function applyEnvironment<T extends { url: string; headers?: { key: strin
   const vars = envVarMap(env);
   const url = rehomeUrl(fillTemplate(endpoint.url, vars) || endpoint.url, env.baseUrl, !!opts?.preserveRealHosts);
   const headers = (endpoint.headers || []).map((h) => ({ key: h.key, value: fillTemplate(h.value, vars) || '' }));
-  const auth = endpoint.auth
-    ? { ...endpoint.auth, value: endpoint.auth.value ? fillTemplate(endpoint.auth.value, vars) : resolveAuthFromEnv(endpoint.auth.type, vars) }
-    : endpoint.auth;
+  const auth = endpoint.auth ? resolveAuthWithEnv(endpoint.auth, vars) : endpoint.auth;
   return { ...endpoint, url, headers, body: fillTemplate(endpoint.body, vars), auth };
+}
+
+/** Resolve `{{vars}}` in an auth config: the simple `value`, and every string
+ *  field of the advanced sub-configs (digest/awsSigV4/oauth1/mtls). A blank
+ *  simple value falls back to a conventional env var (token/apiKey/basicAuth). */
+function resolveAuthWithEnv<A extends { type: string; value?: string }>(auth: A, vars: Record<string, string>): A {
+  const out: any = { ...auth, value: auth.value ? fillTemplate(auth.value, vars) : resolveAuthFromEnv(auth.type, vars) };
+  for (const key of ['digest', 'awsSigV4', 'oauth1', 'mtls']) {
+    const cfg = out[key];
+    if (cfg && typeof cfg === 'object') {
+      const next: Record<string, unknown> = { ...cfg };
+      for (const f of Object.keys(next)) if (typeof next[f] === 'string') next[f] = fillTemplate(next[f] as string, vars);
+      out[key] = next;
+    }
+  }
+  return out;
 }
 
 /** Conventional variable names an environment can use to supply a credential. */

@@ -232,7 +232,7 @@ function UserManagementContent() {
   };
 
   return (
-    <div className="-m-6 p-4 space-y-3">
+    <div className="space-y-3">
       <PageHero
         icon={Users}
         title="User Management"

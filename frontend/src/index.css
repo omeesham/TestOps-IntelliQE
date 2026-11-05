@@ -7,34 +7,34 @@
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 @theme {
-  /* Agentic AI Workspace — Purple / Blue / Teal palette */
-  --color-primary: #7C3AED;
+  /* IntelliQE — Blue / Navy workspace palette (the new default look) */
+  --color-primary: #2563EB;
   --color-primary-foreground: #ffffff;
-  --color-secondary: #EEF2FF;
-  --color-secondary-foreground: #1E1B4B;
-  --color-background: #F5F3FF;
-  --color-foreground: #1E1B4B;
+  --color-secondary: #EFF6FF;
+  --color-secondary-foreground: #0F172A;
+  --color-background: #F1F5F9;
+  --color-foreground: #0F172A;
   --color-card: #ffffff;
-  --color-card-foreground: #1E1B4B;
-  --color-border: #DDD6FE;
-  --color-muted: #EDE9FE;
-  --color-muted-foreground: #6B7280;
-  --color-accent: #ECFEFF;
-  --color-accent-foreground: #164E63;
+  --color-card-foreground: #0F172A;
+  --color-border: #E2E8F0;
+  --color-muted: #EFF6FF;
+  --color-muted-foreground: #64748B;
+  --color-accent: #EFF6FF;
+  --color-accent-foreground: #1E3A8A;
   --color-destructive: #EF4444;
   --color-destructive-foreground: #ffffff;
   --color-success: #10B981;
   --color-warning: #F59E0B;
 
-  /* Extended agentic palette */
-  --color-agent-purple: #7C3AED;
+  /* Extended palette */
+  --color-agent-purple: #2563EB;
   --color-agent-blue: #3B82F6;
   --color-agent-teal: #06B6D4;
-  --color-agent-indigo: #6366F1;
-  --color-sidebar: #1E1B4B;
-  --color-sidebar-foreground: #C4B5FD;
-  --color-sidebar-active: #7C3AED;
-  --color-sidebar-hover: rgba(124, 58, 237, 0.15);
+  --color-agent-indigo: #2563EB;
+  --color-sidebar: #0F172A;
+  --color-sidebar-foreground: #94A3B8;
+  --color-sidebar-active: #2563EB;
+  --color-sidebar-hover: rgba(37, 99, 235, 0.15);
 
   --radius: 12px;
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
@@ -100,8 +100,8 @@
 }
 
 @keyframes pulseGlow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.4); }
-  50% { box-shadow: 0 0 0 8px rgba(124, 58, 237, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(37, 99, 235, 0); }
 }
 .animate-pulseGlow {
   animation: pulseGlow 2s ease-in-out infinite;
@@ -132,9 +132,9 @@
       backdrop while scrolling (a subtle parallax depth cue). */
 main {
   background-image:
-    radial-gradient(1100px 520px at 8% -5%, rgba(124, 58, 237, 0.08), transparent 60%),
-    radial-gradient(900px 480px at 100% 0%, rgba(99, 102, 241, 0.08), transparent 55%),
-    radial-gradient(1000px 620px at 50% 112%, rgba(6, 182, 212, 0.06), transparent 62%);
+    radial-gradient(1100px 520px at 8% -5%, rgba(37, 99, 235, 0.07), transparent 60%),
+    radial-gradient(900px 480px at 100% 0%, rgba(59, 130, 246, 0.07), transparent 55%),
+    radial-gradient(1000px 620px at 50% 112%, rgba(6, 182, 212, 0.05), transparent 62%);
   background-attachment: fixed;
 }
 
@@ -151,7 +151,7 @@ input.rounded-full {
   border-radius: 9999px !important; /* keep genuinely circular controls circular */
 }
 button {
-  --tw-shadow-color: rgb(124 58 237 / 0.22) !important;
+  --tw-shadow-color: rgb(37 99 235 / 0.22) !important;
   transition:
     transform 0.16s ease,
     box-shadow 0.2s ease,
@@ -182,14 +182,14 @@ input:not([type="radio"]):not([type="checkbox"]):not([type="range"]) {
       modals (shadow-2xl) keep their own heavier float. */
 :where(.bg-white.shadow-sm) {
   box-shadow:
-    0 1px 2px rgb(30 27 75 / 0.05),
-    0 12px 32px -16px rgb(124 58 237 / 0.16);
+    0 1px 2px rgb(15 23 42 / 0.05),
+    0 12px 32px -16px rgb(37 99 235 / 0.14);
   transition: box-shadow 0.25s ease, border-color 0.25s ease;
 }
 :where(.bg-white.shadow-sm):hover {
   box-shadow:
-    0 2px 4px rgb(30 27 75 / 0.05),
-    0 20px 44px -18px rgb(124 58 237 / 0.24);
+    0 2px 4px rgb(15 23 42 / 0.05),
+    0 20px 44px -18px rgb(37 99 235 / 0.22);
 }
 
 /* 5 ▸ Modals — springy pop-in entrance for every overlay dialog. The
@@ -208,7 +208,7 @@ input:not([type="radio"]):not([type="checkbox"]):not([type="range"]) {
       OS bar. Firefox gets the thin/colored treatment; WebKit gets the gradient. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #C4B5FD transparent;
+  scrollbar-color: #93C5FD transparent;
 }
 ::-webkit-scrollbar {
   width: 11px;
@@ -218,13 +218,13 @@ input:not([type="radio"]):not([type="checkbox"]):not([type="range"]) {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: linear-gradient(to bottom, #A78BFA, #818CF8);
+  background: linear-gradient(to bottom, #93C5FD, #60A5FA);
   border-radius: 9999px;
   border: 3px solid transparent;
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(to bottom, #8B5CF6, #6366F1);
+  background: linear-gradient(to bottom, #3B82F6, #2563EB);
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-corner {
@@ -237,9 +237,9 @@ input:not([type="radio"]):not([type="checkbox"]):not([type="range"]) {
       keep their own background. */
 aside[class*="1E1B4B"] {
   background-image:
-    radial-gradient(420px 260px at 85% -8%, rgba(124, 58, 237, 0.35), transparent 65%),
-    radial-gradient(360px 420px at -20% 105%, rgba(99, 102, 241, 0.22), transparent 60%),
-    linear-gradient(197deg, #241b63 0%, #1e1b4b 45%, #151233 100%);
+    radial-gradient(420px 260px at 85% -8%, rgba(37, 99, 235, 0.30), transparent 65%),
+    radial-gradient(360px 420px at -20% 105%, rgba(59, 130, 246, 0.16), transparent 60%),
+    linear-gradient(197deg, #152136 0%, #0F172A 45%, #0A0F1E 100%);
 }
 
 /* 7 ▸ Table rows — gentle glide on hover. */
@@ -256,7 +256,7 @@ tbody tr {
 
 /* 9 ▸ Keyboard focus — a clear brand-colored ring for accessibility. */
 :focus-visible {
-  outline: 2px solid rgb(124 58 237 / 0.55);
+  outline: 2px solid rgb(37 99 235 / 0.55);
   outline-offset: 2px;
 }
 
@@ -368,7 +368,7 @@ tbody tr {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  box-shadow: 0 0 0 0 rgba(124, 58, 237, 0);
+  box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
   pointer-events: none;
   transition: box-shadow 0.25s ease;
 }
@@ -381,7 +381,7 @@ tbody tr {
     0 5px 12px -1px rgba(30, 27, 75, 0.35) !important;
 }
 .btn-3d:not(:disabled):hover::after {
-  box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.14);
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.14);
 }
 .btn-3d:not(:disabled):active {
   transform: translateY(0) scale(0.98) !important;
@@ -410,32 +410,32 @@ tbody tr {
 
 /* Shared tokens */
 :root {
-  --iq-edge: #4338CA;                       /* keycap edge under a violet key */
-  --iq-edge-soft: #DDD6FE;                  /* keycap edge under a white key   */
+  --iq-edge: #1E40AF;                        /* keycap edge under a blue key    */
+  --iq-edge-soft: #DBEAFE;                   /* keycap edge under a white key   */
   --iq-hi: inset 0 1px 0 rgba(255, 255, 255, 0.9);
   --iq-raise:
     inset 0 1px 0 rgba(255, 255, 255, 0.9),
     0 1px 2px rgba(15, 23, 42, 0.05),
-    0 14px 30px -18px rgba(76, 29, 149, 0.42);
+    0 14px 30px -18px rgba(30, 58, 138, 0.38);
   --iq-raise-hover:
     inset 0 1px 0 rgba(255, 255, 255, 0.9),
     0 2px 4px rgba(15, 23, 42, 0.05),
-    0 22px 40px -18px rgba(76, 29, 149, 0.52);
+    0 22px 40px -18px rgba(30, 58, 138, 0.46);
   --iq-inset:
-    inset 0 1.5px 3px rgba(30, 27, 75, 0.09),
-    inset 0 0 0 1px rgba(221, 214, 254, 0.35);
+    inset 0 1.5px 3px rgba(15, 23, 42, 0.09),
+    inset 0 0 0 1px rgba(191, 219, 254, 0.4);
   --iq-chip:
     inset 0 1px 0 rgba(255, 255, 255, 0.75),
-    0 1px 2px rgba(30, 27, 75, 0.10);
+    0 1px 2px rgba(15, 23, 42, 0.10);
 }
 
 /* 12.1 ▸ Page backdrop — deeper light pools so raised surfaces have
          something to float above. */
 main:not([data-surface="3d"] *) {
   background-image:
-    radial-gradient(1100px 520px at 8% -5%, rgba(124, 58, 237, 0.13), transparent 60%),
-    radial-gradient(900px 480px at 100% 0%, rgba(99, 102, 241, 0.12), transparent 55%),
-    radial-gradient(1000px 620px at 50% 112%, rgba(6, 182, 212, 0.07), transparent 62%);
+    radial-gradient(1100px 520px at 8% -5%, rgba(37, 99, 235, 0.10), transparent 60%),
+    radial-gradient(900px 480px at 100% 0%, rgba(59, 130, 246, 0.10), transparent 55%),
+    radial-gradient(1000px 620px at 50% 112%, rgba(6, 182, 212, 0.06), transparent 62%);
 }
 
 /* 12.2 ▸ Cards — anything white with a rounded corner and a border or a
@@ -626,14 +626,14 @@ aside[class*="1E1B4B"] > div:first-child {
 aside[class*="1E1B4B"] nav a {
   transition: transform 0.16s ease, box-shadow 0.2s ease, background-color 0.2s ease, color 0.2s ease;
 }
-aside[class*="1E1B4B"] nav a[class*="from-[#7C3AED]"] {
+aside[class*="1E1B4B"] nav a[class*="from-[#2563EB]"] {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.28),
-    0 3px 0 0 #3730A3,
-    0 10px 22px -8px rgba(124, 58, 237, 0.75);
+    0 3px 0 0 #1E40AF,
+    0 10px 22px -8px rgba(37, 99, 235, 0.7);
   transform: translateY(-1px);
 }
-aside[class*="1E1B4B"] nav a:not([class*="from-[#7C3AED]"]):hover {
+aside[class*="1E1B4B"] nav a:not([class*="from-[#2563EB]"]):hover {
   background-color: rgba(255, 255, 255, 0.07);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 2px 0 0 rgba(0, 0, 0, 0.35), 0 8px 16px -10px rgba(0, 0, 0, 0.6);
   transform: translateY(-1px);
@@ -655,6 +655,133 @@ aside[class*="1E1B4B"] button {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
+   BRAND HUE — violet → blue (light mode default)
+   ---------------------------------------------------------------------------
+   The app's components hardcode the old violet brand (bg-[#7C3AED], the
+   from→to gradients, the #F5F3FF/#EDE9FE tints, #DDD6FE borders, violet text).
+   Rather than migrate ~130 files, this block repaints those exact utility
+   TOKENS to the blue/navy palette whenever NOT in dark mode (dark has its own
+   skin below). Same [class~="token"] / [class*="from-…"] technique, so it is
+   reliable and reversible. Status colours (emerald/red/amber/sky) are untouched.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Solid brand fills → blue-600 */
+html:not([data-theme="dark"]) [class~="bg-[#7C3AED]"],
+html:not([data-theme="dark"]) [class~="bg-[#6D28D9]"],
+html:not([data-theme="dark"]) [class~="bg-[#5B21B6]"],
+html:not([data-theme="dark"]) [class~="bg-[#8B5CF6]"],
+html:not([data-theme="dark"]) [class~="bg-[#6366F1]"],
+html:not([data-theme="dark"]) [class~="bg-[#4F46E5]"],
+html:not([data-theme="dark"]) [class~="bg-violet-500"],
+html:not([data-theme="dark"]) [class~="bg-violet-600"],
+html:not([data-theme="dark"]) [class~="bg-violet-700"],
+html:not([data-theme="dark"]) [class~="bg-indigo-500"],
+html:not([data-theme="dark"]) [class~="bg-indigo-600"],
+html:not([data-theme="dark"]) [class~="bg-purple-500"],
+html:not([data-theme="dark"]) [class~="bg-purple-600"] {
+  background-color: #2563EB !important;
+}
+
+/* Gradient stops → blue ramp (the vars drive the compiled gradient). The
+   Tailwind shades are matched at -500/-600 explicitly so the light -50 strips
+   (lavender headers) are left untouched. */
+html:not([data-theme="dark"]) [class*="from-[#7C3AED]"],
+html:not([data-theme="dark"]) [class*="from-[#6D28D9]"],
+html:not([data-theme="dark"]) [class*="from-[#8B5CF6]"],
+html:not([data-theme="dark"]) [class*="from-[#5B21B6]"],
+html:not([data-theme="dark"]) [class*="from-[#6366F1]"],
+html:not([data-theme="dark"]) [class*="from-violet-500"],
+html:not([data-theme="dark"]) [class*="from-violet-600"],
+html:not([data-theme="dark"]) [class*="from-indigo-500"],
+html:not([data-theme="dark"]) [class*="from-indigo-600"],
+html:not([data-theme="dark"]) [class*="from-purple-500"],
+html:not([data-theme="dark"]) [class*="from-purple-600"] {
+  --tw-gradient-from: #2563EB !important;
+}
+html:not([data-theme="dark"]) [class*="via-[#7C3AED]"],
+html:not([data-theme="dark"]) [class*="via-[#8B5CF6]"],
+html:not([data-theme="dark"]) [class*="via-violet-500"],
+html:not([data-theme="dark"]) [class*="via-violet-600"],
+html:not([data-theme="dark"]) [class*="via-indigo-500"],
+html:not([data-theme="dark"]) [class*="via-indigo-600"] {
+  --tw-gradient-via: #3B82F6 !important;
+}
+html:not([data-theme="dark"]) [class*="to-[#6366F1]"],
+html:not([data-theme="dark"]) [class*="to-[#4F46E5]"],
+html:not([data-theme="dark"]) [class*="to-[#4338CA]"],
+html:not([data-theme="dark"]) [class*="to-[#7C3AED]"],
+html:not([data-theme="dark"]) [class*="to-[#8B5CF6]"],
+html:not([data-theme="dark"]) [class*="to-violet-500"],
+html:not([data-theme="dark"]) [class*="to-violet-600"],
+html:not([data-theme="dark"]) [class*="to-indigo-500"],
+html:not([data-theme="dark"]) [class*="to-indigo-600"],
+html:not([data-theme="dark"]) [class*="to-purple-600"] {
+  --tw-gradient-to: #3B82F6 !important;
+}
+
+/* Light violet tints → blue-50 */
+html:not([data-theme="dark"]) [class~="bg-[#F5F3FF]"],
+html:not([data-theme="dark"]) [class~="bg-[#EDE9FE]"],
+html:not([data-theme="dark"]) [class~="bg-[#FBFAFF]"],
+html:not([data-theme="dark"]) [class~="bg-[#FAF9FE]"],
+html:not([data-theme="dark"]) [class~="bg-[#F3F1FB]"],
+html:not([data-theme="dark"]) [class~="bg-[#F1EDFB]"],
+html:not([data-theme="dark"]) [class~="bg-[#EEEBFA]"],
+html:not([data-theme="dark"]) [class~="bg-[#FCFBFF]"],
+html:not([data-theme="dark"]) [class~="bg-violet-50"],
+html:not([data-theme="dark"]) [class~="bg-indigo-50"],
+html:not([data-theme="dark"]) [class~="bg-purple-50"] {
+  background-color: #EFF6FF !important;
+}
+html:not([data-theme="dark"]) [class~="bg-violet-100"],
+html:not([data-theme="dark"]) [class~="bg-indigo-100"],
+html:not([data-theme="dark"]) [class~="bg-purple-100"] {
+  background-color: #DBEAFE !important;
+}
+
+/* Violet borders → blue-200 */
+html:not([data-theme="dark"]) [class~="border-[#DDD6FE]"],
+html:not([data-theme="dark"]) [class~="border-[#E9E5FB]"],
+html:not([data-theme="dark"]) [class~="border-[#E7E3F5]"],
+html:not([data-theme="dark"]) [class~="border-[#ECE9F8]"],
+html:not([data-theme="dark"]) [class~="border-[#E4E0F5]"],
+html:not([data-theme="dark"]) [class~="border-[#D9CDF5]"],
+html:not([data-theme="dark"]) [class~="border-[#C4B5FD]"],
+html:not([data-theme="dark"]) [class~="border-[#A5B4FC]"],
+html:not([data-theme="dark"]) [class~="border-violet-200"],
+html:not([data-theme="dark"]) [class~="border-indigo-200"],
+html:not([data-theme="dark"]) [class~="border-purple-200"] {
+  border-color: #BFDBFE !important;
+}
+
+/* Violet brand text → blue-700 */
+html:not([data-theme="dark"]) [class~="text-[#7C3AED]"],
+html:not([data-theme="dark"]) [class~="text-[#6D28D9]"],
+html:not([data-theme="dark"]) [class~="text-[#5B21B6]"],
+html:not([data-theme="dark"]) [class~="text-[#4C1D95]"],
+html:not([data-theme="dark"]) [class~="text-[#4F46E5]"],
+html:not([data-theme="dark"]) [class~="text-violet-700"],
+html:not([data-theme="dark"]) [class~="text-violet-600"],
+html:not([data-theme="dark"]) [class~="text-violet-500"],
+html:not([data-theme="dark"]) [class~="text-indigo-700"],
+html:not([data-theme="dark"]) [class~="text-indigo-600"],
+html:not([data-theme="dark"]) [class~="text-indigo-500"],
+html:not([data-theme="dark"]) [class~="text-purple-700"],
+html:not([data-theme="dark"]) [class~="text-purple-600"] {
+  color: #1D4ED8 !important;
+}
+
+/* Violet focus/arbitrary rings → blue */
+html:not([data-theme="dark"]) [class~="ring-[#EDE9FE]"],
+html:not([data-theme="dark"]) [class~="ring-[#DDD6FE]"],
+html:not([data-theme="dark"]) [class~="ring-[#C4B5FD]"],
+html:not([data-theme="dark"]) [class*="ring-[#7C3AED]"],
+html:not([data-theme="dark"]) [class*="ring-violet-"],
+html:not([data-theme="dark"]) [class*="ring-indigo-"] {
+  --tw-ring-color: #BFDBFE !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
    DARK MODE — a retrofit skin
    ---------------------------------------------------------------------------
    The app's components hardcode light-mode colours (bg-white, text-[#1E1B4B],
@@ -670,34 +797,34 @@ html[data-theme="dark"] {
   color-scheme: dark;
 
   /* Flip the @theme-referenced design tokens (body, bg-background, etc.). */
-  --color-background: #0E0C1A;
-  --color-foreground: #E7E4F4;
-  --color-card: #17152A;
-  --color-card-foreground: #E7E4F4;
-  --color-border: #2A2740;
-  --color-muted: #201D33;
-  --color-muted-foreground: #9A95B8;
-  --color-secondary: #201D33;
-  --color-secondary-foreground: #E7E4F4;
+  --color-background: #0A0F1E;
+  --color-foreground: #E6EDF8;
+  --color-card: #111A2E;
+  --color-card-foreground: #E6EDF8;
+  --color-border: #1E2A44;
+  --color-muted: #152136;
+  --color-muted-foreground: #94A3C4;
+  --color-secondary: #152136;
+  --color-secondary-foreground: #E6EDF8;
   --color-accent: #16263A;
   --color-accent-foreground: #BAE6FD;
 
-  /* Local dark surface ramp — referenced by the rules below. */
-  --iq-dk-bg: #0E0C1A;
-  --iq-dk-surface: #17152A;    /* cards, modals            */
-  --iq-dk-surface-2: #1E1B30;  /* tinted tiles, wells      */
-  --iq-dk-surface-3: #252138;  /* hover / raised           */
-  --iq-dk-input: #141225;      /* recessed fields          */
-  --iq-dk-border: #2A2740;
-  --iq-dk-border-2: #353150;
-  --iq-dk-text: #E7E4F4;
-  --iq-dk-text-muted: #A7A2C4;
-  --iq-dk-text-faint: #726E90;
+  /* Local dark surface ramp — navy-blue plane, referenced by the rules below. */
+  --iq-dk-bg: #0A0F1E;
+  --iq-dk-surface: #111A2E;    /* cards, modals            */
+  --iq-dk-surface-2: #152136;  /* tinted tiles, wells      */
+  --iq-dk-surface-3: #1E2A44;  /* hover / raised           */
+  --iq-dk-input: #0E1424;      /* recessed fields          */
+  --iq-dk-border: #1E2A44;
+  --iq-dk-border-2: #2A3A5C;
+  --iq-dk-text: #E6EDF8;
+  --iq-dk-text-muted: #9DABC7;
+  --iq-dk-text-faint: #6B7A99;
 
   /* Re-tint the shared "4D" shadow tokens so raised/recessed surfaces read as
      depth over a dark page (black drop shadows, faint white top highlight). */
-  --iq-edge: #312B5C;
-  --iq-edge-soft: #2A2740;
+  --iq-edge: #1E3A6B;
+  --iq-edge-soft: #1E2A44;
   --iq-hi: inset 0 1px 0 rgba(255, 255, 255, 0.05);
   --iq-raise:
     inset 0 1px 0 rgba(255, 255, 255, 0.05),
@@ -709,7 +836,7 @@ html[data-theme="dark"] {
     0 24px 46px -20px rgba(0, 0, 0, 0.82);
   --iq-inset:
     inset 0 1.5px 3px rgba(0, 0, 0, 0.5),
-    inset 0 0 0 1px rgba(124, 58, 237, 0.12);
+    inset 0 0 0 1px rgba(37, 99, 235, 0.14);
   --iq-chip:
     inset 0 1px 0 rgba(255, 255, 255, 0.05),
     0 1px 2px rgba(0, 0, 0, 0.5);
@@ -720,9 +847,9 @@ html[data-theme="dark"] body { background-color: var(--iq-dk-bg); }
 html[data-theme="dark"] main:not([data-surface="3d"] *) {
   background-color: var(--iq-dk-bg);
   background-image:
-    radial-gradient(1100px 520px at 8% -5%, rgba(124, 58, 237, 0.16), transparent 60%),
-    radial-gradient(900px 480px at 100% 0%, rgba(99, 102, 241, 0.14), transparent 55%),
-    radial-gradient(1000px 620px at 50% 112%, rgba(6, 182, 212, 0.08), transparent 62%);
+    radial-gradient(1100px 520px at 8% -5%, rgba(37, 99, 235, 0.18), transparent 60%),
+    radial-gradient(900px 480px at 100% 0%, rgba(59, 130, 246, 0.14), transparent 55%),
+    radial-gradient(1000px 620px at 50% 112%, rgba(14, 165, 233, 0.09), transparent 62%);
 }
 
 /* ── White surfaces → dark card. Exact `bg-white` token only, so low-opacity
@@ -796,14 +923,67 @@ html[data-theme="dark"] [class~="text-gray-400"],
 html[data-theme="dark"] [class~="text-gray-300"],
 html[data-theme="dark"] [class~="text-slate-400"] { color: var(--iq-dk-text-faint) !important; }
 
-/* Brand-violet text used on light chips → brighten for dark contrast. */
+/* Brand text used on light chips → brighten to blue for dark contrast. */
 html[data-theme="dark"] [class~="text-[#6D28D9]"],
 html[data-theme="dark"] [class~="text-[#7C3AED]"],
 html[data-theme="dark"] [class~="text-violet-700"],
 html[data-theme="dark"] [class~="text-violet-600"],
 html[data-theme="dark"] [class~="text-purple-700"],
 html[data-theme="dark"] [class~="text-indigo-700"],
-html[data-theme="dark"] [class~="text-indigo-600"] { color: #C4B5FD !important; }
+html[data-theme="dark"] [class~="text-indigo-600"] { color: #93C5FD !important; }
+
+/* Brand SOLID fills + gradient stops → blue in dark too (the light remap above
+   is scoped to :not([data-theme="dark"]), so without this the primary buttons,
+   avatars and icon tiles would stay violet on the dark skin). Fills/gradients
+   only — dark tints/text/borders are handled by the rules above. */
+html[data-theme="dark"] [class~="bg-[#7C3AED]"],
+html[data-theme="dark"] [class~="bg-[#6D28D9]"],
+html[data-theme="dark"] [class~="bg-[#5B21B6]"],
+html[data-theme="dark"] [class~="bg-[#8B5CF6]"],
+html[data-theme="dark"] [class~="bg-[#6366F1]"],
+html[data-theme="dark"] [class~="bg-[#4F46E5]"],
+html[data-theme="dark"] [class~="bg-violet-500"],
+html[data-theme="dark"] [class~="bg-violet-600"],
+html[data-theme="dark"] [class~="bg-violet-700"],
+html[data-theme="dark"] [class~="bg-indigo-500"],
+html[data-theme="dark"] [class~="bg-indigo-600"],
+html[data-theme="dark"] [class~="bg-purple-500"],
+html[data-theme="dark"] [class~="bg-purple-600"] {
+  background-color: #2563EB !important;
+}
+html[data-theme="dark"] [class*="from-[#7C3AED]"],
+html[data-theme="dark"] [class*="from-[#6D28D9]"],
+html[data-theme="dark"] [class*="from-[#8B5CF6]"],
+html[data-theme="dark"] [class*="from-[#5B21B6]"],
+html[data-theme="dark"] [class*="from-[#6366F1]"],
+html[data-theme="dark"] [class*="from-violet-500"],
+html[data-theme="dark"] [class*="from-violet-600"],
+html[data-theme="dark"] [class*="from-indigo-500"],
+html[data-theme="dark"] [class*="from-indigo-600"],
+html[data-theme="dark"] [class*="from-purple-500"],
+html[data-theme="dark"] [class*="from-purple-600"] {
+  --tw-gradient-from: #2563EB !important;
+}
+html[data-theme="dark"] [class*="via-[#7C3AED]"],
+html[data-theme="dark"] [class*="via-[#8B5CF6]"],
+html[data-theme="dark"] [class*="via-violet-500"],
+html[data-theme="dark"] [class*="via-violet-600"],
+html[data-theme="dark"] [class*="via-indigo-500"],
+html[data-theme="dark"] [class*="via-indigo-600"] {
+  --tw-gradient-via: #3B82F6 !important;
+}
+html[data-theme="dark"] [class*="to-[#6366F1]"],
+html[data-theme="dark"] [class*="to-[#4F46E5]"],
+html[data-theme="dark"] [class*="to-[#4338CA]"],
+html[data-theme="dark"] [class*="to-[#7C3AED]"],
+html[data-theme="dark"] [class*="to-[#8B5CF6]"],
+html[data-theme="dark"] [class*="to-violet-500"],
+html[data-theme="dark"] [class*="to-violet-600"],
+html[data-theme="dark"] [class*="to-indigo-500"],
+html[data-theme="dark"] [class*="to-indigo-600"],
+html[data-theme="dark"] [class*="to-purple-600"] {
+  --tw-gradient-to: #3B82F6 !important;
+}
 
 /* ── Borders ── */
 html[data-theme="dark"] [class~="border-[#DDD6FE]"],
@@ -812,6 +992,7 @@ html[data-theme="dark"] [class~="border-gray-100"],
 html[data-theme="dark"] [class~="border-slate-200"],
 html[data-theme="dark"] [class~="border-slate-100"],
 html[data-theme="dark"] [class~="border-[#E7E3F5]"],
+html[data-theme="dark"] [class~="border-[#E7E3F8]"],
 html[data-theme="dark"] [class~="border-[#ECE9F8]"],
 html[data-theme="dark"] [class~="border-[#E4E0F5]"],
 html[data-theme="dark"] [class~="border-[#E9E5FB]"],
@@ -819,15 +1000,17 @@ html[data-theme="dark"] [class~="border-[#D9CDF5]"] { border-color: var(--iq-dk-
 
 /* ── Tables ── */
 html[data-theme="dark"] thead:not([data-surface="3d"] *) {
-  background-image: linear-gradient(180deg, #211E36 0%, #1A1729 100%) !important;
-  box-shadow: inset 0 -1px 0 #2A2740, inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+  background-image: linear-gradient(180deg, #152136 0%, #111A2E 100%) !important;
+  box-shadow: inset 0 -1px 0 #1E2A44, inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
 }
-html[data-theme="dark"] tbody tr:hover { background-color: rgba(124, 58, 237, 0.08); }
+html[data-theme="dark"] tbody tr:hover { background-color: rgba(37, 99, 235, 0.10); }
 
 /* ── Soft-violet gradient strips (modal headers, STRIP) → dark gradient ── */
 html[data-theme="dark"] [class*="from-[#EDE9FE]"],
-html[data-theme="dark"] [class*="from-[#F5F3FF]"] {
-  background-image: linear-gradient(to right, #201D33, #241B3A, #1C2140) !important;
+html[data-theme="dark"] [class*="from-[#F5F3FF]"],
+html[data-theme="dark"] [class*="from-[#F6F4FF]"],
+html[data-theme="dark"] [class*="from-[#FAF9FF]"] {
+  background-image: linear-gradient(135deg, #111A2E, #152338, #122036) !important;
 }
 
 /* ── More light violet / neutral surface tints found across API Studio ── */
@@ -851,8 +1034,8 @@ html[data-theme="dark"] [class~="bg-yellow-100"] { background-color: rgba(245, 1
 
 /* ── Coloured -100 icon tiles / avatars → dark tints (match the -50 chips) ── */
 html[data-theme="dark"] [class~="bg-violet-100"],
-html[data-theme="dark"] [class~="bg-purple-100"] { background-color: rgba(139, 92, 246, 0.2) !important; }
-html[data-theme="dark"] [class~="bg-indigo-100"] { background-color: rgba(99, 102, 241, 0.2) !important; }
+html[data-theme="dark"] [class~="bg-purple-100"] { background-color: rgba(59, 130, 246, 0.2) !important; }
+html[data-theme="dark"] [class~="bg-indigo-100"] { background-color: rgba(59, 130, 246, 0.2) !important; }
 html[data-theme="dark"] [class~="bg-sky-100"]    { background-color: rgba(14, 165, 233, 0.18) !important; }
 html[data-theme="dark"] [class~="bg-blue-100"]   { background-color: rgba(59, 130, 246, 0.18) !important; }
 html[data-theme="dark"] [class~="bg-rose-100"]   { background-color: rgba(244, 63, 94, 0.18) !important; }
@@ -861,8 +1044,8 @@ html[data-theme="dark"] [class~="bg-orange-100"] { background-color: rgba(249, 1
 
 /* ── Dark-tone text on now-dark surfaces → brighten for contrast ── */
 html[data-theme="dark"] [class~="text-[#5B21B6]"],
-html[data-theme="dark"] [class~="text-[#4C1D95]"] { color: #C4B5FD !important; }
-html[data-theme="dark"] [class~="text-[#4F46E5]"] { color: #A5B4FC !important; }
+html[data-theme="dark"] [class~="text-[#4C1D95]"] { color: #93C5FD !important; }
+html[data-theme="dark"] [class~="text-[#4F46E5]"] { color: #93C5FD !important; }
 html[data-theme="dark"] [class~="text-[#15803D]"] { color: #6EE7B7 !important; }
 html[data-theme="dark"] [class~="text-[#B45309]"] { color: #FCD34D !important; }
 html[data-theme="dark"] [class~="text-[#C32C2C]"] { color: #FCA5A5 !important; }
@@ -872,16 +1055,16 @@ html[data-theme="dark"] [class~="text-[#9CA3AF]"] { color: var(--iq-dk-text-fain
       from-white → to-[#F5F3FF]) → dark tile so they don't glow on dark. ── */
 html[data-theme="dark"] [class*="from-white"][class*="to-[#F5F3FF]"],
 html[data-theme="dark"] [class*="from-white"][class*="to-[#EDE9FE]"] {
-  background-image: linear-gradient(135deg, #211E36, #17152A) !important;
+  background-image: linear-gradient(135deg, #19243C, #111A2E) !important;
   border-color: var(--iq-dk-border) !important;
 }
 
 /* ── Sidebar — deepen below the page so it reads as the darkest plane ── */
 html[data-theme="dark"] aside[class*="1E1B4B"] {
   background-image:
-    radial-gradient(420px 260px at 85% -8%, rgba(124, 58, 237, 0.28), transparent 65%),
-    radial-gradient(360px 420px at -20% 105%, rgba(99, 102, 241, 0.18), transparent 60%),
-    linear-gradient(197deg, #171231 0%, #120F28 45%, #0C0A1E 100%);
+    radial-gradient(420px 260px at 85% -8%, rgba(37, 99, 235, 0.30), transparent 65%),
+    radial-gradient(360px 420px at -20% 105%, rgba(59, 130, 246, 0.18), transparent 60%),
+    linear-gradient(197deg, #122038 0%, #0C1526 45%, #070C18 100%);
 }
 
 /* ── Coloured category/method chips — swap glaring -50 fills for dark tints
@@ -893,10 +1076,10 @@ html[data-theme="dark"] [class~="bg-teal-50"]    { background-color: rgba(20, 18
 html[data-theme="dark"] [class~="bg-rose-50"]    { background-color: rgba(244, 63, 94, 0.15) !important; }
 html[data-theme="dark"] [class~="bg-red-50"]     { background-color: rgba(239, 68, 68, 0.15) !important; }
 html[data-theme="dark"] [class~="bg-green-50"]   { background-color: rgba(34, 197, 94, 0.15) !important; }
-html[data-theme="dark"] [class~="bg-violet-50"]  { background-color: rgba(139, 92, 246, 0.16) !important; }
+html[data-theme="dark"] [class~="bg-violet-50"]  { background-color: rgba(59, 130, 246, 0.16) !important; }
 html[data-theme="dark"] [class~="bg-fuchsia-50"] { background-color: rgba(217, 70, 239, 0.15) !important; }
 html[data-theme="dark"] [class~="bg-orange-50"]  { background-color: rgba(249, 115, 22, 0.15) !important; }
-html[data-theme="dark"] [class~="bg-indigo-50"]  { background-color: rgba(99, 102, 241, 0.16) !important; }
+html[data-theme="dark"] [class~="bg-indigo-50"]  { background-color: rgba(59, 130, 246, 0.16) !important; }
 html[data-theme="dark"] [class~="bg-blue-50"]    { background-color: rgba(59, 130, 246, 0.15) !important; }
 html[data-theme="dark"] [class~="bg-yellow-50"]  { background-color: rgba(234, 179, 8, 0.15) !important; }
 
@@ -920,10 +1103,10 @@ html[data-theme="dark"] [class~="border-amber-200"]   { border-color: rgba(245, 
 html[data-theme="dark"] [class~="border-teal-200"]    { border-color: rgba(20, 184, 166, 0.3) !important; }
 html[data-theme="dark"] [class~="border-rose-200"]    { border-color: rgba(244, 63, 94, 0.3) !important; }
 html[data-theme="dark"] [class~="border-red-200"]     { border-color: rgba(239, 68, 68, 0.3) !important; }
-html[data-theme="dark"] [class~="border-violet-200"]  { border-color: rgba(139, 92, 246, 0.3) !important; }
+html[data-theme="dark"] [class~="border-violet-200"]  { border-color: rgba(59, 130, 246, 0.3) !important; }
 html[data-theme="dark"] [class~="border-fuchsia-200"] { border-color: rgba(217, 70, 239, 0.3) !important; }
 html[data-theme="dark"] [class~="border-orange-200"]  { border-color: rgba(249, 115, 22, 0.3) !important; }
-html[data-theme="dark"] [class~="border-indigo-200"]  { border-color: rgba(99, 102, 241, 0.3) !important; }
+html[data-theme="dark"] [class~="border-indigo-200"]  { border-color: rgba(59, 130, 246, 0.3) !important; }
 html[data-theme="dark"] [class~="border-blue-200"]    { border-color: rgba(59, 130, 246, 0.3) !important; }
 
 /* ── White / light "keycap" buttons — the 4D skin paints a strong white

@@ -90,7 +90,7 @@ export default function SystemConfigurationPage() {
   };
 
   return (
-    <div className="-m-6 p-4">
+    <div>
       <div className="flex bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
         {/* Left: Vertical Tabs */}
         <div className="p-3 border-r border-gray-100 bg-gray-50/40 w-56 flex-shrink-0">

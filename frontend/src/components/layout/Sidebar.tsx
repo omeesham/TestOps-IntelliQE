@@ -92,7 +92,7 @@ export default function Sidebar() {
         />
         <button
           onClick={toggleCollapsed}
-          className="w-7 h-7 rounded-md bg-white/5 text-[#C4B5FD] hover:bg-white/10 hover:text-white flex items-center justify-center transition-colors flex-shrink-0"
+          className="w-7 h-7 rounded-md bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white flex items-center justify-center transition-colors flex-shrink-0"
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
@@ -108,8 +108,8 @@ export default function Sidebar() {
             className={({ isActive }) =>
               `flex items-center gap-3 ${collapsed ? 'justify-center px-2' : 'px-3'} py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
                 isActive
-                  ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white shadow-lg shadow-purple-900/30'
-                  : 'text-[#C4B5FD] hover:bg-white/5 hover:text-white'
+                  ? 'bg-gradient-to-r from-[#2563EB] to-[#3B82F6] text-white shadow-lg shadow-blue-900/30'
+                  : 'text-slate-300 hover:bg-white/5 hover:text-white'
               }`
             }
           >
@@ -120,7 +120,7 @@ export default function Sidebar() {
       </nav>
 
       <div
-        className={`border-t border-white/10 ${collapsed ? 'px-2 py-2' : 'px-4 py-2'} text-[10px] font-medium uppercase tracking-wider text-[#C4B5FD]/50 text-center select-none`}
+        className={`border-t border-white/10 ${collapsed ? 'px-2 py-2' : 'px-4 py-2'} text-[10px] font-medium uppercase tracking-wider text-slate-400/60 text-center select-none`}
         title={`Build ${APP_VERSION}`}
       >
         {collapsed ? APP_VERSION.split('-')[0] : APP_VERSION}

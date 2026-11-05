@@ -597,7 +597,7 @@ export default function BugTrackerPage() {
   const canReopen = detailBug && ['resolved', 'closed', 'revoked'].includes(detailBug.status);
 
   return (
-    <div className="-m-6 p-4 space-y-3">
+    <div className="space-y-3">
       <PageHero
         icon={Bug}
         title="Bug Tracker"

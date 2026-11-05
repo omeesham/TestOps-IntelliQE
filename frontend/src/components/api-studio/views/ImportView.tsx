@@ -7,7 +7,7 @@
  * Every path ends in the same place — endpoints in the catalogue, profiled.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
-import { UploadCloud, CheckCircle2, AlertTriangle, ArrowRight, FileText, X, Plus, Trash2, Layers, Plug, KeyRound, ExternalLink, Paperclip, FileSpreadsheet, RotateCw, Link2, CheckSquare, Square } from 'lucide-react';
+import { UploadCloud, CheckCircle2, AlertTriangle, ArrowRight, FileText, X, Plus, Trash2, Layers, Plug, KeyRound, ExternalLink, Paperclip, FileSpreadsheet, RotateCw, Link2, CheckSquare, Square, ShieldCheck } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import {
   importApiFiles, importApiText, importApiUrl, importApiEndpoint, importApiCurl, importApiGraphql, importApiMcp,
@@ -25,8 +25,7 @@ import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, LABEL, CARD, CARD_HOVER, CHIP
 import { KeyValueRows } from '../EndpointEditor';
 import EndpointEditor from '../EndpointEditor';
 import type { Catalog } from '../hooks/useCatalog';
-import { validateApiEndpoints } from '../apiValidation';
-import ValidationReport from '../ValidationReport';
+import { buildReadinessReview } from '../apiValidation';
 import type { AuthType, HeaderPair, ImportMethod, LogLine, ApiEnvironment } from '../types';
 
 interface Props {
@@ -37,6 +36,9 @@ interface Props {
   environment?: ApiEnvironment | null;
   /** Opens the Story generator — offered after a requirement-driven import (Jira/Azure/BRD/FRD). */
   onOpenStory?: () => void;
+  /** Opens the strict readiness review. With ids, reviews exactly those endpoints
+   *  (the ones just imported); without, reviews the current selection. */
+  onReview?: (ids?: string[]) => void;
 }
 
 interface Outcome { method: ImportMethod; name: string; res: ApiImportResponse; added: number; duplicates: number }
@@ -50,7 +52,7 @@ const FORMAT_COLOR: Record<string, string> = {
   'WSDL / XML': '#6366F1', PDF: '#EF4444', Word: '#2563EB', Excel: '#16A34A', Markdown: '#64748B', 'Source code': '#8B5CF6',
 };
 
-export default function ImportView({ catalog, onOpenCatalogue, log, environment, onOpenStory }: Props) {
+export default function ImportView({ catalog, onOpenCatalogue, log, onOpenStory, onReview }: Props) {
   const toast = useToast();
   const [active, setActive] = useState<ImportMethodDef | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -59,16 +61,28 @@ export default function ImportView({ catalog, onOpenCatalogue, log, environment,
   const [manualOpen, setManualOpen] = useState(false);
   /** The opened method form — scrolled into view when a card is picked. */
   const formRef = useRef<HTMLDivElement>(null);
+  /** A sentinel at the very top — scrolled into view once an import finishes so
+   *  the result panel is on screen (scrollIntoView finds the real scroll parent,
+   *  which a direct scrollTo on the container does not inside the dialog). */
+  const topRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!active || active.id === 'manual') return;
     // Let the form mount and lay out before scrolling, so the target offset is final.
     const id = window.setTimeout(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
     return () => window.clearTimeout(id);
   }, [active]);
+  // After any import produces an outcome (Jira/Azure/file/…), bring the user back
+  // to the top so the result panel is in view instead of leaving them parked on
+  // the form they just submitted.
+  useEffect(() => {
+    if (!outcome) return;
+    const id = window.setTimeout(() => topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+    return () => window.clearTimeout(id);
+  }, [outcome]);
 
   /** Every import funnels through here so the catalogue, log and result panel agree. */
   const finish = useCallback((method: ImportMethod, name: string, res: ApiImportResponse) => {
-    const { added, duplicates } = catalog.addEndpoints(res.endpoints || [], {
+    const { added, duplicates, addedIds } = catalog.addEndpoints(res.endpoints || [], {
       method, name, format: res.format, parser: res.parser, warnings: res.warnings, notice: res.notice, profile: res.profile,
     });
     setOutcome({ method, name, res, added, duplicates });
@@ -79,8 +93,13 @@ export default function ImportView({ catalog, onOpenCatalogue, log, environment,
       log('import', `${name}: ${added} endpoint${added === 1 ? '' : 's'} added${duplicates ? ` (${duplicates} already in the catalogue)` : ''} via ${res.parser}`, 'ok');
       for (const w of res.warnings || []) log('import', w, 'warn');
       toast.success(`${added} endpoint${added === 1 ? '' : 's'} imported`, name);
+      // Strict readiness applies to EVERY import: if anything the import produced
+      // is not automation-ready (missing purpose/inputs/responses/business rules/
+      // schema), open the review so it's validated — and fixed or removed — now.
+      const rr = buildReadinessReview(res.endpoints || []);
+      if (added > 0 && !rr.allReady && onReview) onReview(addedIds);
     }
-  }, [catalog, log, toast]);
+  }, [catalog, log, toast, onReview]);
 
   const run = useCallback(async (key: string, method: ImportMethod, name: string, fn: () => Promise<ApiImportResponse>) => {
     setBusy(key); setError(''); setOutcome(null);
@@ -109,6 +128,7 @@ export default function ImportView({ catalog, onOpenCatalogue, log, environment,
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-[1180px] mx-auto px-6 py-5 space-y-4">
+        <div ref={topRef} aria-hidden className="scroll-mt-2" />
         {/* Header — a colourful gradient banner */}
         <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#5B21B6] via-[#7C3AED] to-[#4338CA] px-5 py-4 shadow-[0_18px_44px_-22px_rgba(76,29,149,0.75)]">
           <div className="pointer-events-none absolute -top-14 -right-6 w-52 h-52 rounded-full bg-[#E879F9]/25 blur-3xl" />
@@ -162,7 +182,7 @@ export default function ImportView({ catalog, onOpenCatalogue, log, environment,
             <button type="button" onClick={() => setError('')} className="ml-auto text-red-400 hover:text-red-600"><X className="w-3.5 h-3.5" /></button>
           </div>
         )}
-        {outcome && <OutcomePanel outcome={outcome} environment={environment} onOpenCatalogue={onOpenCatalogue} onOpenStory={onOpenStory} onDismiss={() => setOutcome(null)} />}
+        {outcome && <OutcomePanel outcome={outcome} onOpenCatalogue={onOpenCatalogue} onOpenStory={onOpenStory} onReview={onReview} onDismiss={() => setOutcome(null)} />}
 
         {/* Method grid */}
         <div>
@@ -230,14 +250,20 @@ export default function ImportView({ catalog, onOpenCatalogue, log, environment,
 
 /* ── Result panel ─────────────────────────────────────────────── */
 
-function OutcomePanel({ outcome, environment, onOpenCatalogue, onOpenStory, onDismiss }: { outcome: Outcome; environment?: ApiEnvironment | null; onOpenCatalogue: () => void; onOpenStory?: () => void; onDismiss: () => void }) {
+function OutcomePanel({ outcome, onOpenCatalogue, onOpenStory, onReview, onDismiss }: { outcome: Outcome; onOpenCatalogue: () => void; onOpenStory?: () => void; onReview?: (ids?: string[]) => void; onDismiss: () => void }) {
   const { res, added, duplicates, method } = outcome;
   const none = (res.endpoints || []).length === 0;
   // Requirement-driven sources can also feed the Story generator for a brief.
   const fromRequirements = method === 'jira' || method === 'ado' || method === 'brd' || method === 'frd';
-  // Deterministic readiness check over what the document produced — surfaced here
-  // so a non-API file (or un-runnable endpoints) is caught before the catalogue.
-  const report = useMemo(() => validateApiEndpoints(res.endpoints || [], environment), [res.endpoints, environment]);
+  // Strict readiness check over what the document produced — the SAME gate that
+  // guards planning, applied to every import, so missing purpose/inputs/responses/
+  // business rules/schema are surfaced here (and in the review) before anything runs.
+  const readiness = useMemo(() => buildReadinessReview(res.endpoints || []), [res.endpoints]);
+  const missing = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const it of readiness.items) for (const f of it.fields) if (!f.ok && f.level === 'error') m[f.label] = (m[f.label] || 0) + 1;
+    return Object.entries(m).sort((a, b) => b[1] - a[1]);
+  }, [readiness]);
   return (
     <div className={`${CARD} p-4`}>
       <div className="flex items-start gap-3">
@@ -250,7 +276,30 @@ function OutcomePanel({ outcome, environment, onOpenCatalogue, onOpenStory, onDi
             {duplicates > 0 && <span className="font-normal text-gray-500"> · {duplicates} already present</span>}
           </p>
           {res.notice && <p className="mt-2 text-[11.5px] text-[#4C1D95] bg-[#F5F3FF] border border-[#DDD6FE] rounded-md px-2.5 py-1.5">{res.notice}</p>}
-          <div className="mt-2"><ValidationReport report={report} /></div>
+          {!none && (
+            <div className={`mt-2 rounded-lg border px-3 py-2.5 ${readiness.allReady ? 'border-emerald-200 bg-emerald-50/40' : 'border-amber-200 bg-amber-50/40'}`}>
+              <div className="flex items-center gap-2">
+                {readiness.allReady
+                  ? <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                  : <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />}
+                <p className="text-[12px] font-semibold text-gray-800">
+                  {readiness.allReady
+                    ? `Strict readiness ✓ — all ${readiness.total} endpoint${readiness.total === 1 ? '' : 's'} capture purpose, inputs, responses, business rules & a valid schema.`
+                    : `Strict readiness — ${readiness.ready}/${readiness.total} ready · ${readiness.notReady} need detail${readiness.notReady === 1 ? '' : 's'} before automation.`}
+                </p>
+              </div>
+              {!readiness.allReady && (
+                <>
+                  <ul className="mt-1.5 flex flex-wrap gap-1.5">
+                    {missing.map(([label, n]) => (
+                      <li key={label} className="px-2 py-0.5 rounded-md text-[10.5px] font-medium text-red-700 bg-red-50 border border-red-200">{n} missing {label}</li>
+                    ))}
+                  </ul>
+                  <p className="mt-1.5 text-[11px] text-gray-500">The readiness review opened so you can capture the details, or reject endpoints you don't need.</p>
+                </>
+              )}
+            </div>
+          )}
           {res.observed && (
             <p className="mt-2 text-[11px] text-gray-600">Live probe: status <span className="font-mono font-semibold">{res.observed.status}</span> in {res.observed.durationMs}ms · {res.observed.contentType || 'no content-type'}</p>
           )}
@@ -280,7 +329,8 @@ function OutcomePanel({ outcome, environment, onOpenCatalogue, onOpenStory, onDi
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
           {fromRequirements && onOpenStory && <button type="button" onClick={onOpenStory} className={SECONDARY_BTN} title="Open the Story generator to turn these requirements into a test-plan brief">Requirements brief<ArrowRight className="w-3.5 h-3.5" /></button>}
-          {!none && <button type="button" onClick={onOpenCatalogue} className={PRIMARY_BTN}>Review catalogue<ArrowRight className="w-3.5 h-3.5" /></button>}
+          {!none && onReview && <button type="button" onClick={() => onReview()} className={readiness.allReady ? SECONDARY_BTN : PRIMARY_BTN} title="Strictly validate every endpoint (purpose, inputs, responses, business rules, schema) before planning"><ShieldCheck className="w-3.5 h-3.5" />{readiness.allReady ? 'Validate & review' : 'Fix & review'}</button>}
+          {!none && <button type="button" onClick={onOpenCatalogue} className={readiness.allReady ? PRIMARY_BTN : SECONDARY_BTN}>Review catalogue<ArrowRight className="w-3.5 h-3.5" /></button>}
           <button type="button" onClick={onDismiss} className="p-1.5 rounded-md text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]"><X className="w-4 h-4" /></button>
         </div>
       </div>

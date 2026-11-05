@@ -156,3 +156,167 @@ export function validateApiEndpoints(
   const warningCount = issues.filter((i) => i.level === 'warning').length;
   return { ok: errorCount === 0, total, ready, errorCount, warningCount, issues };
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   STRICT READINESS REVIEW — the reviewer gate before planning starts.
+   ---------------------------------------------------------------------------
+   Deterministic per-endpoint completeness. For every endpoint it captures and
+   grades: purpose, inputs, expected responses, business rules, schema validity
+   and that it is a valid, categorised API call. Required fields are errors, so
+   the gate blocks planning until each endpoint is complete OR the reviewer
+   removes it. Each item also carries its source and a per-category test
+   checklist (REST vs SOAP vs …). No model calls — instant and repeatable.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+export type ApiCategory = 'rest' | 'soap' | 'graphql' | 'jsonrpc' | 'webhook' | 'mcp';
+
+/** The richer shape the readiness review grades (CatalogEndpoint satisfies it). */
+export interface ReviewableEndpoint extends ValidatableEndpoint {
+  title?: string;
+  description?: string;
+  expectedStatus?: number;
+  expectedResponse?: string;
+  businessRules?: string;
+  style?: string;
+  bodyMode?: string;
+  source?: { method: string; name: string };
+  pathParams?: { name: string; example?: string; required?: boolean }[];
+  queryParams?: { name: string; example?: string; required?: boolean }[];
+  formFields?: unknown[];
+}
+
+export type ReadinessKey = 'valid' | 'purpose' | 'inputs' | 'responses' | 'businessRules' | 'schema';
+
+export interface ReadinessField {
+  key: ReadinessKey;
+  label: string;
+  ok: boolean;
+  /** 'error' ⇒ required and blocks the gate; 'info' ⇒ nice-to-have. */
+  level: ValidationLevel;
+  /** Short preview of the captured value when present. */
+  value?: string;
+  /** Why it failed, when it did. */
+  message?: string;
+}
+
+export interface EndpointReadiness {
+  endpointId: string;
+  title: string;
+  method: string;
+  url: string;
+  category: ApiCategory;
+  source?: { method: string; name: string };
+  fields: ReadinessField[];
+  ready: boolean;
+  errorCount: number;
+}
+
+export interface ReadinessReviewReport {
+  total: number;
+  ready: number;
+  notReady: number;
+  allReady: boolean;
+  items: EndpointReadiness[];
+}
+
+/** What the platform tests for each API category — shown per endpoint so the
+ *  reviewer sees what "automate this" will mean for a REST vs a SOAP service. */
+export const CATEGORY_CHECKLIST: Record<ApiCategory, { label: string; color: string; tests: string[] }> = {
+  rest:    { label: 'REST',     color: '#2563EB', tests: ['Status codes & headers', 'Response schema / contract', 'CRUD happy paths', 'Auth & authorization', 'Negative & boundary inputs', 'Pagination & idempotency'] },
+  soap:    { label: 'SOAP',     color: '#7C3AED', tests: ['WSDL operations reachable', 'SOAP envelope + SOAPAction header', 'Request/response XSD schema', 'SOAP Fault handling', 'WS-Security / auth headers'] },
+  graphql: { label: 'GraphQL',  color: '#DB2777', tests: ['Query & mutation shape', 'Schema introspection', 'errors[] envelope', 'Auth on resolvers', 'Null / partial-data handling'] },
+  jsonrpc: { label: 'JSON-RPC', color: '#0891B2', tests: ['method & params', 'result / error object', 'Batch requests', 'Auth'] },
+  webhook: { label: 'Webhook',  color: '#D97706', tests: ['Payload schema', 'Signature verification', 'Retry / idempotency', 'Ack status code'] },
+  mcp:     { label: 'MCP',      color: '#059669', tests: ['Tool listing', 'Tool-call schema', 'Error handling', 'Auth'] },
+};
+
+const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH']);
+
+function categoryOf(ep: ReviewableEndpoint): ApiCategory {
+  const s = String(ep.style || '').toLowerCase();
+  if (s === 'soap' || s === 'graphql' || s === 'jsonrpc' || s === 'webhook' || s === 'mcp') return s as ApiCategory;
+  const url = String(ep.url || '').toLowerCase();
+  const body = String(ep.body || '').toLowerCase();
+  if (url.includes('?wsdl') || url.endsWith('.wsdl') || body.includes('<soap:envelope') || body.includes('<soapenv:envelope')) return 'soap';
+  return 'rest';
+}
+
+function parsesAsJson(text: string): boolean {
+  try { JSON.parse(text); return true; } catch { return false; }
+}
+
+function previewText(text: string, n = 80): string {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  return t.length > n ? `${t.slice(0, n)}…` : t;
+}
+
+/** Grade one endpoint across the six readiness fields. */
+export function reviewEndpoint(ep: ReviewableEndpoint): EndpointReadiness {
+  const category = categoryOf(ep);
+  const method = String(ep.method || '').toUpperCase();
+  const url = String(ep.url || '').trim();
+  const title = String(ep.title || `${method} ${url}`.trim());
+  const fields: ReadinessField[] = [];
+
+  // 1 ▸ Valid, categorised API call.
+  let validOk = true; let validMsg = '';
+  const verbMatters = category !== 'graphql' && category !== 'jsonrpc' && category !== 'mcp';
+  if (verbMatters && !HTTP_METHODS.has(method)) { validOk = false; validMsg = `"${method || '(none)'}" is not a valid HTTP method.`; }
+  else if (!url) { validOk = false; validMsg = 'Endpoint has no URL.'; }
+  else if (!isAbsolute(url)) { validOk = false; validMsg = 'URL is not absolute (needs http/https).'; }
+  fields.push({ key: 'valid', label: 'Valid API call', ok: validOk, level: 'error', value: validOk ? `${method} ${url}` : undefined, message: validMsg || undefined });
+
+  // 2 ▸ Purpose — a meaningful description, not just the URL echoed back.
+  const desc = String(ep.description || '').trim();
+  const meaningful = desc.length >= 12 && desc.toLowerCase() !== title.toLowerCase() && desc.toLowerCase() !== url.toLowerCase();
+  fields.push({ key: 'purpose', label: 'Purpose', ok: meaningful, level: 'error', value: meaningful ? previewText(desc) : undefined,
+    message: meaningful ? undefined : (desc ? 'Description is too short to be meaningful.' : 'No purpose / description captured.') });
+
+  // 3 ▸ Inputs documented.
+  const inputBits: string[] = [];
+  if (ep.pathParams?.length) inputBits.push(`${ep.pathParams.length} path param${ep.pathParams.length === 1 ? '' : 's'}`);
+  if (ep.queryParams?.length) inputBits.push(`${ep.queryParams.length} query param${ep.queryParams.length === 1 ? '' : 's'}`);
+  const hasBody = !!(ep.body && String(ep.body).trim()) || !!(ep.formFields && ep.formFields.length);
+  if (hasBody) inputBits.push('request body');
+  const needsBody = WRITE_METHODS.has(method) || category === 'soap';
+  let inputsOk = true; let inputsMsg = '';
+  if (needsBody && !hasBody) { inputsOk = false; inputsMsg = category === 'soap' ? 'SOAP call needs a request envelope/body.' : `${method} needs a documented request body.`; }
+  fields.push({ key: 'inputs', label: 'Inputs', ok: inputsOk, level: 'error',
+    value: inputsOk ? (inputBits.length ? inputBits.join(', ') : 'no inputs required') : undefined, message: inputsOk ? undefined : inputsMsg });
+
+  // 4 ▸ Expected responses — a status code and an example body.
+  const hasStatus = typeof ep.expectedStatus === 'number' && ep.expectedStatus > 0;
+  const expResp = String(ep.expectedResponse || '').trim();
+  const respOk = hasStatus && !!expResp;
+  fields.push({ key: 'responses', label: 'Expected response', ok: respOk, level: 'error',
+    value: respOk ? `${ep.expectedStatus} · ${previewText(expResp, 44)}` : undefined,
+    message: respOk ? undefined : (!hasStatus && !expResp ? 'No expected status code or body.' : (!hasStatus ? 'No expected status code.' : 'No expected response body.')) });
+
+  // 5 ▸ Business rules / acceptance criteria.
+  const rules = String(ep.businessRules || '').trim();
+  const rulesOk = rules.length >= 8;
+  fields.push({ key: 'businessRules', label: 'Business rules', ok: rulesOk, level: 'error',
+    value: rulesOk ? previewText(rules) : undefined, message: rulesOk ? undefined : 'No business rules / acceptance criteria captured.' });
+
+  // 6 ▸ Schema validity — the example body must parse (JSON, or XML for SOAP).
+  let schemaOk = true; let schemaMsg = ''; let schemaVal = '';
+  if (expResp) {
+    if (category === 'soap') { schemaOk = expResp.includes('<'); schemaVal = schemaOk ? 'XML' : ''; schemaMsg = schemaOk ? '' : 'Expected SOAP response is not XML.'; }
+    else { schemaOk = parsesAsJson(expResp); schemaVal = schemaOk ? 'valid JSON' : ''; schemaMsg = schemaOk ? '' : 'Expected response is not valid JSON.'; }
+  }
+  if (schemaOk && ep.body && String(ep.bodyMode || '') === 'json' && !parsesAsJson(String(ep.body))) {
+    schemaOk = false; schemaMsg = 'Request body is declared JSON but does not parse.';
+  }
+  fields.push({ key: 'schema', label: 'Schema', ok: schemaOk, level: schemaOk ? 'info' : 'error',
+    value: schemaOk ? (schemaVal || 'ok') : undefined, message: schemaMsg || undefined });
+
+  const errorCount = fields.filter((f) => !f.ok && f.level === 'error').length;
+  return { endpointId: ep.id || '', title, method, url, category, source: ep.source, fields, ready: errorCount === 0, errorCount };
+}
+
+/** Grade a whole selection; `allReady` gates the planning start. */
+export function buildReadinessReview(endpoints: ReviewableEndpoint[]): ReadinessReviewReport {
+  const items = endpoints.map(reviewEndpoint);
+  const ready = items.filter((i) => i.ready).length;
+  return { total: items.length, ready, notReady: items.length - ready, allReady: items.length > 0 && ready === items.length, items };
+}

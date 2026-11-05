@@ -1271,7 +1271,7 @@ export interface FlowExtract { name: string; from: 'body' | 'header' | 'status';
 export type CompareMode = 'strict' | 'strict-order' | 'lenient' | 'non-extensible';
 export interface FlowCheck { kind: 'status' | 'jsonPathExists' | 'jsonPathEquals' | 'bodyContains' | 'responseTimeUnderMs' | 'header' | 'bodyMatches' | 'xpath' | 'expr' | 'schema' | 'graphql' | 'noSecrets' | 'noError'; equals?: number | string; oneOf?: number[]; path?: string; value?: unknown; text?: string; ms?: number; name?: string; op?: 'equals' | 'contains' | 'exists'; compareMode?: CompareMode; ignore?: string[]; expr?: string; schema?: string }
 export interface ApiOAuth2Config { grant?: string; tokenUrl?: string; clientId?: string; clientSecret?: string; scope?: string; audience?: string; username?: string; password?: string; refreshToken?: string; clientAuthBasic?: boolean }
-export interface ApiHttpAuth { type: string; value?: string; headerName?: string; oauth2?: ApiOAuth2Config }
+export interface ApiHttpAuth { type: string; value?: string; headerName?: string; in?: 'header' | 'query'; oauth2?: ApiOAuth2Config; digest?: { username?: string; password?: string; algorithm?: string }; awsSigV4?: { accessKeyId?: string; secretAccessKey?: string; region?: string; service?: string; sessionToken?: string }; oauth1?: { consumerKey?: string; consumerSecret?: string; token?: string; tokenSecret?: string; signatureMethod?: string }; mtls?: { cert?: string; key?: string; ca?: string; passphrase?: string; rejectUnauthorized?: boolean } }
 export interface ApiFormField { key: string; value?: string; type?: 'text' | 'file'; filename?: string; contentType?: string; dataBase64?: string }
 export type FlowStepType = 'request' | 'if' | 'loop' | 'wait' | 'group' | 'retry';
 export type FlowConditionOp = 'eq' | 'ne' | 'exists' | 'notExists' | 'contains' | 'gt' | 'lt';
@@ -1617,7 +1617,7 @@ export async function pullFromGit(): Promise<{ content: string; path: string; br
 
 /* ── G1. Interactive request send (rich bodies + OAuth2) ── */
 export interface SendRequestResult { ok: boolean; status?: number; headers: Record<string, string>; bodyText: string; elapsedMs: number; error?: string }
-export async function sendApiRequest(input: { method: string; url: string; headers?: { key: string; value: string }[]; auth?: ApiHttpAuth; body?: string; bodyMode?: string; formFields?: ApiFormField[]; bodyBase64?: string; bodyContentType?: string }): Promise<SendRequestResult> {
+export async function sendApiRequest(input: { method: string; url: string; headers?: { key: string; value: string }[]; auth?: ApiHttpAuth; body?: string; bodyMode?: string; formFields?: ApiFormField[]; bodyBase64?: string; bodyContentType?: string; environmentId?: string }): Promise<SendRequestResult> {
   const { data } = await api.post('/api-automation/request/send', input, { timeout: 30_000 });
   return data;
 }

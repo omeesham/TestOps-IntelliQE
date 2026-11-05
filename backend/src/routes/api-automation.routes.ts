@@ -95,6 +95,7 @@ import { publishPact, listPacts, deletePact, verifyPact, recordDeployment, canID
 import { runChaosProbe } from '../services/api-chaos.service.js';
 import { fetchOAuthToken, listOAuthConfigs, saveOAuthConfig, deleteOAuthConfig, fetchTokenFromConfig, resolveSecret, resolveHttpAuth } from '../services/api-oauth.service.js';
 import { buildRequestInit, fetchFull } from '../utils/api-http.js';
+import { signAwsSigV4, buildOAuth1Header, buildDigestHeader, parseDigestChallenge } from '../utils/api-auth-advanced.js';
 import { listDataProfiles, saveDataProfile, deleteDataProfile, parseCsv, parseExcel, profileFromDb, fetchGoogleSheet, runProfileOverFlow } from '../services/api-data-profiles.service.js';
 import { orchestrate, getOrchestratorConfig, saveOrchestratorConfig, rotateOrchestratorToken, listOrchestratorEvents } from '../services/api-orchestrator.service.js';
 // ─── Atto coworker lifecycle tools (all additive, opt-in; pipeline untouched) ───
@@ -1607,17 +1608,95 @@ router.delete('/step-groups/:id', async (req: Request, res: Response) => {
   } catch (err) { fail(res, err); }
 });
 
-/* ── Interactive request send (opt-in; rich bodies + OAuth2, resolved here) ── */
+/** Build an undici dispatcher carrying a client certificate for mTLS. Returns
+ *  undefined when no cert/key is supplied. undici ships with Node, so this never
+ *  needs an install. */
+async function makeMtlsDispatcher(cfg: any): Promise<unknown> {
+  if (!cfg || (!cfg.cert && !cfg.key)) return undefined;
+  const undici: any = await import('undici');
+  return new undici.Agent({
+    connect: {
+      cert: cfg.cert || undefined,
+      key: cfg.key || undefined,
+      ca: cfg.ca || undefined,
+      passphrase: cfg.passphrase || undefined,
+      rejectUnauthorized: cfg.rejectUnauthorized !== false,
+    },
+  });
+}
+
+/** HTTP Digest: send once to read the 401 WWW-Authenticate challenge, then retry
+ *  with the computed `Authorization: Digest` header. Returns the final result
+ *  (or the first response unchanged when no digest challenge comes back). */
+async function sendWithDigest(shaped: any, bodyFields: any) {
+  const cfg = shaped.auth?.digest || {};
+  const base = buildRequestInit({ method: shaped.method, url: shaped.url, headers: shaped.headers, auth: undefined, body: shaped.body, ...bodyFields });
+  const first = await fetchFull(base.url, base.init, 20_000, 200_000);
+  const challengeHeader = first.headers['www-authenticate'] || '';
+  if (first.status !== 401 || !/digest/i.test(challengeHeader)) return first;
+  const challenge = parseDigestChallenge(challengeHeader);
+  const u = new URL(base.url);
+  const authHeader = buildDigestHeader({
+    challenge, method: shaped.method || 'GET', uri: u.pathname + u.search,
+    username: cfg.username || '', password: cfg.password || '',
+  });
+  const retryInit = { ...base.init, headers: { ...(base.init.headers as Record<string, string>), Authorization: authHeader } };
+  return fetchFull(base.url, retryInit, 20_000, 200_000);
+}
+
+/* ── Interactive request send (opt-in; rich bodies + OAuth2/Digest/SigV4/OAuth1/mTLS) ── */
 router.post('/request/send', async (req: Request, res: Response) => {
   try {
     const r = req.body || {};
-    if (!/^https?:\/\//i.test(String(r.url || ''))) { res.status(400).json({ error: 'Provide an http(s) URL.' }); return; }
-    const auth = await resolveHttpAuth(r.auth);   // oauth2 → bearer; else unchanged
+    if (!r.url) { res.status(400).json({ error: 'Provide an http(s) URL.' }); return; }
+    // Resolve the active environment's {{vars}} SERVER-SIDE (the browser never
+    // holds secret values): base URL, headers, body and the auth credential —
+    // including a conventional env var (token/apiKey/basicAuth) when the auth
+    // value is left blank. `preserveRealHosts` keeps a typed absolute URL as-is
+    // and only re-homes a {{baseUrl}}/placeholder host. This runs BEFORE the
+    // absolute-URL check so a `{{baseUrl}}/path` URL is allowed and resolved.
+    let shaped: any = { method: r.method, url: r.url, headers: r.headers, auth: r.auth, body: r.body };
+    if (r.environmentId) {
+      const env = await getEnvironment(req.user!.tenantId, String(r.environmentId), { reveal: true });
+      if (env) {
+        const applied = applyEnvironment({ url: r.url, headers: r.headers || [], body: r.body, auth: r.auth }, env, { preserveRealHosts: true });
+        shaped = { ...shaped, url: applied.url, headers: applied.headers, body: applied.body, auth: applied.auth };
+      }
+    }
+    if (!/^https?:\/\//i.test(String(shaped.url || ''))) {
+      res.status(400).json({ error: r.environmentId ? 'The URL did not resolve to an absolute http(s) URL after applying the environment — check the {{variables}} and base URL.' : 'Provide an http(s) URL.' });
+      return;
+    }
+    const bodyFields = { bodyMode: r.bodyMode, formFields: r.formFields, bodyBase64: r.bodyBase64, bodyContentType: r.bodyContentType };
+    const authType = String(shaped.auth?.type || 'none').toLowerCase();
+
+    // ── HTTP Digest — needs the 401 challenge round-trip, so it's handled apart. ──
+    if (authType === 'digest') {
+      res.json(await sendWithDigest(shaped, bodyFields));
+      return;
+    }
+
+    const auth = await resolveHttpAuth(shaped.auth);   // oauth2 → bearer; else unchanged
     const { url, init } = buildRequestInit({
-      method: r.method, url: r.url, headers: r.headers, auth, body: r.body,
-      bodyMode: r.bodyMode, formFields: r.formFields, bodyBase64: r.bodyBase64, bodyContentType: r.bodyContentType,
+      method: shaped.method, url: shaped.url, headers: shaped.headers, auth, body: shaped.body, ...bodyFields,
     });
-    const result = await fetchFull(url, init, 20_000, 200_000);
+    const hdrs = init.headers as Record<string, string>;
+    let dispatcher: unknown;
+
+    // ── Advanced schemes computed over the FINAL url/headers/body, then merged. ──
+    if (authType === 'oauth1') {
+      // Per RFC 5849, form-urlencoded body params join the signature base string.
+      const extraParams = (r.bodyMode === 'urlencoded' && Array.isArray(r.formFields))
+        ? Object.fromEntries(r.formFields.filter((f: any) => f?.key).map((f: any) => [String(f.key), String(f.value ?? '')]))
+        : undefined;
+      hdrs['Authorization'] = buildOAuth1Header(shaped.method || 'GET', url, shaped.auth?.oauth1 || {}, extraParams ? { extraParams } : undefined);
+    } else if (authType === 'awssigv4') {
+      Object.assign(hdrs, signAwsSigV4({ method: shaped.method || 'GET', url, body: typeof init.body === 'string' ? init.body : '', cfg: shaped.auth?.awsSigV4 || {} }));
+    } else if (authType === 'mtls') {
+      dispatcher = await makeMtlsDispatcher(shaped.auth?.mtls);
+    }
+
+    const result = await fetchFull(url, init, 20_000, 200_000, dispatcher);
     res.json(result);
   } catch (err) { fail(res, err); }
 });

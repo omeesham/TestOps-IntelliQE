@@ -16,7 +16,20 @@ export interface OAuth2AuthConfig {
   scope?: string; audience?: string; username?: string; password?: string;
   refreshToken?: string; clientAuthBasic?: boolean;
 }
-export interface HttpAuth { type: string; value?: string; headerName?: string; oauth2?: OAuth2AuthConfig }
+/** Advanced-scheme configs — resolved/signed at the CALL SITE (never here). */
+export interface DigestAuthConfig { username?: string; password?: string; algorithm?: string }
+export interface AwsSigV4AuthConfig { accessKeyId?: string; secretAccessKey?: string; region?: string; service?: string; sessionToken?: string }
+export interface OAuth1AuthConfig { consumerKey?: string; consumerSecret?: string; token?: string; tokenSecret?: string; signatureMethod?: string }
+export interface MtlsAuthConfig { cert?: string; key?: string; ca?: string; passphrase?: string; rejectUnauthorized?: boolean }
+
+export interface HttpAuth {
+  type: string; value?: string; headerName?: string; in?: 'header' | 'query';
+  oauth2?: OAuth2AuthConfig;
+  digest?: DigestAuthConfig;
+  awsSigV4?: AwsSigV4AuthConfig;
+  oauth1?: OAuth1AuthConfig;
+  mtls?: MtlsAuthConfig;
+}
 
 /** A form-data / urlencoded field. `type:'file'` fields carry base64 content. */
 export interface HttpFormField { key: string; value?: string; type?: 'text' | 'file'; filename?: string; contentType?: string; dataBase64?: string }
@@ -56,9 +69,21 @@ export function buildHeaders(ep: HttpEndpoint, opts: { omitAuth?: boolean } = {}
     // oauth2 carries a pre-resolved access token → treat exactly like bearer.
     if (a.type === 'bearer' || a.type === 'oauth2') headers['Authorization'] = `Bearer ${a.value}`;
     else if (a.type === 'basic') headers['Authorization'] = `Basic ${Buffer.from(a.value).toString('base64')}`;
-    else if (a.type === 'apikey') headers[a.headerName || 'X-API-Key'] = a.value;
+    // API key in a header (the default); the `query` placement is folded into the URL in buildRequestInit.
+    else if (a.type === 'apikey' && a.in !== 'query') headers[a.headerName || 'X-API-Key'] = a.value;
   }
   return headers;
+}
+
+/** Fold an `apikey` auth placed in the query string onto the URL. No-op otherwise. */
+export function applyQueryAuth(url: string, auth: HttpAuth | undefined, omitAuth = false): string {
+  if (omitAuth || !auth || auth.type !== 'apikey' || auth.in !== 'query' || !auth.value) return url;
+  try {
+    const u = new URL(url);
+    u.searchParams.set(auth.headerName || 'api_key', auth.value);
+    // `new URL` percent-encodes `{{ }}` — restore any runtime placeholders left in the URL.
+    return u.toString().replace(/%7B/gi, '{').replace(/%7D/gi, '}');
+  } catch { return url; }
 }
 
 export function buildRequestInit(
@@ -101,7 +126,7 @@ export function buildRequestInit(
     }
   }
 
-  return { url: ep.url, init: { method, headers, body } };
+  return { url: applyQueryAuth(ep.url, ep.auth, opts.omitAuth), init: { method, headers, body } };
 }
 
 export interface TimedResult { ok: boolean; status?: number; elapsedMs: number; error?: string }
@@ -119,10 +144,12 @@ export async function timedFetch(url: string, init: RequestInit, timeoutMs = 15_
 
 export interface FullResult { ok: boolean; status?: number; headers: Record<string, string>; bodyText: string; elapsedMs: number; error?: string }
 /** Issue a request and return status, headers and a truncated body. */
-export async function fetchFull(url: string, init: RequestInit, timeoutMs = 15_000, bodyLimit = 8000): Promise<FullResult> {
+export async function fetchFull(url: string, init: RequestInit, timeoutMs = 15_000, bodyLimit = 8000, dispatcher?: unknown): Promise<FullResult> {
   const started = Date.now();
   try {
-    const res = await fetch(url, { ...init, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
+    // `dispatcher` is an undici Agent (mTLS client cert); it's a non-standard
+    // fetch option undici honours, so it is cast through `any`.
+    const res = await fetch(url, { ...init, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs), ...(dispatcher ? { dispatcher } : {}) } as any);
     const headers: Record<string, string> = {};
     res.headers.forEach((v, k) => { headers[k] = v; });
     let bodyText = '';

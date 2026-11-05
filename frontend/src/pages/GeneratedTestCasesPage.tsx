@@ -328,7 +328,7 @@ export default function GeneratedTestCasesPage() {
      ══════════════════════════════════════════ */
   if (selectedRun) {
     return (
-      <div className="-m-6 p-4 space-y-3">
+      <div className="space-y-3">
         <ConfirmModal />
 
         {/* Back + Header */}
@@ -703,7 +703,7 @@ export default function GeneratedTestCasesPage() {
      LIST VIEW — All test runs
      ══════════════════════════════════════════ */
   return (
-    <div className="-m-6 p-4 space-y-3">
+    <div className="space-y-3">
       <ConfirmModal />
 
       <PageHero

@@ -66,7 +66,7 @@ export function toCatalogEndpoint(e: any, method?: ImportMethod): CatalogEndpoin
     method: String(e.method || 'GET').toUpperCase(),
     url: String(e.url || ''),
     headers: Array.isArray(e.headers) ? e.headers.filter((h: any) => h && h.key).map((h: any) => ({ key: String(h.key), value: String(h.value ?? '') })) : [],
-    auth: { type: (['none', 'bearer', 'basic', 'apikey', 'oauth2'].includes(e.auth?.type) ? e.auth.type : 'none'), value: e.auth?.value || undefined, headerName: e.auth?.headerName || undefined, oauth2: e.auth?.oauth2 || undefined },
+    auth: { type: (['none', 'bearer', 'basic', 'apikey', 'oauth2', 'digest', 'awssigv4', 'oauth1', 'mtls'].includes(e.auth?.type) ? e.auth.type : 'none'), value: e.auth?.value || undefined, headerName: e.auth?.headerName || undefined, in: e.auth?.in === 'query' ? 'query' : (e.auth?.in === 'header' ? 'header' : undefined), oauth2: e.auth?.oauth2 || undefined, digest: e.auth?.digest || undefined, awsSigV4: e.auth?.awsSigV4 || undefined, oauth1: e.auth?.oauth1 || undefined, mtls: e.auth?.mtls || undefined },
     body: e.body || undefined,
     // Rich request body (omitted ⇒ raw/json, unchanged).
     bodyMode: e.bodyMode || undefined,
@@ -76,6 +76,7 @@ export function toCatalogEndpoint(e: any, method?: ImportMethod): CatalogEndpoin
     expectedStatus: typeof e.expectedStatus === 'number' ? e.expectedStatus : undefined,
     expectedResponse: e.expectedResponse || undefined,
     description: e.description || undefined,
+    businessRules: e.businessRules || undefined,
     operationId: e.operationId || undefined,
     tags: Array.isArray(e.tags) ? e.tags : undefined,
     resource: e.resource || undefined,
@@ -156,7 +157,7 @@ export function useCatalog() {
     if (meta.profile && (meta.replace || base.length === 0)) setProfile(meta.profile);
     else void analyze(next);
     setImports((prev) => [{ id: newEndpointId(), at: Date.now(), method: meta.method, name: meta.name, format: meta.format, parser: meta.parser, count: fresh.length, warnings: meta.warnings || [], notice: meta.notice }, ...prev].slice(0, 30));
-    return { added: addedIds.length, total: fresh.length, duplicates: fresh.length - addedIds.length };
+    return { added: addedIds.length, total: fresh.length, duplicates: fresh.length - addedIds.length, addedIds };
   }, [analyze]);
 
   const removeEndpoints = useCallback((ids: string[]) => {
@@ -180,6 +181,22 @@ export function useCatalog() {
     setEndpoints([]);
     setSelected(new Set());
     setProfile(null);
+  }, []);
+
+  /** Wipe the ENTIRE cached workspace — endpoints, selection, the derived
+   *  profile, the strategy and the import log — and drop the persisted copy in
+   *  sessionStorage. Used after an end-to-end run completes so nothing stale
+   *  carries into the next API. (The persist effect re-writes an empty record;
+   *  that is the cleared state, not a leftover.) */
+  const clearCache = useCallback(() => {
+    endpointsRef.current = [];
+    setEndpoints([]);
+    setSelected(new Set());
+    setProfile(null);
+    setStrategyState(DEFAULT_STRATEGY);
+    setImports([]);
+    setAnalysisError('');
+    try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
   }, []);
 
   const toggle = useCallback((id: string) => setSelected((prev) => {
@@ -212,7 +229,7 @@ export function useCatalog() {
   return {
     endpoints, selected, selectedEndpoints, profile, strategy, imports,
     analyzing, analysisError,
-    addEndpoints, removeEndpoints, updateEndpoint, clearCatalog,
+    addEndpoints, removeEndpoints, updateEndpoint, clearCatalog, clearCache,
     toggle, selectMany, selectAll, clearSelection,
     analyze: (deep = false) => analyze(endpoints, deep),
     setStrategy, toggleLayer, adoptRecommendation,

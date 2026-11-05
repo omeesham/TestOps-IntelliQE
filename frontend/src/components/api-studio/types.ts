@@ -14,8 +14,12 @@
    Catalogue — the endpoints the workspace knows about
    ═══════════════════════════════════════════════════════════════ */
 
-export type AuthType = 'none' | 'bearer' | 'basic' | 'apikey' | 'oauth2';
+export type AuthType = 'none' | 'bearer' | 'basic' | 'apikey' | 'oauth2' | 'digest' | 'awssigv4' | 'oauth1' | 'mtls';
 export interface OAuth2Config { grant?: string; tokenUrl?: string; clientId?: string; clientSecret?: string; scope?: string; audience?: string; username?: string; password?: string; refreshToken?: string; clientAuthBasic?: boolean }
+export interface DigestConfig { username?: string; password?: string; algorithm?: string }
+export interface AwsSigV4Config { accessKeyId?: string; secretAccessKey?: string; region?: string; service?: string; sessionToken?: string }
+export interface OAuth1Config { consumerKey?: string; consumerSecret?: string; token?: string; tokenSecret?: string; signatureMethod?: string }
+export interface MtlsConfig { cert?: string; key?: string; ca?: string; passphrase?: string; rejectUnauthorized?: boolean }
 export interface EndpointFormField { key: string; value?: string; type?: 'text' | 'file'; filename?: string; contentType?: string; dataBase64?: string }
 export type ApiStyle = 'rest' | 'graphql' | 'soap' | 'jsonrpc' | 'webhook' | 'mcp';
 
@@ -39,7 +43,7 @@ export interface CatalogEndpoint {
   method: string;
   url: string;
   headers: HeaderPair[];
-  auth: { type: AuthType; value?: string; headerName?: string; oauth2?: OAuth2Config };
+  auth: { type: AuthType; value?: string; headerName?: string; in?: 'header' | 'query'; oauth2?: OAuth2Config; digest?: DigestConfig; awsSigV4?: AwsSigV4Config; oauth1?: OAuth1Config; mtls?: MtlsConfig };
   body?: string;
   /** Rich body (omitted ⇒ raw/json — unchanged). */
   bodyMode?: 'raw' | 'json' | 'form-data' | 'urlencoded' | 'binary';
@@ -49,6 +53,9 @@ export interface CatalogEndpoint {
   expectedStatus?: number;
   expectedResponse?: string;
   description?: string;
+  /** Business rules / acceptance criteria the endpoint must satisfy — captured
+   *  for the readiness review and used to ground generated scenarios. */
+  businessRules?: string;
   operationId?: string;
   tags?: string[];
   resource?: string;
