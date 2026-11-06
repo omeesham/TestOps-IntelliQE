@@ -14,10 +14,10 @@
  * shown by type/scope only, never with its value.
  */
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { UploadCloud, FileJson, X, FolderTree, ChevronRight, KeyRound, CheckCircle2, AlertTriangle, XCircle, ArrowRight, Layers } from 'lucide-react';
+import { UploadCloud, FileJson, X, FolderTree, ChevronRight, KeyRound, CheckCircle2, AlertTriangle, XCircle, ArrowRight, Layers, Workflow } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import { useToast } from '@/components/feedback/ToastProvider';
-import { importPostmanPlan, type PostmanPlanResponse, type PostmanFolderNode, type MergedVariable } from '@/services/api';
+import { importPostmanPlan, importPostmanSteps, type PostmanPlanResponse, type PostmanFolderNode, type MergedVariable, type ApiFlowSeed } from '@/services/api';
 import { CARD, PRIMARY_BTN, SECONDARY_BTN, INPUT, LABEL, THEAD } from './format';
 import { useApiEnvironments } from './hooks/useApiEnvironments';
 import type { ApiEnvironment } from './types';
@@ -50,7 +50,7 @@ function FolderBranch({ node, depth }: { node: PostmanFolderNode; depth: number 
 }
 
 export default function PostmanImportWizard({
-  environment, onImported, onEnvironmentsChanged, onClose,
+  environment, onImported, onEnvironmentsChanged, onImportAsFlow, onClose,
 }: {
   /** Active environment — seeds the default mapping target. */
   environment?: ApiEnvironment | null;
@@ -58,6 +58,9 @@ export default function PostmanImportWizard({
   onImported: (name: string, res: PostmanPlanResponse) => void;
   /** Tell the app to refresh its environment list after a mapping write. */
   onEnvironmentsChanged?: () => void;
+  /** Hand the collection to the Flow Builder as a runnable flow (steps keep the
+   *  scripts' assertions + variable chaining). When omitted, the action is hidden. */
+  onImportAsFlow?: (seed: ApiFlowSeed) => void;
   onClose: () => void;
 }) {
   const toast = useToast();
@@ -68,6 +71,7 @@ export default function PostmanImportWizard({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [committing, setCommitting] = useState(false);
+  const [flowLoading, setFlowLoading] = useState(false);
 
   const [target, setTarget] = useState<Target>('__none__');
   const [strategy, setStrategy] = useState<Strategy>('skip');
@@ -123,6 +127,23 @@ export default function PostmanImportWizard({
       setError(err?.response?.data?.error || err?.message || 'Could not complete the import.');
     } finally { setCommitting(false); }
   }, [plan, collectionFile, envFile, mapVars, target, strategy, newEnvName, envStore, toast, onImported, onEnvironmentsChanged, onClose]);
+
+  // Hand the same collection to the Flow Builder as a runnable flow. Uses the flow
+  // importer (/flows/import-postman), so each step keeps the assertions + variable
+  // chaining parsed from the collection's test / pre-request scripts.
+  const importAsFlow = useCallback(async () => {
+    if (!plan || !collectionFile || !onImportAsFlow) return;
+    setFlowLoading(true); setError('');
+    try {
+      const text = await collectionFile.text();
+      const { steps, variables, warnings } = await importPostmanSteps(text);
+      if (!steps.length) { setError('That collection has no requests to build a flow from.'); return; }
+      onImportAsFlow({ name: plan.collection.name, steps, variables, warnings });
+      onClose();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || err?.message || 'Could not build a flow from that collection.');
+    } finally { setFlowLoading(false); }
+  }, [plan, collectionFile, onImportAsFlow, onClose]);
 
   const summary = plan?.summary;
   const problems = useMemo(() => (plan?.items || []).filter((i) => i.outcome !== 'imported'), [plan]);
@@ -281,6 +302,17 @@ export default function PostmanImportWizard({
             : mapVars ? 'Map variables' : 'Confirm import'}
           <ArrowRight className="w-3.5 h-3.5" />
         </button>
+        {onImportAsFlow && (
+          <button
+            type="button"
+            disabled={flowLoading || committing || !plan.collection.requestCount}
+            onClick={() => void importAsFlow()}
+            className={SECONDARY_BTN}
+            title="Open these requests as a runnable flow in the Flow Builder — assertions and variable captures from the collection's scripts come across as checks and extracts."
+          >
+            {flowLoading ? <Spinner /> : <Workflow className="w-3.5 h-3.5" />}Import as runnable flow
+          </button>
+        )}
         <button type="button" onClick={() => { setPlan(null); setError(''); }} className={SECONDARY_BTN}>Back</button>
       </div>
     </div>

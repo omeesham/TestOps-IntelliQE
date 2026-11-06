@@ -14,7 +14,7 @@ import {
   importApiConnector, importApiWebhook, importApiSource, importApiJira, importApiAzure, type ApiImportResponse,
   connectJira, getJiraStatus, getJiraStories, connectAzureDevops, getAzureDevopsStatus, getAzureDevopsStories,
   getAzureDevopsAttachments, getJiraAttachments, getImportAttachmentCounts, type AttachmentCount,
-  type PostmanPlanResponse,
+  type PostmanPlanResponse, type ApiFlowSeed,
 } from '@/services/api';
 
 /** Provider-agnostic attachment shape — ADO adds `linked`/`workItemId`; Jira doesn't. */
@@ -40,6 +40,8 @@ interface Props {
   onEnvironmentsChanged?: () => void;
   /** Opens the Story generator — offered after a requirement-driven import (Jira/Azure/BRD/FRD). */
   onOpenStory?: () => void;
+  /** Hands a parsed Postman collection to the Flow Builder as a runnable flow. */
+  onImportFlow?: (seed: ApiFlowSeed) => void;
   /** Opens the strict readiness review. With ids, reviews exactly those endpoints
    *  (the ones just imported); without, reviews the current selection. */
   onReview?: (ids?: string[]) => void;
@@ -56,7 +58,7 @@ const FORMAT_COLOR: Record<string, string> = {
   'WSDL / XML': '#6366F1', PDF: '#EF4444', Word: '#2563EB', Excel: '#16A34A', Markdown: '#64748B', 'Source code': '#8B5CF6',
 };
 
-export default function ImportView({ catalog, onOpenCatalogue, log, environment, onEnvironmentsChanged, onOpenStory, onReview }: Props) {
+export default function ImportView({ catalog, onOpenCatalogue, log, environment, onEnvironmentsChanged, onOpenStory, onImportFlow, onReview }: Props) {
   const toast = useToast();
   const [active, setActive] = useState<ImportMethodDef | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -230,6 +232,7 @@ export default function ImportView({ catalog, onOpenCatalogue, log, environment,
               environment={environment}
               onImported={(name, res: PostmanPlanResponse) => finish('postman', name, res)}
               onEnvironmentsChanged={onEnvironmentsChanged}
+              onImportAsFlow={onImportFlow}
               onClose={() => setActive(null)}
             />
           </div>

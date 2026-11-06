@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/components/feedback/ToastProvider';
 import { useAuth } from '@/contexts/AuthContext';
-import { getApiToolToggles, updateApiToolToggles, importApiFiles } from '@/services/api';
+import { getApiToolToggles, updateApiToolToggles, importApiFiles, type ApiFlowSeed } from '@/services/api';
 import { CARD, FIELD } from './format';
 import { EmptyState } from './primitives';
 
@@ -135,6 +135,10 @@ interface Props {
   onNavigate?: (view: NavView) => void;
   /** The environment a run would target — tools that gate on it need to know. */
   environment?: ApiEnvironment | null;
+  /** A flow handed in from another view (e.g. the Postman import wizard) — opens
+      the Flow Builder seeded with these steps. Cleared via `onConsumeFlow`. */
+  initialFlow?: ApiFlowSeed | null;
+  onConsumeFlow?: () => void;
 }
 
 interface ToolDef { icon: ElementType; label: string; desc: string; open: () => void }
@@ -207,7 +211,7 @@ const DIFFERENTIATORS = new Set<string>([
   'Unified cross-layer test', 'API + UI hybrid test', 'Monitoring', 'Public status page',
 ]);
 
-export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearch = '', onNavigate, environment }: Props) {
+export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearch = '', onNavigate, environment, initialFlow, onConsumeFlow }: Props) {
   const { endpoints, selected } = catalog;
   const toast = useToast();
   const { user } = useAuth();
@@ -488,6 +492,12 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
   const allOn = disabledTools.size === 0;
   const isOn = (key: string) => !disabledTools.has(key);
 
+  // A flow was handed in (e.g. from the Postman import wizard) — open the builder
+  // on it. FlowBuilder seeds itself from `initialFlow`; closing clears the seed.
+  useEffect(() => {
+    if (initialFlow && initialFlow.steps?.length) setFlowOpen(true);
+  }, [initialFlow]);
+
   useEffect(() => {
     let alive = true;
     getApiToolToggles()
@@ -679,7 +689,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
       {gapsOpen && <CoverageGaps catalog={catalog} onClose={() => setGapsOpen(false)} />}
       {semanticOpen && <SemanticAssert endpoints={ep} onClose={() => setSemanticOpen(false)} />}
       {callbackOpen && <CallbackVerify onClose={() => setCallbackOpen(false)} />}
-      {flowOpen && <FlowBuilder catalog={catalog} onClose={() => setFlowOpen(false)} />}
+      {flowOpen && <FlowBuilder catalog={catalog} initialFlow={initialFlow} onClose={() => { setFlowOpen(false); onConsumeFlow?.(); }} />}
       {chatTestOpen && <ChatToTest endpoints={ep} onClose={() => setChatTestOpen(false)} />}
       {maintenanceOpen && <AutoMaintenance catalog={catalog} onClose={() => setMaintenanceOpen(false)} />}
       {synthOpen && <SyntheticData endpoints={ep} onClose={() => setSynthOpen(false)} />}

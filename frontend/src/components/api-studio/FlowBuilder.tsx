@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Workflow, X, Play, Plus, Trash2, ChevronUp, ChevronDown, ChevronRight, Save, AlertTriangle, CheckCircle2, XCircle, Check, Copy, Download, Upload, ShieldCheck, Info, FileText } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import { useToast } from '@/components/feedback/ToastProvider';
-import { listApiFlows, saveApiFlow, deleteApiFlow, runApiFlow, importCurlSteps, importHarSteps, importPostmanSteps, exportFlowJUnit, exportFlowReport, exportFlowPostman, lintApiFlow, type SavedApiFlow, type FlowStep, type FlowCheck, type FlowRunResult, type FlowLintReport, type StepPhase } from '@/services/api';
+import { listApiFlows, saveApiFlow, deleteApiFlow, runApiFlow, importCurlSteps, importHarSteps, importPostmanSteps, exportFlowJUnit, exportFlowReport, exportFlowPostman, lintApiFlow, type SavedApiFlow, type FlowStep, type FlowCheck, type FlowRunResult, type FlowLintReport, type StepPhase, type ApiFlowSeed } from '@/services/api';
 import { MethodBadge } from './primitives';
 import { CARD, STRIP, INPUT, FIELD, LABEL, PRIMARY_BTN, SECONDARY_BTN, formatDuration } from './format';
 import type { CatalogEndpoint } from './types';
@@ -183,7 +183,7 @@ function StepResult({ s }: { s: FlowRunResult['steps'][number] }) {
   );
 }
 
-export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; onClose: () => void }) {
+export default function FlowBuilder({ catalog, onClose, initialFlow }: { catalog: Catalog; onClose: () => void; initialFlow?: ApiFlowSeed | null }) {
   const toast = useToast();
   const counter = useRef(0);
   const nextId = (p: string) => `${p}-${Date.now().toString(36)}-${(counter.current++).toString(36)}`;
@@ -263,6 +263,22 @@ export default function FlowBuilder({ catalog, onClose }: { catalog: Catalog; on
     open: false,
     };
   };
+
+  /* ── Seed a brand-new flow handed in from another view (e.g. the Postman
+        import wizard). Runs once; the steps already carry their checks/extracts. ── */
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (seededRef.current || !initialFlow || !initialFlow.steps?.length) return;
+    seededRef.current = true;
+    if (initialFlow.name) setName(initialFlow.name.slice(0, 120));
+    setSteps(initialFlow.steps.map(apiStepToEdit));
+    const incoming = Object.entries(initialFlow.variables || {});
+    if (incoming.length) setVars(incoming.map(([k, v]) => ({ _k: nextId('v'), key: k, value: String(v) })));
+    const n = initialFlow.steps.length;
+    const detail = [incoming.length ? `${incoming.length} variable${incoming.length === 1 ? '' : 's'}` : '', (initialFlow.warnings?.length) ? `${initialFlow.warnings.length} warning${initialFlow.warnings.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+    toast.success(`Loaded ${n} step${n === 1 ? '' : 's'} from Postman`, detail || 'Checks and variable captures came across from the collection scripts.');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialFlow]);
 
   /* ── Import a cURL command (or several) as step(s) ── */
   const importCurl = async () => {

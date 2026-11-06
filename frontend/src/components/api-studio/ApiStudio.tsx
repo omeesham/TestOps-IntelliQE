@@ -39,6 +39,7 @@ import { PRIMARY_BTN, SECONDARY_BTN } from './format';
 import PageTabs, { type TabItem } from '@/components/ui/PageTabs';
 import Loader from '@/components/feedback/Loader';
 import type { NavView, Phase, CatalogEndpoint } from './types';
+import type { ApiFlowSeed } from '@/services/api';
 
 /** The tabs, left to right, in the order you walk the workflow. */
 const TAB_IDS = new Set<NavView>(['overview', 'endpoints', 'scenarios', 'runs', 'report', 'environments', 'tools']);
@@ -57,6 +58,8 @@ export default function ApiStudio() {
   /** Seed for the Tools gallery search — set when a caller deep-links to a
       capability (e.g. an Overview feature chip), cleared on a plain Tools visit. */
   const [toolsSeed, setToolsSeed] = useState('');
+  /** A flow handed from the import wizard to the Flow Builder (Tools tab). */
+  const [flowSeed, setFlowSeed] = useState<ApiFlowSeed | null>(null);
 
   /* Follow the run: design → scenarios, execute → runs, finished → report. */
   const onPhase = (p: Phase) => {
@@ -256,13 +259,13 @@ export default function ApiStudio() {
           <ReportTab report={run.report} rows={run.rows} scenarios={run.scenarios} onExport={run.handleExport} exporting={run.exporting} canExport={!!run.testRunId} onPushToRepo={run.handlePushToRepo} pushState={run.pushState} canPush={run.specs.length > 0 && run.selected.size > 0} />
         )}
         {view === 'environments' && <EnvironmentsView store={envStore} />}
-        {view === 'tools' && <ApiToolsLauncher key={`tools:${toolsSeed}`} catalog={catalog} scenarios={run.scenarios} initialSearch={toolsSeed} onNavigate={navigate} environment={envStore.activeEnvironment} />}
+        {view === 'tools' && <ApiToolsLauncher key={`tools:${toolsSeed}`} catalog={catalog} scenarios={run.scenarios} initialSearch={toolsSeed} onNavigate={navigate} environment={envStore.activeEnvironment} initialFlow={flowSeed} onConsumeFlow={() => setFlowSeed(null)} />}
       </div>
 
       {/* ── Import API — modal ── */}
       {importOpen && (
         <ImportModal onClose={() => setImportOpen(false)}>
-          <ImportView catalog={catalog} onOpenCatalogue={() => { setImportOpen(false); setView('endpoints'); }} log={run.log} environment={envStore.activeEnvironment} onEnvironmentsChanged={() => { void envStore.reload(); }} onOpenStory={() => { setImportOpen(false); navigate('tools', 'story'); }} onReview={(ids) => { setImportOpen(false); setView('endpoints'); if (ids && ids.length) setReview({ ids }); else openReview(catalog.selectedEndpoints); }} />
+          <ImportView catalog={catalog} onOpenCatalogue={() => { setImportOpen(false); setView('endpoints'); }} log={run.log} environment={envStore.activeEnvironment} onEnvironmentsChanged={() => { void envStore.reload(); }} onOpenStory={() => { setImportOpen(false); navigate('tools', 'story'); }} onImportFlow={(seed) => { setImportOpen(false); setFlowSeed(seed); navigate('tools'); }} onReview={(ids) => { setImportOpen(false); setView('endpoints'); if (ids && ids.length) setReview({ ids }); else openReview(catalog.selectedEndpoints); }} />
         </ImportModal>
       )}
 

@@ -1393,6 +1393,8 @@ export async function exportFlowPostman(input: { name?: string; steps: FlowStep[
 export async function importHarSteps(har: string): Promise<{ steps: FlowStep[]; warnings: string[] }> { const { data } = await api.post('/api-automation/flows/import-har', { har }); return { steps: data.steps || [], warnings: data.warnings || [] }; }
 /** Import a Postman Collection (v2.0/v2.1) as flow steps (inverse of exportFlowPostman); collection variables come back as suggested seed vars. */
 export async function importPostmanSteps(collection: string): Promise<{ steps: FlowStep[]; variables: Record<string, string>; warnings: string[] }> { const { data } = await api.post('/api-automation/flows/import-postman', { collection }); return { steps: data.steps || [], variables: data.variables || {}, warnings: data.warnings || [] }; }
+/** A set of flow steps handed from one view (e.g. the import wizard) to the Flow Builder to seed a new flow. */
+export interface ApiFlowSeed { name?: string; steps: FlowStep[]; variables?: Record<string, string>; warnings?: string[] }
 /** Static pre-flight lint of a flow — undefined {{vars}}, no-assertion steps, dup names. Pure, network-free; `ok` is false when there are errors (a CI gate). */
 export type FlowLintLevel = 'error' | 'warning' | 'info';
 export interface FlowLintIssue { level: FlowLintLevel; step?: string; message: string }
