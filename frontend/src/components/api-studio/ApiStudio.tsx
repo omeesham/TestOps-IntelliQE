@@ -262,7 +262,7 @@ export default function ApiStudio() {
       {/* ── Import API — modal ── */}
       {importOpen && (
         <ImportModal onClose={() => setImportOpen(false)}>
-          <ImportView catalog={catalog} onOpenCatalogue={() => { setImportOpen(false); setView('endpoints'); }} log={run.log} environment={envStore.activeEnvironment} onOpenStory={() => { setImportOpen(false); navigate('tools', 'story'); }} onReview={(ids) => { setImportOpen(false); setView('endpoints'); if (ids && ids.length) setReview({ ids }); else openReview(catalog.selectedEndpoints); }} />
+          <ImportView catalog={catalog} onOpenCatalogue={() => { setImportOpen(false); setView('endpoints'); }} log={run.log} environment={envStore.activeEnvironment} onEnvironmentsChanged={() => { void envStore.reload(); }} onOpenStory={() => { setImportOpen(false); navigate('tools', 'story'); }} onReview={(ids) => { setImportOpen(false); setView('endpoints'); if (ids && ids.length) setReview({ ids }); else openReview(catalog.selectedEndpoints); }} />
         </ImportModal>
       )}
 

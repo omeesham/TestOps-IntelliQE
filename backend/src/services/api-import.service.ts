@@ -71,6 +71,32 @@ export interface ImportedEndpoint extends ParsedApiSpec {
   discovered?: boolean;
 }
 
+/** Per-request outcome of an import, so the UI can show an accurate
+ *  imported / skipped / failed breakdown with an actionable reason per item.
+ *  `code` is a stable, machine-readable reason; `message` is safe for display. */
+export interface ImportItemResult {
+  /** The request's name (or a safe fallback). */
+  name: string;
+  /** Folder path within the collection, e.g. ["Auth", "Login"]. */
+  folderPath: string[];
+  method?: string;
+  /** URL template with `{{vars}}` kept — never a resolved secret. */
+  url?: string;
+  outcome: 'imported' | 'skipped' | 'failed';
+  /** Stable reason code, e.g. POSTMAN_NO_URL, POSTMAN_DUPLICATE. */
+  code: string;
+  /** Human-readable, secret-free explanation. */
+  message: string;
+}
+
+/** Reconciling tally: imported + skipped + failed === total evaluated. */
+export interface ImportSummary {
+  imported: number;
+  skipped: number;
+  failed: number;
+  total: number;
+}
+
 export interface ImportResult {
   endpoints: ImportedEndpoint[];
   parser: ParserId;
@@ -78,6 +104,10 @@ export interface ImportResult {
   format: string;
   warnings: string[];
   notice?: string;
+  /** Per-request outcomes (currently emitted by the Postman parser). */
+  items?: ImportItemResult[];
+  /** Reconciling imported/skipped/failed tally over the items evaluated. */
+  summary?: ImportSummary;
 }
 
 export type SniffedFormat =
@@ -644,8 +674,40 @@ function postmanAuth(auth: any): { type: ParsedApiSpec['auth']['type']; value?: 
   return { type: 'none' };
 }
 
+/**
+ * Detect and validate the Postman collection schema version. Only v2.0 and v2.1
+ * are supported — a confidently-recognised different version (v1, v2.2, …) throws
+ * a clear, actionable error rather than being silently parsed as v2.x. A missing
+ * or unparseable schema is parsed as v2.1 with a warning.
+ */
+export function postmanSchemaInfo(doc: any): { label: string; warning?: string } {
+  const schema = String(doc?.info?.schema || '').trim();
+  const m = schema.match(/\/v(\d+)\.(\d+)\.\d+\/collection/i) || schema.match(/collection\/v(\d+)\.(\d+)/i);
+  if (m) {
+    const major = Number(m[1]);
+    const minor = Number(m[2]);
+    if (major === 2 && (minor === 0 || minor === 1)) return { label: `Postman collection v2.${minor}` };
+    throw new Error(
+      `This is a Postman Collection v${major}.${minor} export — only v2.0 and v2.1 are supported. ` +
+      `Re-export the collection as Collection v2.1 from Postman and try again.`,
+    );
+  }
+  if (schema && /getpostman\.com/i.test(schema)) {
+    return { label: 'Postman collection', warning: 'The collection schema version could not be determined — it was parsed as v2.1.' };
+  }
+  return {
+    label: 'Postman collection v2.1',
+    warning: schema ? undefined : 'The collection declares no schema version — it was parsed as v2.1.',
+  };
+}
+
 export function parsePostmanCollection(doc: any, opts: { variables?: Record<string, string>; sourceName?: string } = {}): ImportResult {
   const warnings: string[] = [];
+  const items: ImportItemResult[] = [];
+  // Schema guard — throws on a confidently-unsupported version.
+  const schemaInfo = postmanSchemaInfo(doc);
+  if (schemaInfo.warning) warnings.push(schemaInfo.warning);
+
   const vars: Record<string, string> = { ...(opts.variables || {}) };
   if (Array.isArray(doc.variable)) {
     for (const v of doc.variable) if (isObj(v) && v.key && vars[String(v.key)] === undefined) vars[String(v.key)] = String(v.value ?? '');
@@ -654,49 +716,80 @@ export function parsePostmanCollection(doc: any, opts: { variables?: Record<stri
   const endpoints: ImportedEndpoint[] = [];
   const source: ImportedEndpoint['source'] = { method: 'postman', name: opts.sourceName || String(doc.info?.name || 'Postman collection') };
   let unresolved = 0;
+  let capped = false;
+  // Per-request dedupe (method+url), so `items` and `endpoints` agree on duplicates.
+  const seen = new Set<string>();
 
-  const walk = (items: any[], folder: string[], inheritedAuth: typeof collectionAuth) => {
-    for (const it of items) {
+  const walk = (list: any[], folder: string[], inheritedAuth: typeof collectionAuth) => {
+    for (const it of list) {
       if (!isObj(it)) continue;
-      if (endpoints.length >= MAX_BULK_ENDPOINTS) return;
       const itemAuth = it.auth ? postmanAuth(it.auth) : inheritedAuth;
+      // A folder (has nested `item`) — recurse; it is not itself a request.
       if (Array.isArray(it.item)) { walk(it.item, [...folder, String(it.name || '')], itemAuth); continue; }
       const req = isObj(it.request) ? it.request : (typeof it.request === 'string' ? { url: it.request, method: 'GET' } : null);
+      // Neither a folder nor a request — not a countable item.
       if (!req) continue;
 
+      // Effective auth: request-level (`request.auth`) wins, else item/folder/
+      // collection auth inherited down the tree. (The original importer only read
+      // `item.auth`, so request-level overrides were ignored.)
+      const auth = req.auth ? postmanAuth(req.auth) : itemAuth;
+
+      const folderPath = folder.filter(Boolean);
+      const name = String(it.name || '').trim() || 'request';
+      const method = String(req.method || 'GET').toUpperCase();
+      const record = (outcome: ImportItemResult['outcome'], code: string, message: string, url?: string): void => {
+        items.push({ name, folderPath, method, url, outcome, code, message });
+      };
+
+      if (endpoints.length >= MAX_BULK_ENDPOINTS) {
+        capped = true;
+        record('skipped', 'POSTMAN_LIMIT', `Import is capped at ${MAX_BULK_ENDPOINTS} endpoints — this request was not imported.`);
+        continue;
+      }
+
+      // ── URL ──────────────────────────────────────────────────────────
       let raw = '';
-      if (typeof req.url === 'string') raw = req.url;
+      let hadUrl = false;
+      if (typeof req.url === 'string') { raw = req.url; hadUrl = !!raw.trim(); }
       else if (isObj(req.url)) {
         raw = String(req.url.raw || '');
         if (!raw) {
           const host = Array.isArray(req.url.host) ? req.url.host.join('.') : String(req.url.host || '');
           const path = Array.isArray(req.url.path) ? req.url.path.join('/') : String(req.url.path || '');
-          raw = `${req.url.protocol ? `${req.url.protocol}://` : ''}${host}/${path}`;
+          raw = host || path ? `${req.url.protocol ? `${req.url.protocol}://` : ''}${host}${path ? `/${path}` : ''}` : '';
         }
-        // Path variables (":id") → example values
+        hadUrl = !!raw.trim();
         if (Array.isArray(req.url.variable)) {
           for (const v of req.url.variable) if (isObj(v) && v.key) raw = raw.replace(`:${v.key}`, exampleForParam(String(v.key), v.value));
         }
       }
+      const urlTemplate = raw; // kept with {{vars}} intact for the preview
+      if (!hadUrl) { record('skipped', 'POSTMAN_NO_URL', 'The request has no URL — nothing to import.'); continue; }
+
       raw = fillVars(raw, vars);
       raw = raw.replace(/:([A-Za-z_][A-Za-z0-9_]*)/g, (_m, k) => exampleForParam(k));
+      let hadUnresolved = false;
       if (/\{\{/.test(raw)) {
         unresolved++;
-        // {{baseUrl}}-style prefix with no value: attach a placeholder host so the endpoint survives.
+        hadUnresolved = true;
         raw = raw.replace(/^\{\{[^}]+\}\}/, PLACEHOLDER_HOST).replace(/\{\{[^}]+\}\}/g, 'example');
       }
       if (!isAbsolute(raw)) raw = joinUrl(PLACEHOLDER_HOST, raw);
 
+      // ── Headers ─────────────────────────────────────────────────────
       const headers: { key: string; value: string }[] = [];
       if (Array.isArray(req.header)) {
         for (const h of req.header) {
           if (!isObj(h) || h.disabled || !h.key) continue;
-          if (/^authorization$/i.test(String(h.key)) && (itemAuth.type !== 'none')) continue;
+          if (/^authorization$/i.test(String(h.key)) && (auth.type !== 'none')) continue;
           headers.push({ key: String(h.key), value: fillVars(String(h.value ?? ''), vars) });
         }
       }
 
+      // ── Body ────────────────────────────────────────────────────────
       let body: string | undefined;
+      let bodyNote: string | undefined;
       const b = req.body;
       if (isObj(b)) {
         const mode = String(b.mode || 'raw');
@@ -710,9 +803,14 @@ export function parsePostmanCollection(doc: any, opts: { variables?: Record<stri
           body = JSON.stringify(form, null, 2);
         } else if (mode === 'graphql' && isObj(b.graphql)) {
           body = JSON.stringify({ query: b.graphql.query || '', variables: safeJson(b.graphql.variables) }, null, 2);
+        } else if (mode === 'file') {
+          // A file-upload body references a local file we never read — the
+          // endpoint still imports, but the body is dropped WITH a reason.
+          bodyNote = 'The file-upload body was not imported — add the payload manually before running.';
         }
       }
 
+      // ── Expected response (saved example) ───────────────────────────
       let expectedStatus: number | undefined;
       let expectedResponse: string | undefined;
       if (Array.isArray(it.response) && it.response.length) {
@@ -723,40 +821,137 @@ export function parsePostmanCollection(doc: any, opts: { variables?: Record<stri
         }
       }
 
-      const method = String(req.method || 'GET').toUpperCase();
       const isGraphql = isObj(b) && b.mode === 'graphql';
       const ep = finalizeEndpoint({
         title: `${method} ${it.name || raw}`.slice(0, 160),
         method,
         url: raw,
         headers,
-        auth: { type: itemAuth.type, value: itemAuth.value, headerName: itemAuth.headerName } as any,
+        auth: { type: auth.type, value: auth.value, headerName: auth.headerName } as any,
         body,
         expectedStatus,
         expectedResponse,
         description: typeof req.description === 'string' ? req.description : (isObj(req.description) ? String(req.description.content || '') : undefined),
-        tags: folder.filter(Boolean),
-        resource: folder.filter(Boolean).pop()?.toLowerCase() || undefined,
+        tags: folderPath,
+        resource: folderPath.length ? folderPath[folderPath.length - 1]!.toLowerCase() : undefined,
         style: isGraphql ? 'graphql' : 'rest',
       }, source);
-      if (ep) endpoints.push(ep);
+
+      if (!ep) { record('failed', 'POSTMAN_INVALID_ENDPOINT', 'The request could not be turned into a valid endpoint (missing or malformed URL/method).', urlTemplate); continue; }
+
+      const key = `${ep.method} ${ep.url}`.toLowerCase();
+      if (seen.has(key)) { record('skipped', 'POSTMAN_DUPLICATE', 'A request with the same method and URL was already imported.', urlTemplate); continue; }
+      seen.add(key);
+      endpoints.push(ep);
+
+      if (bodyNote) { warnings.push(`"${name}": ${bodyNote}`); record('imported', 'POSTMAN_BODY_FILE_UNSUPPORTED', bodyNote, urlTemplate); }
+      else if (hadUnresolved) { record('imported', 'POSTMAN_UNRESOLVED_VAR', 'Imported with unresolved {{variables}} — a placeholder host was substituted. Map the variables to an Environment before running.', urlTemplate); }
+      else { record('imported', 'OK', 'Imported.', urlTemplate); }
     }
   };
   walk(Array.isArray(doc.item) ? doc.item : [], [], collectionAuth);
 
   if (unresolved) warnings.push(`${unresolved} request${unresolved === 1 ? '' : 's'} used collection variables with no value (e.g. {{baseUrl}}) — placeholders were substituted. Define them in an Environment before running.`);
+  if (capped) warnings.push(`The collection has more than ${MAX_BULK_ENDPOINTS} requests — the first ${MAX_BULK_ENDPOINTS} were imported.`);
+
+  const summary: ImportSummary = {
+    imported: items.filter((i) => i.outcome === 'imported').length,
+    skipped: items.filter((i) => i.outcome === 'skipped').length,
+    failed: items.filter((i) => i.outcome === 'failed').length,
+    total: items.length,
+  };
   return {
-    endpoints: dedupeEndpoints(endpoints),
+    endpoints,
     parser: 'postman',
-    format: `Postman collection ${/2\.1/.test(String(doc.info?.schema || '')) ? 'v2.1' : 'v2.0'}`,
+    format: schemaInfo.label,
     warnings,
-    notice: `${endpoints.length} request${endpoints.length === 1 ? '' : 's'} read from "${doc.info?.name || 'the collection'}".`,
+    notice: `${summary.imported} request${summary.imported === 1 ? '' : 's'} read from "${doc.info?.name || 'the collection'}".`,
+    items,
+    summary,
   };
 }
 
 function safeJson(v: unknown): unknown {
   if (typeof v !== 'string') return v ?? {};
   try { return JSON.parse(v); } catch { return v; }
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Postman structure outline — for the pre-commit import preview
+   ──────────────────────────────────────────────────────────────── */
+
+export interface PostmanFolderNode {
+  name: string;
+  requests: { name: string; method: string; url: string }[];
+  folders: PostmanFolderNode[];
+}
+/** Auth declared at a scope (Collection / folder path / request), for the
+ *  inheritance read-out. Type only — never a value. */
+export interface PostmanAuthScope { scope: string; type: ParsedApiSpec['auth']['type'] }
+
+/** URL as a template string, `{{vars}}` kept verbatim (never resolved). */
+function postmanUrlTemplate(u: unknown): string {
+  if (typeof u === 'string') return u;
+  if (!isObj(u)) return '';
+  if (u.raw) return String(u.raw);
+  const host = Array.isArray(u.host) ? u.host.join('.') : String(u.host || '');
+  const path = Array.isArray(u.path) ? u.path.join('/') : String(u.path || '');
+  return `${u.protocol ? `${u.protocol}://` : ''}${host}${path ? `/${path}` : ''}`;
+}
+
+/**
+ * Describe a Postman collection's structure for the import preview: the folder
+ * tree (with per-request method + URL template), the total request count, and
+ * the auth declared at each scope so inheritance is visible. Reads only shape,
+ * never credential values.
+ */
+export function postmanOutline(doc: any): {
+  name: string;
+  description: string;
+  schemaVersion: string;
+  requestCount: number;
+  folders: PostmanFolderNode[];
+  rootRequests: { name: string; method: string; url: string }[];
+  auth: PostmanAuthScope[];
+} {
+  const auth: PostmanAuthScope[] = [{ scope: 'Collection', type: postmanAuth(doc?.auth).type }];
+  let requestCount = 0;
+
+  const walk = (list: unknown, path: string[]): { requests: PostmanFolderNode['requests']; folders: PostmanFolderNode[] } => {
+    const requests: PostmanFolderNode['requests'] = [];
+    const folders: PostmanFolderNode[] = [];
+    if (!Array.isArray(list)) return { requests, folders };
+    for (const it of list) {
+      if (!isObj(it)) continue;
+      const here = [...path, String(it.name || '')].filter(Boolean);
+      if (it.auth) auth.push({ scope: here.join(' / ') || 'Collection', type: postmanAuth(it.auth).type });
+      if (Array.isArray(it.item)) {
+        const child = walk(it.item, here);
+        folders.push({ name: String(it.name || 'Folder'), requests: child.requests, folders: child.folders });
+      } else if (it.request) {
+        const req = isObj(it.request) ? it.request : { url: it.request, method: 'GET' };
+        // A request-level auth override is part of the inheritance picture too.
+        if (isObj(req) && req.auth) auth.push({ scope: here.join(' / ') || 'Collection', type: postmanAuth(req.auth).type });
+        requestCount++;
+        requests.push({ name: String(it.name || 'request'), method: String(req.method || 'GET').toUpperCase(), url: postmanUrlTemplate(req.url) });
+      }
+    }
+    return { requests, folders };
+  };
+
+  const root = walk(Array.isArray(doc?.item) ? doc.item : [], []);
+  let schemaVersion = 'v2.1';
+  try { schemaVersion = postmanSchemaInfo(doc).label.replace(/^Postman collection\s*/i, '').trim() || 'v2.1'; } catch { schemaVersion = 'unsupported'; }
+  const rawDesc = doc?.info?.description;
+  return {
+    name: String(doc?.info?.name || 'Postman collection'),
+    description: typeof rawDesc === 'string' ? rawDesc : (isObj(rawDesc) ? String(rawDesc.content || '') : ''),
+    schemaVersion,
+    requestCount,
+    folders: root.folders,
+    rootRequests: root.requests,
+    auth,
+  };
 }
 
 /* ────────────────────────────────────────────────────────────────

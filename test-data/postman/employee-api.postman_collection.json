@@ -1,0 +1,87 @@
+{
+  "info": {
+    "name": "Employee API",
+    "description": "Sprint 1 Postman import verification fixture (no live calls).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}" }]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "https://qa.example.test" },
+    { "key": "apiKey", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "basic",
+              "basic": [
+                { "key": "username", "value": "{{username}}" },
+                { "key": "password", "value": "{{password}}" }
+              ]
+            },
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"grant_type\":\"password\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/login"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Employees",
+      "item": [
+        {
+          "name": "Get Employees",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/employees?page=1",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "employees"],
+              "query": [{ "key": "page", "value": "1" }]
+            }
+          }
+        },
+        {
+          "name": "Get Employee By ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/employees/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "employees", ":id"],
+              "variable": [{ "key": "id", "value": "42" }]
+            }
+          }
+        },
+        {
+          "name": "Create Employee",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"name\":\"Test Employee\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/employees"
+          }
+        },
+        {
+          "name": "Upload Avatar (file body)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": { "mode": "file", "file": { "src": "/local/path/avatar.png" } },
+            "url": "{{baseUrl}}/api/employees/42/avatar"
+          }
+        }
+      ]
+    }
+  ]
+}

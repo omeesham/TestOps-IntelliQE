@@ -14,6 +14,7 @@ import {
   importApiConnector, importApiWebhook, importApiSource, importApiJira, importApiAzure, type ApiImportResponse,
   connectJira, getJiraStatus, getJiraStories, connectAzureDevops, getAzureDevopsStatus, getAzureDevopsStories,
   getAzureDevopsAttachments, getJiraAttachments, getImportAttachmentCounts, type AttachmentCount,
+  type PostmanPlanResponse,
 } from '@/services/api';
 
 /** Provider-agnostic attachment shape — ADO adds `linked`/`workItemId`; Jira doesn't. */
@@ -24,6 +25,7 @@ import { IMPORT_METHODS, BULK_ACCEPT, type ImportMethodDef, type ImportInput } f
 import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, LABEL, CARD, CARD_HOVER, CHIP_3D, TILE, TILE_ACTIVE, THEAD } from '../format';
 import { KeyValueRows } from '../EndpointEditor';
 import EndpointEditor from '../EndpointEditor';
+import PostmanImportWizard from '../PostmanImportWizard';
 import type { Catalog } from '../hooks/useCatalog';
 import { buildReadinessReview } from '../apiValidation';
 import type { AuthType, HeaderPair, ImportMethod, LogLine, ApiEnvironment } from '../types';
@@ -34,6 +36,8 @@ interface Props {
   log: (stage: LogLine['stage'], text: string, level?: LogLine['level']) => void;
   /** Active environment — used to resolve {{vars}}/base URL when validating the import. */
   environment?: ApiEnvironment | null;
+  /** Refresh the app's environment list after an import maps variables into one. */
+  onEnvironmentsChanged?: () => void;
   /** Opens the Story generator — offered after a requirement-driven import (Jira/Azure/BRD/FRD). */
   onOpenStory?: () => void;
   /** Opens the strict readiness review. With ids, reviews exactly those endpoints
@@ -52,7 +56,7 @@ const FORMAT_COLOR: Record<string, string> = {
   'WSDL / XML': '#6366F1', PDF: '#EF4444', Word: '#2563EB', Excel: '#16A34A', Markdown: '#64748B', 'Source code': '#8B5CF6',
 };
 
-export default function ImportView({ catalog, onOpenCatalogue, log, onOpenStory, onReview }: Props) {
+export default function ImportView({ catalog, onOpenCatalogue, log, environment, onEnvironmentsChanged, onOpenStory, onReview }: Props) {
   const toast = useToast();
   const [active, setActive] = useState<ImportMethodDef | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -220,7 +224,17 @@ export default function ImportView({ catalog, onOpenCatalogue, log, onOpenStory,
         </div>
 
         {/* Active method form */}
-        {active && active.id !== 'manual' && (
+        {active && active.id === 'postman' && (
+          <div ref={formRef} className="scroll-mt-2">
+            <PostmanImportWizard
+              environment={environment}
+              onImported={(name, res: PostmanPlanResponse) => finish('postman', name, res)}
+              onEnvironmentsChanged={onEnvironmentsChanged}
+              onClose={() => setActive(null)}
+            />
+          </div>
+        )}
+        {active && active.id !== 'manual' && active.id !== 'postman' && (
           <div ref={formRef} className="scroll-mt-2">
             <MethodForm
               key={active.id}

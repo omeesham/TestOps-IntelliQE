@@ -45,8 +45,10 @@ import { publishRunResults as publishAzureResults, runJUnit } from '../services/
 import {
   importFromText, importFromUrl, parseCurlCommands, parseHar, introspectGraphql, discoverMcpTools,
   parseConnectorManifest, endpointsFromWebhook, probeEndpoint, parseStructured, dedupeEndpoints,
+  parsePostmanCollection, postmanOutline,
   type ImportResult, type ImportedEndpoint, type ImportMethod,
 } from '../services/api-import.service.js';
+import { parsePostmanEnvironment, collectionVariables, mergePostmanVariables } from '../utils/postman-env.js';
 import { analyzeApiSurface, enrichProfileWithLlm } from '../services/api-intelligence.service.js';
 import { validateContract } from '../services/api-contract.service.js';
 import { runLoadTest, runLoadProfile } from '../services/api-loadtest.service.js';
@@ -169,7 +171,7 @@ import { runUnified } from '../services/api-unified.service.js';
 import { grpcClientStream, grpcBidi } from '../services/api-messaging.service.js';
 import { logAudit } from '../utils/audit.js';
 import {
-  listEnvironments, getEnvironment, createEnvironment, updateEnvironment, deleteEnvironment, applyEnvironment, resolveApiCase, spansMultipleHosts,
+  listEnvironments, getEnvironment, createEnvironment, updateEnvironment, deleteEnvironment, importVariables, applyEnvironment, resolveApiCase, spansMultipleHosts,
 } from '../services/api-environments.service.js';
 import {
   getReadinessConfig, saveReadinessConfig, evaluateReadiness, enforceReadiness, listReadinessHistory,
@@ -247,6 +249,10 @@ async function respondImport(req: Request, res: Response, method: ImportMethod, 
     format: result.format,
     warnings: result.warnings,
     notice: result.notice,
+    // Per-request outcomes + reconciling tally, when the parser emits them
+    // (Postman today) — so the UI can show imported/skipped/failed with reasons.
+    ...(result.items ? { items: result.items } : {}),
+    ...(result.summary ? { summary: result.summary } : {}),
     // Pattern intelligence comes back with every import so the UI can show
     // what was understood immediately, without a second round-trip.
     profile: endpoints.length ? analyzeApiSurface(endpoints) : null,
@@ -366,6 +372,108 @@ router.post('/import/url', async (req: Request, res: Response) => {
     const llm = (await getTenantLlm(req.user!.tenantId)) || undefined;
     const result = await importFromUrl(url, { formatHint: String(req.body?.format || 'auto'), llm, headers: bodyHeaders(req.body?.headers), baseUrl: req.body?.baseUrl, sourceMethod: 'docs-url' });
     await respondImport(req, res, result.parser === 'llm' ? 'docs-url' : 'openapi', url, result);
+  } catch (err) { fail(res, err); }
+});
+
+/**
+ * Dedicated Postman import — the pre-commit PREVIEW and the variable-mapping
+ * COMMIT, in one stateless route. Parses a Postman collection (`file`) and an
+ * optional Postman environment export (`environment`) and returns everything the
+ * UI reviews before committing: parsed endpoints, a folder tree + request count
+ * + auth summary, the merged variable set (collection + environment, environment
+ * taking precedence), and the imported/skipped/failed breakdown with reasons.
+ *
+ * Secret variable VALUES are never returned — they are blanked in the response,
+ * and the UI shows them masked. When the user confirms a variable mapping, the
+ * client RE-UPLOADS the files with `applyStrategy` (+ `applyTargetId` / `applyName`),
+ * and the environment write happens entirely server-side from the real file
+ * contents, so plaintext secrets never round-trip through the browser. Endpoints
+ * are committed client-side; nothing else is persisted here except import history.
+ */
+router.post('/import/postman', upload.fields([{ name: 'file', maxCount: 1 }, { name: 'environment', maxCount: 1 }]), async (req: Request, res: Response) => {
+  try {
+    const files = req.files as Record<string, Express.Multer.File[]> | undefined;
+    const collectionFile = files?.file?.[0];
+    const envFile = files?.environment?.[0];
+    if (!collectionFile) { res.status(400).json({ error: 'Upload a Postman collection JSON file in the "file" field.' }); return; }
+
+    const parsedColl = parseStructured(collectionFile.buffer.toString('utf8'));
+    const doc = parsedColl?.doc;
+    if (!doc || typeof doc !== 'object' || !(doc as any).info) {
+      res.status(400).json({ error: 'That file is not a valid Postman collection (missing JSON "info").' });
+      return;
+    }
+
+    // Optional Postman environment export.
+    let envName: string | undefined;
+    let envVars: { key: string; value: string; secret: boolean }[] = [];
+    if (envFile) {
+      const parsedEnv = parseStructured(envFile.buffer.toString('utf8'));
+      if (!parsedEnv) { res.status(400).json({ error: 'The environment file is not valid JSON.' }); return; }
+      const env = parsePostmanEnvironment(parsedEnv.doc); // throws if not an environment export
+      envName = env.name;
+      envVars = env.variables;
+    }
+
+    // Throws on a confidently-unsupported schema version.
+    const result = parsePostmanCollection(doc, { sourceName: collectionFile.originalname });
+    const endpoints = dedupeEndpoints(result.endpoints);
+    const outline = postmanOutline(doc);
+    const variables = mergePostmanVariables(collectionVariables(doc), envVars); // real values (server-side only)
+    const baseUrlVar = variables.find((v) => /^(base_?url|url|host)$/i.test(v.key) && !v.secret);
+
+    // Variable-mapping COMMIT (opt-in): when the client re-uploads with an apply
+    // strategy, write the environment server-side from the real values.
+    const applyStrategy = String(req.body?.applyStrategy || '');
+    const isApply = applyStrategy === 'skip' || applyStrategy === 'update' || applyStrategy === 'new';
+
+    // Record history once — on the preview, not again on the apply re-upload.
+    if (!isApply) {
+      await recordImport(req.user!.tenantId, req.user!.username, {
+        method: 'postman', name: collectionFile.originalname, format: result.format, parser: result.parser,
+        endpointCount: endpoints.length, warnings: result.warnings,
+      });
+    }
+
+    let applied: { key: string; action: string }[] | undefined;
+    let appliedEnvironment: unknown;
+    if (isApply && variables.length) {
+      const r = await importVariables(req.user!.tenantId, req.user!.username, {
+        strategy: applyStrategy as 'skip' | 'update' | 'new',
+        targetId: req.body?.applyTargetId ? String(req.body.applyTargetId) : undefined,
+        name: req.body?.applyName ? String(req.body.applyName) : (envName || outline.name),
+        baseUrl: baseUrlVar ? baseUrlVar.value : undefined,
+        variables: variables.map((v) => ({ key: v.key, value: v.value, secret: v.secret })),
+      });
+      applied = r.applied;
+      appliedEnvironment = r.environment; // secrets already masked by the service
+    }
+
+    res.json({
+      endpoints,
+      count: endpoints.length,
+      parser: result.parser,
+      format: result.format,
+      warnings: result.warnings,
+      notice: result.notice,
+      items: result.items,
+      summary: result.summary,
+      profile: endpoints.length ? analyzeApiSurface(endpoints) : null,
+      collection: {
+        name: outline.name,
+        description: outline.description,
+        schemaVersion: outline.schemaVersion,
+        requestCount: outline.requestCount,
+        folders: outline.folders,
+        rootRequests: outline.rootRequests,
+        auth: outline.auth,
+      },
+      // Secret values are blanked — the UI renders them masked; real values stay server-side.
+      variables: variables.map((v) => ({ ...v, value: v.secret ? '' : v.value })),
+      suggestedEnvironmentName: envName || outline.name,
+      suggestedBaseUrl: baseUrlVar ? baseUrlVar.value : undefined,
+      ...(applied ? { applied, environment: appliedEnvironment } : {}),
+    });
   } catch (err) { fail(res, err); }
 });
 

@@ -161,6 +161,73 @@ export async function updateEnvironment(
   return rows.length ? rowToEnv(rows[0], { reveal: false }) : null;
 }
 
+export type VariableImportStrategy = 'skip' | 'update' | 'new';
+
+export interface VariableImportResult {
+  environment: ApiEnvironment;
+  applied: { key: string; action: 'added' | 'updated' | 'skipped' }[];
+}
+
+/**
+ * Map a set of variables (e.g. from a Postman collection + environment export)
+ * into an environment, under a documented, deterministic conflict strategy:
+ *   - `new`    — create a fresh environment from the variables.
+ *   - `skip`   — add new keys; keep the target's existing value on a conflict.
+ *   - `update` — add new keys; overwrite the target's value on a conflict.
+ * Secrets are encrypted at rest via the normal save path; existing secrets are
+ * preserved (their masked values round-trip to "keep the stored secret"). An
+ * `applied[]` report says what happened to every key — nothing is overwritten
+ * silently.
+ */
+export async function importVariables(
+  tenantId: string,
+  username: string,
+  input: { targetId?: string; name?: string; variables: EnvVariable[]; strategy: VariableImportStrategy; baseUrl?: string },
+): Promise<VariableImportResult> {
+  const strategy: VariableImportStrategy = input.strategy === 'update' || input.strategy === 'new' ? input.strategy : 'skip';
+  const incoming = Array.isArray(input.variables) ? input.variables : [];
+
+  if (strategy === 'new') {
+    const environment = await createEnvironment(tenantId, username, {
+      name: String(input.name || 'Imported environment'),
+      baseUrl: input.baseUrl,
+      variables: incoming,
+    });
+    // Report only the keys that actually persisted — sanitizeVariables drops
+    // blank/duplicate keys, rewrites disallowed characters, and caps at VARS_MAX.
+    const storedKeys = new Set(environment.variables.map((v) => v.key));
+    return { environment, applied: incoming.filter((v) => storedKeys.has(v.key)).map((v) => ({ key: v.key, action: 'added' as const })) };
+  }
+
+  if (!input.targetId) throw new Error('Choose a target environment, or create a new one.');
+  const target = await getEnvironment(tenantId, input.targetId);
+  if (!target) throw new Error('The selected environment no longer exists.');
+
+  const existingKeys = new Set(target.variables.map((v) => v.key));
+  const applied: VariableImportResult['applied'] = [];
+  // Start from the target's current variables (masked secrets round-trip to the
+  // stored value on save), then apply the incoming set under the strategy.
+  const byKey = new Map<string, EnvVariable>(target.variables.map((v) => [v.key, { key: v.key, value: v.value, secret: v.secret }]));
+  for (const v of incoming) {
+    const key = String(v?.key || '').trim();
+    if (!key) continue;
+    if (existingKeys.has(key)) {
+      if (strategy === 'skip') { applied.push({ key, action: 'skipped' }); continue; }
+      byKey.set(key, { key, value: String(v.value ?? ''), secret: !!v.secret });
+      applied.push({ key, action: 'updated' });
+    } else {
+      byKey.set(key, { key, value: String(v.value ?? ''), secret: !!v.secret });
+      applied.push({ key, action: 'added' });
+    }
+  }
+  const environment = await updateEnvironment(tenantId, input.targetId, { variables: [...byKey.values()] });
+  if (!environment) throw new Error('The selected environment no longer exists.');
+  // Drop any entry that didn't actually persist (sanitizeVariables may rewrite a
+  // key's characters or hit VARS_MAX) so the report never over-claims.
+  const storedKeys = new Set(environment.variables.map((v) => v.key));
+  return { environment, applied: applied.filter((a) => storedKeys.has(a.key)) };
+}
+
 export async function deleteEnvironment(tenantId: string, id: string): Promise<boolean> {
   const { rowCount } = await pool.query(`DELETE FROM api_environments WHERE tenant_id = $1 AND id = $2`, [tenantId, id]);
   return (rowCount || 0) > 0;

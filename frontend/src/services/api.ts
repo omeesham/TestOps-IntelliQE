@@ -457,6 +457,75 @@ export async function importApiSource(method: 'sdk' | 'middleware', input: { tex
   return data;
 }
 
+/* ── Postman import: pre-commit preview + environment variable mapping ── */
+
+/** Per-request outcome of an import, with a stable reason code. */
+export interface ImportItemResult {
+  name: string;
+  folderPath: string[];
+  method?: string;
+  url?: string;
+  outcome: 'imported' | 'skipped' | 'failed';
+  code: string;
+  message: string;
+}
+export interface ImportSummary { imported: number; skipped: number; failed: number; total: number }
+export interface PostmanAuthScope { scope: string; type: string }
+export interface PostmanFolderNode {
+  name: string;
+  requests: { name: string; method: string; url: string }[];
+  folders: PostmanFolderNode[];
+}
+export interface MergedVariable {
+  key: string;
+  value: string;
+  secret: boolean;
+  source: 'environment' | 'collection';
+  conflict?: boolean;
+}
+export interface PostmanPlanResponse extends ApiImportResponse {
+  items?: ImportItemResult[];
+  summary?: ImportSummary;
+  collection: {
+    name: string;
+    description: string;
+    schemaVersion: string;
+    requestCount: number;
+    folders: PostmanFolderNode[];
+    rootRequests: { name: string; method: string; url: string }[];
+    auth: PostmanAuthScope[];
+  };
+  variables: MergedVariable[];
+  suggestedEnvironmentName?: string;
+  suggestedBaseUrl?: string;
+  /** Present only on an apply call: what the server wrote to the environment. */
+  applied?: { key: string; action: 'added' | 'updated' | 'skipped' }[];
+  /** The environment after an apply (secrets masked). */
+  environment?: any;
+}
+
+/** Map variables into an environment during an apply (strategy + target/name). */
+export interface PostmanApplyEnv { strategy: 'skip' | 'update' | 'new'; targetId?: string; name?: string }
+
+/**
+ * Parse a Postman collection (+ optional environment export). Without `apply` this
+ * is a preview (nothing committed, secret values blanked). With `apply` the files
+ * are re-sent and the environment mapping is written server-side from the real
+ * values, so plaintext secrets never round-trip through the browser.
+ */
+export async function importPostmanPlan(collection: File, environment?: File, apply?: PostmanApplyEnv): Promise<PostmanPlanResponse> {
+  const form = new FormData();
+  form.append('file', collection);
+  if (environment) form.append('environment', environment);
+  if (apply) {
+    form.append('applyStrategy', apply.strategy);
+    if (apply.targetId) form.append('applyTargetId', apply.targetId);
+    if (apply.name) form.append('applyName', apply.name);
+  }
+  const { data } = await api.post('/api-automation/import/postman', form, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: IMPORT_TIMEOUT });
+  return data;
+}
+
 /**
  * Design scenarios as a background job — one model call per endpoint means a
  * big catalogue outlives any single HTTP request. Returns the jobId to poll.
@@ -1646,7 +1715,7 @@ export async function healApiRequest(input: {
   auth?: ApiHttpAuth;
   body?: string; bodyMode?: string;
   expectedStatus?: number; expectedResponse?: string;
-  observed?: { status?: number | null; ok?: boolean; error?: string; bodyText?: string };
+  observed?: { status?: number | null; ok?: boolean; error?: string; bodyText?: string; headers?: Record<string, string> };
 }): Promise<RequestFix> {
   const { data } = await api.post('/api-automation/heal/fix-request', input, { timeout: 60_000 });
   return data;
