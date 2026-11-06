@@ -8,7 +8,7 @@
  */
 import { useEffect, useState } from 'react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Activity, AlertTriangle, ArrowRight, Clock, RefreshCw, Layers, Upload, Gauge, Zap, TrendingUp, ChevronRight, Timer, ShieldCheck, Sparkles, BrainCircuit, ShieldAlert, HeartPulse, Radar, ClipboardList, ClipboardCheck, Bug, Waypoints, Workflow, PlusCircle } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowRight, Clock, RefreshCw, Layers, Upload, Gauge, Zap, TrendingUp, ChevronRight, ChevronDown, Timer, ShieldCheck, Sparkles, BrainCircuit, ShieldAlert, HeartPulse, Radar, ClipboardList, ClipboardCheck, Bug, Waypoints, Workflow, PlusCircle } from 'lucide-react';
 import { getApiOverview } from '@/services/api';
 import { CARD, CARD_HOVER, THEAD, BRAND_CHIP, MUTED_CHIP, relativeTime, formatDuration, IMPORT_METHOD_LABELS, methodColor } from '../format';
 import { StatusPill, PassRing } from '../primitives';
@@ -53,6 +53,18 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, onOpenMan
   const [data, setData] = useState<ApiOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // Collapse state for the Enterprise integration suite panel — persisted so the
+  // user's choice to hide it sticks across reloads.
+  const SUITE_KEY = 'iqe_overview_suite_collapsed';
+  const [suiteCollapsed, setSuiteCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem(SUITE_KEY) === '1'; } catch { return false; }
+  });
+  const toggleSuite = () => setSuiteCollapsed((prev) => {
+    const next = !prev;
+    try { localStorage.setItem(SUITE_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+    return next;
+  });
 
   /** `fresh` bypasses the server's 20s roll-up cache — the Refresh button and
       the reload after a run both want the new numbers, not the cached ones. */
@@ -142,12 +154,22 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, onOpenMan
         {/* ── Enterprise integration suite — BRD/FRD · Jira/Azure defects ·
             traceability · dashboard, each deep-linking into its tool ── */}
         <div className={`${CARD} p-4`}>
-          <div className="flex items-center gap-2 mb-3">
+          <div className={`flex items-center gap-2 ${suiteCollapsed ? '' : 'mb-3'}`}>
             <span className="w-7 h-7 rounded-lg bg-[#F5F3FF] flex items-center justify-center flex-shrink-0"><Workflow className="w-4 h-4 text-[#7C3AED]" /></span>
             <h3 className="text-[13px] font-semibold text-gray-900">Enterprise integration suite</h3>
-            <span className="text-[11px] text-gray-400">requirements · trackers · traceability</span>
-            <button type="button" onClick={() => onNavigate('tools', 'integration dashboard')} className="ml-auto inline-flex items-center gap-0.5 text-[11px] font-medium text-[#7C3AED] hover:text-[#5B21B6]">Open dashboard<ArrowRight className="w-3 h-3" /></button>
+            <span className="text-[11px] text-gray-400 truncate hidden sm:inline">requirements · trackers · traceability</span>
+            <button type="button" onClick={() => onNavigate('tools', 'integration dashboard')} className="ml-auto inline-flex items-center gap-0.5 text-[11px] font-medium text-[#7C3AED] hover:text-[#5B21B6] flex-shrink-0">Open dashboard<ArrowRight className="w-3 h-3" /></button>
+            <button
+              type="button"
+              onClick={toggleSuite}
+              aria-expanded={!suiteCollapsed}
+              title={suiteCollapsed ? 'Show integration suite' : 'Hide integration suite'}
+              className="flex-shrink-0 p-1 rounded-md text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF] transition-colors"
+            >
+              <ChevronDown className={`w-4 h-4 transition-transform ${suiteCollapsed ? '-rotate-90' : ''}`} />
+            </button>
           </div>
+          {!suiteCollapsed && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
             {INTEGRATION_SUITE.map((t) => (
               <button
@@ -170,6 +192,7 @@ export default function OverviewView({ catalog, onNavigate, onOpenRun, onOpenMan
               </button>
             ))}
           </div>
+          )}
         </div>
 
         {error &&<div className="flex items-center gap-2 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg text-[12px] text-red-700"><AlertTriangle className="w-4 h-4" />{error}<button type="button" onClick={() => load(true)} className="ml-auto underline">Retry</button></div>}

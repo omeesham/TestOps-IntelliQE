@@ -29,7 +29,7 @@ export interface RequestFixInput {
   expectedStatus?: number;
   expectedResponse?: string;
   /** What the client saw when it sent the request (no re-firing here). */
-  observed?: { status?: number | null; ok?: boolean; error?: string; bodyText?: string };
+  observed?: { status?: number | null; ok?: boolean; error?: string; bodyText?: string; headers?: Record<string, string> };
 }
 
 export interface RequestFix {
@@ -84,6 +84,9 @@ export async function proposeRequestFix(input: RequestFixInput, llm: LlmConfig):
   if (!/^https?:\/\//i.test(url)) throw new Error('A request with an absolute http(s) URL is required to heal.');
 
   const obs = input.observed || {};
+  const relevantRespHeaders = ['www-authenticate', 'allow', 'content-type', 'accept']
+    .map((k) => { const v = headerLookup(obs.headers, k); return v ? `${k}: ${v}` : null; })
+    .filter(Boolean).join('; ');
   const prompt = [
     `REQUEST: ${method} ${url}`,
     input.headers?.length ? `HEADERS: ${JSON.stringify(maskHeaders(input.headers))}` : '',
@@ -94,6 +97,7 @@ export async function proposeRequestFix(input: RequestFixInput, llm: LlmConfig):
     input.expectedStatus ? `EXPECTED STATUS: ${input.expectedStatus}` : '',
     obs.error ? `OBSERVED: transport error — ${String(obs.error).slice(0, 400)}`
       : `OBSERVED STATUS: ${obs.status ?? '—'}${obs.ok === false ? ' (not ok)' : ''}`,
+    relevantRespHeaders ? `RESPONSE HEADERS: ${relevantRespHeaders}` : '',
     obs.bodyText ? `OBSERVED BODY: ${String(obs.bodyText).slice(0, 1500)}` : '',
     'Return the JSON now.',
   ].filter(Boolean).join('\n');
@@ -162,36 +166,101 @@ export async function proposeRequestFix(input: RequestFixInput, llm: LlmConfig):
   };
 }
 
+/** Case-insensitive lookup in a response-header map. */
+function headerLookup(h: Record<string, string> | undefined, name: string): string | undefined {
+  if (!h) return undefined;
+  const found = Object.entries(h).find(([k]) => k.toLowerCase() === name.toLowerCase());
+  return found?.[1];
+}
+
 /**
  * Deterministic fallback for well-known HTTP failures — used when the model is
- * unavailable, returns prose, or is too conservative to propose a fix. Only
- * fires for unambiguous, request-side problems; never guesses a secret value.
+ * unavailable, returns prose, or is too conservative to propose a fix. It reads
+ * the observed status, body AND response headers (WWW-Authenticate, Allow, …).
+ * Only fires for unambiguous, request-side problems; never guesses a secret.
  */
 function heuristicFix(input: RequestFixInput): RequestFix | null {
   const status = input.observed?.status ?? undefined;
   const body = String(input.observed?.bodyText || '').toLowerCase();
+  const rh = input.observed?.headers;
+  const method = String(input.method || 'GET').toUpperCase();
   const hasAuth = !!(input.auth?.type && input.auth.type !== 'none');
+  const hasContentType = (input.headers || []).some((h) => h.key.trim().toLowerCase() === 'content-type');
+  const hasBodyPayload = !!(input.body && input.body.trim());
+  const isWrite = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+  const is4xx = typeof status === 'number' && status >= 400 && status < 500;
 
-  // 401/403 (or a body that says so) with no credentials sent → add Bearer auth.
-  const looksAuth = status === 401 || status === 403 || /unauthor|authenticat|requires? (a )?(token|auth|credential)|credential|permission denied|forbidden/.test(body);
+  // 1. Auth — 401/403, a WWW-Authenticate header, or a body that says so.
+  const wwwAuth = headerLookup(rh, 'www-authenticate') || '';
+  const looksAuth = status === 401 || status === 403 || !!wwwAuth
+    || /unauthor|authenticat|requires? (a )?(token|auth|credential)|credential|permission denied|forbidden|invalid token|api key/.test(body);
   if (looksAuth && !hasAuth) {
+    const scheme = /basic/i.test(wwwAuth) ? 'basic'
+      : (/api[- ]?key/i.test(wwwAuth + ' ' + body) ? 'apikey' : 'bearer');
+    const fix = scheme === 'apikey'
+      ? { auth: { type: 'apikey', headerName: 'X-API-Key', in: 'header' as const } }
+      : { auth: { type: scheme } };
+    const label = scheme === 'basic' ? 'Basic' : scheme === 'apikey' ? 'API key' : 'Bearer';
     return {
       classification: 'auth', confidence: 'low', changed: true,
-      summary: 'Endpoint requires authentication — added Bearer auth.',
-      rationale: `The request returned ${status ?? 'an auth error'} and sent no credentials. Set Auth to Bearer — paste your token in the Auth field, then Send again.`,
-      fix: { auth: { type: 'bearer' } },
+      summary: `Endpoint requires authentication — added ${label} auth.`,
+      rationale: `The request returned ${status ?? 'an auth error'} with no credentials. Set Auth to ${label} — enter your ${scheme === 'apikey' ? 'key' : scheme === 'basic' ? 'username/password' : 'token'} in the Auth field, then Send again.`,
+      fix,
     };
   }
 
-  // 415 / media-type complaint → ensure a JSON Content-Type header.
-  const looksMedia = status === 415 || /unsupported media type|content[- ]type/.test(body);
-  const hasContentType = (input.headers || []).some((h) => h.key.trim().toLowerCase() === 'content-type');
-  if (looksMedia && !hasContentType) {
+  // 2. Method not allowed — use the Allow header to pick a permitted method.
+  if (status === 405 || /method not allowed/.test(body)) {
+    const allow = headerLookup(rh, 'allow') || '';
+    const allowed = allow.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+    const pick = allowed.find((m) => m !== method && m !== 'OPTIONS' && m !== 'HEAD');
+    if (pick) {
+      return {
+        classification: 'url', confidence: 'low', changed: true,
+        summary: `Method not allowed — switched to ${pick}.`,
+        rationale: `The endpoint returned 405; its Allow header lists: ${allow}. Changed the method to ${pick}, then Send again.`,
+        fix: { method: pick },
+      };
+    }
+  }
+
+  // 3. Unsupported / missing media type — ensure a JSON Content-Type.
+  if ((status === 415 || /unsupported media type/.test(body)) && !hasContentType) {
     return {
       classification: 'headers', confidence: 'low', changed: true,
       summary: 'Added a JSON Content-Type header.',
       rationale: 'The response indicates a missing or unsupported media type. Added Content-Type: application/json — adjust if the API expects another type, then Send again.',
       fix: { headers: [{ key: 'Content-Type', value: 'application/json' }] },
+    };
+  }
+
+  // 4. Not acceptable — add an Accept header.
+  if (status === 406 || /not acceptable/.test(body)) {
+    return {
+      classification: 'headers', confidence: 'low', changed: true,
+      summary: 'Added an Accept: application/json header.',
+      rationale: 'The server returned 406 Not Acceptable. Added Accept: application/json — adjust if another type is needed, then Send again.',
+      fix: { headers: [{ key: 'Accept', value: 'application/json' }] },
+    };
+  }
+
+  // 5. A write with a body but no Content-Type and a 4xx — a very common cause.
+  if (isWrite && hasBodyPayload && !hasContentType && is4xx) {
+    return {
+      classification: 'headers', confidence: 'low', changed: true,
+      summary: 'Added Content-Type: application/json for the request body.',
+      rationale: `A ${method} with a body was sent without a Content-Type header (got ${status}). Added Content-Type: application/json — change it if the body is another format, then Send again.`,
+      fix: { headers: [{ key: 'Content-Type', value: 'application/json' }] },
+    };
+  }
+
+  // 6. Transport failure on an http:// URL — retry over HTTPS.
+  if (input.observed?.error && /^http:\/\//i.test(String(input.url || ''))) {
+    return {
+      classification: 'url', confidence: 'low', changed: true,
+      summary: 'Retried over HTTPS.',
+      rationale: `The request could not connect over HTTP (${String(input.observed.error).slice(0, 120)}). Switched the URL to https://, then Send again.`,
+      fix: { url: String(input.url).replace(/^http:\/\//i, 'https://') },
     };
   }
 

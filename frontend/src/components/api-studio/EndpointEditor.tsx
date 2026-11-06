@@ -110,6 +110,8 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
   const [sendError, setSendError] = useState('');
   const [healing, setHealing] = useState(false);
   const [healResult, setHealResult] = useState<RequestFix | null>(null);
+  // Which fields the last heal changed — drives the "Healed" highlight.
+  const [healedFields, setHealedFields] = useState<Set<string>>(new Set());
 
   // ── Import & auto-fill (manual mode) ──
   const [importOpen, setImportOpen] = useState(true);
@@ -268,7 +270,7 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
 
   const doSend = async () => {
     if (!canSend) { setShowRequired(true); return; }
-    setSending(true); setSendError(''); setSendResult(null); setHealResult(null);
+    setSending(true); setSendError(''); setSendResult(null); setHealResult(null); setHealedFields(new Set());
     try {
       const b = buildBodyFields();
       setSendResult(await sendApiRequest({
@@ -300,22 +302,26 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
   /** Merge the healer's proposed fields into the form (auto-fill). Headers are
    *  merged by name so corrections don't drop the ones the model left alone. */
   const applyFix = (fix: RequestFix['fix']) => {
-    if (fix.method) setMethod(fix.method.toUpperCase());
-    if (fix.url) changeUrl(fix.url);
+    const healed = new Set<string>();
+    if (fix.method) { setMethod(fix.method.toUpperCase()); healed.add('method'); }
+    if (fix.url) { changeUrl(fix.url); healed.add('url'); }
     if (fix.headers?.length) {
       setHeaders((prev) => {
         const map = new Map(prev.filter((h) => h.key.trim()).map((h) => [h.key.trim().toLowerCase(), { key: h.key.trim(), value: h.value }]));
         for (const h of fix.headers!) map.set(h.key.trim().toLowerCase(), { key: h.key.trim(), value: h.value });
         return [...map.values(), { key: '', value: '' }];
       });
+      healed.add('headers');
     }
     if (typeof fix.body === 'string') {
       setBody(fix.body);
       setBodyMode((prev) => (prev === 'json' || prev === 'raw' ? prev : 'raw'));
+      healed.add('body');
     }
-    if (fix.auth) applyAuthFix(fix.auth);
-    if (fix.expectedStatus != null) setExpectedStatus(String(fix.expectedStatus));
-    if (typeof fix.expectedResponse === 'string') setExpectedResponse(fix.expectedResponse);
+    if (fix.auth) { applyAuthFix(fix.auth); healed.add('auth'); }
+    if (fix.expectedStatus != null) { setExpectedStatus(String(fix.expectedStatus)); healed.add('expected'); }
+    if (typeof fix.expectedResponse === 'string') { setExpectedResponse(fix.expectedResponse); healed.add('expected'); }
+    setHealedFields(healed);
   };
 
   /** "Heal it" — ask the healer to diagnose the last failed Send and, when it
@@ -336,7 +342,7 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
         expectedStatus: Number.isFinite(status) ? status : undefined,
         expectedResponse: expectedResponse.trim() || undefined,
         observed: sendResult
-          ? { status: sendResult.status ?? null, ok: sendResult.ok, error: sendResult.error, bodyText: sendResult.bodyText }
+          ? { status: sendResult.status ?? null, ok: sendResult.ok, error: sendResult.error, bodyText: sendResult.bodyText, headers: sendResult.headers }
           : { status: null, ok: false, error: sendError },
       });
       setHealResult(res);
@@ -381,6 +387,13 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
   const tested = !!sendResult && sendResult.status != null && !sendResult.error;
   /** The last Send failed — a transport error, or a non-2xx response. */
   const sendFailed = (!!sendResult && (sendResult.ok === false || !!sendResult.error)) || !!sendError;
+  /** Fields the last heal corrected — drives the green "Healed" highlight. */
+  const isHealed = (f: string) => healedFields.has(f);
+  const healBadge = (
+    <span className="inline-flex items-center gap-1 text-[9.5px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1 py-0.5">
+      <Wand2 className="w-2.5 h-2.5" /> Healed
+    </span>
+  );
 
   const automate = () => {
     if (!urlValid) { setShowRequired(true); return; }
@@ -508,8 +521,8 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
               <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Create order" className={INPUT} />
             </div>
             <div>
-              <label className={LABEL}>Request <RequiredMark /></label>
-              <div className={`flex rounded-lg border bg-white overflow-hidden ${BAR_3D} ${showRequired && !urlValid ? 'border-red-300 ring-2 ring-red-100' : 'border-gray-200/80 focus-within:border-[#A5B4FC] focus-within:ring-2 focus-within:ring-[#EDE9FE]'}`}>
+              <label className={LABEL}>Request <RequiredMark /> {(isHealed('method') || isHealed('url')) && healBadge}</label>
+              <div className={`flex rounded-lg border bg-white overflow-hidden ${BAR_3D} ${showRequired && !urlValid ? 'border-red-300 ring-2 ring-red-100' : (isHealed('method') || isHealed('url')) ? 'border-emerald-300 ring-2 ring-emerald-300/60' : 'border-gray-200/80 focus-within:border-[#A5B4FC] focus-within:ring-2 focus-within:ring-[#EDE9FE]'}`}>
                 <select value={method} onChange={(e) => setMethod(e.target.value)} className="px-2.5 py-2 border-r border-gray-200 text-[12px] font-mono font-bold outline-none text-[#6D28D9] bg-gradient-to-b from-[#F5F3FF] to-[#EDE9FE]">
                   {HTTP_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
                 </select>
@@ -527,11 +540,11 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
             <KeyValueRows rows={params.map((p) => ({ key: p.key, value: p.value, enabled: p.enabled }))} withEnabled onChange={(rows) => applyParams(rows.map((r) => ({ key: r.key, value: r.value, enabled: r.enabled ?? true })))} placeholderKey="page" placeholderValue="1" />
           </Section>
 
-          <Section title="Headers" badge={headers.filter((h) => h.key).length || ''}>
+          <Section key={isHealed('headers') ? 'headers-healed' : 'headers'} title="Headers" badge={headers.filter((h) => h.key).length || ''} action={isHealed('headers') ? healBadge : undefined}>
             <KeyValueRows rows={headers} onChange={(rows) => setHeaders(rows.map((r) => ({ key: r.key, value: r.value })))} placeholderKey="Content-Type" placeholderValue="application/json" />
           </Section>
 
-          <Section title="Auth" badge={AUTH_LABELS[authType] || 'None'}>
+          <Section key={isHealed('auth') ? 'auth-healed' : 'auth'} title="Auth" badge={AUTH_LABELS[authType] || 'None'} action={isHealed('auth') ? healBadge : undefined}>
             <div className="flex flex-wrap gap-1">
               {(['none', 'bearer', 'basic', 'apikey', 'oauth2', 'digest', 'awssigv4', 'oauth1', 'mtls'] as AuthType[]).map((t) => (
                 <button key={t} type="button" onClick={() => setAuthType(t)} className={`px-2 py-1 rounded-md text-[11px] font-medium border transition-all active:translate-y-px ${CHIP_3D} ${authType === t ? 'bg-gradient-to-b from-[#F5F3FF] to-[#EDE9FE] text-[#6D28D9] border-[#DDD6FE]' : 'bg-white text-gray-500 border-gray-200 hover:border-[#DDD6FE]'}`}>
@@ -667,7 +680,7 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
           </Section>
 
           {hasBody && (
-            <Section title="Body" badge={BODY_MODES.find((m) => m.id === bodyMode)?.label || ''} defaultOpen={bodyMode !== 'json' || body.trim().length > 0}>
+            <Section key={isHealed('body') ? 'body-healed' : 'body'} title="Body" badge={BODY_MODES.find((m) => m.id === bodyMode)?.label || ''} defaultOpen={isHealed('body') || bodyMode !== 'json' || body.trim().length > 0} action={isHealed('body') ? healBadge : undefined}>
               <div className="flex flex-wrap gap-1 mb-2">
                 {BODY_MODES.map((m) => (
                   <button key={m.id} type="button" onClick={() => setBodyMode(m.id)} className={`px-2 py-1 rounded-md text-[11px] font-medium border transition-all active:translate-y-px ${CHIP_3D} ${bodyMode === m.id ? 'bg-gradient-to-b from-[#F5F3FF] to-[#EDE9FE] text-[#6D28D9] border-[#DDD6FE]' : 'bg-white text-gray-500 border-gray-200 hover:border-[#DDD6FE]'}`}>{m.label}</button>
@@ -745,7 +758,7 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
             )}
           </Section>
 
-          <Section title="Expected response" badge={expectedStatus}>
+          <Section key={isHealed('expected') ? 'expected-healed' : 'expected'} title="Expected response" badge={expectedStatus} action={isHealed('expected') ? healBadge : undefined}>
             <div className="grid grid-cols-[110px_1fr] gap-2">
               <div><label className={LABEL}>Status</label><input value={expectedStatus} onChange={(e) => setExpectedStatus(e.target.value.replace(/[^\d]/g, '').slice(0, 3))} className={`${INPUT} font-mono`} /></div>
               <div><label className={LABEL}>Body (shape or example)</label><textarea value={expectedResponse} onChange={(e) => setExpectedResponse(e.target.value)} rows={4} spellCheck={false} placeholder='{"id": "string", "status": "created"}' className={`${INPUT} font-mono text-[11.5px] resize-y`} /></div>
