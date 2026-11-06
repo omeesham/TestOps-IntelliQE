@@ -14,6 +14,7 @@
  * variables so `{{baseUrl}}`-style tokens resolve once the user fills them.
  */
 import type { FlowStep } from '../services/api-flow.service.js';
+import { parsePostmanScripts } from './postman-script-parser.js';
 
 type Auth = { type: 'none' | 'bearer' | 'basic' | 'apikey'; value?: string; headerName?: string };
 interface PmResult { steps: FlowStep[]; variables: Record<string, string>; warnings: string[] }
@@ -113,6 +114,16 @@ export function postmanToFlow(doc: unknown): PmResult {
       const step: FlowStep = { name: String(it.name || `${method} ${url}`).slice(0, 80), method, url, headers };
       if (auth.type !== 'none' && (auth.value || auth.type === 'apikey')) step.auth = auth as FlowStep['auth'];
       if (body && method !== 'GET' && method !== 'HEAD') step.body = body;
+
+      // Carry the request's test / pre-request scripts across as runnable
+      // assertions and variable captures — so the imported flow keeps the user's
+      // test intent and its login→use token chaining, not just the request shape.
+      const scripted = parsePostmanScripts(it.event);
+      if (scripted.checks.length) step.checks = scripted.checks;
+      if (scripted.extracts.length) step.extract = scripted.extracts;
+      for (const [k, v] of Object.entries(scripted.variables)) if (variables[k] === undefined) variables[k] = v;
+      for (const w of scripted.warnings) warnings.push(`"${step.name}": ${w}`);
+
       steps.push(step);
     }
   };
