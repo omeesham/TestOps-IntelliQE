@@ -50,6 +50,7 @@ import {
 } from '../services/api-import.service.js';
 import { parsePostmanEnvironment, collectionVariables, mergePostmanVariables } from '../utils/postman-env.js';
 import { analyzeApiSurface, enrichProfileWithLlm } from '../services/api-intelligence.service.js';
+import { suggestReadiness, type EndpointForSuggest } from '../services/api-readiness-suggest.service.js';
 import { validateContract } from '../services/api-contract.service.js';
 import { runLoadTest, runLoadProfile } from '../services/api-loadtest.service.js';
 import { runSecurityScan } from '../services/api-security.service.js';
@@ -474,6 +475,26 @@ router.post('/import/postman', upload.fields([{ name: 'file', maxCount: 1 }, { n
       suggestedBaseUrl: baseUrlVar ? baseUrlVar.value : undefined,
       ...(applied ? { applied, environment: appliedEnvironment } : {}),
     });
+  } catch (err) { fail(res, err); }
+});
+
+/**
+ * Suggest the details an endpoint is MISSING for the strict readiness gate
+ * (purpose, expected response status + body, business rules, write-verb body).
+ * AI-first when the tenant has an LLM, deterministic fallback otherwise — the
+ * suggestion is always complete and shaped to pass review. Nothing is persisted;
+ * the client applies the fields it is missing.
+ */
+router.post('/endpoints/suggest-readiness', async (req: Request, res: Response) => {
+  try {
+    const ep = req.body?.endpoint as EndpointForSuggest | undefined;
+    if (!ep || typeof ep !== 'object' || !String(ep.url || '').trim()) {
+      res.status(400).json({ error: 'An endpoint (with at least a URL) is required.' });
+      return;
+    }
+    const llm = (await getTenantLlm(req.user!.tenantId)) || undefined;
+    const { suggestion, source } = await suggestReadiness(ep, llm);
+    res.json({ suggestion, source });
   } catch (err) { fail(res, err); }
 });
 

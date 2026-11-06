@@ -1395,6 +1395,13 @@ export async function importHarSteps(har: string): Promise<{ steps: FlowStep[]; 
 export async function importPostmanSteps(collection: string): Promise<{ steps: FlowStep[]; variables: Record<string, string>; warnings: string[] }> { const { data } = await api.post('/api-automation/flows/import-postman', { collection }); return { steps: data.steps || [], variables: data.variables || {}, warnings: data.warnings || [] }; }
 /** A set of flow steps handed from one view (e.g. the import wizard) to the Flow Builder to seed a new flow. */
 export interface ApiFlowSeed { name?: string; steps: FlowStep[]; variables?: Record<string, string>; warnings?: string[] }
+/** Suggested values for the readiness-gate fields (AI-first, deterministic fallback). */
+export interface ReadinessSuggestion { description: string; expectedStatus: number; expectedResponse: string; businessRules: string; body: string }
+/** Ask the backend to suggest the details an endpoint is missing to pass the readiness gate. */
+export async function suggestEndpointReadiness(endpoint: { method?: string; url?: string; title?: string; description?: string; expectedStatus?: number; expectedResponse?: string; businessRules?: string; body?: string; style?: string; resource?: string; pathParams?: { name: string; example?: string }[]; queryParams?: { name: string; example?: string }[] }): Promise<{ suggestion: ReadinessSuggestion; source: 'ai' | 'heuristic' }> {
+  const { data } = await api.post('/api-automation/endpoints/suggest-readiness', { endpoint });
+  return { suggestion: data.suggestion, source: data.source };
+}
 /** Static pre-flight lint of a flow — undefined {{vars}}, no-assertion steps, dup names. Pure, network-free; `ok` is false when there are errors (a CI gate). */
 export type FlowLintLevel = 'error' | 'warning' | 'info';
 export interface FlowLintIssue { level: FlowLintLevel; step?: string; message: string }
