@@ -530,6 +530,39 @@ export async function getProjects(creds: JiraCreds): Promise<JiraProject[]> {
   return values.map((p: any) => ({ key: p.key, name: p.name, id: String(p.id), projectTypeKey: p.projectTypeKey })).slice(0, 200);
 }
 
+const ISSUE_FIELDS = 'summary,issuetype,status,priority,parent';
+
+/** Map a raw Jira issue (search or agile endpoint) to our summary shape. */
+function mapIssue(i: any): JiraIssueSummary {
+  return {
+    key: i.key,
+    summary: i.fields?.summary ?? '',
+    type: i.fields?.issuetype?.name ?? '',
+    status: i.fields?.status?.name,
+    priority: i.fields?.priority?.name,
+    parentKey: i.fields?.parent?.key,
+  };
+}
+
+/**
+ * Build bounded JQL from filter options. An explicit `jql` wins; otherwise a
+ * project/type clause is assembled, with a date floor so the new /search/jql
+ * endpoint (which rejects unbounded JQL) always has a bound.
+ */
+function buildIssuesJql(opts: { types?: string[]; jql?: string; projectKey?: string }, fallbackProjectKey?: string): string {
+  const explicit = (opts.jql || '').trim();
+  if (explicit) return explicit;
+  const projectKey = opts.projectKey || fallbackProjectKey;
+  const clauses: string[] = [];
+  if (projectKey) clauses.push(`project = "${projectKey}"`);
+  if (opts.types?.length) {
+    const quoted = opts.types.map((t) => `"${String(t).replace(/"/g, '\\"')}"`).join(', ');
+    clauses.push(`issuetype in (${quoted})`);
+  }
+  if (!clauses.length) clauses.push('created >= "2000-01-01"'); // keep the JQL bounded
+  return `${clauses.join(' AND ')} ORDER BY created DESC`;
+}
+
 /**
  * Fetch issues of any type (epics, stories, tasks, subtasks, bugs). Scoped to a
  * project when one is known; the new /search/jql endpoint requires bounded JQL,
@@ -540,30 +573,175 @@ export async function getIssues(
   opts?: { types?: string[]; jql?: string; maxResults?: number; projectKey?: string },
 ): Promise<JiraIssueSummary[]> {
   const max = Math.min(100, Math.max(1, opts?.maxResults ?? 50));
-  const projectKey = opts?.projectKey || creds.projectKey;
-  let jql = (opts?.jql || '').trim();
-  if (!jql) {
-    const clauses: string[] = [];
-    if (projectKey) clauses.push(`project = "${projectKey}"`);
-    if (opts?.types?.length) {
-      const quoted = opts.types.map((t) => `"${String(t).replace(/"/g, '\\"')}"`).join(', ');
-      clauses.push(`issuetype in (${quoted})`);
-    }
-    if (!clauses.length) clauses.push('created >= "2000-01-01"'); // keep the JQL bounded
-    jql = `${clauses.join(' AND ')} ORDER BY created DESC`;
-  }
+  const jql = buildIssuesJql(opts || {}, creds.projectKey);
   const data = await request<any>(creds, `${creds.baseUrl}/rest/api/3/search/jql`, {
-    jql, maxResults: max, fields: 'summary,issuetype,status,priority,parent',
+    jql, maxResults: max, fields: ISSUE_FIELDS,
   });
   const issues = Array.isArray(data?.issues) ? data.issues : [];
-  return issues.map((i: any) => ({
-    key: i.key,
-    summary: i.fields?.summary ?? '',
-    type: i.fields?.issuetype?.name ?? '',
-    status: i.fields?.status?.name,
-    priority: i.fields?.priority?.name,
-    parentKey: i.fields?.parent?.key,
-  }));
+  return issues.map(mapIssue);
+}
+
+/**
+ * Fetch ALL matching issues across pages, beyond the single-request cap. The new
+ * /search/jql endpoint is token-paginated: each response carries a
+ * `nextPageToken` until the last page (`isLast: true` / token absent). A total
+ * cap and an iteration guard keep this bounded even on a misbehaving server.
+ */
+export async function getAllIssues(
+  creds: JiraCreds,
+  opts?: { types?: string[]; jql?: string; projectKey?: string; maxTotal?: number; pageSize?: number },
+): Promise<JiraIssueSummary[]> {
+  const maxTotal = Math.min(5000, Math.max(1, opts?.maxTotal ?? 1000));
+  const pageSize = Math.min(100, Math.max(1, opts?.pageSize ?? 100));
+  const jql = buildIssuesJql(opts || {}, creds.projectKey);
+  const url = `${creds.baseUrl}/rest/api/3/search/jql`;
+  const out: JiraIssueSummary[] = [];
+  let nextPageToken: string | undefined;
+  let guard = 0;
+  do {
+    const data = await request<any>(creds, url, {
+      jql,
+      maxResults: Math.min(pageSize, maxTotal - out.length),
+      fields: ISSUE_FIELDS,
+      ...(nextPageToken ? { nextPageToken } : {}),
+    });
+    const issues = Array.isArray(data?.issues) ? data.issues : [];
+    for (const i of issues) out.push(mapIssue(i));
+    nextPageToken = typeof data?.nextPageToken === 'string' ? data.nextPageToken : undefined;
+    if (data?.isLast === true || issues.length === 0) nextPageToken = undefined;
+    guard += 1;
+  } while (nextPageToken && out.length < maxTotal && guard < 200);
+  return out.slice(0, maxTotal);
+}
+
+// --- Comments & changelog (read) ---
+export interface JiraComment { id: string; author?: string; body: string; created?: string; updated?: string }
+
+/** Read an issue's comments as plain text (rendered HTML flattened), newest first. */
+export async function getIssueComments(creds: JiraCreds, key: string, opts?: { maxResults?: number }): Promise<JiraComment[]> {
+  const max = Math.min(100, Math.max(1, opts?.maxResults ?? 50));
+  const url = `${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}/comment`;
+  const data = await request<any>(creds, url, { maxResults: max, expand: 'renderedBody', orderBy: '-created' });
+  const comments = Array.isArray(data?.comments) ? data.comments : [];
+  return comments
+    .map((c: any): JiraComment => ({
+      id: String(c?.id ?? ''),
+      author: c?.author?.displayName || undefined,
+      body: c?.renderedBody ? htmlToPlain(String(c.renderedBody))
+        : typeof c?.body === 'string' ? c.body
+        : c?.body ? htmlToPlain(JSON.stringify(c.body)) : '',
+      created: c?.created || undefined,
+      updated: c?.updated || undefined,
+    }))
+    .filter((c: JiraComment) => c.id);
+}
+
+export interface JiraChange { field: string; from?: string; to?: string }
+export interface JiraChangelogEntry { id: string; author?: string; created?: string; changes: JiraChange[] }
+
+/**
+ * Read an issue's change history (field transitions). Note the Jira item fields
+ * are literally named `fromString` / `toString`; `toString` collides with
+ * Object.prototype, so each is accepted only when it is actually a string.
+ */
+export async function getIssueChangelog(creds: JiraCreds, key: string, opts?: { maxResults?: number }): Promise<JiraChangelogEntry[]> {
+  const max = Math.min(100, Math.max(1, opts?.maxResults ?? 50));
+  const url = `${creds.baseUrl}/rest/api/3/issue/${encodeURIComponent(key)}/changelog`;
+  const data = await request<any>(creds, url, { maxResults: max });
+  const values = Array.isArray(data?.values) ? data.values : [];
+  return values
+    .map((v: any): JiraChangelogEntry => ({
+      id: String(v?.id ?? ''),
+      author: v?.author?.displayName || undefined,
+      created: v?.created || undefined,
+      changes: (Array.isArray(v?.items) ? v.items : []).map((it: any): JiraChange => ({
+        field: String(it?.field ?? it?.fieldId ?? ''),
+        from: typeof it?.fromString === 'string' ? it.fromString : (it?.from != null ? String(it.from) : undefined),
+        to: typeof it?.toString === 'string' ? it.toString : (it?.to != null ? String(it.to) : undefined),
+      })),
+    }))
+    .filter((e: JiraChangelogEntry) => e.id);
+}
+
+// --- Agile: boards, sprints, backlog (/rest/agile/1.0) ---
+export interface JiraBoard { id: number; name: string; type?: string }
+export interface JiraSprint { id: number; name: string; state?: string; startDate?: string; endDate?: string; boardId?: number }
+
+/** List agile boards, optionally scoped to a project (key or numeric id). */
+export async function getBoards(creds: JiraCreds, opts?: { projectKeyOrId?: string; maxResults?: number }): Promise<JiraBoard[]> {
+  const max = Math.min(100, Math.max(1, opts?.maxResults ?? 50));
+  const params: Record<string, any> = { maxResults: max };
+  if (opts?.projectKeyOrId) params.projectKeyOrId = opts.projectKeyOrId;
+  const data = await request<any>(creds, `${creds.baseUrl}/rest/agile/1.0/board`, params);
+  const values = Array.isArray(data?.values) ? data.values : [];
+  return values
+    .map((b: any): JiraBoard => ({ id: Number(b?.id), name: String(b?.name ?? ''), type: b?.type }))
+    .filter((b: JiraBoard) => Number.isFinite(b.id));
+}
+
+/** List the sprints on a board, optionally by state (future | active | closed). */
+export async function getSprints(creds: JiraCreds, boardId: number, opts?: { state?: string; maxResults?: number }): Promise<JiraSprint[]> {
+  const max = Math.min(100, Math.max(1, opts?.maxResults ?? 50));
+  const params: Record<string, any> = { maxResults: max };
+  if (opts?.state) params.state = opts.state;
+  const data = await request<any>(creds, `${creds.baseUrl}/rest/agile/1.0/board/${encodeURIComponent(String(boardId))}/sprint`, params);
+  const values = Array.isArray(data?.values) ? data.values : [];
+  return values
+    .map((s: any): JiraSprint => ({ id: Number(s?.id), name: String(s?.name ?? ''), state: s?.state, startDate: s?.startDate, endDate: s?.endDate, boardId: s?.originBoardId }))
+    .filter((s: JiraSprint) => Number.isFinite(s.id));
+}
+
+/** Fetch the issues in a sprint. */
+export async function getSprintIssues(creds: JiraCreds, sprintId: number, opts?: { maxResults?: number }): Promise<JiraIssueSummary[]> {
+  const max = Math.min(100, Math.max(1, opts?.maxResults ?? 100));
+  const data = await request<any>(creds, `${creds.baseUrl}/rest/agile/1.0/sprint/${encodeURIComponent(String(sprintId))}/issue`, { maxResults: max, fields: ISSUE_FIELDS });
+  const issues = Array.isArray(data?.issues) ? data.issues : [];
+  return issues.map(mapIssue);
+}
+
+/** Fetch a board's backlog issues (those not assigned to any sprint). */
+export async function getBacklogIssues(creds: JiraCreds, boardId: number, opts?: { maxResults?: number }): Promise<JiraIssueSummary[]> {
+  const max = Math.min(100, Math.max(1, opts?.maxResults ?? 100));
+  const data = await request<any>(creds, `${creds.baseUrl}/rest/agile/1.0/board/${encodeURIComponent(String(boardId))}/backlog`, { maxResults: max, fields: ISSUE_FIELDS });
+  const issues = Array.isArray(data?.issues) ? data.issues : [];
+  return issues.map(mapIssue);
+}
+
+// --- Saved JQL filters ---
+export interface JiraFilter { id: string; name: string; jql: string; owner?: string; favourite?: boolean }
+
+function mapFilter(f: any, fallbackId?: string): JiraFilter {
+  return {
+    id: String(f?.id ?? fallbackId ?? ''),
+    name: String(f?.name ?? ''),
+    jql: String(f?.jql ?? ''),
+    owner: f?.owner?.displayName || undefined,
+    favourite: typeof f?.favourite === 'boolean' ? f.favourite : undefined,
+  };
+}
+
+/** List the account's saved JQL filters, each with its JQL. */
+export async function getFilters(creds: JiraCreds, opts?: { maxResults?: number }): Promise<JiraFilter[]> {
+  const max = Math.min(100, Math.max(1, opts?.maxResults ?? 50));
+  const data = await request<any>(creds, `${creds.baseUrl}/rest/api/3/filter/search`, { maxResults: max, expand: 'jql,owner' });
+  const values = Array.isArray(data?.values) ? data.values : [];
+  return values.map((f: any) => mapFilter(f)).filter((f: JiraFilter) => f.id);
+}
+
+/** Get a single saved filter (with its JQL). */
+export async function getFilter(creds: JiraCreds, id: string): Promise<JiraFilter> {
+  const f = await request<any>(creds, `${creds.baseUrl}/rest/api/3/filter/${encodeURIComponent(id)}`, { expand: 'jql,owner' });
+  return mapFilter(f, id);
+}
+
+/** Run a saved filter: resolve its JQL, then fetch the matching issues. */
+export async function runFilter(creds: JiraCreds, id: string, opts?: { maxResults?: number; fetchAll?: boolean }): Promise<{ filter: JiraFilter; issues: JiraIssueSummary[] }> {
+  const filter = await getFilter(creds, id);
+  if (!filter.jql) return { filter, issues: [] };
+  const issues = opts?.fetchAll
+    ? await getAllIssues(creds, { jql: filter.jql, maxTotal: opts?.maxResults })
+    : await getIssues(creds, { jql: filter.jql, maxResults: opts?.maxResults });
+  return { filter, issues };
 }
 
 /** Add a plain-text comment to an issue (used when a failure recurs on an existing defect). */
@@ -650,4 +828,10 @@ export async function downloadIssueAttachments(
   return out;
 }
 
-export default { testConnection, getStories, getStory, getCredsForTenant, saveCredsForTenant, deleteCredsForTenant, getConnectionStatus, createBug, deleteIssue, getProjects, getIssues, addComment, listIssueAttachments, downloadIssueAttachments };
+export default {
+  testConnection, getStories, getStory, getCredsForTenant, saveCredsForTenant,
+  deleteCredsForTenant, getConnectionStatus, createBug, deleteIssue, getProjects,
+  getIssues, addComment, listIssueAttachments, downloadIssueAttachments,
+  getAllIssues, getIssueComments, getIssueChangelog, getBoards, getSprints,
+  getSprintIssues, getBacklogIssues, getFilters, getFilter, runFilter,
+};

@@ -10,12 +10,9 @@
  */
 import { useState } from 'react';
 import {
-  Check, X, Trash2, ShieldCheck, ChevronDown, Link2, FlaskConical, AlertCircle, Pencil, Sparkles,
+  Check, X, Trash2, ShieldCheck, ChevronDown, Link2, FlaskConical, AlertCircle, Pencil,
 } from 'lucide-react';
 import { PRIMARY_BTN, SECONDARY_BTN, INPUT, LABEL } from './format';
-import Spinner from '@/components/feedback/Spinner';
-import { useToast } from '@/components/feedback/ToastProvider';
-import { suggestEndpointReadiness } from '@/services/api';
 import {
   buildReadinessReview, CATEGORY_CHECKLIST,
   type EndpointReadiness, type ReadinessField,
@@ -48,13 +45,11 @@ function FieldRow({ f }: { f: ReadinessField }) {
   );
 }
 
-function EndpointCard({ item, ep, onPatch, onReject, onSuggest, suggesting }: {
+function EndpointCard({ item, ep, onPatch, onReject }: {
   item: EndpointReadiness;
   ep: CatalogEndpoint;
   onPatch: (patch: Partial<CatalogEndpoint>) => void;
   onReject: () => void;
-  onSuggest: () => void;
-  suggesting: boolean;
 }) {
   const [editing, setEditing] = useState(!item.ready);
   const [showTests, setShowTests] = useState(false);
@@ -81,14 +76,6 @@ function EndpointCard({ item, ep, onPatch, onReject, onSuggest, suggesting }: {
           {item.ready
             ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold"><Check className="w-3 h-3" />Ready</span>
             : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[10px] font-bold">{item.errorCount} missing</span>}
-          {!item.ready && (
-            <button type="button" onClick={onSuggest} disabled={suggesting}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#EEF2FF] border border-[#C7D2FE] text-[#4338CA] text-[10px] font-bold hover:bg-[#E0E7FF] disabled:opacity-60"
-              title="Suggest the missing details (purpose, expected response, business rules) with AI and fill them in so this endpoint passes review">
-              {suggesting ? <Spinner className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-              Suggest &amp; make ready
-            </button>
-          )}
           <button type="button" onClick={() => setEditing((v) => !v)} className="p-1 rounded text-gray-400 hover:text-[#2563EB] hover:bg-white" title="Edit fields"><Pencil className="w-3.5 h-3.5" /></button>
           <button type="button" onClick={onReject} className="p-1 rounded text-gray-400 hover:text-red-600 hover:bg-white" title="Reject & remove this endpoint"><Trash2 className="w-3.5 h-3.5" /></button>
         </span>
@@ -163,54 +150,10 @@ export default function ReadinessReview({ catalog, endpointIds, onClose, onProce
   onClose: () => void;
   onProceed: (eps: CatalogEndpoint[]) => void;
 }) {
-  const toast = useToast();
   const ids = new Set(endpointIds);
   const eps = catalog.endpoints.filter((e) => ids.has(e.id));
   const report = buildReadinessReview(eps);
   const empty = eps.length === 0;
-  const [suggesting, setSuggesting] = useState<Set<string>>(new Set());
-
-  /** Suggest the missing readiness details for one endpoint and fill ONLY the
-   *  fields that are currently failing, so a good purpose/body is never clobbered. */
-  const suggestFor = async (item: EndpointReadiness, ep: CatalogEndpoint) => {
-    if (suggesting.has(item.endpointId)) return;
-    setSuggesting((s) => new Set(s).add(item.endpointId));
-    try {
-      const { suggestion, source } = await suggestEndpointReadiness({
-        method: ep.method, url: ep.url, title: ep.title, description: ep.description,
-        expectedStatus: ep.expectedStatus, expectedResponse: ep.expectedResponse,
-        businessRules: ep.businessRules, body: ep.body, style: ep.style, resource: ep.resource,
-        pathParams: ep.pathParams, queryParams: ep.queryParams,
-      });
-      const fail = new Set(item.fields.filter((f) => !f.ok && f.level === 'error').map((f) => f.key));
-      const patch: Partial<CatalogEndpoint> = {};
-      if (fail.has('purpose')) patch.description = suggestion.description;
-      if (fail.has('responses')) {
-        if (!(typeof ep.expectedStatus === 'number' && ep.expectedStatus > 0)) patch.expectedStatus = suggestion.expectedStatus;
-        if (!String(ep.expectedResponse || '').trim()) patch.expectedResponse = suggestion.expectedResponse;
-      }
-      if (fail.has('schema')) patch.expectedResponse = suggestion.expectedResponse; // invalid JSON → replace with a valid example
-      if (fail.has('businessRules')) patch.businessRules = suggestion.businessRules;
-      if (fail.has('inputs') && suggestion.body) patch.body = suggestion.body;
-      const n = Object.keys(patch).length;
-      if (n) catalog.updateEndpoint(item.endpointId, patch);
-      toast.success(source === 'ai' ? 'Suggested with AI' : 'Suggested', n ? `Filled ${n} missing item${n === 1 ? '' : 's'} — endpoint is ready.` : 'Nothing to fill.');
-    } catch (err: any) {
-      toast.error('Could not suggest', err?.response?.data?.error || err?.message || 'Please try again.');
-    } finally {
-      setSuggesting((s) => { const n = new Set(s); n.delete(item.endpointId); return n; });
-    }
-  };
-
-  /** Suggest for every not-ready endpoint, one at a time. */
-  const suggestAll = async () => {
-    for (const item of report.items) {
-      if (item.ready) continue;
-      const ep = eps.find((e) => e.id === item.endpointId);
-      if (ep) await suggestFor(item, ep);
-    }
-  };
-  const busyAny = suggesting.size > 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm" onClick={onClose}>
@@ -246,9 +189,7 @@ export default function ReadinessReview({ catalog, endpointIds, onClose, onProce
                 return (
                   <EndpointCard key={item.endpointId} item={item} ep={ep}
                     onPatch={(patch) => catalog.updateEndpoint(item.endpointId, patch)}
-                    onReject={() => catalog.removeEndpoints([item.endpointId])}
-                    onSuggest={() => void suggestFor(item, ep)}
-                    suggesting={suggesting.has(item.endpointId)} />
+                    onReject={() => catalog.removeEndpoints([item.endpointId])} />
                 );
               })}
         </div>
@@ -259,14 +200,6 @@ export default function ReadinessReview({ catalog, endpointIds, onClose, onProce
             {report.allReady ? 'All endpoints are automation-ready.' : `${report.notReady} endpoint${report.notReady === 1 ? '' : 's'} still need${report.notReady === 1 ? 's' : ''} attention.`}
           </p>
           <div className="ml-auto flex items-center gap-2">
-            {report.notReady > 0 && (
-              <button type="button" onClick={() => void suggestAll()} disabled={busyAny}
-                className={SECONDARY_BTN}
-                title="Suggest the missing details for every not-ready endpoint with AI and fill them in">
-                {busyAny ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                Suggest &amp; make all ready ({report.notReady})
-              </button>
-            )}
             <button type="button" onClick={onClose} className={SECONDARY_BTN}>Close</button>
             <button type="button" disabled={!report.allReady} onClick={() => onProceed(eps)} className={PRIMARY_BTN}>
               Start planning

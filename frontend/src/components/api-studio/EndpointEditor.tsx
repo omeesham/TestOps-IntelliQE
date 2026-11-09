@@ -727,6 +727,24 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
             {sendError && <p className="text-[11px] text-red-600 mt-2 whitespace-pre-wrap break-words">{sendError}</p>}
             {sendResult && (
               <div className="mt-2 space-y-1.5">
+                {(() => {
+                  const exp = parseInt(expectedStatus, 10);
+                  const actual = sendResult.status ?? null;
+                  const transportFail = !!sendResult.error || actual == null;
+                  const matched = !transportFail && Number.isFinite(exp) && actual === exp;
+                  return (
+                    <div className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-[11.5px] font-semibold ${matched ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-800'}`}>
+                      {matched ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
+                      <span>
+                        {matched
+                          ? `Success — response matches the expected status (${exp})`
+                          : transportFail
+                            ? `Failure — the request did not complete${sendResult.error ? `: ${sendResult.error}` : ''}`
+                            : `Failure — expected ${Number.isFinite(exp) ? exp : '—'}, got ${actual ?? '—'}`}
+                      </span>
+                    </div>
+                  );
+                })()}
                 <div className="flex items-center gap-2 text-[11.5px]">
                   <span className={`font-mono font-bold ${sendResult.ok ? 'text-emerald-700' : 'text-red-700'}`}>{sendResult.status ?? '—'}</span>
                   <span className="text-gray-400 tabular-nums">{sendResult.elapsedMs}ms</span>

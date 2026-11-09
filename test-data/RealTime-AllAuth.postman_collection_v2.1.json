@@ -1,0 +1,789 @@
+{
+  "info": {
+    "name": "RealTime All-Auth APIs (v2.1)",
+    "description": "Live public APIs across all Postman auth types, with folders and variables. For testing IntelliQE Postman import (folders, variables, auth).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "realtime-allauth-21"
+  },
+  "item": [
+    {
+      "name": "01 - Public REST (no auth)",
+      "description": "Full CRUD + echo, no auth.",
+      "item": [
+        {
+          "name": "List posts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{jsonph}}/posts",
+              "host": [
+                "{{jsonph}}"
+              ],
+              "path": [
+                "posts"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get post",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{jsonph}}/posts/{{post_id}}",
+              "host": [
+                "{{jsonph}}"
+              ],
+              "path": [
+                "posts",
+                "{{post_id}}"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create post",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{jsonph}}/posts",
+              "host": [
+                "{{jsonph}}"
+              ],
+              "path": [
+                "posts"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\": \"hello\", \"body\": \"world\", \"userId\": 1}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 201', function () { pm.response.to.have.status(201); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Replace post",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{jsonph}}/posts/{{post_id}}",
+              "host": [
+                "{{jsonph}}"
+              ],
+              "path": [
+                "posts",
+                "{{post_id}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"id\": 1, \"title\": \"updated\", \"userId\": 1}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Patch post",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{jsonph}}/posts/{{post_id}}",
+              "host": [
+                "{{jsonph}}"
+              ],
+              "path": [
+                "posts",
+                "{{post_id}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\": \"patched\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete post",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{jsonph}}/posts/{{post_id}}",
+              "host": [
+                "{{jsonph}}"
+              ],
+              "path": [
+                "posts",
+                "{{post_id}}"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Echo GET",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{httpbin}}/get?demo=1",
+              "host": [
+                "{{httpbin}}"
+              ],
+              "path": [
+                "get"
+              ],
+              "query": [
+                {
+                  "key": "demo",
+                  "value": "1"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "noauth"
+      }
+    },
+    {
+      "name": "02 - Basic Auth",
+      "description": "Folder-level Basic auth; requests inherit.",
+      "item": [
+        {
+          "name": "Echo basic-auth (postman/password)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{echo}}/basic-auth",
+              "host": [
+                "{{echo}}"
+              ],
+              "path": [
+                "basic-auth"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "httpbin basic-auth",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{httpbin}}/basic-auth/user/passwd",
+              "host": [
+                "{{httpbin}}"
+              ],
+              "path": [
+                "basic-auth",
+                "user",
+                "passwd"
+              ]
+            },
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{basic_user}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{basic_pass}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "basic",
+        "basic": [
+          {
+            "key": "username",
+            "value": "{{username}}",
+            "type": "string"
+          },
+          {
+            "key": "password",
+            "value": "{{password}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "03 - Bearer & OAuth2",
+      "description": "Folder-level Bearer; one OAuth2 request.",
+      "item": [
+        {
+          "name": "httpbin bearer",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{httpbin}}/bearer",
+              "host": [
+                "{{httpbin}}"
+              ],
+              "path": [
+                "bearer"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GitHub repo (public)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{github}}/repos/postmanlabs/httpbin",
+              "host": [
+                "{{github}}"
+              ],
+              "path": [
+                "repos",
+                "postmanlabs",
+                "httpbin"
+              ]
+            },
+            "auth": {
+              "type": "oauth2",
+              "oauth2": [
+                {
+                  "key": "accessToken",
+                  "value": "{{bearer_token}}",
+                  "type": "string"
+                },
+                {
+                  "key": "tokenType",
+                  "value": "Bearer",
+                  "type": "string"
+                },
+                {
+                  "key": "addTokenTo",
+                  "value": "header",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{bearer_token}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "04 - API Key",
+      "description": "API key in header and in query.",
+      "item": [
+        {
+          "name": "API key in header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{httpbin}}/headers",
+              "host": [
+                "{{httpbin}}"
+              ],
+              "path": [
+                "headers"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "API key in query",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{httpbin}}/get?api_key={{api_key_value}}",
+              "host": [
+                "{{httpbin}}"
+              ],
+              "path": [
+                "get"
+              ],
+              "query": [
+                {
+                  "key": "api_key",
+                  "value": "{{api_key_value}}"
+                }
+              ]
+            },
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                {
+                  "key": "key",
+                  "value": "{{api_key_name}}",
+                  "type": "string"
+                },
+                {
+                  "key": "value",
+                  "value": "{{api_key_value}}",
+                  "type": "string"
+                },
+                {
+                  "key": "in",
+                  "value": "query",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "apikey",
+        "apikey": [
+          {
+            "key": "key",
+            "value": "{{api_key_name}}",
+            "type": "string"
+          },
+          {
+            "key": "value",
+            "value": "{{api_key_value}}",
+            "type": "string"
+          },
+          {
+            "key": "in",
+            "value": "header",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "05 - Digest Auth",
+      "description": "Digest auth (challenge/response).",
+      "item": [
+        {
+          "name": "httpbin digest-auth",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{httpbin}}/digest-auth/auth/user/passwd",
+              "host": [
+                "{{httpbin}}"
+              ],
+              "path": [
+                "digest-auth",
+                "auth",
+                "user",
+                "passwd"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Echo digest-auth",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{echo}}/digest-auth",
+              "host": [
+                "{{echo}}"
+              ],
+              "path": [
+                "digest-auth"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 401', function () { pm.response.to.have.status(401); });"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "digest",
+        "digest": [
+          {
+            "key": "username",
+            "value": "{{digest_user}}",
+            "type": "string"
+          },
+          {
+            "key": "password",
+            "value": "{{digest_pass}}",
+            "type": "string"
+          },
+          {
+            "key": "algorithm",
+            "value": "MD5",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "06 - OAuth1",
+      "description": "OAuth 1.0 signed request.",
+      "item": [
+        {
+          "name": "Echo oauth1",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{echo}}/oauth1",
+              "host": [
+                "{{echo}}"
+              ],
+              "path": [
+                "oauth1"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "oauth1",
+        "oauth1": [
+          {
+            "key": "consumerKey",
+            "value": "{{oauth1_ck}}",
+            "type": "string"
+          },
+          {
+            "key": "consumerSecret",
+            "value": "{{oauth1_cs}}",
+            "type": "string"
+          },
+          {
+            "key": "signatureMethod",
+            "value": "HMAC-SHA1",
+            "type": "string"
+          },
+          {
+            "key": "addParamsToHeader",
+            "value": true,
+            "type": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "name": "07 - AWS SigV4",
+      "description": "AWS Signature v4 (auth-block parse test).",
+      "item": [
+        {
+          "name": "S3-style signed GET",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://s3.amazonaws.com/",
+              "host": [
+                "s3.amazonaws.com"
+              ],
+              "protocol": "https"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 403', function () { pm.response.to.have.status(403); });"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "awsv4",
+        "awsv4": [
+          {
+            "key": "accessKey",
+            "value": "{{aws_access_key}}",
+            "type": "string"
+          },
+          {
+            "key": "secretKey",
+            "value": "{{aws_secret_key}}",
+            "type": "string"
+          },
+          {
+            "key": "region",
+            "value": "us-east-1",
+            "type": "string"
+          },
+          {
+            "key": "service",
+            "value": "s3",
+            "type": "string"
+          }
+        ]
+      }
+    }
+  ],
+  "auth": {
+    "type": "noauth"
+  },
+  "variable": [
+    {
+      "key": "jsonph",
+      "value": "https://jsonplaceholder.typicode.com"
+    },
+    {
+      "key": "httpbin",
+      "value": "https://httpbin.org"
+    },
+    {
+      "key": "echo",
+      "value": "https://postman-echo.com"
+    },
+    {
+      "key": "github",
+      "value": "https://api.github.com"
+    },
+    {
+      "key": "post_id",
+      "value": "1"
+    }
+  ]
+}

@@ -36,7 +36,7 @@ import multer from 'multer';
 import { parseDocument } from '../services/document-parser.service.js';
 import { getTenantLlm } from '../services/llm.service.js';
 import { getConfigsForTenant, upsertConfig } from '../services/configurations.service.js';
-import { getCredsForTenant as getJiraCreds, getStory as getJiraStory, getProjects as getJiraProjects, getIssues as getJiraIssues, downloadIssueAttachments as downloadJiraAttachments } from '../services/jira.service.js';
+import { getCredsForTenant as getJiraCreds, getStory as getJiraStory, getProjects as getJiraProjects, getIssues as getJiraIssues, downloadIssueAttachments as downloadJiraAttachments, getAllIssues as getJiraAllIssues, getIssueComments as getJiraComments, getIssueChangelog as getJiraChangelog, getBoards as getJiraBoards, getSprints as getJiraSprints, getSprintIssues as getJiraSprintIssues, getBacklogIssues as getJiraBacklog, getFilters as getJiraFilters, getFilter as getJiraFilter, runFilter as runJiraFilter } from '../services/jira.service.js';
 import { countFileItems } from '../services/api-attachment-count.service.js';
 import { syncDefects as syncJiraDefects, listSyncHistory as listJiraSyncHistory, listDefectLinks as listJiraDefectLinks } from '../services/api-jira-sync.service.js';
 import { getCredsForTenant as getAdoCreds, getStory as getAdoStory, getStoryAttachments as getAdoAttachments, getProjects as getAdoProjects, getWorkItems as getAdoWorkItems } from '../services/azure-devops.service.js';
@@ -50,7 +50,6 @@ import {
 } from '../services/api-import.service.js';
 import { parsePostmanEnvironment, collectionVariables, mergePostmanVariables } from '../utils/postman-env.js';
 import { analyzeApiSurface, enrichProfileWithLlm } from '../services/api-intelligence.service.js';
-import { suggestReadiness, type EndpointForSuggest } from '../services/api-readiness-suggest.service.js';
 import { validateContract } from '../services/api-contract.service.js';
 import { runLoadTest, runLoadProfile } from '../services/api-loadtest.service.js';
 import { runSecurityScan } from '../services/api-security.service.js';
@@ -475,26 +474,6 @@ router.post('/import/postman', upload.fields([{ name: 'file', maxCount: 1 }, { n
       suggestedBaseUrl: baseUrlVar ? baseUrlVar.value : undefined,
       ...(applied ? { applied, environment: appliedEnvironment } : {}),
     });
-  } catch (err) { fail(res, err); }
-});
-
-/**
- * Suggest the details an endpoint is MISSING for the strict readiness gate
- * (purpose, expected response status + body, business rules, write-verb body).
- * AI-first when the tenant has an LLM, deterministic fallback otherwise — the
- * suggestion is always complete and shaped to pass review. Nothing is persisted;
- * the client applies the fields it is missing.
- */
-router.post('/endpoints/suggest-readiness', async (req: Request, res: Response) => {
-  try {
-    const ep = req.body?.endpoint as EndpointForSuggest | undefined;
-    if (!ep || typeof ep !== 'object' || !String(ep.url || '').trim()) {
-      res.status(400).json({ error: 'An endpoint (with at least a URL) is required.' });
-      return;
-    }
-    const llm = (await getTenantLlm(req.user!.tenantId)) || undefined;
-    const { suggestion, source } = await suggestReadiness(ep, llm);
-    res.json({ suggestion, source });
   } catch (err) { fail(res, err); }
 });
 
@@ -3506,6 +3485,142 @@ router.get('/jira/issues', async (req: Request, res: Response) => {
     try {
       res.json({ issues: await getJiraIssues(creds, { types, jql, projectKey, maxResults }) });
     } catch (e) { res.status(502).json({ error: issueFetchError('Jira', 'issues', e) }); }
+  } catch (err) { fail(res, err); }
+});
+
+/* ── Jira — expanded read (fetch methods beyond projects/issues) ───────────── */
+
+/** Fetch ALL Jira issues across pages (token pagination), beyond the 100 cap. */
+router.get('/jira/issues/all', async (req: Request, res: Response) => {
+  try {
+    const creds = await getJiraCreds(req.user!.tenantId);
+    if (!creds) { res.status(409).json({ error: 'Jira is not connected. Connect it under System Configuration → Integrations first.' }); return; }
+    const types = typeof req.query.types === 'string' && req.query.types.trim()
+      ? req.query.types.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 10) : undefined;
+    const jql = typeof req.query.jql === 'string' ? req.query.jql.slice(0, 500) : undefined;
+    const projectKey = typeof req.query.projectKey === 'string' ? req.query.projectKey.trim() : undefined;
+    const maxTotal = Math.min(5000, Math.max(1, parseInt(String(req.query.maxTotal ?? '1000'), 10) || 1000));
+    try {
+      res.json({ issues: await getJiraAllIssues(creds, { types, jql, projectKey, maxTotal }) });
+    } catch (e) { res.status(502).json({ error: issueFetchError('Jira', 'issues', e) }); }
+  } catch (err) { fail(res, err); }
+});
+
+/** Read the comments on a Jira issue (plain text, newest first). */
+router.get('/jira/issue/:key/comments', async (req: Request, res: Response) => {
+  try {
+    const key = String(req.params.key || '').trim();
+    if (!key) { res.status(400).json({ error: 'A Jira issue key is required (e.g. PROJ-123).' }); return; }
+    const creds = await getJiraCreds(req.user!.tenantId);
+    if (!creds) { res.status(409).json({ error: 'Jira is not connected. Connect it under System Configuration → Integrations first.' }); return; }
+    const maxResults = Math.min(100, Math.max(1, parseInt(String(req.query.maxResults ?? '50'), 10) || 50));
+    try {
+      res.set('Cache-Control', 'no-store');
+      res.json({ comments: await getJiraComments(creds, key, { maxResults }) });
+    } catch (e) { res.status(502).json({ error: issueFetchError('Jira', key, e) }); }
+  } catch (err) { fail(res, err); }
+});
+
+/** Read the change history (field transitions) of a Jira issue. */
+router.get('/jira/issue/:key/changelog', async (req: Request, res: Response) => {
+  try {
+    const key = String(req.params.key || '').trim();
+    if (!key) { res.status(400).json({ error: 'A Jira issue key is required (e.g. PROJ-123).' }); return; }
+    const creds = await getJiraCreds(req.user!.tenantId);
+    if (!creds) { res.status(409).json({ error: 'Jira is not connected. Connect it under System Configuration → Integrations first.' }); return; }
+    const maxResults = Math.min(100, Math.max(1, parseInt(String(req.query.maxResults ?? '50'), 10) || 50));
+    try {
+      res.set('Cache-Control', 'no-store');
+      res.json({ changelog: await getJiraChangelog(creds, key, { maxResults }) });
+    } catch (e) { res.status(502).json({ error: issueFetchError('Jira', key, e) }); }
+  } catch (err) { fail(res, err); }
+});
+
+/** List agile boards (optionally scoped to a project). */
+router.get('/jira/boards', async (req: Request, res: Response) => {
+  try {
+    const creds = await getJiraCreds(req.user!.tenantId);
+    if (!creds) { res.status(409).json({ error: 'Jira is not connected. Connect it under System Configuration → Integrations first.' }); return; }
+    const projectKeyOrId = typeof req.query.projectKey === 'string' && req.query.projectKey.trim()
+      ? req.query.projectKey.trim() : undefined;
+    try {
+      res.json({ boards: await getJiraBoards(creds, { projectKeyOrId }) });
+    } catch (e) { res.status(502).json({ error: issueFetchError('Jira', 'boards', e) }); }
+  } catch (err) { fail(res, err); }
+});
+
+/** List the sprints on a board (optionally by state: future|active|closed). */
+router.get('/jira/board/:boardId/sprints', async (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(String(req.params.boardId || ''), 10);
+    if (!Number.isFinite(boardId)) { res.status(400).json({ error: 'A numeric board id is required.' }); return; }
+    const creds = await getJiraCreds(req.user!.tenantId);
+    if (!creds) { res.status(409).json({ error: 'Jira is not connected. Connect it under System Configuration → Integrations first.' }); return; }
+    const state = typeof req.query.state === 'string' && /^(future|active|closed)$/i.test(req.query.state.trim())
+      ? req.query.state.trim().toLowerCase() : undefined;
+    try {
+      res.json({ sprints: await getJiraSprints(creds, boardId, { state }) });
+    } catch (e) { res.status(502).json({ error: issueFetchError('Jira', `board ${boardId}`, e) }); }
+  } catch (err) { fail(res, err); }
+});
+
+/** Fetch the issues in a sprint. */
+router.get('/jira/sprint/:sprintId/issues', async (req: Request, res: Response) => {
+  try {
+    const sprintId = parseInt(String(req.params.sprintId || ''), 10);
+    if (!Number.isFinite(sprintId)) { res.status(400).json({ error: 'A numeric sprint id is required.' }); return; }
+    const creds = await getJiraCreds(req.user!.tenantId);
+    if (!creds) { res.status(409).json({ error: 'Jira is not connected. Connect it under System Configuration → Integrations first.' }); return; }
+    const maxResults = Math.min(100, Math.max(1, parseInt(String(req.query.maxResults ?? '100'), 10) || 100));
+    try {
+      res.json({ issues: await getJiraSprintIssues(creds, sprintId, { maxResults }) });
+    } catch (e) { res.status(502).json({ error: issueFetchError('Jira', `sprint ${sprintId}`, e) }); }
+  } catch (err) { fail(res, err); }
+});
+
+/** Fetch the backlog issues of a board (not assigned to any sprint). */
+router.get('/jira/board/:boardId/backlog', async (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(String(req.params.boardId || ''), 10);
+    if (!Number.isFinite(boardId)) { res.status(400).json({ error: 'A numeric board id is required.' }); return; }
+    const creds = await getJiraCreds(req.user!.tenantId);
+    if (!creds) { res.status(409).json({ error: 'Jira is not connected. Connect it under System Configuration → Integrations first.' }); return; }
+    const maxResults = Math.min(100, Math.max(1, parseInt(String(req.query.maxResults ?? '100'), 10) || 100));
+    try {
+      res.json({ issues: await getJiraBacklog(creds, boardId, { maxResults }) });
+    } catch (e) { res.status(502).json({ error: issueFetchError('Jira', `board ${boardId}`, e) }); }
+  } catch (err) { fail(res, err); }
+});
+
+/** List the account's saved JQL filters (with their JQL). */
+router.get('/jira/filters', async (req: Request, res: Response) => {
+  try {
+    const creds = await getJiraCreds(req.user!.tenantId);
+    if (!creds) { res.status(409).json({ error: 'Jira is not connected. Connect it under System Configuration → Integrations first.' }); return; }
+    try {
+      res.json({ filters: await getJiraFilters(creds) });
+    } catch (e) { res.status(502).json({ error: issueFetchError('Jira', 'filters', e) }); }
+  } catch (err) { fail(res, err); }
+});
+
+/** Get one saved filter, or run it to fetch its issues (?run=true, &all=true for every page). */
+router.get('/jira/filter/:id', async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) { res.status(400).json({ error: 'A filter id is required.' }); return; }
+    const creds = await getJiraCreds(req.user!.tenantId);
+    if (!creds) { res.status(409).json({ error: 'Jira is not connected. Connect it under System Configuration → Integrations first.' }); return; }
+    const run = String(req.query.run ?? '') === 'true';
+    try {
+      if (run) {
+        const fetchAll = String(req.query.all ?? '') === 'true';
+        const fallback = fetchAll ? 1000 : 50;
+        const maxResults = Math.min(fetchAll ? 5000 : 100, Math.max(1, parseInt(String(req.query.maxResults ?? String(fallback)), 10) || fallback));
+        res.json(await runJiraFilter(creds, id, { maxResults, fetchAll }));
+      } else {
+        res.json({ filter: await getJiraFilter(creds, id) });
+      }
+    } catch (e) { res.status(502).json({ error: issueFetchError('Jira', `filter ${id}`, e) }); }
   } catch (err) { fail(res, err); }
 });
 
