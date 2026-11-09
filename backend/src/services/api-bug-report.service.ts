@@ -113,7 +113,11 @@ export function buildMarkdown(f: BugReportInput, severity: Severity, curl: strin
     lines.push('## AI root-cause triage');
     lines.push(`- **Category:** ${d.category}  (confidence: ${d.confidence})`);
     lines.push(`- **Root cause:** ${d.rootCause}`);
-    lines.push(`- **Suggested fix:** ${d.suggestedFix}`);
+    if (d.evidence?.length) { lines.push(`- **Evidence:**`); d.evidence.forEach((e) => lines.push(`  - ${e}`)); }
+    if (d.impact) lines.push(`- **Impact:** ${d.impact}`);
+    if (d.fixSteps?.length) { lines.push(`- **How to fix:**`); d.fixSteps.forEach((s, i) => lines.push(`  ${i + 1}. ${s}`)); }
+    else if (d.suggestedFix) lines.push(`- **Suggested fix:** ${d.suggestedFix}`);
+    if (d.prevention) lines.push(`- **Prevent recurrence:** ${d.prevention}`);
     lines.push('');
   }
   lines.push('---');

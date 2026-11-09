@@ -703,8 +703,16 @@ export async function runApiFuzz(endpoints: any[]): Promise<FuzzReport> {
 
 /* ── AI root-cause diagnosis (opt-in, standalone) ── */
 export interface Diagnosis {
-  category: string; rootCause: string; suggestedFix: string;
-  confidence: 'high' | 'medium' | 'low'; reproCurl: string;
+  category: string;
+  summary?: string;
+  rootCause: string;
+  evidence?: string[];
+  impact?: string;
+  fixSteps?: string[];
+  suggestedFix: string;
+  prevention?: string;
+  confidence: 'high' | 'medium' | 'low';
+  reproCurl: string;
 }
 export async function diagnoseApiFailure(failure: {
   title?: string; method: string; url: string; error: string;

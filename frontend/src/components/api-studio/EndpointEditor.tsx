@@ -493,7 +493,7 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
                             const on = pickedKey === key;
                             return (
                               <li key={key}>
-                                <button type="button" onClick={() => applyEndpoint(ep, key)} title="Auto-fill this request" className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors ${on ? 'bg-[#F5F3FF]' : 'hover:bg-[#FBFAFF]'}`}>
+                                <button type="button" onClick={() => { applyEndpoint(ep, key); setFolders((prev) => prev.map((x, j) => (j === fi ? { ...x, open: false } : x))); }} title="Auto-fill this request" className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors ${on ? 'bg-[#F5F3FF]' : 'hover:bg-[#FBFAFF]'}`}>
                                   <MethodBadge method={ep.method} />
                                   <span className="min-w-0 flex-1">
                                     <span className="block font-mono text-[11px] text-gray-800 truncate" title={ep.url}>{pathOf(ep.url)}</span>
