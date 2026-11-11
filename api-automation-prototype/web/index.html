@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>API Automation Prototype</title>
+    <style>
+      :root {
+        --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --border: #2a2f3a;
+        --text: #e6e8ec; --muted: #9aa3b2; --accent: #5b8cff; --green: #3fb950; --red: #f85149;
+        --amber: #d29922;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; font: 14px/1.5 -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
+      header { padding: 18px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+      header h1 { font-size: 18px; margin: 0; }
+      header .sub { color: var(--muted); font-size: 13px; }
+      #status { margin-left: auto; font-size: 12px; color: var(--muted); }
+      #status b { color: var(--amber); }
+      main { display: grid; grid-template-columns: 380px 1fr; gap: 0; min-height: calc(100vh - 60px); }
+      .col { padding: 20px 24px; }
+      .col.left { border-right: 1px solid var(--border); background: var(--panel); }
+      h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 12px; }
+      label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
+      input, select, textarea { width: 100%; background: var(--panel2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 8px 10px; font: inherit; }
+      textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+      .row { display: flex; gap: 8px; }
+      .row > * { flex: 1; }
+      .row > .method { flex: 0 0 110px; }
+      button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 9px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+      button.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+      button:disabled { opacity: .5; cursor: default; }
+      .actions { display: flex; gap: 8px; margin-top: 16px; align-items: center; }
+      .hint { color: var(--muted); font-size: 11px; margin-top: 6px; }
+      details { margin-top: 14px; } summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+      .summary-bar { display: flex; gap: 18px; flex-wrap: wrap; padding: 12px 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 16px; }
+      .summary-bar .stat { font-size: 13px; } .summary-bar .stat b { font-size: 18px; display: block; }
+      .case { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
+      .case > .head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--panel); cursor: pointer; }
+      .badge { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px; }
+      .badge.pass { background: rgba(63,185,80,.15); color: var(--green); }
+      .badge.fail { background: rgba(248,81,73,.15); color: var(--red); }
+      .badge.cat { background: var(--panel2); color: var(--muted); }
+      .case .title { flex: 1; } .case .meta { color: var(--muted); font-size: 12px; font-family: ui-monospace, monospace; }
+      .case > .body { padding: 10px 14px; border-top: 1px solid var(--border); display: none; }
+      .case.open > .body { display: block; }
+      .chk { display: flex; gap: 8px; padding: 3px 0; font-size: 13px; font-family: ui-monospace, monospace; }
+      .chk .m { width: 14px; } .chk .m.ok { color: var(--green); } .chk .m.no { color: var(--red); }
+      .chk .actual { color: var(--muted); margin-left: auto; }
+      .err { color: var(--red); font-size: 12px; }
+      .empty { color: var(--muted); padding: 40px; text-align: center; }
+      pre.preview { background: var(--panel2); padding: 8px; border-radius: 6px; font-size: 11px; color: var(--muted); overflow-x: auto; margin: 6px 0 0; }
+      @media (max-width: 860px) { main { grid-template-columns: 1fr; } .col.left { border-right: 0; border-bottom: 1px solid var(--border); } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>API Automation</h1>
+      <span class="sub">prototype · LLM designs typed-JSON intent → deterministic code runs it</span>
+      <span id="status"></span>
+    </header>
+    <main>
+      <section class="col left">
+        <h2>1 · Define the endpoint</h2>
+        <div class="row">
+          <select class="method" id="method">
+            <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
+          </select>
+          <input id="url" placeholder="https://api.example.com/posts/1" value="https://jsonplaceholder.typicode.com/posts/1" />
+        </div>
+        <label>Auth</label>
+        <div class="row">
+          <select class="method" id="authType">
+            <option value="none">None</option><option value="bearer">Bearer</option>
+            <option value="basic">Basic</option><option value="apikey">API key</option>
+          </select>
+          <input id="authValue" placeholder="token / user:pass / key" />
+        </div>
+        <label>Coverage depth</label>
+        <select id="coverage">
+          <option value="essential">Essential (4–6)</option>
+          <option value="standard" selected>Standard (10–16)</option>
+          <option value="exhaustive">Exhaustive (16–28)</option>
+        </select>
+        <label>Expected status (optional)</label>
+        <input id="expectedStatus" placeholder="200" />
+        <label>Sample response body (optional)</label>
+        <textarea id="expectedResponse" placeholder='{"id":1,"title":"...","userId":1}'></textarea>
+        <label>Request body — write methods (optional)</label>
+        <textarea id="body" placeholder='{"title":"foo","body":"bar","userId":1}'></textarea>
+        <div class="actions">
+          <button id="genBtn">Design test suite</button>
+          <button class="secondary" id="curlBtn">Import cURL…</button>
+        </div>
+        <div class="hint" id="genHint"></div>
+        <details>
+          <summary>Designed suite (editable JSON)</summary>
+          <textarea id="casesJson" style="min-height:200px" placeholder="Designed cases appear here — edit before running."></textarea>
+        </details>
+      </section>
+      <section class="col">
+        <h2>2 · Run &amp; report</h2>
+        <div class="actions" style="margin: 0 0 16px">
+          <button id="runBtn" disabled>Run suite</button>
+          <label style="margin:0; display:flex; align-items:center; gap:6px; color:var(--muted)">
+            <input type="checkbox" id="allowWrites" style="width:auto" /> allow writes
+          </label>
+          <span id="runHint" class="hint" style="margin:0"></span>
+        </div>
+        <div id="summary"></div>
+        <div id="report"><div class="empty">Design a suite, then run it to see per-check results here.</div></div>
+
+        <details id="flowPanel" style="margin-top:28px">
+          <summary style="font-size:13px; color:var(--text); font-weight:600">M4 · Multi-step flow journey (extract <code>{{var}}</code> → substitute)</summary>
+          <p class="hint" style="margin:8px 0">
+            A journey chains requests, carrying a value one step mints into the next.
+            The sample creates an object, reads it back by the returned id, deletes it, and confirms 404 — against a public CRUD sandbox.
+          </p>
+          <label>Journey steps (editable JSON)</label>
+          <textarea id="flowJson" style="min-height:200px"></textarea>
+          <div class="actions" style="margin-top:10px">
+            <button id="flowRunBtn">Run journey</button>
+            <label style="margin:0; display:flex; align-items:center; gap:6px; color:var(--muted)">
+              <input type="checkbox" id="flowAllowWrites" checked style="width:auto" /> allow writes
+            </label>
+            <span id="flowHint" class="hint" style="margin:0"></span>
+          </div>
+          <div id="flowReport"></div>
+        </details>
+      </section>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let designed = [];
+
+      async function refreshStatus() {
+        try {
+          const s = await (await fetch('/api/status')).json();
+          $('status').innerHTML = s.aiEnabled
+            ? `AI: <b style="color:var(--green)">on</b> · ${s.model}`
+            : `AI: <b>offline</b> (no API key) — using deterministic heuristic`;
+        } catch { $('status').textContent = ''; }
+      }
+
+      function buildSpec() {
+        const spec = { method: $('method').value, url: $('url').value.trim(), coverage: $('coverage').value };
+        const at = $('authType').value;
+        if (at !== 'none' && $('authValue').value.trim()) spec.auth = { type: at, value: $('authValue').value.trim() };
+        if ($('expectedStatus').value.trim()) spec.expectedStatus = Number($('expectedStatus').value.trim());
+        if ($('expectedResponse').value.trim()) spec.expectedResponse = $('expectedResponse').value.trim();
+        if ($('body').value.trim()) spec.body = $('body').value.trim();
+        return spec;
+      }
+
+      $('genBtn').onclick = async () => {
+        $('genBtn').disabled = true; $('genHint').textContent = 'Designing…';
+        try {
+          const r = await (await fetch('/api/generate', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ spec: buildSpec() }),
+          })).json();
+          if (r.error) throw new Error(r.error);
+          designed = r.cases || [];
+          $('casesJson').value = JSON.stringify(designed, null, 2);
+          $('runBtn').disabled = designed.length === 0;
+          $('genHint').textContent = `${designed.length} cases designed via ${r.source === 'ai' ? 'the model' : 'offline heuristic'}.` + (r.note ? ' ' + r.note : '');
+        } catch (e) { $('genHint').innerHTML = `<span class="err">${e.message}</span>`; }
+        finally { $('genBtn').disabled = false; }
+      };
+
+      $('curlBtn').onclick = async () => {
+        const curl = prompt('Paste a cURL command:');
+        if (!curl) return;
+        const r = await (await fetch('/api/curl', {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ curl }),
+        })).json();
+        if (r.spec) {
+          $('method').value = r.spec.method || 'GET';
+          $('url').value = r.spec.url || '';
+          if (r.spec.auth) { $('authType').value = r.spec.auth.type; $('authValue').value = r.spec.auth.value || ''; }
+          if (r.spec.body) $('body').value = r.spec.body;
+          $('genHint').textContent = 'cURL imported into the form.';
+        }
+      };
+
+      $('runBtn').onclick = async () => {
+        let cases;
+        try { cases = JSON.parse($('casesJson').value); } catch { $('runHint').innerHTML = '<span class="err">cases JSON is invalid</span>'; return; }
+        $('runBtn').disabled = true; $('runHint').textContent = 'Running…';
+        try {
+          const r = await (await fetch('/api/run', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ cases, allowWrites: $('allowWrites').checked }),
+          })).json();
+          if (r.error) throw new Error(r.error);
+          renderReport(r.results, r.summary);
+          $('runHint').textContent = '';
+        } catch (e) { $('runHint').innerHTML = `<span class="err">${e.message}</span>`; }
+        finally { $('runBtn').disabled = false; }
+      };
+
+      function renderReport(results, summary) {
+        $('summary').innerHTML = `<div class="summary-bar">
+          <div class="stat"><b>${summary.passed}/${summary.total}</b> cases passed</div>
+          <div class="stat"><b>${summary.checksPassed}/${summary.checks}</b> assertions passed</div>
+          <div class="stat"><b>${summary.failed}</b> failed</div>
+          <div class="stat"><b>${summary.slowestMs}ms</b> slowest</div>
+        </div>`;
+        $('report').innerHTML = results.map((r, i) => `
+          <div class="case" data-i="${i}">
+            <div class="head" onclick="this.parentElement.classList.toggle('open')">
+              <span class="badge ${r.ok ? 'pass' : 'fail'}">${r.ok ? 'PASS' : 'FAIL'}</span>
+              <span class="badge cat">${r.category}</span>
+              <span class="title">${escapeHtml(r.title)}</span>
+              <span class="meta">${r.method} · ${r.status ?? '—'} · ${r.durationMs}ms</span>
+            </div>
+            <div class="body">
+              ${r.error ? `<div class="err">${escapeHtml(r.error)}</div>` : ''}
+              ${r.checks.map((c) => `<div class="chk"><span class="m ${c.pass ? 'ok' : 'no'}">${c.pass ? '✓' : '✗'}</span><span>${escapeHtml(c.label)}</span><span class="actual">actual: ${escapeHtml(c.actual ?? '')}</span></div>`).join('')}
+              ${r.bodyPreview ? `<pre class="preview">${escapeHtml(r.bodyPreview)}</pre>` : ''}
+            </div>
+          </div>`).join('');
+      }
+      function escapeHtml(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+      // ── M4 flow journey ──
+      const SAMPLE_FLOW = [
+        { name: 'create object', method: 'POST', url: 'https://api.restful-api.dev/objects',
+          body: '{"name":"IntelliQE proto {{$timestamp}}","data":{"year":2026}}',
+          extract: { objId: 'id' },
+          checks: [{ kind: 'status', equals: 200 }, { kind: 'jsonProperty', path: 'id', exists: true }] },
+        { name: 'read it back by id', method: 'GET', url: 'https://api.restful-api.dev/objects/{{objId}}',
+          checks: [{ kind: 'status', equals: 200 }, { kind: 'jsonProperty', path: 'data.year', value: 2026 }] },
+        { name: 'delete it', method: 'DELETE', url: 'https://api.restful-api.dev/objects/{{objId}}',
+          checks: [{ kind: 'status', equals: 200 }, { kind: 'bodyContains', text: 'has been deleted' }] },
+        { name: 'confirm it is gone', method: 'GET', url: 'https://api.restful-api.dev/objects/{{objId}}',
+          checks: [{ kind: 'status', equals: 404 }] },
+      ];
+      $('flowJson').value = JSON.stringify(SAMPLE_FLOW, null, 2);
+
+      $('flowRunBtn').onclick = async () => {
+        let steps;
+        try { steps = JSON.parse($('flowJson').value); } catch { $('flowHint').innerHTML = '<span class="err">steps JSON is invalid</span>'; return; }
+        $('flowRunBtn').disabled = true; $('flowHint').textContent = 'Running journey…';
+        try {
+          const r = await (await fetch('/api/flow/run', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ steps, allowWrites: $('flowAllowWrites').checked }),
+          })).json();
+          if (r.error) throw new Error(r.error);
+          renderFlow(r);
+          $('flowHint').textContent = '';
+        } catch (e) { $('flowHint').innerHTML = `<span class="err">${e.message}</span>`; }
+        finally { $('flowRunBtn').disabled = false; }
+      };
+
+      function renderFlow(run) {
+        const head = `<div class="summary-bar" style="margin-top:12px">
+          <div class="stat"><b>${run.passed ? 'PASSED' : 'FAILED'}</b> journey</div>
+          <div class="stat"><b>${run.stepsRun}/${run.stepsTotal}</b> steps</div>
+          <div class="stat"><b>${run.durationMs}ms</b> total</div>
+        </div>`;
+        const steps = run.steps.map((s) => `
+          <div class="case open">
+            <div class="head">
+              <span class="badge ${s.ok ? 'pass' : 'fail'}">${s.ok ? 'PASS' : 'FAIL'}</span>
+              <span class="title">${s.index + 1}. ${escapeHtml(s.name)}</span>
+              <span class="meta">${s.method} · ${s.status ?? '—'} · ${s.durationMs}ms</span>
+            </div>
+            <div class="body">
+              <div class="meta" style="margin-bottom:6px">${escapeHtml(s.url)}</div>
+              ${s.error ? `<div class="err">${escapeHtml(s.error)}</div>` : ''}
+              ${(s.checks || []).map((c) => `<div class="chk"><span class="m ${c.pass ? 'ok' : 'no'}">${c.pass ? '✓' : '✗'}</span><span>${escapeHtml(c.label)}</span><span class="actual">actual: ${escapeHtml(c.actual ?? '')}</span></div>`).join('')}
+              ${Object.entries(s.extracted || {}).map(([k, v]) => `<div class="chk"><span class="m ok">⇲</span><span>extract <b>${escapeHtml(k)}</b> = ${escapeHtml(v)}</span></div>`).join('')}
+            </div>
+          </div>`).join('');
+        const bag = `<pre class="preview">variable bag: ${escapeHtml(JSON.stringify(run.variables))}</pre>`;
+        $('flowReport').innerHTML = head + steps + bag;
+      }
+
+      refreshStatus();
+    </script>
+  </body>
+</html>
