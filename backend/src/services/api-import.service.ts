@@ -43,9 +43,9 @@ export type ImportMethod =
   | 'openapi' | 'postman' | 'bruno' | 'endpoint' | 'curl' | 'docs-url' | 'connector'
   | 'sdk' | 'webhook' | 'graphql' | 'mcp' | 'middleware' | 'manual' | 'file'
   // Requirement-driven sources (Module 1): a Jira issue, an Azure DevOps work
-  // item, or an uploaded Business/Functional Requirements Document — each read
-  // for the API endpoints it describes.
-  | 'jira' | 'ado' | 'brd' | 'frd';
+  // item, a Confluence page, or an uploaded Business/Functional Requirements
+  // Document — each read for the API endpoints it describes.
+  | 'jira' | 'ado' | 'confluence' | 'brd' | 'frd';
 
 export type ApiStyle = 'rest' | 'graphql' | 'soap' | 'jsonrpc' | 'webhook' | 'mcp';
 
@@ -55,6 +55,8 @@ export type ParserId =
 
 export interface ImportedEndpoint extends ParsedApiSpec {
   description?: string;
+  /** Business rules / acceptance criteria captured from a requirement source. */
+  businessRules?: string;
   operationId?: string;
   tags?: string[];
   /** Resource / module grouping, e.g. "users". */
@@ -64,7 +66,9 @@ export interface ImportedEndpoint extends ParsedApiSpec {
   pathParams?: { name: string; example?: string; required?: boolean }[];
   queryParams?: { name: string; example?: string; required?: boolean }[];
   style?: ApiStyle;
-  source?: { method: ImportMethod; name: string };
+  /** Where the endpoint came from. `key` is the Jira key / ADO work-item id,
+   *  `section` the requirement id / document heading, `url` a deep-link back. */
+  source?: { method: ImportMethod; name: string; key?: string; section?: string; url?: string };
   deprecated?: boolean;
   /** Set on endpoints that were auto-discovered (e.g. an OpenAPI document found
       on the origin of a probed URL) rather than named by the user. */
@@ -195,6 +199,15 @@ function normaliseAuthType(t: string): ParsedApiSpec['auth']['type'] {
   return 'none';
 }
 
+/** Attach a per-endpoint `sourceSection` to the source, without overwriting a
+ *  section the source already carries. Returns undefined when there is no source. */
+function mergeSourceSection(source: ImportedEndpoint['source'] | undefined, section?: string): ImportedEndpoint['source'] | undefined {
+  if (!source) return undefined;
+  const s = section?.trim();
+  if (!s || source.section) return source;
+  return { ...source, section: s.slice(0, 200) };
+}
+
 /** Trim and validate one endpoint — mirrors api-spec-parser's normalise(). */
 export function finalizeEndpoint(e: Partial<ImportedEndpoint>, source?: ImportedEndpoint['source']): ImportedEndpoint | null {
   const url = String(e.url || '').trim();
@@ -227,6 +240,7 @@ export function finalizeEndpoint(e: Partial<ImportedEndpoint>, source?: Imported
     expectedStatus,
     expectedResponse: e.expectedResponse?.trim() ? e.expectedResponse.slice(0, 20000) : undefined,
     description: e.description?.trim() ? e.description.slice(0, 2000) : undefined,
+    businessRules: e.businessRules?.trim() ? e.businessRules.slice(0, 4000) : undefined,
     operationId: e.operationId,
     tags: Array.isArray(e.tags) ? e.tags.map(String).slice(0, 10) : undefined,
     resource: e.resource || resourceFromPath((() => { try { return new URL(url).pathname; } catch { return url; } })()),
@@ -234,7 +248,8 @@ export function finalizeEndpoint(e: Partial<ImportedEndpoint>, source?: Imported
     pathParams: e.pathParams,
     queryParams: e.queryParams,
     style: e.style || 'rest',
-    source: e.source || source,
+    // Fold a per-endpoint `sourceSection` (from the LLM reader) into the source.
+    source: mergeSourceSection(e.source || source, e.sourceSection),
     deprecated: e.deprecated || undefined,
     discovered: e.discovered || undefined,
   };
@@ -1712,6 +1727,10 @@ export interface TextImportOptions {
   /** Overrides the document's own server for OpenAPI. */
   baseUrl?: string;
   sourceMethod?: ImportMethod;
+  /** A durable, structured back-reference to the originating requirement — the
+   *  Jira key / ADO work-item id and a deep-link — stamped onto every endpoint's
+   *  `source`. The per-endpoint document section comes from the reader instead. */
+  sourceRef?: { key?: string; url?: string };
 }
 
 /**
@@ -1744,7 +1763,10 @@ export async function importFromText(text: string, opts: TextImportOptions = {})
   }
 
   if (result && result.endpoints.length) {
-    if (opts.sourceMethod) result.endpoints = result.endpoints.map((e) => ({ ...e, source: { method: opts.sourceMethod!, name: e.source?.name || name } }));
+    if (opts.sourceMethod) result.endpoints = result.endpoints.map((e) => ({
+      ...e,
+      source: { method: opts.sourceMethod!, name: e.source?.name || name, ...(opts.sourceRef?.key ? { key: opts.sourceRef.key } : {}), ...(opts.sourceRef?.url ? { url: opts.sourceRef.url } : {}) },
+    }));
     return result;
   }
 
@@ -1757,7 +1779,11 @@ export async function importFromText(text: string, opts: TextImportOptions = {})
   const llmEndpoints = await parseApiEndpointsFromText(text, name, opts.llm, llmHint);
   const style: ApiStyle = sniffed === 'wsdl' ? 'soap' : sniffed === 'graphql-sdl' ? 'graphql' : 'rest';
   const endpoints = llmEndpoints
-    .map((e) => finalizeEndpoint({ ...e, style, source: { method: opts.sourceMethod || 'file', name } }))
+    .map((e) => finalizeEndpoint({
+      ...e,
+      style,
+      source: { method: opts.sourceMethod || 'file', name, ...(opts.sourceRef?.key ? { key: opts.sourceRef.key } : {}), ...(opts.sourceRef?.url ? { url: opts.sourceRef.url } : {}) },
+    }))
     .filter((e): e is ImportedEndpoint => e !== null);
   // The AI reader salvages path-only endpoints (common in spreadsheets, CSV
   // exports and prose docs) onto a placeholder host — tell the user so they can

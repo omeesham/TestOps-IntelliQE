@@ -36,6 +36,15 @@ export interface ParsedApiSpec {
   /** Expected success HTTP status code, when the doc states one. */
   expectedStatus?: number;
   expectedResponse?: string;
+  /** One- or two-sentence purpose — what the endpoint does and when it's used. */
+  description?: string;
+  /** Business rules / acceptance criteria the endpoint must satisfy. */
+  businessRules?: string;
+  /** Documented path/query parameters, when the source lists them. */
+  pathParams?: { name: string; example?: string; required?: boolean }[];
+  queryParams?: { name: string; example?: string; required?: boolean }[];
+  /** The requirement id / document section this endpoint was derived from. */
+  sourceSection?: string;
 }
 
 const VALID_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']);
@@ -89,6 +98,11 @@ interface RawSpec {
   body?: unknown;
   expectedStatus?: unknown;
   expectedResponse?: unknown;
+  description?: unknown;
+  businessRules?: unknown;
+  pathParams?: unknown;
+  queryParams?: unknown;
+  sourceSection?: unknown;
 }
 
 /** Format-specific reading guidance for the sources the deterministic parsers cannot handle. */
@@ -99,8 +113,8 @@ const FORMAT_GUIDANCE: Record<string, string> = {
   xml: 'This is a WSDL / SOAP contract or an XML API description. Each operation/binding is one endpoint: POST to the service address with Content-Type text/xml and a SOAPAction header, and a SOAP envelope body built from the operation\'s input message.',
   graphql: 'This is a GraphQL SDL schema. Each field of the Query and Mutation types is one endpoint: POST to the GraphQL URL with a JSON body { "query": "<operation>" } whose selection set covers the field\'s scalar sub-fields.',
   excel: 'This is a spreadsheet rendered as CSV rows — typically one endpoint per row with columns like endpoint / method / headers / payload / expected response / status.',
-  frd: 'This is a FUNCTIONAL REQUIREMENTS DOCUMENT (FRD). It describes API behaviour in prose and tables. Extract every API endpoint it specifies: recover the HTTP method, the URL/path (with path & query parameters), request headers, request body fields, the authentication requirement, the expected response status code(s) and the response schema/fields. When a requirement cites field-level validations or error scenarios, capture them in the expected response/description. Treat each documented operation as one endpoint; ignore pure business narrative that implies no HTTP call.',
-  brd: 'This is a BUSINESS REQUIREMENTS DOCUMENT (BRD). It states business capabilities and rules, usually without explicit HTTP detail. Infer the API endpoints implied by each requirement (e.g. "users can reset their password" → POST /password/reset), giving a plausible REST method and path, a representative request body and the expected success status. Be conservative: only emit an endpoint where a requirement clearly implies a server operation, and put the originating requirement text in the description.',
+  frd: 'This is a FUNCTIONAL REQUIREMENTS DOCUMENT (FRD). It describes API behaviour in prose and tables. Extract every API endpoint it specifies: recover the HTTP method, the URL/path (with path & query parameters), request headers, request body fields, the authentication requirement, the expected response status code(s) and the response schema/fields. For EVERY endpoint also set: "description" (a one- or two-sentence purpose of the operation), "businessRules" (the field-level validations, acceptance criteria and error scenarios the requirement states, as text), "pathParams"/"queryParams" (name/example/required), and "sourceSection" (the requirement id or section heading this endpoint was derived from, e.g. "FR-12 / §4.3 Orders"). Treat each documented operation as one endpoint; ignore pure business narrative that implies no HTTP call.',
+  brd: 'This is a BUSINESS REQUIREMENTS DOCUMENT (BRD). It states business capabilities and rules, usually without explicit HTTP detail. Infer the API endpoints implied by each requirement (e.g. "users can reset their password" → POST /password/reset), giving a plausible REST method and path, a representative request body and the expected success status. For EVERY endpoint also set: "description" (a one- or two-sentence purpose), "businessRules" (the originating requirement text and any rules/acceptance criteria it states), and "sourceSection" (the requirement id or heading it came from, e.g. "BR-7 / §2.1 Accounts"). Be conservative: only emit an endpoint where a requirement clearly implies a server operation.',
 };
 
 function buildPrompt(text: string, fileName: string, formatHint?: string): string {
@@ -138,7 +152,12 @@ RETURN ONLY A JSON ARRAY of endpoint objects (no markdown, no prose):
     },
     "body": "",                               // request body as a JSON string for POST/PUT/PATCH, else ""
     "expectedStatus": 200,                    // expected SUCCESS status code (200, 201…); infer from the method if not stated
-    "expectedResponse": ""                    // a sample/expected success response body if the doc shows one, else ""
+    "expectedResponse": "",                   // a sample/expected success response body if the doc shows one, else ""
+    "description": "",                        // 1-2 sentence PURPOSE — what the endpoint does and when it's used
+    "businessRules": "",                      // acceptance criteria / validation rules / error scenarios the requirement states, as plain text; "" if none
+    "pathParams": [],                         // [{ "name": "id", "example": "1", "required": true }] when the doc lists path params, else []
+    "queryParams": [],                        // [{ "name": "status", "example": "active", "required": false }] when the doc lists query params, else []
+    "sourceSection": ""                       // the requirement id / document section this endpoint came from (e.g. "FR-12 / §4.3 Orders"), else ""
   }
 ]
 
@@ -148,7 +167,8 @@ RULES:
 3. NEVER invent or echo secret values. If auth is a placeholder like "Bearer <token>", "{{apiKey}}", or "YOUR_API_KEY", set the correct auth TYPE but leave "value" as "".
 4. Convert path/query parameter placeholders to concrete-looking example values (e.g. \`/users/{id}\` → \`/users/1\`).
 5. Give every endpoint a distinct, descriptive "title" (method + path + a few words of purpose) so a person can tell them apart in a list.
-6. STRICT JSON only: double-quoted keys/strings, no comments, no trailing commas, no code expressions.
+6. Always set "description" (the endpoint's purpose) and, when the source is a requirement/spec, "businessRules" (the acceptance criteria, validations and error scenarios it states) and "sourceSection" (the requirement id or heading the endpoint was derived from). Populate "pathParams"/"queryParams" from any parameters the document lists. Leave a field as "" or [] only when the document genuinely gives nothing.
+7. STRICT JSON only: double-quoted keys/strings, no comments, no trailing commas, no code expressions.
 
 Return the JSON array now.`;
 }
@@ -169,8 +189,23 @@ function normalizeHeaders(h: unknown): { key: string; value: string }[] {
   return out.slice(0, 40);
 }
 
+/** Coerce a loose list of parameter descriptors into the structured shape. */
+function normalizeParams(p: unknown): { name: string; example?: string; required?: boolean }[] | undefined {
+  if (!Array.isArray(p)) return undefined;
+  const out: { name: string; example?: string; required?: boolean }[] = [];
+  for (const raw of p) {
+    if (!raw || typeof raw !== 'object') continue;
+    const name = String((raw as any).name ?? '').trim().slice(0, 120);
+    if (!name) continue;
+    const example = (raw as any).example != null ? String((raw as any).example).slice(0, 200) : undefined;
+    const required = typeof (raw as any).required === 'boolean' ? (raw as any).required : undefined;
+    out.push({ name, ...(example ? { example } : {}), ...(required != null ? { required } : {}) });
+  }
+  return out.length ? out.slice(0, 40) : undefined;
+}
+
 /** Coerce one loose endpoint object into a validated ParsedApiSpec, or null. */
-function normalize(raw: RawSpec): ParsedApiSpec | null {
+export function normalize(raw: RawSpec): ParsedApiSpec | null {
   const method = String(raw.method || 'GET').toUpperCase().trim();
   // Salvage path-only endpoints (the common case for spreadsheet/CSV/prose
   // sources) by attaching the placeholder host, instead of dropping them.
@@ -212,6 +247,10 @@ function normalize(raw: RawSpec): ParsedApiSpec | null {
     title = `${normalizedMethod} ${path}`;
   }
 
+  const description = typeof raw.description === 'string' && raw.description.trim() ? raw.description.trim().slice(0, 2000) : undefined;
+  const businessRules = typeof raw.businessRules === 'string' && raw.businessRules.trim() ? raw.businessRules.trim().slice(0, 4000) : undefined;
+  const sourceSection = typeof raw.sourceSection === 'string' && raw.sourceSection.trim() ? raw.sourceSection.trim().slice(0, 200) : undefined;
+
   return {
     title,
     method: normalizedMethod,
@@ -221,6 +260,11 @@ function normalize(raw: RawSpec): ParsedApiSpec | null {
     body: body?.trim() ? body : undefined,
     expectedStatus,
     expectedResponse: expectedResponse?.trim() ? expectedResponse : undefined,
+    description,
+    businessRules,
+    pathParams: normalizeParams(raw.pathParams),
+    queryParams: normalizeParams(raw.queryParams),
+    sourceSection,
   };
 }
 

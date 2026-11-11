@@ -37,6 +37,7 @@ import { parseDocument } from '../services/document-parser.service.js';
 import { getTenantLlm } from '../services/llm.service.js';
 import { getConfigsForTenant, upsertConfig } from '../services/configurations.service.js';
 import { getCredsForTenant as getJiraCreds, getStory as getJiraStory, getProjects as getJiraProjects, getIssues as getJiraIssues, downloadIssueAttachments as downloadJiraAttachments, getAllIssues as getJiraAllIssues, getIssueComments as getJiraComments, getIssueChangelog as getJiraChangelog, getBoards as getJiraBoards, getSprints as getJiraSprints, getSprintIssues as getJiraSprintIssues, getBacklogIssues as getJiraBacklog, getFilters as getJiraFilters, getFilter as getJiraFilter, runFilter as runJiraFilter } from '../services/jira.service.js';
+import { getCredsForTenant as getConfluenceCreds, getPage as getConfluencePage } from '../services/confluence.service.js';
 import { countFileItems } from '../services/api-attachment-count.service.js';
 import { syncDefects as syncJiraDefects, listSyncHistory as listJiraSyncHistory, listDefectLinks as listJiraDefectLinks } from '../services/api-jira-sync.service.js';
 import { getCredsForTenant as getAdoCreds, getStory as getAdoStory, getStoryAttachments as getAdoAttachments, getProjects as getAdoProjects, getWorkItems as getAdoWorkItems } from '../services/azure-devops.service.js';
@@ -502,6 +503,9 @@ router.post('/import/jira', async (req: Request, res: Response) => {
       res.status(502).json({ error: issueFetchError('Jira', key, e) }); return;
     }
     const llm = (await getTenantLlm(req.user!.tenantId)) || undefined;
+    // Structured, durable back-reference stamped onto every imported endpoint's
+    // source — the Jira key + a browse deep-link — regardless of import path.
+    const jiraRef = { key: story.key, ...(creds?.baseUrl ? { url: `${creds.baseUrl}/browse/${encodeURIComponent(story.key)}` } : {}) };
 
     // 1) Selected attachments first — import only the files the user ticked.
     //    (attachmentIds undefined → skip straight to text, preserving old behaviour.)
@@ -516,7 +520,7 @@ router.post('/import/jira', async (req: Request, res: Response) => {
         try {
           const parsed = await parseDocument(att.buffer, '', att.name);
           if (!parsed.text?.trim()) continue;
-          const r = await importFromText(parsed.text, { fileName: att.name, formatHint: 'auto', llm, sourceMethod: 'jira' });
+          const r = await importFromText(parsed.text, { fileName: att.name, formatHint: 'auto', llm, sourceMethod: 'jira', sourceRef: jiraRef });
           if (r.endpoints.length) {
             fromFiles.push(...r.endpoints);
             parser = parser || r.parser;
@@ -540,14 +544,33 @@ router.post('/import/jira', async (req: Request, res: Response) => {
     }
 
     // 2) No selection, or the selected files held no usable spec — read the prose.
-    const text = [story.title, story.description, story.acceptanceCriteria].filter(Boolean).join('\n\n');
+    //    Endpoints are often pasted into a COMMENT (e.g. an API table) rather than
+    //    the description, so comment bodies are folded into the text we parse.
+    let commentText = '';
+    let commentCount = 0;
+    try {
+      const comments = await getJiraComments(creds, key, { maxResults: 50 });
+      commentCount = comments.length;
+      commentText = comments.map((c) => c.body).filter(Boolean).join('\n\n');
+    } catch (e) {
+      // Comments are best-effort — a fetch failure must not block the import,
+      // but log why so a permission/API problem is diagnosable.
+      console.warn(`[jira-import ${key}] comment fetch failed:`, (e as Error)?.message || e);
+    }
+    const text = [story.title, story.description, story.acceptanceCriteria, commentText].filter(Boolean).join('\n\n');
+    console.log(`[jira-import ${key}] llm=${!!llm} descLen=${(story.description || '').length} acLen=${(story.acceptanceCriteria || '').length} comments=${commentCount} commentLen=${commentText.length} totalTextLen=${text.length}`);
     if (text.trim().length < 10) {
       res.status(400).json({ error: attachmentIds && attachmentIds.length
-        ? `None of the ${attachmentIds.length} selected file(s) on Jira issue ${key} contained a usable API spec or test-case table, and the issue has no readable description to fall back on.`
-        : `Jira issue ${key} has no readable description or acceptance criteria to extract endpoints from.` });
+        ? `None of the ${attachmentIds.length} selected file(s) on Jira issue ${key} contained a usable API spec or test-case table, and the issue has no readable description, acceptance criteria or comments to fall back on.`
+        : `Jira issue ${key} has no readable description, acceptance criteria or comments to extract endpoints from.` });
       return;
     }
-    const result = await importFromText(text, { fileName: `Jira ${story.key}: ${story.title}`.slice(0, 200), formatHint: 'frd', llm, sourceMethod: 'jira' });
+    if (!llm) {
+      res.status(409).json({ error: `Jira issue ${key} describes its API in prose (description/comments), which needs an LLM to read. Add an Anthropic API key under System Configuration → LLM Configuration, then import again.` });
+      return;
+    }
+    const result = await importFromText(text, { fileName: `Jira ${story.key}: ${story.title}`.slice(0, 200), formatHint: 'frd', llm, sourceMethod: 'jira', sourceRef: jiraRef });
+    console.log(`[jira-import ${key}] importFromText → ${result.endpoints.length} endpoint(s), parser=${result.parser}`);
     await respondImport(req, res, 'jira', story.key, result, { origin: { kind: 'jira', ref: story.key, label: story.title }, sourceText: text.slice(0, 20000) });
   } catch (err) { fail(res, err); }
 });
@@ -578,6 +601,9 @@ router.post('/import/azure', async (req: Request, res: Response) => {
       res.status(502).json({ error: issueFetchError('Azure DevOps', id, e) }); return;
     }
     const llm = (await getTenantLlm(req.user!.tenantId)) || undefined;
+    // Structured, durable back-reference stamped onto every imported endpoint's
+    // source — the work-item id + a deep-link — regardless of import path.
+    const adoRef = { key: story.key, ...(creds?.baseUrl && creds?.project ? { url: `${creds.baseUrl}/${encodeURIComponent(creds.project)}/_workitems/edit/${encodeURIComponent(story.key)}` } : {}) };
 
     // 1) Attachments first — a real spec file beats AI-reading prose. Follows
     // one hop of links so a spec attached to a linked Test Case is still found.
@@ -598,7 +624,7 @@ router.post('/import/azure', async (req: Request, res: Response) => {
       try {
         const parsed = await parseDocument(att.buffer, '', att.name);
         if (!parsed.text?.trim()) continue;
-        const r = await importFromText(parsed.text, { fileName: att.name, formatHint: 'auto', llm, sourceMethod: 'ado' });
+        const r = await importFromText(parsed.text, { fileName: att.name, formatHint: 'auto', llm, sourceMethod: 'ado', sourceRef: adoRef });
         if (r.endpoints.length) {
           fromFiles.push(...r.endpoints);
           parser = parser || r.parser;
@@ -629,8 +655,45 @@ router.post('/import/azure', async (req: Request, res: Response) => {
         : `Azure work item ${id} has no attachments and no readable description or acceptance criteria to extract endpoints from.` });
       return;
     }
-    const result = await importFromText(text, { fileName: `Azure ${story.key}: ${story.title}`.slice(0, 200), formatHint: 'frd', llm, sourceMethod: 'ado' });
+    const result = await importFromText(text, { fileName: `Azure ${story.key}: ${story.title}`.slice(0, 200), formatHint: 'frd', llm, sourceMethod: 'ado', sourceRef: adoRef });
     await respondImport(req, res, 'ado', story.key, result, { origin: { kind: 'ado', ref: story.key, label: story.title }, sourceText: text.slice(0, 20000) });
+  } catch (err) { fail(res, err); }
+});
+
+/**
+ * Import endpoints from a Confluence page (Module 1 — requirement-driven
+ * source). Reuses the tenant's existing Confluence connection (System
+ * Configuration → Integrations). The page's storage-format body is flattened to
+ * plain text by the service, then AI-read for the API endpoints it describes —
+ * the same text path Jira/Azure prose takes. Confluence pages have no spec
+ * attachments to prefer, so this is text-only by design.
+ */
+router.post('/import/confluence', async (req: Request, res: Response) => {
+  try {
+    const pageId = String(req.body?.pageId || req.body?.id || '').trim();
+    if (!pageId) { res.status(400).json({ error: 'A Confluence page id is required.' }); return; }
+    const creds = await getConfluenceCreds(req.user!.tenantId);
+    if (!creds) { res.status(409).json({ error: 'Confluence is not connected. Connect it under System Configuration → Integrations first.' }); return; }
+    let page;
+    try {
+      page = await getConfluencePage(creds, pageId);
+    } catch (e) {
+      res.status(502).json({ error: issueFetchError('Confluence', pageId, e) }); return;
+    }
+    const llm = (await getTenantLlm(req.user!.tenantId)) || undefined;
+    const text = [page.title, page.body].filter(Boolean).join('\n\n');
+    if (text.trim().length < 10) {
+      res.status(400).json({ error: `Confluence page "${page.title || pageId}" has no readable content to extract endpoints from.` });
+      return;
+    }
+    if (!llm) {
+      res.status(409).json({ error: `Confluence page "${page.title || pageId}" describes its API in prose, which needs an LLM to read. Add an Anthropic API key under System Configuration → LLM Configuration, then import again.` });
+      return;
+    }
+    const name = `Confluence: ${page.title || pageId}`.slice(0, 200);
+    const result = await importFromText(text, { fileName: name, formatHint: 'frd', llm, sourceMethod: 'confluence' });
+    console.log(`[confluence-import ${pageId}] bodyLen=${(page.body || '').length} → ${result.endpoints.length} endpoint(s), parser=${result.parser}`);
+    await respondImport(req, res, 'confluence', page.title || pageId, result, { origin: { kind: 'confluence', ref: page.id, label: page.title }, sourceText: text.slice(0, 20000) });
   } catch (err) { fail(res, err); }
 });
 

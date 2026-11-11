@@ -179,7 +179,7 @@ export interface ReviewableEndpoint extends ValidatableEndpoint {
   businessRules?: string;
   style?: string;
   bodyMode?: string;
-  source?: { method: string; name: string };
+  source?: { method: string; name: string; key?: string; section?: string; url?: string };
   pathParams?: { name: string; example?: string; required?: boolean }[];
   queryParams?: { name: string; example?: string; required?: boolean }[];
   formFields?: unknown[];
@@ -205,7 +205,7 @@ export interface EndpointReadiness {
   method: string;
   url: string;
   category: ApiCategory;
-  source?: { method: string; name: string };
+  source?: { method: string; name: string; key?: string; section?: string; url?: string };
   fields: ReadinessField[];
   ready: boolean;
   errorCount: number;

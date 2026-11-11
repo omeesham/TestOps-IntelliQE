@@ -31,7 +31,7 @@ import RunsView from './views/RunsView';
 import EnvironmentsView from './views/EnvironmentsView';
 import EnvironmentPicker from './views/EnvironmentPicker';
 import ApiToolsLauncher from './ApiToolsLauncher';
-import { validateApiEndpoints, buildReadinessReview, type ApiValidationReport } from './apiValidation';
+import { validateApiEndpoints, type ApiValidationReport } from './apiValidation';
 import { ValidationGateModal } from './ValidationReport';
 import ReadinessReview from './ReadinessReview';
 import { EmptyState } from './primitives';
@@ -131,9 +131,9 @@ export default function ApiStudio() {
   const design = (endpoints: CatalogEndpoint[] = catalog.selectedEndpoints) => {
     const list = Array.isArray(endpoints) ? endpoints : catalog.selectedEndpoints;
     if (list.length === 0) return;
-    const readiness = buildReadinessReview(list);
-    if (!readiness.allReady) { setReview({ ids: list.map((e) => e.id) }); return; }
-    proceedToPlan(list);
+    // Always open the readiness review so the reviewer accepts or rejects every
+    // imported endpoint before planning — even when all are already documented.
+    setReview({ ids: list.map((e) => e.id) });
   };
   /** Open the readiness review explicitly (from the import outcome panel). */
   const openReview = (list: CatalogEndpoint[]) => {

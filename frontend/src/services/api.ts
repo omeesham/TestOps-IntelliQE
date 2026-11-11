@@ -175,6 +175,15 @@ export async function getConfluencePage(pageId: string): Promise<ConfluencePageD
   const { data } = await api.get(`/confluence/page/${encodeURIComponent(pageId)}`);
   return data;
 }
+export interface ConfluenceStatus { connected: boolean; url?: string; email?: string; connectedAt?: string }
+export async function getConfluenceStatus(): Promise<ConfluenceStatus> {
+  const { data } = await api.get('/confluence/status');
+  return data;
+}
+/** Connect Confluence via the shared integration config (stored encrypted, tenant-scoped). */
+export async function connectConfluence(url: string, email: string, apiToken: string) {
+  return connectIntegration('confluence', { url, email, api_token: apiToken });
+}
 
 /* ─────────────────────────────────────────────────────────────
    SharePoint — lists + downloads documents from a connected site
@@ -412,6 +421,12 @@ export async function importApiJira(key: string, attachmentIds?: string[]): Prom
 
 export async function importApiAzure(id: string, attachmentIds?: string[]): Promise<ApiImportResponse> {
   const { data } = await api.post('/api-automation/import/azure', { id, ...(attachmentIds ? { attachmentIds } : {}) }, { timeout: IMPORT_TIMEOUT });
+  return data;
+}
+
+/** Read a Confluence page and AI-extract the API endpoints it describes. */
+export async function importApiConfluence(pageId: string): Promise<ApiImportResponse> {
+  const { data } = await api.post('/api-automation/import/confluence', { pageId }, { timeout: IMPORT_TIMEOUT });
   return data;
 }
 

@@ -243,6 +243,11 @@ function htmlToPlain(html: string): string {
   out = out.replace(/<\/p>\s*<p[^>]*>/gi, '\n\n');
   out = out.replace(/<p[^>]*>/gi, '');
   out = out.replace(/<\/p>/gi, '\n');
+  // Tables: keep the grid readable so an API table pasted into a description or
+  // comment survives as tab-separated rows (cells merged into one run would lose
+  // the method/URL/status columns and defeat endpoint extraction).
+  out = out.replace(/<\/t[dh]>\s*<t[dh][^>]*>/gi, '\t');
+  out = out.replace(/<\/tr>/gi, '\n');
   out = out.replace(/<[^>]+>/g, '');
   out = decodeHtmlEntities(out)
     .replace(/\r/g, '')

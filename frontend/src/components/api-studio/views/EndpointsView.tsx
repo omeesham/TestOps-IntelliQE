@@ -10,8 +10,8 @@
  * used to hang off a "Tools" dropdown here; it now lives in its own dedicated
  * "Tools" tab (see ApiToolsLauncher). This view stays about the catalogue.
  */
-import { useMemo, useState } from 'react';
-import { Search, Trash2, Pencil, Layers, Plus, Download, ChevronDown, ChevronRight, Globe, Antenna } from 'lucide-react';
+import { Fragment, useMemo, useState, type ReactNode } from 'react';
+import { Search, Trash2, Pencil, Layers, Plus, Download, ChevronDown, ChevronRight, Globe, Antenna, Link2, FileText } from 'lucide-react';
 import { MethodBadge, StatusCode, EmptyState, TabHero } from '../primitives';
 import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, CARD, BRAND_CHIP, MUTED_CHIP, STRIP, THEAD, IMPORT_METHOD_LABELS, pathOf, hostOf } from '../format';
 import EndpointEditor from '../EndpointEditor';
@@ -55,6 +55,7 @@ export default function EndpointsView({ catalog, running, onDesign, onImport }: 
   const [methodFilter, setMethodFilter] = useState('all');
   const [resourceFocus, setResourceFocus] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [editing, setEditing] = useState<CatalogEndpoint | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [captureOpen, setCaptureOpen] = useState(false);
@@ -199,7 +200,8 @@ export default function EndpointsView({ catalog, running, onDesign, onImport }: 
                     <GroupRows key={key} label={key} list={list} collapsed={isCollapsed} groupSelected={groupSelected}
                       onToggleCollapse={() => setCollapsed((c) => ({ ...c, [key]: !isCollapsed }))}
                       onToggleGroup={() => catalog.selectMany(list.map((e) => e.id), !groupSelected)}
-                      selected={selected} running={running}
+                      selected={selected} running={running} expanded={expanded}
+                      onToggleExpand={(id) => setExpanded((x) => ({ ...x, [id]: !x[id] }))}
                       onToggle={catalog.toggle} onEdit={setEditing} onRemove={(id) => catalog.removeEndpoints([id])}
                     />
                   );
@@ -244,9 +246,10 @@ export default function EndpointsView({ catalog, running, onDesign, onImport }: 
   );
 }
 
-function GroupRows({ label, list, collapsed, groupSelected, onToggleCollapse, onToggleGroup, selected, running, onToggle, onEdit, onRemove }: {
+function GroupRows({ label, list, collapsed, groupSelected, onToggleCollapse, onToggleGroup, selected, running, expanded, onToggleExpand, onToggle, onEdit, onRemove }: {
   label: string; list: CatalogEndpoint[]; collapsed: boolean; groupSelected: boolean; onToggleCollapse: () => void; onToggleGroup: () => void;
-  selected: Set<string>; running: boolean; onToggle: (id: string) => void; onEdit: (e: CatalogEndpoint) => void; onRemove: (id: string) => void;
+  selected: Set<string>; running: boolean; expanded: Record<string, boolean>; onToggleExpand: (id: string) => void;
+  onToggle: (id: string) => void; onEdit: (e: CatalogEndpoint) => void; onRemove: (id: string) => void;
 }) {
   return (
     <>
@@ -262,29 +265,147 @@ function GroupRows({ label, list, collapsed, groupSelected, onToggleCollapse, on
       </tr>
       {!collapsed && list.map((e) => {
         const on = selected.has(e.id);
+        const isOpen = !!expanded[e.id];
         return (
-          <tr key={e.id} className={`border-b border-gray-50 hover:bg-[#FAFAFE] hover:shadow-[inset_3px_0_0_0_#C4B5FD] transition-[background,box-shadow] group ${on ? '' : 'opacity-60'}`}>
-            <td className="px-2 py-1.5 align-top"><input type="checkbox" checked={on} onChange={() => onToggle(e.id)} className="w-3.5 h-3.5 rounded border-gray-300 text-[#7C3AED] focus:ring-[#A5B4FC] focus:ring-offset-0" /></td>
-            <td className="px-2 py-1.5 align-top"><MethodBadge method={e.method} /></td>
-            <td className="px-2 py-1.5 align-top max-w-0 w-full">
-              <div className="font-mono text-[11.5px] text-gray-800 truncate" title={e.url}>{pathOf(e.url)}</div>
-              <div className="text-[10.5px] text-gray-500 truncate">
-                {e.title}{e.deprecated && <span className="ml-1 text-amber-600">· deprecated</span>}{e.discovered && <span className="ml-1 text-[#7C3AED]">· discovered</span>}
-                {e.style && e.style !== 'rest' && <span className="ml-1 uppercase text-gray-400">· {e.style}</span>}
-              </div>
-            </td>
-            <td className="px-2 py-1.5 align-top text-[11px] text-gray-500">{e.auth.type === 'none' ? <span className="text-gray-300">—</span> : e.auth.type === 'apikey' ? `key · ${e.auth.headerName || 'X-API-Key'}` : e.auth.type}</td>
-            <td className="px-2 py-1.5 align-top"><StatusCode code={e.expectedStatus || ''} /></td>
-            <td className="px-2 py-1.5 align-top text-[10.5px] text-gray-500 truncate max-w-[110px] hidden @[900px]:table-cell" title={e.source?.name}>{e.source ? IMPORT_METHOD_LABELS[e.source.method] || e.source.method : ''}</td>
-            <td className="px-2 py-1.5 align-top">
-              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button type="button" onClick={() => onEdit(e)} disabled={running} className="p-1 rounded text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
-                <button type="button" onClick={() => onRemove(e.id)} disabled={running} className="p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50" title="Remove"><Trash2 className="w-3.5 h-3.5" /></button>
-              </div>
-            </td>
-          </tr>
+          <Fragment key={e.id}>
+            <tr className={`border-b border-gray-50 hover:bg-[#FAFAFE] hover:shadow-[inset_3px_0_0_0_#C4B5FD] transition-[background,box-shadow] group ${on ? '' : 'opacity-60'} ${isOpen ? 'bg-[#FAFAFE]' : ''}`}>
+              <td className="px-2 py-1.5 align-top"><input type="checkbox" checked={on} onChange={() => onToggle(e.id)} className="w-3.5 h-3.5 rounded border-gray-300 text-[#7C3AED] focus:ring-[#A5B4FC] focus:ring-offset-0" /></td>
+              <td className="px-2 py-1.5 align-top"><MethodBadge method={e.method} /></td>
+              <td className="px-2 py-1.5 align-top max-w-0 w-full">
+                <button type="button" onClick={() => onToggleExpand(e.id)} className="flex items-start gap-1 text-left w-full group/exp" title={isOpen ? 'Hide details' : 'Show all API details'}>
+                  {isOpen ? <ChevronDown className="w-3 h-3 mt-0.5 flex-shrink-0 text-[#7C3AED]" /> : <ChevronRight className="w-3 h-3 mt-0.5 flex-shrink-0 text-gray-400 group-hover/exp:text-[#7C3AED]" />}
+                  <span className="min-w-0">
+                    <span className="block font-mono text-[11.5px] text-gray-800 truncate group-hover/exp:text-[#7C3AED]" title={e.url}>{pathOf(e.url)}</span>
+                    <span className="block text-[10.5px] text-gray-500 truncate">
+                      {e.title}{e.deprecated && <span className="ml-1 text-amber-600">· deprecated</span>}{e.discovered && <span className="ml-1 text-[#7C3AED]">· discovered</span>}
+                      {e.style && e.style !== 'rest' && <span className="ml-1 uppercase text-gray-400">· {e.style}</span>}
+                    </span>
+                  </span>
+                </button>
+              </td>
+              <td className="px-2 py-1.5 align-top text-[11px] text-gray-500">{e.auth.type === 'none' ? <span className="text-gray-300">—</span> : e.auth.type === 'apikey' ? `key · ${e.auth.headerName || 'X-API-Key'}` : e.auth.type}</td>
+              <td className="px-2 py-1.5 align-top"><StatusCode code={e.expectedStatus || ''} /></td>
+              <td className="px-2 py-1.5 align-top text-[10.5px] text-gray-500 truncate max-w-[110px] hidden @[900px]:table-cell" title={e.source?.name}>{e.source ? IMPORT_METHOD_LABELS[e.source.method] || e.source.method : ''}</td>
+              <td className="px-2 py-1.5 align-top">
+                <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button type="button" onClick={() => onEdit(e)} disabled={running} className="p-1 rounded text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
+                  <button type="button" onClick={() => onRemove(e.id)} disabled={running} className="p-1 rounded text-gray-400 hover:text-red-500 hover:bg-red-50" title="Remove"><Trash2 className="w-3.5 h-3.5" /></button>
+                </div>
+              </td>
+            </tr>
+            {isOpen && (
+              <tr className="bg-[#FBFAFE] border-b border-gray-100">
+                <td />
+                <td colSpan={6} className="px-2 pb-3 pt-0 align-top">
+                  <EndpointDetailBox e={e} on={on} running={running} onToggle={() => onToggle(e.id)} onEdit={() => onEdit(e)} onRemove={() => onRemove(e.id)} />
+                </td>
+              </tr>
+            )}
+          </Fragment>
         );
       })}
     </>
+  );
+}
+
+/** Everything captured about one API, laid out as a box — the "docs" for the
+ *  endpoint — with its include tick and an Edit shortcut. */
+function EndpointDetailBox({ e, on, running, onToggle, onEdit, onRemove }: {
+  e: CatalogEndpoint; on: boolean; running: boolean; onToggle: () => void; onEdit: () => void; onRemove: () => void;
+}) {
+  const sourceName = e.source?.name || '';
+  const sourceIsUrl = /^https?:\/\//i.test(sourceName);
+  const authDetail = e.auth.type === 'none' ? '—'
+    : e.auth.type === 'apikey' ? `API key · ${e.auth.headerName || 'X-API-Key'}${e.auth.in ? ` (in ${e.auth.in})` : ''}`
+    : e.auth.type;
+  const fields: { label: string; value: ReactNode; wide?: boolean; mono?: boolean }[] = [
+    { label: 'Purpose', value: e.description || <span className="text-gray-400">Not captured</span>, wide: true },
+    { label: 'Business rules', value: e.businessRules || <span className="text-gray-400">Not captured</span>, wide: true },
+    { label: 'HTTP method', value: e.method },
+    { label: 'Expected status', value: e.expectedStatus ?? <span className="text-gray-400">—</span> },
+    { label: 'Request URL', value: e.url, wide: true, mono: true },
+    { label: 'Auth', value: authDetail },
+    { label: 'Style', value: (e.style || 'rest').toUpperCase() },
+  ];
+  if (e.operationId) fields.push({ label: 'Operation ID', value: e.operationId, mono: true });
+  if (e.resource) fields.push({ label: 'Resource', value: e.resource });
+
+  return (
+    <div className="rounded-xl border border-[#E4E0F5] bg-white p-3 shadow-[0_2px_10px_-6px_rgba(76,29,149,0.25)]">
+      {/* Top bar — include tick + method + edit/remove */}
+      <div className="flex items-center gap-2 flex-wrap pb-2 mb-2 border-b border-black/5">
+        <label className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-gray-700 cursor-pointer select-none">
+          <input type="checkbox" checked={on} onChange={onToggle} className="w-4 h-4 rounded border-gray-300 text-[#7C3AED] focus:ring-[#A5B4FC] focus:ring-offset-0" />
+          Include in test design
+        </label>
+        <MethodBadge method={e.method} />
+        <span className="font-mono text-[11px] text-gray-600 truncate max-w-[280px]" title={e.url}>{pathOf(e.url)}</span>
+        <div className="ml-auto flex items-center gap-1.5">
+          <button type="button" onClick={onEdit} disabled={running} className={`${SECONDARY_BTN} py-1`}><Pencil className="w-3.5 h-3.5" />Edit</button>
+          <button type="button" onClick={onRemove} disabled={running} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11.5px] font-semibold border bg-white text-red-600 border-red-200 hover:bg-red-50 transition-colors"><Trash2 className="w-3.5 h-3.5" />Remove</button>
+        </div>
+      </div>
+
+      {/* Details grid */}
+      <div className="grid sm:grid-cols-2 gap-x-6 gap-y-2">
+        {fields.map((f) => (
+          <div key={f.label} className={f.wide ? 'sm:col-span-2' : ''}>
+            <div className="text-[10px] font-bold uppercase tracking-wide text-gray-400">{f.label}</div>
+            <div className={`text-[11.5px] text-gray-700 break-words ${f.mono ? 'font-mono text-[11px]' : ''}`}>{f.value}</div>
+          </div>
+        ))}
+
+        {e.tags && e.tags.length > 0 && (
+          <div className="sm:col-span-2">
+            <div className="text-[10px] font-bold uppercase tracking-wide text-gray-400">Tags</div>
+            <div className="flex flex-wrap gap-1 mt-0.5">{e.tags.map((t) => <span key={t} className={`px-1.5 py-0.5 rounded border text-[10px] ${BRAND_CHIP}`}>{t}</span>)}</div>
+          </div>
+        )}
+
+        {e.headers.length > 0 && (
+          <div className="sm:col-span-2">
+            <div className="text-[10px] font-bold uppercase tracking-wide text-gray-400">Headers</div>
+            <ul className="mt-0.5 space-y-0.5">{e.headers.map((h, i) => <li key={i} className="font-mono text-[11px] text-gray-600"><span className="text-gray-800">{h.key}</span>: {h.value || <span className="text-gray-300">—</span>}</li>)}</ul>
+          </div>
+        )}
+
+        {(e.pathParams?.length || e.queryParams?.length) ? (
+          <div className="sm:col-span-2">
+            <div className="text-[10px] font-bold uppercase tracking-wide text-gray-400">Parameters</div>
+            <div className="flex flex-wrap gap-1 mt-0.5">
+              {(e.pathParams || []).map((p) => <span key={`p-${p.name}`} className="px-1.5 py-0.5 rounded border border-sky-200 bg-sky-50 text-sky-700 text-[10px] font-mono" title="Path parameter">:{p.name}</span>)}
+              {(e.queryParams || []).map((p) => <span key={`q-${p.name}`} className="px-1.5 py-0.5 rounded border border-gray-200 bg-gray-50 text-gray-600 text-[10px] font-mono" title="Query parameter">?{p.name}{p.required ? '*' : ''}</span>)}
+            </div>
+          </div>
+        ) : null}
+
+        {e.body && (
+          <div className="sm:col-span-2">
+            <div className="text-[10px] font-bold uppercase tracking-wide text-gray-400">Request body{e.bodyMode ? ` · ${e.bodyMode}` : ''}</div>
+            <pre className="mt-0.5 p-2 rounded-lg bg-gray-50 border border-gray-100 text-[10.5px] font-mono text-gray-700 overflow-x-auto max-h-40 whitespace-pre-wrap">{e.body}</pre>
+          </div>
+        )}
+
+        {e.expectedResponse && (
+          <div className="sm:col-span-2">
+            <div className="text-[10px] font-bold uppercase tracking-wide text-gray-400">Expected response (example)</div>
+            <pre className="mt-0.5 p-2 rounded-lg bg-gray-50 border border-gray-100 text-[10.5px] font-mono text-gray-700 overflow-x-auto max-h-40 whitespace-pre-wrap">{e.expectedResponse}</pre>
+          </div>
+        )}
+
+        {/* Source / docs origin */}
+        <div className="sm:col-span-2 pt-1.5 border-t border-black/5">
+          <div className="text-[10px] font-bold uppercase tracking-wide text-gray-400 flex items-center gap-1"><FileText className="w-3 h-3" />Source &amp; docs</div>
+          {e.source ? (
+            <div className="text-[11.5px] text-gray-700 flex items-center gap-1.5 mt-0.5">
+              <span className={`inline-flex px-1.5 py-0.5 rounded border text-[10px] font-semibold ${MUTED_CHIP}`}>{IMPORT_METHOD_LABELS[e.source.method] || e.source.method}</span>
+              {sourceIsUrl
+                ? <a href={sourceName} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[#7C3AED] hover:underline break-all"><Link2 className="w-3 h-3 flex-shrink-0" />{sourceName}</a>
+                : <span className="break-all">{sourceName || <span className="text-gray-400">—</span>}</span>}
+            </div>
+          ) : <div className="text-[11.5px] text-gray-400 mt-0.5">No source recorded</div>}
+        </div>
+      </div>
+    </div>
   );
 }

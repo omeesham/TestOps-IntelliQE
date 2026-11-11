@@ -135,7 +135,7 @@ export function useCatalog() {
   useEffect(() => { endpointsRef.current = endpoints; }, [endpoints]);
 
   const addEndpoints = useCallback((incoming: any[], meta: { method: ImportMethod; name: string; format: string; parser: string; warnings?: string[]; notice?: string; profile?: ApiProfile | null; replace?: boolean }) => {
-    const fresh = incoming.map((e) => toCatalogEndpoint(e, meta.method)).map((e) => ({ ...e, source: { method: e.source?.method || meta.method, name: e.source?.name || meta.name } }));
+    const fresh = incoming.map((e) => toCatalogEndpoint(e, meta.method)).map((e) => ({ ...e, source: { ...e.source, method: e.source?.method || meta.method, name: e.source?.name || meta.name } }));
     const base = meta.replace ? [] : endpointsRef.current;
     const seen = new Set(base.map((e) => `${e.method} ${e.url}`.toLowerCase()));
     const merged = [...base];

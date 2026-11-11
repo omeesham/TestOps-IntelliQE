@@ -28,8 +28,8 @@ export type ImportMethod =
   | 'openapi' | 'postman' | 'bruno' | 'endpoint' | 'curl' | 'docs-url' | 'connector'
   | 'sdk' | 'webhook' | 'graphql' | 'mcp' | 'middleware' | 'manual' | 'file' | 'capture'
   // Requirement-driven sources (Module 1): Jira issue, Azure DevOps work item,
-  // or an uploaded Business/Functional Requirements Document.
-  | 'jira' | 'ado' | 'brd' | 'frd';
+  // Confluence page, or an uploaded Business/Functional Requirements Document.
+  | 'jira' | 'ado' | 'confluence' | 'brd' | 'frd';
 
 export interface HeaderPair { key: string; value: string }
 
@@ -63,7 +63,7 @@ export interface CatalogEndpoint {
   pathParams?: { name: string; example?: string; required?: boolean }[];
   queryParams?: { name: string; example?: string; required?: boolean }[];
   style?: ApiStyle;
-  source?: { method: ImportMethod; name: string };
+  source?: { method: ImportMethod; name: string; key?: string; section?: string; url?: string };
   deprecated?: boolean;
   discovered?: boolean;
   /** When this endpoint landed in the catalogue (ms epoch). */

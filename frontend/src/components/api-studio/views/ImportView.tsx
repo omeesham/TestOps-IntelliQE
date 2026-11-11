@@ -11,9 +11,10 @@ import { UploadCloud, CheckCircle2, AlertTriangle, ArrowRight, FileText, X, Plus
 import Spinner from '@/components/feedback/Spinner';
 import {
   importApiFiles, importApiText, importApiUrl, importApiEndpoint, importApiCurl, importApiGraphql, importApiMcp,
-  importApiConnector, importApiWebhook, importApiSource, importApiJira, importApiAzure, type ApiImportResponse,
+  importApiConnector, importApiWebhook, importApiSource, importApiJira, importApiAzure, importApiConfluence, type ApiImportResponse,
   connectJira, getJiraStatus, getJiraStories, connectAzureDevops, getAzureDevopsStatus, getAzureDevopsStories,
   getAzureDevopsAttachments, getJiraAttachments, getImportAttachmentCounts, type AttachmentCount,
+  connectConfluence, getConfluenceStatus, getConfluencePages, type ConfluencePageSummary,
   type PostmanPlanResponse, type ApiFlowSeed,
 } from '@/services/api';
 
@@ -271,7 +272,7 @@ function OutcomePanel({ outcome, onOpenCatalogue, onOpenStory, onReview, onDismi
   const { res, added, duplicates, method } = outcome;
   const none = (res.endpoints || []).length === 0;
   // Requirement-driven sources can also feed the Story generator for a brief.
-  const fromRequirements = method === 'jira' || method === 'ado' || method === 'brd' || method === 'frd';
+  const fromRequirements = method === 'jira' || method === 'ado' || method === 'confluence' || method === 'brd' || method === 'frd';
   // Strict readiness check over what the document produced — the SAME gate that
   // guards planning, applied to every import, so missing purpose/inputs/responses/
   // business rules/schema are surfaced here (and in the review) before anything runs.
@@ -389,6 +390,7 @@ function MethodForm({ def, busy, onClose, onRun }: { def: ImportMethodDef; busy:
       {input === 'webhook' && <WebhookForm busy={busy} onRun={onRun} />}
       {input === 'connector' && <ConnectorForm busy={busy} onRun={onRun} />}
       {(input === 'jira' || input === 'ado') && <IssueForm kind={input} busy={busy} onRun={onRun} />}
+      {input === 'confluence' && <ConfluenceForm busy={busy} onRun={onRun} />}
     </div>
   );
 }
@@ -623,6 +625,184 @@ function IssueForm({ kind, busy, onRun }: { kind: 'jira' | 'ado'; busy: boolean;
         </form>
       )}
     </div>
+  );
+}
+
+/**
+ * Confluence — pick a page from the connected wiki and read it for endpoints.
+ * Reuses the tenant's Confluence connection (System Configuration); when none
+ * exists, the user can connect inline with site URL + email + API token. No
+ * attachment picker: a Confluence page is prose, read as text by AI.
+ */
+function ConfluenceForm({ busy, onRun }: { busy: boolean; onRun: RunFn }) {
+  const [pageId, setPageId] = useState('');
+  const [conn, setConn] = useState<{ connected: boolean; label?: string } | 'unknown'>('unknown');
+  const [showConnect, setShowConnect] = useState(false);
+  const [pages, setPages] = useState<ConfluencePageSummary[] | null>(null);
+  const [spaceKey, setSpaceKey] = useState('');
+  const [listLoading, setListLoading] = useState(false);
+  const [listError, setListError] = useState('');
+
+  const loadPages = useCallback(async (space?: string) => {
+    setListLoading(true); setListError('');
+    try {
+      const rows = await getConfluencePages(space?.trim() || undefined);
+      setPages(Array.isArray(rows) ? rows : []);
+    } catch (err: any) {
+      setPages([]);
+      setListError(err?.response?.data?.error || err?.message || 'Could not load the page list — you can still paste a page id below.');
+    } finally { setListLoading(false); }
+  }, []);
+
+  const checkStatus = useCallback(async () => {
+    try {
+      const s = await getConfluenceStatus();
+      const connected = !!s?.connected;
+      setConn({ connected, label: s?.url });
+      if (connected) void loadPages(); else setPages(null);
+    } catch { setConn({ connected: false }); setPages(null); }
+  }, [loadPages]);
+
+  useEffect(() => { void checkStatus(); }, [checkStatus]);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const v = pageId.trim();
+    if (!v) return;
+    const picked = pages?.find((p) => p.id === v);
+    const name = picked ? `Confluence: ${picked.title}` : `Confluence page ${v}`;
+    const ok = await onRun(name, () => importApiConfluence(v));
+    if (ok) setPageId('');
+  };
+
+  const needsConnect = conn !== 'unknown' && !conn.connected;
+  const showConnectPanel = needsConnect || showConnect;
+
+  return (
+    <div className="space-y-3">
+      {conn === 'unknown' ? (
+        <div className="flex items-center gap-2 text-[11px] text-gray-400 px-3 py-2"><Spinner className="w-3.5 h-3.5 animate-spin" /> Checking Confluence connection…</div>
+      ) : conn.connected ? (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-[11.5px] text-emerald-800">
+          <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0 text-emerald-600" />
+          <span className="truncate">Connected{conn.label ? ` · ${conn.label}` : ''}</span>
+          <button type="button" onClick={() => setShowConnect((v) => !v)} className="ml-auto text-[11px] font-medium text-emerald-700 hover:text-emerald-900 underline">{showConnect ? 'Hide' : 'Change'}</button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-[11.5px] text-amber-800">
+          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 text-amber-600" />
+          <span>Not connected — enter your Confluence site, email and API token below to connect.</span>
+        </div>
+      )}
+
+      {showConnectPanel && <ConfluenceConnectPanel onConnected={() => { setShowConnect(false); void checkStatus(); }} />}
+
+      {conn !== 'unknown' && conn.connected && (
+        <form onSubmit={submit} className="space-y-3">
+          {/* Optional space filter — narrows the picker to one space. */}
+          <div>
+            <label className={LABEL}>Space key <span className="font-normal text-gray-400">(optional — filters the page list)</span></label>
+            <div className="flex gap-2">
+              <input value={spaceKey} onChange={(e) => setSpaceKey(e.target.value)} placeholder="e.g. QA" className={INPUT} spellCheck={false} />
+              <button type="button" onClick={() => void loadPages(spaceKey)} disabled={listLoading} className={SECONDARY_BTN}>
+                {listLoading ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <RotateCw className="w-3.5 h-3.5" />}Load
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label className={`${LABEL} flex items-center gap-1.5`}>
+              Choose a Confluence page
+              {listLoading && <Spinner className="w-3 h-3 animate-spin text-gray-400" />}
+              <button type="button" onClick={() => void loadPages(spaceKey)} disabled={listLoading} className="ml-auto text-[10.5px] font-medium text-[#7C3AED] hover:text-[#5B21B6] disabled:opacity-50">Refresh</button>
+            </label>
+            <select
+              value={pages?.some((p) => p.id === pageId) ? pageId : ''}
+              onChange={(e) => setPageId(e.target.value)}
+              disabled={listLoading || !pages}
+              className={INPUT}
+            >
+              <option value="">{listLoading ? 'Loading…' : pages && pages.length === 0 ? '— no pages found —' : '— choose a page —'}</option>
+              {(pages || []).map((p) => (
+                <option key={p.id} value={p.id}>{p.title}{p.spaceKey ? ` (${p.spaceKey})` : ''}</option>
+              ))}
+            </select>
+            {listError && <p className="text-[10.5px] text-amber-600 mt-1 leading-snug">{listError}</p>}
+          </div>
+
+          <div>
+            <label className={LABEL}>or paste the page id</label>
+            <input value={pageId} onChange={(e) => setPageId(e.target.value)} placeholder="123456789" className={INPUT} spellCheck={false} />
+            <p className="text-[10.5px] text-gray-400 mt-2 leading-relaxed">
+              The page's content is read by AI for the API endpoints it describes. The page itself is not stored here.
+            </p>
+          </div>
+
+          <div className="flex justify-end">
+            <SubmitBtn busy={busy} label="Import" disabled={!pageId.trim()} />
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Inline connect form for Confluence — site URL (…/wiki), email and API token.
+ * Stored via the shared integration config (encrypted at rest, tenant-scoped),
+ * the same place System Configuration → Integrations writes it.
+ */
+function ConfluenceConnectPanel({ onConnected }: { onConnected: () => void }) {
+  const toast = useToast();
+  const [url, setUrl] = useState('');
+  const [email, setEmail] = useState('');
+  const [token, setToken] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const ready = url.trim() && email.trim() && token.trim();
+
+  const connect = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ready || saving) return;
+    setSaving(true); setError('');
+    try {
+      await connectConfluence(url.trim(), email.trim(), token.trim());
+      toast.success('Confluence connected');
+      setToken('');
+      onConnected();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || err?.message || 'Could not connect. Check the details and try again.');
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <form onSubmit={connect} className="space-y-2.5 rounded-lg border border-[#DDD6FE] bg-[#FAFAFE] p-3">
+      <div className="flex items-center gap-1.5 text-[11.5px] font-semibold text-[#5B21B6]"><Plug className="w-3.5 h-3.5" /> Connect Confluence with an API token</div>
+      <div>
+        <label className={LABEL}>Confluence site URL</label>
+        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://your-site.atlassian.net/wiki" className={INPUT} spellCheck={false} autoComplete="off" />
+      </div>
+      <div>
+        <label className={LABEL}>Email</label>
+        <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" className={INPUT} spellCheck={false} autoComplete="off" type="email" />
+      </div>
+      <div>
+        <label className={`${LABEL} flex items-center gap-1`}><KeyRound className="w-3 h-3" /> API token</label>
+        <input value={token} onChange={(e) => setToken(e.target.value)} placeholder="••••••••••••" className={INPUT} spellCheck={false} autoComplete="off" type="password" />
+        <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[10.5px] text-[#7C3AED] hover:text-[#5B21B6] mt-1.5">
+          Create one at id.atlassian.com → Security → API tokens <ExternalLink className="w-3 h-3" />
+        </a>
+      </div>
+      {error && <p className="text-[11px] text-red-600 leading-snug">{error}</p>}
+      <p className="text-[10.5px] text-gray-400 leading-relaxed">The token is encrypted in transit and stored encrypted, scoped to your tenant. You can manage it later in System Configuration → Integrations.</p>
+      <div className="flex justify-end">
+        <button type="submit" disabled={!ready || saving} className={PRIMARY_BTN}>
+          {saving ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Plug className="w-3.5 h-3.5" />}
+          {saving ? 'Connecting…' : 'Connect'}
+        </button>
+      </div>
+    </form>
   );
 }
 
