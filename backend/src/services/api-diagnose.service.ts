@@ -37,7 +37,13 @@ export interface Diagnosis {
   prevention: string;
   confidence: 'high' | 'medium' | 'low';
   reproCurl: string;
+  /** IQE-041.1: the standing reminder shown on every healer suggestion — the Healer
+   *  only suggests, it never changes a script or re-runs a test on its own. */
+  revalidateNote: string;
 }
+
+/** IQE-041.1 crit 4 — the exact note that must accompany every failure suggestion. */
+export const REVALIDATE_NOTE = 'Please check all the API details and revalidate.';
 
 const CATEGORIES = ['assertion-drift', 'server-defect', 'auth', 'data-setup', 'contract', 'rate-limited', 'flaky', 'unknown'];
 
@@ -111,5 +117,6 @@ Return the JSON now.`;
     prevention: String(parsed.prevention || '').slice(0, 240),
     confidence,
     reproCurl: buildCurl(f),
+    revalidateNote: REVALIDATE_NOTE,
   };
 }

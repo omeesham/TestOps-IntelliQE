@@ -728,6 +728,8 @@ export interface Diagnosis {
   prevention?: string;
   confidence: 'high' | 'medium' | 'low';
   reproCurl: string;
+  /** IQE-041.1: the standing "Please check all the API details and revalidate." note. */
+  revalidateNote?: string;
 }
 export async function diagnoseApiFailure(failure: {
   title?: string; method: string; url: string; error: string;
@@ -1361,11 +1363,11 @@ export async function captureWebPerformance(input: { url: string; engine?: WebEn
 /* ── 1. Visual flow / journey builder ── */
 export interface FlowExtract { name: string; from: 'body' | 'header' | 'status'; path?: string; regex?: string }
 export type CompareMode = 'strict' | 'strict-order' | 'lenient' | 'non-extensible';
-export interface FlowCheck { kind: 'status' | 'jsonPathExists' | 'jsonPathEquals' | 'bodyContains' | 'responseTimeUnderMs' | 'header' | 'bodyMatches' | 'xpath' | 'expr' | 'schema' | 'graphql' | 'noSecrets' | 'noError'; equals?: number | string; oneOf?: number[]; path?: string; value?: unknown; text?: string; ms?: number; name?: string; op?: 'equals' | 'contains' | 'exists'; compareMode?: CompareMode; ignore?: string[]; expr?: string; schema?: string }
+export interface FlowCheck { kind: 'status' | 'jsonPathExists' | 'jsonPathEquals' | 'bodyContains' | 'bodyNotContains' | 'contentType' | 'responseTimeUnderMs' | 'header' | 'bodyMatches' | 'xpath' | 'expr' | 'schema' | 'graphql' | 'countAtMost' | 'everyMatches' | 'sortedBy' | 'noDuplicates' | 'noSecrets' | 'noError'; equals?: number | string; oneOf?: number[]; path?: string; value?: unknown; text?: string; ms?: number; name?: string; op?: 'equals' | 'contains' | 'exists'; field?: string; direction?: 'asc' | 'desc'; max?: number; caseInsensitive?: boolean; compareMode?: CompareMode; ignore?: string[]; expr?: string; schema?: string }
 export interface ApiOAuth2Config { grant?: string; tokenUrl?: string; clientId?: string; clientSecret?: string; scope?: string; audience?: string; username?: string; password?: string; refreshToken?: string; clientAuthBasic?: boolean }
 export interface ApiHttpAuth { type: string; value?: string; headerName?: string; in?: 'header' | 'query'; oauth2?: ApiOAuth2Config; digest?: { username?: string; password?: string; algorithm?: string }; awsSigV4?: { accessKeyId?: string; secretAccessKey?: string; region?: string; service?: string; sessionToken?: string }; oauth1?: { consumerKey?: string; consumerSecret?: string; token?: string; tokenSecret?: string; signatureMethod?: string }; mtls?: { cert?: string; key?: string; ca?: string; passphrase?: string; rejectUnauthorized?: boolean } }
 export interface ApiFormField { key: string; value?: string; type?: 'text' | 'file'; filename?: string; contentType?: string; dataBase64?: string }
-export type FlowStepType = 'request' | 'if' | 'loop' | 'wait' | 'group' | 'retry';
+export type FlowStepType = 'request' | 'if' | 'loop' | 'wait' | 'group' | 'retry' | 'parallel';
 export type FlowConditionOp = 'eq' | 'ne' | 'exists' | 'notExists' | 'contains' | 'gt' | 'lt';
 export interface FlowCondition { var?: string; op?: FlowConditionOp; value?: string; expr?: string }
 export interface FlowLoop { mode: 'times' | 'while' | 'forEach'; times?: number; while?: FlowCondition; maxIterations?: number; items?: string; var?: string }
@@ -1399,9 +1401,16 @@ export interface FlowStep {
   groupId?: string;
   /** Per-request timeout in ms (100–120000). Omitted ⇒ 15000. */
   timeoutMs?: number;
+  /** When false, redirects are NOT followed so a 3xx + Location can be asserted. Omitted ⇒ follow. */
+  followRedirects?: boolean;
+  /** Per-request retry: retry while the status is in this list, up to maxAttempts (safe/idempotent methods only unless retryNonIdempotent). */
+  retryOnStatuses?: number[];
+  maxAttempts?: number;
+  retryDelayMs?: number;
+  retryNonIdempotent?: boolean;
 }
 export interface SavedApiFlow { id: string; name: string; steps: FlowStep[]; variables: Record<string, string>; createdBy: string; createdAt: string; updatedAt: string }
-export interface FlowStepResult { index: number; name: string; method: string; url: string; phase?: StepPhase; ok: boolean; status?: number; elapsedMs: number; error?: string; extracted: Record<string, string>; checks: { kind: string; label: string; pass: boolean; detail?: string }[]; bodyPreview: string }
+export interface FlowStepResult { index: number; name: string; method: string; url: string; phase?: StepPhase; ok: boolean; status?: number; elapsedMs: number; error?: string; extracted: Record<string, string>; checks: { kind: string; label: string; pass: boolean; detail?: string }[]; bodyPreview: string; request?: { method: string; url: string; headers: Record<string, string>; body?: string }; responseHeaders?: Record<string, string>; attempts?: number }
 export interface FlowRunSummary { requests: number; passed: number; failed: number; checks: number; checksPassed: number; maxStepMs: number; avgStepMs: number; slowestStep?: string }
 export interface FlowRunResult { passed: boolean; steps: FlowStepResult[]; variables: Record<string, string>; durationMs: number; stepsRun: number; stepsTotal: number; summary?: FlowRunSummary }
 export async function listApiFlows(): Promise<{ flows: SavedApiFlow[] }> { const { data } = await api.get('/api-automation/flows'); return data; }

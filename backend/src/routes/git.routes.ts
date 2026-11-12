@@ -31,6 +31,8 @@ import { gitlabProvider } from '../services/git/gitlab.provider.js';
 import { bitbucketProvider } from '../services/git/bitbucket.provider.js';
 import { assembleClientPackage } from '../services/client-package.service.js';
 import { getReportStats, readAllureResults, readBasicReport } from '../services/allure-report.service.js';
+import { scanFilesForSecrets, formatSecretFindings } from '../services/git/secret-scan.js';
+import { requirePermission } from '../services/api-access.service.js';
 
 /**
  * Build docs/TEST-EXECUTION-REPORT.md for the run being published, so the
@@ -145,7 +147,7 @@ function cfgToProvider(cfg: Record<string, any>): GitProviderConfig {
   };
 }
 
-router.post('/publish', async (req: Request, res: Response) => {
+router.post('/publish', requirePermission('api.run'), async (req: Request, res: Response) => {
   try {
     const user = req.user!;
     const {
@@ -231,6 +233,24 @@ router.post('/publish', async (req: Request, res: Response) => {
     });
     const specFileCount = files.filter((f) => /^tests\/.+\.spec\.ts$/.test(f.path)).length;
     console.log(`[git.publish] deliverable = ${files.length} file(s), ${specFileCount} consolidated module spec(s) from ${scripts.length} generated script(s)`);
+
+    // 3b. IQE-053.2 — secret check before ANY push (shared by all git providers).
+    // Scan the exact files to be committed; if a real secret (token, password,
+    // API key, private key) is found, STOP the push and tell the user the file +
+    // line with the value masked. Normal generated output reads secrets from the
+    // environment, so a clean deliverable is never blocked.
+    const scan = scanFilesForSecrets(files);
+    if (!scan.clean) {
+      console.warn(`[git.publish] BLOCKED — ${scan.findings.length} secret(s) in deliverable for ${user.username} (tenant=${user.tenantId})`);
+      res.status(400).json({
+        error:
+          `Push blocked: ${scan.findings.length} possible secret${scan.findings.length === 1 ? '' : 's'} found in the files to be committed. ` +
+          `Move the value(s) into an environment variable and reference them from the scripts, then push again.\n` +
+          formatSecretFindings(scan.findings),
+        secretScan: { blocked: true, findings: scan.findings },
+      });
+      return;
+    }
 
     // 4. Defaults — branch name, PR title, commit message, PR body.
     // GitHub publishes go STRAIGHT onto the configured branch (no

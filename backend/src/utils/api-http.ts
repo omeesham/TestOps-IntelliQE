@@ -142,21 +142,29 @@ export async function timedFetch(url: string, init: RequestInit, timeoutMs = 15_
   }
 }
 
-export interface FullResult { ok: boolean; status?: number; headers: Record<string, string>; bodyText: string; elapsedMs: number; error?: string }
+export interface FullResult { ok: boolean; status?: number; headers: Record<string, string>; setCookies: string[]; bodyText: string; elapsedMs: number; error?: string }
 /** Issue a request and return status, headers and a truncated body. */
 export async function fetchFull(url: string, init: RequestInit, timeoutMs = 15_000, bodyLimit = 8000, dispatcher?: unknown): Promise<FullResult> {
   const started = Date.now();
   try {
     // `dispatcher` is an undici Agent (mTLS client cert); it's a non-standard
     // fetch option undici honours, so it is cast through `any`.
-    const res = await fetch(url, { ...init, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs), ...(dispatcher ? { dispatcher } : {}) } as any);
+    // Default to following redirects, but honour an explicit `init.redirect`
+    // (e.g. 'manual') so a caller can assert a 3xx status + Location (IQE-043.8).
+    const res = await fetch(url, { redirect: 'follow', ...init, signal: AbortSignal.timeout(timeoutMs), ...(dispatcher ? { dispatcher } : {}) } as any);
     const headers: Record<string, string> = {};
     res.headers.forEach((v, k) => { headers[k] = v; });
+    // Preserve EACH Set-Cookie (res.headers collapses them into one comma-joined
+    // string). undici exposes getSetCookie(); fall back to the collapsed header.
+    const getSetCookie = (res.headers as unknown as { getSetCookie?: () => string[] }).getSetCookie;
+    const setCookies: string[] = typeof getSetCookie === 'function'
+      ? getSetCookie.call(res.headers)
+      : (headers['set-cookie'] ? [headers['set-cookie']] : []);
     let bodyText = '';
     try { bodyText = (await res.text()).slice(0, bodyLimit); } catch { /* empty body */ }
-    return { ok: res.ok, status: res.status, headers, bodyText, elapsedMs: Date.now() - started };
+    return { ok: res.ok, status: res.status, headers, setCookies, bodyText, elapsedMs: Date.now() - started };
   } catch (e) {
-    return { ok: false, headers: {}, bodyText: '', elapsedMs: Date.now() - started, error: (e as Error).message || String(e) };
+    return { ok: false, headers: {}, setCookies: [], bodyText: '', elapsedMs: Date.now() - started, error: (e as Error).message || String(e) };
   }
 }
 

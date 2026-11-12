@@ -653,6 +653,47 @@ export function planServiceObjects(
   return { plans: [...plans.values()], bindings };
 }
 
+/**
+ * Render one header value. A value carrying an `__ENVREF__<KEY>__` sentinel (a
+ * secret env var, kept out of the script by resolveApiCase's secretsAsEnvRefs
+ * mode) becomes a `process.env.<KEY>` read, concatenated with the literal parts —
+ * so the generated script reads the secret from the environment, never embeds it
+ * (IQE-040.1/040.3). Plain values render as a JSON string exactly as before.
+ */
+function renderEnvRefHeaderValue(v: string): string {
+  const parts: string[] = [];
+  let last = 0;
+  const re = /__ENVREF__([A-Za-z0-9_]+)__/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(v)) !== null) {
+    if (m.index > last) parts.push(JSON.stringify(v.slice(last, m.index)));
+    parts.push(`(process.env.${m[1]} ?? '')`);
+    last = m.index + m[0].length;
+  }
+  if (last < v.length) parts.push(JSON.stringify(v.slice(last)));
+  return parts.length ? parts.join(' + ') : "''";
+}
+
+/**
+ * Render a headers object for a service-object method. With no secret env refs
+ * this is byte-identical to before (`fillHeaders(...)` when the method has flow
+ * `{{vars}}`, else a JSON literal). When a header carries a secret env ref, the
+ * object is rendered as a computed literal: env-ref values become `process.env`
+ * reads, flow-var values keep `fill(...)`, and plain values stay JSON strings.
+ */
+function renderHeadersExpr(headers: Record<string, string>, dyn: boolean): string {
+  const hasRef = Object.values(headers).some((v) => String(v).includes('__ENVREF__'));
+  if (!hasRef) return dyn ? `fillHeaders(${JSON.stringify(headers)}, vars)` : JSON.stringify(headers);
+  const entries = Object.entries(headers).map(([k, v]) => {
+    const s = String(v);
+    const val = s.includes('__ENVREF__')
+      ? renderEnvRefHeaderValue(s)
+      : (dyn && s.includes('{{')) ? `fill(${JSON.stringify(s)}, vars)` : JSON.stringify(s);
+    return `${JSON.stringify(k)}: ${val}`;
+  });
+  return `{ ${entries.join(', ')} }`;
+}
+
 /** Render one service object class. */
 export function renderServiceObject(plan: ServiceObjectPlan): string {
   const anyVars = plan.methods.some(hasVars);
@@ -664,7 +705,7 @@ export function renderServiceObject(plan: ServiceObjectPlan): string {
       // time; a plain request renders exactly as before.
       const dyn = hasVars(m);
       const wrap = (lit: string) => (dyn ? `fill(${lit}, vars)` : lit);
-      if (Object.keys(m.headers).length) opts.push(`      headers: ${dyn ? `fillHeaders(${JSON.stringify(m.headers)}, vars)` : JSON.stringify(m.headers)}`);
+      if (Object.keys(m.headers).length) opts.push(`      headers: ${renderHeadersExpr(m.headers, dyn)}`);
       if (m.body !== undefined) opts.push(`      data: ${wrap(JSON.stringify(m.body))}`);
       const optsArg = opts.length ? `, {\n${opts.join(',\n')},\n    }` : '';
       return `  /** ${m.method} ${m.url} */\n`
@@ -1316,7 +1357,10 @@ export async function apiGeneratorAgent(state: TestOpsState): Promise<TestOpsSta
   // A multi-host catalogue keeps each endpoint's own host; a single-service
   // catalogue still retargets onto the environment's base URL exactly as before.
   const preserveRealHosts = spansMultipleHosts(templatedCases);
-  const forRender = env ? templatedCases.map((nc) => resolveApiCase(nc, env, { preserveRealHosts })) : templatedCases;
+  // Render secret env vars as `process.env.<KEY>` reads, never literals — so a
+  // generated/pushed script carries no credentials (IQE-040.1/040.3). The live
+  // runner injects these same vars so the interactive run still authenticates.
+  const forRender = env ? templatedCases.map((nc) => resolveApiCase(nc, env, { preserveRealHosts, secretsAsEnvRefs: true })) : templatedCases;
   const { testCases, automationScripts, pageObjects } = renderApiCases(forRender);
 
   return {

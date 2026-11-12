@@ -163,6 +163,12 @@ export default function Diagnose({ failure, onClose }: { failure: FailurePayload
                 <pre className={`font-mono text-[11px] text-gray-700 bg-[#FCFBFF] border border-[#E4E0F5] rounded-md p-2.5 whitespace-pre-wrap ${INSET}`}>{diag.reproCurl}</pre>
               </div>
 
+              {/* IQE-041.1 — the Healer only suggests; it never changes a script or re-runs a test on its own. */}
+              <div className="flex items-start gap-1.5 px-2.5 py-1.5 bg-amber-50 border border-amber-200 rounded-md">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0 mt-px" />
+                <p className="text-[11.5px] text-amber-800">{diag.revalidateNote || 'Please check all the API details and revalidate.'}</p>
+              </div>
+
               {/* ── Heal agent — propose a concrete resolution for this failure ── */}
               <div className="border-t border-[#EDE9FE] pt-3 space-y-2.5">
                 {!healed && (

@@ -119,7 +119,7 @@ import { summarizeAsyncApi, validateAsyncMessage } from '../services/api-asyncap
 import { runTraceProbe } from '../services/api-trace.service.js';
 import { detectFlaky, listQuarantine, addQuarantine, removeQuarantine, analyzeImpact } from '../services/api-testintel.service.js';
 import { listLoadAgents, saveLoadAgent, deleteLoadAgent, runCloudLoad, runCloudLoadProfile } from '../services/api-cloud-load.service.js';
-import { PERMISSION_CATALOG, getRolePermissions, setRolePermissions, getSsoConfig, saveSsoConfig, testOidcDiscovery, getScimToken, rotateScimToken, revokeScimToken, getSecuritySettings, saveSecuritySettings, beginMfaEnrollment, confirmMfaEnrollment, disableMfa, userHasMfa } from '../services/api-access.service.js';
+import { PERMISSION_CATALOG, getRolePermissions, setRolePermissions, getSsoConfig, saveSsoConfig, testOidcDiscovery, getScimToken, rotateScimToken, revokeScimToken, getSecuritySettings, saveSecuritySettings, beginMfaEnrollment, confirmMfaEnrollment, disableMfa, userHasMfa, checkPermission } from '../services/api-access.service.js';
 import { openRemediationPr } from '../services/api-remediation.service.js';
 import { runCompliancePack, listCompliancePacks } from '../services/api-compliance.service.js';
 // ─── Tier 3 — strategic / packaging (enterprise deals; all additive, opt-in) ───
@@ -186,6 +186,70 @@ import { sanitizeApiSpec } from '../utils/api-spec.js';
 import type { ApiSpec } from '../agents/state.js';
 
 const router = Router();
+
+/* ════════════════════════════════════════════════════════════════
+   IQE-043.2 — RBAC enforcement (role-based access).
+   One router-level gate. Reads (GET/HEAD/OPTIONS) and self-service MFA
+   routes always pass. For a mutating request, the FIRST matching prefix in
+   ROUTE_PERMISSIONS decides the required permission; an UNMAPPED path passes
+   (so behaviour is unchanged for anything not listed — blast radius is only
+   the mapped prefixes). The decision reuses api-access.checkPermission:
+   platform/admin bypass, role→permission map, fail-open on lookup error.
+   Order matters — most specific prefixes first.
+   ════════════════════════════════════════════════════════════════ */
+const ROUTE_PERMISSIONS: { prefix: string; perm: string }[] = [
+  { prefix: '/import', perm: 'api.import' },
+  { prefix: '/runs', perm: 'api.run' },
+  { prefix: '/flows/run', perm: 'api.run' },
+  { prefix: '/render', perm: 'api.run' },
+  { prefix: '/security', perm: 'api.security_scan' },
+  { prefix: '/owasp', perm: 'api.security_scan' },
+  { prefix: '/fuzz', perm: 'api.security_scan' },
+  { prefix: '/seqfuzz', perm: 'api.security_scan' },
+  { prefix: '/loadtest', perm: 'api.load_test' },
+  { prefix: '/geo-load', perm: 'api.load_test' },
+  { prefix: '/cloud-load', perm: 'api.load_test' },
+  { prefix: '/load-agents', perm: 'api.load_test' },
+  { prefix: '/chaos', perm: 'api.chaos' },
+  { prefix: '/db', perm: 'api.db_validate' },
+  { prefix: '/mocks', perm: 'api.mock_manage' },
+  { prefix: '/virtual-services', perm: 'api.virtual_manage' },
+  { prefix: '/pacts', perm: 'api.pact_manage' },
+  { prefix: '/pact', perm: 'api.pact_manage' },
+  { prefix: '/providers', perm: 'api.providers_manage' },
+  { prefix: '/mcp-tokens', perm: 'api.mcp_manage' },
+  { prefix: '/oauth', perm: 'api.oauth_secrets' },
+  { prefix: '/schedules', perm: 'api.schedules_manage' },
+  { prefix: '/webhooks', perm: 'api.schedules_manage' },
+  { prefix: '/testintel/quarantine', perm: 'api.quarantine_manage' },
+  { prefix: '/reviews', perm: 'api.reviews_signoff' },
+  { prefix: '/signoff', perm: 'api.reviews_signoff' },
+  // /runs/:id/reviews is nested under /runs — handled by the explicit check below.
+];
+
+/** The required permission for a mutating request, or null when the route is unmapped/exempt. */
+export function permissionForRoute(method: string, routePath: string): string | null {
+  const m = (method || 'GET').toUpperCase();
+  if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return null;       // reads always pass
+  if (routePath.startsWith('/access/mfa')) return null;                  // self-service MFA
+  if (routePath.startsWith('/access')) return 'api.access_manage';       // SSO/SCIM/role config
+  if (/^\/runs\/[^/]+\/reviews/.test(routePath)) return 'api.reviews_signoff';
+  for (const { prefix, perm } of ROUTE_PERMISSIONS) {
+    if (routePath === prefix || routePath.startsWith(prefix + '/')) return perm;
+  }
+  return null;                                                           // unmapped ⇒ unchanged behaviour
+}
+
+router.use(async (req: Request, res: Response, next): Promise<void> => {
+  const perm = permissionForRoute(req.method, req.path);
+  if (!perm) { next(); return; }
+  const verdict = await checkPermission(req.user, perm);
+  if (verdict === 'deny') {
+    res.status(403).json({ error: `Your role (${req.user?.role || 'unknown'}) is not allowed to ${req.method} this resource (missing "${perm}").` });
+    return;
+  }
+  next();
+});
 
 /* ── Upload config ── */
 const IMPORT_EXTS = ['pdf', 'docx', 'doc', 'xlsx', 'xls', 'csv', 'txt', 'md', 'markdown', 'json', 'yaml', 'yml', 'xml', 'wsdl', 'bru', 'har', 'ts', 'js', 'py', 'java', 'cs', 'go', 'rb', 'php', 'kt', 'graphql', 'gql'];

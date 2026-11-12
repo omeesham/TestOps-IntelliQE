@@ -50,7 +50,13 @@ export interface HealProposal {
   patch?: { expectedStatus?: number; expectedResponse?: string };
   /** Set when the endpoint could not be re-observed (e.g. a write, not re-fired). */
   note?: string;
+  /** IQE-041.1 crit 4 — the standing reminder shown on every suggestion. The Healer
+   *  only SUGGESTS; it never changes a script or re-runs a test on its own. */
+  revalidateNote: string;
 }
+
+/** IQE-041.1 crit 4 — the exact note that must accompany every failure suggestion. */
+export const REVALIDATE_NOTE = 'Please check all the API details and revalidate.';
 
 export interface HealResult {
   proposals: HealProposal[];
@@ -82,7 +88,7 @@ async function healOne(f: HealFailure, llm: LlmConfig, allowWrites: boolean): Pr
   const base: HealProposal = {
     endpointId: f.endpointId, title, method, url: f.url,
     classification: 'unknown', confidence: 'low', shouldHeal: false,
-    summary: '', rationale: '',
+    summary: '', rationale: '', revalidateNote: REVALIDATE_NOTE,
   };
 
   // Re-observe the live endpoint — but never re-fire a state-changing request

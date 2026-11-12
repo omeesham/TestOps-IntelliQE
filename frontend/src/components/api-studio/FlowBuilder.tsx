@@ -26,7 +26,7 @@ type ExtractRow = NonNullable<FlowStep['extract']>[number];
 
 interface EditExtract { _k: string; name: string; from: ExtractRow['from']; path: string; regex: string }
 interface VarRow { _k: string; key: string; value: string }
-interface EditCheck { _k: string; kind: FlowCheck['kind']; oneOf: string; path: string; value: string; text: string; ms: string; name: string; op: string; compareMode: string; ignore: string; expr: string; schema: string }
+interface EditCheck { _k: string; kind: FlowCheck['kind']; oneOf: string; path: string; value: string; text: string; ms: string; name: string; op: string; compareMode: string; ignore: string; expr: string; schema: string; field: string; direction: string; max: string; caseInsensitive: boolean }
 interface EditStep {
   id: string;
   name: string;
@@ -38,6 +38,12 @@ interface EditStep {
   phase: StepPhase;
   /** Per-request timeout in ms (blank ⇒ default 15000). */
   timeout: string;
+  /** When true, redirects are NOT followed so a 3xx + Location can be asserted. */
+  noFollowRedirects: boolean;
+  /** Per-request retry (IQE-043.8): comma list of statuses to retry, max attempts, and a non-idempotent override. */
+  retryStatuses: string;
+  maxAttempts: string;
+  retryNonIdempotent: boolean;
   // Poll/retry: when enabled, the request is wrapped in a retry that re-runs it
   // until `pollUntil` holds (eventual consistency). Empty ⇒ a plain request.
   pollEnabled: boolean;
@@ -49,7 +55,7 @@ interface EditStep {
   open: boolean;
 }
 
-const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 const WRITE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const isWrite = (m: string) => WRITE.has((m || '').toUpperCase());
 
@@ -58,6 +64,8 @@ const CHECK_LABELS: Record<FlowCheck['kind'], string> = {
   jsonPathExists: 'JSON path exists',
   jsonPathEquals: 'JSON path equals',
   bodyContains: 'Body contains',
+  bodyNotContains: 'Body does NOT contain',
+  contentType: 'Content-Type is',
   responseTimeUnderMs: 'Response time under (ms)',
   header: 'Header',
   bodyMatches: 'Body matches (compare)',
@@ -65,6 +73,10 @@ const CHECK_LABELS: Record<FlowCheck['kind'], string> = {
   expr: 'Expression',
   schema: 'JSON Schema (contract)',
   graphql: 'GraphQL (no errors)',
+  countAtMost: 'Array size at most',
+  everyMatches: 'Every item matches',
+  sortedBy: 'Sorted by',
+  noDuplicates: 'No duplicate items',
   noSecrets: 'No leaked secrets',
   noError: 'No error envelope (REST)',
 };
@@ -100,6 +112,8 @@ function editCheckToApi(c: EditCheck): FlowCheck {
     case 'jsonPathExists': return { kind: 'jsonPathExists', path: c.path };
     case 'jsonPathEquals': return { kind: 'jsonPathEquals', path: c.path, value: c.value };
     case 'bodyContains': return { kind: 'bodyContains', text: c.text };
+    case 'bodyNotContains': return { kind: 'bodyNotContains', text: c.text, ...(c.caseInsensitive ? { caseInsensitive: true } : {}) };
+    case 'contentType': return { kind: 'contentType', value: c.value, op: (c.op === 'equals' ? 'equals' : 'contains') as FlowCheck['op'] };
     case 'responseTimeUnderMs': return { kind: 'responseTimeUnderMs', ms: Number(c.ms) || 0 };
     case 'header': return { kind: 'header', name: c.name, op: (c.op || 'exists') as FlowCheck['op'], value: c.value };
     case 'bodyMatches': return { kind: 'bodyMatches', value: c.value, compareMode: (c.compareMode || 'lenient') as FlowCheck['compareMode'], ...(c.ignore.trim() ? { ignore: c.ignore.split(',').map((p) => p.trim()).filter(Boolean) } : {}) };
@@ -107,6 +121,10 @@ function editCheckToApi(c: EditCheck): FlowCheck {
     case 'expr': return { kind: 'expr', expr: c.expr };
     case 'schema': return { kind: 'schema', schema: c.schema, ...(c.path.trim() ? { path: c.path } : {}) };
     case 'graphql': return { kind: 'graphql' };
+    case 'countAtMost': return { kind: 'countAtMost', path: c.path, max: Number(c.max) || 0 };
+    case 'everyMatches': return { kind: 'everyMatches', path: c.path, field: c.field, op: (c.op === 'contains' ? 'contains' : c.op === 'exists' ? 'exists' : 'equals') as FlowCheck['op'], value: c.value, ...(c.caseInsensitive ? { caseInsensitive: true } : {}) };
+    case 'sortedBy': return { kind: 'sortedBy', path: c.path, field: c.field, direction: (c.direction === 'desc' ? 'desc' : 'asc') as FlowCheck['direction'] };
+    case 'noDuplicates': return { kind: 'noDuplicates', path: c.path, ...(c.field.trim() ? { field: c.field } : {}) };
     case 'noSecrets': return { kind: 'noSecrets' };
     case 'noError': return { kind: 'noError' };
   }
@@ -121,6 +139,13 @@ function editStepToApi(s: EditStep): FlowStep {
   if (s.auth && s.auth.type && s.auth.type !== 'none') req.auth = s.auth;
   if (isWrite(s.method) && s.body.trim()) req.body = s.body;
   if (Number(s.timeout) > 0) req.timeoutMs = Number(s.timeout);
+  if (s.noFollowRedirects) req.followRedirects = false;
+  const retryStatuses = s.retryStatuses.split(',').map((x) => Number(x.trim())).filter((n) => Number.isFinite(n));
+  if (retryStatuses.length) {
+    req.retryOnStatuses = retryStatuses;
+    if (Number(s.maxAttempts) > 1) req.maxAttempts = Number(s.maxAttempts);
+    if (s.retryNonIdempotent) req.retryNonIdempotent = true;
+  }
   const ex: ExtractRow[] = s.extract
     .filter((x) => x.name.trim())
     .map((x) => ({ name: x.name.trim(), from: x.from, ...(x.path.trim() ? { path: x.path.trim() } : {}), ...(x.regex.trim() ? { regex: x.regex.trim() } : {}) }));
@@ -153,7 +178,7 @@ function StepResult({ s }: { s: FlowRunResult['steps'][number] }) {
         {s.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" /> : <XCircle className="w-4 h-4 text-red-600 flex-shrink-0" />}
         <MethodBadge method={s.method} />
         <span className="text-[12px] font-medium text-gray-800 truncate">{s.name || s.url}</span>
-        <span className="ml-auto text-[11px] text-gray-400 flex-shrink-0">{s.status ?? '—'} · {s.elapsedMs}ms</span>
+        <span className="ml-auto text-[11px] text-gray-400 flex-shrink-0">{s.status ?? '—'} · {s.elapsedMs}ms{s.attempts && s.attempts > 1 ? ` · ${s.attempts}×` : ''}</span>
       </div>
       <div className="px-3 pb-2.5 space-y-1.5">
         {s.error && <p className="text-[11.5px] text-red-600">{s.error}</p>}
@@ -170,12 +195,33 @@ function StepResult({ s }: { s: FlowRunResult['steps'][number] }) {
             <span className={c.pass ? 'text-gray-600' : 'text-red-600'}>{c.label}{c.detail ? <span className="text-gray-400"> · {c.detail}</span> : null}</span>
           </div>
         ))}
-        {s.bodyPreview && (
+        {(s.bodyPreview || s.request || s.responseHeaders) && (
           <div>
             <button type="button" onClick={() => setOpen((o) => !o)} className="text-[11px] text-gray-400 hover:text-[#7C3AED] inline-flex items-center gap-0.5">
-              <ChevronRight className={`w-3 h-3 transition-transform ${open ? 'rotate-90' : ''}`} />Response body
+              <ChevronRight className={`w-3 h-3 transition-transform ${open ? 'rotate-90' : ''}`} />Request &amp; response
             </button>
-            {open && <pre className="mt-1 text-[10.5px] font-mono text-gray-600 bg-gray-50 rounded p-2 overflow-x-auto max-h-40">{s.bodyPreview}</pre>}
+            {open && (
+              <div className="mt-1 space-y-2">
+                {s.request && (
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">Request</p>
+                    <pre className="mt-0.5 text-[10.5px] font-mono text-gray-600 bg-gray-50 rounded p-2 overflow-x-auto max-h-40">{`${s.request.method} ${s.request.url}\n${Object.entries(s.request.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n')}${s.request.body ? `\n\n${s.request.body}` : ''}`}</pre>
+                  </div>
+                )}
+                {s.responseHeaders && Object.keys(s.responseHeaders).length > 0 && (
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">Response headers</p>
+                    <pre className="mt-0.5 text-[10.5px] font-mono text-gray-600 bg-gray-50 rounded p-2 overflow-x-auto max-h-40">{Object.entries(s.responseHeaders).map(([k, v]) => `${k}: ${v}`).join('\n')}</pre>
+                  </div>
+                )}
+                {s.bodyPreview && (
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">Response body</p>
+                    <pre className="mt-0.5 text-[10.5px] font-mono text-gray-600 bg-gray-50 rounded p-2 overflow-x-auto max-h-40">{s.bodyPreview}</pre>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -208,7 +254,7 @@ export default function FlowBuilder({ catalog, onClose, initialFlow }: { catalog
   const hasWrites = steps.some((s) => isWrite(s.method));
 
   /* ── Builders ── */
-  const blankStep = (): EditStep => ({ id: nextId('s'), name: '', method: 'GET', url: '', headers: [], body: '', phase: 'main', timeout: '', pollEnabled: false, pollUntil: '', pollAttempts: '', pollDelayMs: '', extract: [], checks: [], open: true });
+  const blankStep = (): EditStep => ({ id: nextId('s'), name: '', method: 'GET', url: '', headers: [], body: '', phase: 'main', timeout: '', noFollowRedirects: false, retryStatuses: '', maxAttempts: '', retryNonIdempotent: false, pollEnabled: false, pollUntil: '', pollAttempts: '', pollDelayMs: '', extract: [], checks: [], open: true });
   const seedStep = (ep: CatalogEndpoint): EditStep => ({
     id: nextId('s'),
     name: ep.title || '',
@@ -219,6 +265,8 @@ export default function FlowBuilder({ catalog, onClose, initialFlow }: { catalog
     body: ep.body || '',
     phase: 'main',
     timeout: '',
+    noFollowRedirects: false,
+    retryStatuses: '', maxAttempts: '', retryNonIdempotent: false,
     pollEnabled: false, pollUntil: '', pollAttempts: '', pollDelayMs: '',
     extract: [],
     checks: [],
@@ -240,6 +288,10 @@ export default function FlowBuilder({ catalog, onClose, initialFlow }: { catalog
     body: req.body || '',
     phase: s.phase || req.phase || 'main',
     timeout: req.timeoutMs != null ? String(req.timeoutMs) : '',
+    noFollowRedirects: req.followRedirects === false,
+    retryStatuses: (req.retryOnStatuses || []).join(', '),
+    maxAttempts: req.maxAttempts != null ? String(req.maxAttempts) : '',
+    retryNonIdempotent: req.retryNonIdempotent === true,
     pollEnabled: isRetry,
     pollUntil: poll?.until?.expr || '',
     pollAttempts: poll?.attempts != null ? String(poll.attempts) : '',
@@ -259,6 +311,10 @@ export default function FlowBuilder({ catalog, onClose, initialFlow }: { catalog
       ignore: (c.ignore || []).join(', '),
       expr: c.expr || '',
       schema: c.schema || '',
+      field: c.field || '',
+      direction: c.direction || 'asc',
+      max: c.max != null ? String(c.max) : '',
+      caseInsensitive: !!c.caseInsensitive,
     })),
     open: false,
     };
@@ -399,7 +455,7 @@ export default function FlowBuilder({ catalog, onClose, initialFlow }: { catalog
   const delVar = (k: string) => setVars((p) => p.filter((v) => v._k !== k));
   // Seed variables available to {{...}} from step 1, before any extract (baseUrl, a static token, test data). Blank keys dropped.
   const varsToRecord = (): Record<string, string> => { const o: Record<string, string> = {}; for (const v of vars) if (v.key.trim()) o[v.key.trim()] = v.value; return o; };
-  const addCheck = (s: EditStep) => patchStep(s.id, { checks: [...s.checks, { _k: nextId('k'), kind: 'status', oneOf: '200', path: '', value: '', text: '', ms: '', name: '', op: 'exists', compareMode: 'lenient', ignore: '', expr: '', schema: '' }] });
+  const addCheck = (s: EditStep) => patchStep(s.id, { checks: [...s.checks, { _k: nextId('k'), kind: 'status', oneOf: '200', path: '', value: '', text: '', ms: '', name: '', op: 'exists', compareMode: 'lenient', ignore: '', expr: '', schema: '', field: '', direction: 'asc', max: '', caseInsensitive: false }] });
   const setCheck = (s: EditStep, k: string, patch: Partial<EditCheck>) => patchStep(s.id, { checks: s.checks.map((c) => (c._k === k ? { ...c, ...patch } : c)) });
   const delCheck = (s: EditStep, k: string) => patchStep(s.id, { checks: s.checks.filter((c) => c._k !== k) });
 
@@ -606,6 +662,27 @@ export default function FlowBuilder({ catalog, onClose, initialFlow }: { catalog
                         <input value={s.timeout} onChange={(e) => patchStep(s.id, { timeout: e.target.value.replace(/[^0-9]/g, '') })} placeholder="15000" className={`${FIELD} w-24 flex-shrink-0`} />
                         <span className="text-gray-400 text-[11px]">ms</span>
                       </label>
+                      <label className="flex items-center gap-1.5 text-[12px] text-gray-600" title="When on, a 3xx redirect is NOT followed so its status and Location header can be asserted (IQE-043.8)">
+                        <input type="checkbox" checked={s.noFollowRedirects} onChange={(e) => patchStep(s.id, { noFollowRedirects: e.target.checked })} className="accent-[#7C3AED]" />
+                        Don't follow redirects
+                      </label>
+                      <label className="flex items-center gap-1.5 text-[12px] text-gray-600" title="Retry this request while the response status is one of these (e.g. 429, 503), up to max attempts. A status not listed (e.g. 400) is never retried.">
+                        Retry on
+                        <input value={s.retryStatuses} onChange={(e) => patchStep(s.id, { retryStatuses: e.target.value })} placeholder="429, 503" className={`${FIELD} w-24 flex-shrink-0`} />
+                      </label>
+                      {s.retryStatuses.trim() && (
+                        <label className="flex items-center gap-1.5 text-[12px] text-gray-600" title="Maximum attempts including the first (1–10).">
+                          max
+                          <input value={s.maxAttempts} onChange={(e) => patchStep(s.id, { maxAttempts: e.target.value.replace(/[^0-9]/g, '') })} placeholder="3" className={`${FIELD} w-14 flex-shrink-0`} />
+                          attempts
+                        </label>
+                      )}
+                      {s.retryStatuses.trim() && (s.method.toUpperCase() === 'POST' || s.method.toUpperCase() === 'PATCH') && (
+                        <label className="flex items-center gap-1.5 text-[12px] text-gray-600" title="By default only safe/idempotent methods (GET/PUT/DELETE/HEAD/OPTIONS) auto-retry. Tick to retry this non-idempotent method too.">
+                          <input type="checkbox" checked={s.retryNonIdempotent} onChange={(e) => patchStep(s.id, { retryNonIdempotent: e.target.checked })} className="accent-[#7C3AED]" />
+                          retry anyway
+                        </label>
+                      )}
                       <span className="text-gray-200">·</span>
                       <label className="flex items-center gap-1.5 text-[12px] text-gray-600 cursor-pointer" title="Retry this request until the expression holds — for a resource that appears/changes asynchronously">
                         <input type="checkbox" checked={s.pollEnabled} onChange={(e) => patchStep(s.id, { pollEnabled: e.target.checked })} className="accent-[#7C3AED]" />
@@ -695,6 +772,16 @@ export default function FlowBuilder({ catalog, onClose, initialFlow }: { catalog
                             {c.kind === 'graphql' && <span className="flex-1 min-w-0 text-[11px] text-gray-400 self-center">Fails if the response body has a non-empty <code className="font-mono">errors</code> array (GraphQL replies 200 even on failure).</span>}
                             {c.kind === 'noSecrets' && <span className="flex-1 min-w-0 text-[11px] text-gray-400 self-center">Fails if the body exposes a credential field (<code className="font-mono">password</code>, <code className="font-mono">secret</code>, <code className="font-mono">apiKey</code>, private key…) with a real value.</span>}
                             {c.kind === 'noError' && <span className="flex-1 min-w-0 text-[11px] text-gray-400 self-center">Fails on a "200 but failed" body: <code className="font-mono">error</code>, <code className="font-mono">errors[]</code>, <code className="font-mono">success:false</code>, or <code className="font-mono">status:"error"</code>.</span>}
+                            {c.kind === 'bodyNotContains' && <input value={c.text} onChange={(e) => setCheck(s, c._k, { text: e.target.value })} placeholder="text that must be ABSENT" title="Fails if the response body contains this text (HTML/text negative)" className={`${FIELD} flex-1 min-w-0`} />}
+                            {c.kind === 'contentType' && <input value={c.value} onChange={(e) => setCheck(s, c._k, { value: e.target.value })} placeholder="application/json" title="Checked before the body is parsed; a mismatch fails with expected vs actual" className={`${FIELD} flex-1 min-w-0`} />}
+                            {c.kind === 'contentType' && <select value={c.op} onChange={(e) => setCheck(s, c._k, { op: e.target.value })} className={`${FIELD} flex-shrink-0`}><option value="contains">contains</option><option value="equals">equals</option></select>}
+                            {c.kind === 'countAtMost' && <input value={c.path} onChange={(e) => setCheck(s, c._k, { path: e.target.value })} placeholder="array path (e.g. data or products)" className={`${FIELD} flex-1 min-w-0`} />}
+                            {c.kind === 'countAtMost' && <input value={c.max} onChange={(e) => setCheck(s, c._k, { max: e.target.value })} placeholder="max" inputMode="numeric" title="Page returns no more items than this limit" className={`${FIELD} w-20 flex-shrink-0`} />}
+                            {(c.kind === 'everyMatches' || c.kind === 'sortedBy' || c.kind === 'noDuplicates') && <input value={c.path} onChange={(e) => setCheck(s, c._k, { path: e.target.value })} placeholder="array path (e.g. data)" className={`${FIELD} w-32 flex-shrink-0`} />}
+                            {(c.kind === 'everyMatches' || c.kind === 'sortedBy' || c.kind === 'noDuplicates') && <input value={c.field} onChange={(e) => setCheck(s, c._k, { field: e.target.value })} placeholder={c.kind === 'noDuplicates' ? 'field (optional)' : 'item field (e.g. category)'} title="Field within each array item to compare/sort/dedupe by" className={`${FIELD} w-32 flex-shrink-0`} />}
+                            {c.kind === 'everyMatches' && <select value={c.op} onChange={(e) => setCheck(s, c._k, { op: e.target.value })} className={`${FIELD} flex-shrink-0`}><option value="equals">equals</option><option value="contains">contains</option><option value="exists">exists</option></select>}
+                            {c.kind === 'everyMatches' && c.op !== 'exists' && <input value={c.value} onChange={(e) => setCheck(s, c._k, { value: e.target.value })} placeholder="expected value" title="Every item's field must match this value" className={`${FIELD} w-28 flex-shrink-0`} />}
+                            {c.kind === 'sortedBy' && <select value={c.direction} onChange={(e) => setCheck(s, c._k, { direction: e.target.value })} className={`${FIELD} flex-shrink-0`}><option value="asc">ascending</option><option value="desc">descending</option></select>}
                             <button type="button" onClick={() => delCheck(s, c._k)} className="p-1 text-gray-400 hover:text-red-500 flex-shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>
                           </div>
                         ))}

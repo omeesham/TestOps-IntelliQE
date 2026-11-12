@@ -7,6 +7,7 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import type { TestOpsState, TestCase, PageObjectFile } from './state.js';
 import { collectClientDeliverableBundle } from '../services/client-deliverable.service.js';
+import { envProcessVars } from '../services/api-environments.service.js';
 import { isApiRun } from './apiHealingAgent.js';
 import { runTuning } from '../utils/playwright-tuning.js';
 
@@ -140,6 +141,9 @@ async function runPlaywrightInMemory(
   targetUrl: string | undefined,
   htmlReportDir?: string,
   allureResultsDir?: string,
+  /** IQE-040.x: the active environment's variables, injected so generated scripts
+   *  that read `process.env.<KEY>` (secrets kept out of the script) still authenticate. */
+  envVars?: Record<string, string>,
 ): Promise<{ specResults: SpecResult[]; summary: PwSummary | null }> {
   const workspace = path.join(os.tmpdir(), `jbs-pw-sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const testsDir = path.join(workspace, 'tests');
@@ -271,6 +275,7 @@ ${tuning.projectsLine}});
 
   const env = {
     ...process.env,
+    ...(envVars || {}),   // IQE-040.x: inject the environment's vars so process.env.<KEY> reads resolve
     CI: '1',
     PLAYWRIGHT_JSON_OUTPUT_NAME: path.join(workspace, 'pw-summary.json'),
     NODE_PATH: path.join(BACKEND_ROOT, 'node_modules'),
@@ -441,7 +446,8 @@ export async function executionAgent(
   }
 
   try {
-    const { specResults } = await runPlaywrightInMemory(scripts, state.pageObjects || [], targetUrl, opts?.htmlReportDir, opts?.allureResultsDir);
+    const envVars = envProcessVars((state as any).apiEnvironment);
+    const { specResults } = await runPlaywrightInMemory(scripts, state.pageObjects || [], targetUrl, opts?.htmlReportDir, opts?.allureResultsDir, envVars);
 
     // Primary lookup is by test case id (from the spec file name); scenario
     // title is only a fallback for results we couldn't map by file.

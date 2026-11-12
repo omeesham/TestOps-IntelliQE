@@ -245,6 +245,40 @@ export function fillTemplate(text: string | undefined, vars: Record<string, stri
 
 /** The environment's variables as a flat map, with the base-URL convenience
  *  aliases (`baseUrl`/`BASE_URL`/`host`) so `{{baseUrl}}` resolves too. */
+/**
+ * The environment's variables as a `process.env`-style record (valid identifier
+ * keys only), so the server can INJECT them when it runs generated scripts that
+ * read secrets via `process.env.<KEY>` (IQE-040.1/040.3). The generated render
+ * keeps secrets out of the script; this puts them back into the runner's process
+ * env at execution time. Secret values must already be revealed on `env`.
+ */
+export function envProcessVars(env: ApiEnvironment | null | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!env) return out;
+  for (const v of env.variables) if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(v.key)) out[v.key] = String(v.value ?? '');
+  return out;
+}
+
+/**
+ * Best-effort process-env vars for a RE-RUN that has no environment linkage
+ * (test_runs stores none, and persisting a run's secrets would defeat IQE-040.x).
+ * Falls back to the tenant's DEFAULT environment (secrets revealed) so a
+ * report-rebuild / bug-repro re-run of generated scripts that read
+ * `process.env.<KEY>` still authenticates against the standard environment.
+ * Returns {} when there is no default environment or on any error.
+ */
+export async function defaultEnvProcessVars(tenantId: string): Promise<Record<string, string>> {
+  try {
+    const envs = await listEnvironments(tenantId);
+    const pick = envs.find((e) => e.isDefault) || envs[0];
+    if (!pick) return {};
+    const revealed = await getEnvironment(tenantId, pick.id, { reveal: true });
+    return envProcessVars(revealed);
+  } catch {
+    return {};
+  }
+}
+
 function envVarMap(env: ApiEnvironment): Record<string, string> {
   const vars: Record<string, string> = {};
   for (const v of env.variables) vars[v.key] = v.value;
@@ -327,14 +361,25 @@ function encodeBasicIfNeeded(key: string, value: string): string {
 export function resolveApiCase<T extends { url: string; headers: Record<string, string>; body?: string; steps?: unknown[] }>(
   nc: T,
   env: ApiEnvironment | null | undefined,
-  opts?: { preserveRealHosts?: boolean },
+  opts?: { preserveRealHosts?: boolean; secretsAsEnvRefs?: boolean },
 ): T {
   if (!env) return nc;
   const preserveRealHosts = !!opts?.preserveRealHosts;
   const vars = envVarMap(env);
+  // IQE-040.1/040.3: for the RENDER path, DON'T bake a secret env var's real value
+  // into the generated script — resolve it to a sentinel the renderer turns into a
+  // `process.env.<KEY>` read, so the script reads the secret from the environment.
+  // The live-run resolve leaves this off and uses the real value as before.
+  if (opts?.secretsAsEnvRefs) {
+    for (const v of env.variables) if (v.secret && /^[A-Za-z0-9_]+$/.test(v.key)) vars[v.key] = `__ENVREF__${v.key}__`;
+  }
   const resolveHeaders = (h: Record<string, string> | undefined): Record<string, string> => {
     const out: Record<string, string> = {};
-    for (const [k, val] of Object.entries(h || {})) out[k] = encodeBasicIfNeeded(k, fillTemplate(val, vars) || '');
+    for (const [k, val] of Object.entries(h || {})) {
+      const filled = fillTemplate(val, vars) || '';
+      // A sentinel-bearing value is a process.env ref, not a literal — never base64 it.
+      out[k] = filled.includes('__ENVREF__') ? filled : encodeBasicIfNeeded(k, filled);
+    }
     return out;
   };
   const steps = Array.isArray(nc.steps)

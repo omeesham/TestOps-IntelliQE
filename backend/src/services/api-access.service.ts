@@ -360,17 +360,33 @@ export async function userHasMfa(userId: string): Promise<boolean> {
   catch { return false; }
 }
 
+/* ── RBAC enforcement ──
+   The core allow/deny decision for ONE permission, shared by the per-route
+   `requirePermission` factory and the router-level `rbacGate` so both behave
+   identically: platform/admin always pass; a lookup error fails OPEN (never
+   hard-breaks a route); otherwise the role→permission map decides.
+   Returns: 'allow' | 'deny'. */
+export async function checkPermission(
+  user: { role: string; tenantId: string; isPlatform?: boolean } | undefined,
+  permission: string,
+): Promise<'allow' | 'deny'> {
+  if (!user) return 'deny';
+  try {
+    if (user.isPlatform || user.role === 'admin') return 'allow';   // platform/admin bypass
+    return (await hasPermission(user.tenantId, user.role, permission)) ? 'allow' : 'deny';
+  } catch {
+    return 'allow';   // fail-open on lookup error → never hard-break a route
+  }
+}
+
 /* ── RBAC enforcement middleware factory (apply to routes opt-in) ── */
 export function requirePermission(permission: string) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const u = req.user;
     if (!u) { res.status(401).json({ error: 'Unauthorized' }); return; }
-    try {
-      if (u.isPlatform || u.role === 'admin') { next(); return; }   // platform/admin bypass
-      const ok = await hasPermission(u.tenantId, u.role, permission);
-      if (!ok) { res.status(403).json({ error: `Your role (${u.role}) lacks the "${permission}" permission.` }); return; }
-      next();
-    } catch { next(); }   // fail-open on lookup error → never hard-break a route
+    const verdict = await checkPermission(u, permission);
+    if (verdict === 'deny') { res.status(403).json({ error: `Your role (${u.role}) lacks the "${permission}" permission.` }); return; }
+    next();
   };
 }
 

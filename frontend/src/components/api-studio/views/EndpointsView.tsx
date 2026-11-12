@@ -47,9 +47,12 @@ interface Props {
   onImport: () => void;
   /** The current run's designed scenarios — read-only, for coverage. */
   scenarios?: Scenario[];
+  /** IQE-043.2 — role gates. Default true so other callers are unaffected. */
+  canImport?: boolean;
+  canRun?: boolean;
 }
 
-export default function EndpointsView({ catalog, running, onDesign, onImport }: Props) {
+export default function EndpointsView({ catalog, running, onDesign, onImport, canImport = true, canRun = true }: Props) {
   const { endpoints, selected, profile } = catalog;
   const [q, setQ] = useState('');
   const [methodFilter, setMethodFilter] = useState('all');
@@ -105,7 +108,7 @@ export default function EndpointsView({ catalog, running, onDesign, onImport }: 
         <div className="flex-1 flex flex-col min-h-0">
           <EmptyState icon={Layers} title="The catalogue is empty" />
           <div className="flex justify-center items-center gap-2 -mt-10 pb-10">
-            <button type="button" onClick={onImport} className={PRIMARY_BTN}><Plus className="w-3.5 h-3.5" />Import APIs</button>
+            <button type="button" onClick={onImport} disabled={!canImport} title={canImport ? undefined : 'Your role does not allow importing APIs'} className={PRIMARY_BTN}><Plus className="w-3.5 h-3.5" />Import APIs</button>
             <button type="button" onClick={() => setCaptureOpen(true)} className={SECONDARY_BTN} title="Record real API traffic and turn it into endpoints"><Antenna className="w-3.5 h-3.5" />Capture traffic</button>
           </div>
         </div>
@@ -169,8 +172,8 @@ export default function EndpointsView({ catalog, running, onDesign, onImport }: 
                 </>
               )}
             </div>
-            <button type="button" onClick={onImport} className={SECONDARY_BTN} title="Import more APIs"><Plus className="w-3.5 h-3.5" /><span className="hidden @[1000px]:inline">Import</span></button>
-            <button type="button" onClick={onDesign} disabled={running || selectedCount === 0} title={`Testcase generation for ${selectedCount} selected endpoint${selectedCount === 1 ? '' : 's'}`} className={`${PRIMARY_BTN} whitespace-nowrap`}>
+            <button type="button" onClick={onImport} disabled={!canImport} title={canImport ? 'Import more APIs' : 'Your role does not allow importing APIs'} className={SECONDARY_BTN}><Plus className="w-3.5 h-3.5" /><span className="hidden @[1000px]:inline">Import</span></button>
+            <button type="button" onClick={onDesign} disabled={running || selectedCount === 0 || !canRun} title={canRun ? `Testcase generation for ${selectedCount} selected endpoint${selectedCount === 1 ? '' : 's'}` : 'Your role does not allow running or generating tests'} className={`${PRIMARY_BTN} whitespace-nowrap`}>
               {running ? 'Generating…' : <>Testcase generation ({selectedCount})</>}
             </button>
           </div>

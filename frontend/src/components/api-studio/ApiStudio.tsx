@@ -37,6 +37,8 @@ import ReadinessReview from './ReadinessReview';
 import { EmptyState } from './primitives';
 import { PRIMARY_BTN, SECONDARY_BTN } from './format';
 import PageTabs, { type TabItem } from '@/components/ui/PageTabs';
+import { useAuth } from '@/contexts/AuthContext';
+import { getAccessPermissions } from '@/services/api';
 import Loader from '@/components/feedback/Loader';
 import type { NavView, Phase, CatalogEndpoint } from './types';
 import type { ApiFlowSeed } from '@/services/api';
@@ -69,6 +71,26 @@ export default function ApiStudio() {
   };
   const run = useApiRun({ onPhase });
 
+  /* IQE-043.2 — role-based access. Load the current user's effective permissions
+     (admin ⇒ everything) and gate the action entry points. The backend enforces
+     the same permissions on the routes; this just avoids dead clicks and shows
+     why. Until the map loads (null) we allow, so the UI never flickers blocked. */
+  const { user } = useAuth();
+  const [myPerms, setMyPerms] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    let alive = true;
+    getAccessPermissions()
+      .then((r) => {
+        if (!alive) return;
+        const all = (r.catalog || []).map((p) => p.key);
+        const perms = user?.role === 'admin' ? all : (r.roles?.[user?.role || ''] || []);
+        setMyPerms(new Set(perms));
+      })
+      .catch(() => { if (alive) setMyPerms(null); });
+    return () => { alive = false; };
+  }, [user?.role]);
+  const can = (perm: string): boolean => myPerms === null || user?.role === 'admin' || myPerms.has(perm);
+
   useEffect(() => { try { sessionStorage.setItem('intelliqe_api_view', view); } catch { /* ignore */ } }, [view]);
 
   /* Once an end-to-end run completes (the flow reaches the Report stage), wipe the
@@ -94,7 +116,10 @@ export default function ApiStudio() {
   /* One navigator for tabs and for in-view links. Import is a modal, not a tab,
      so a request to "go to import" opens the modal over whatever tab is showing. */
   const navigate = (v: NavView, toolsSearch?: string) => {
-    if (v === 'import') { setImportOpen(true); return; }
+    if (v === 'import') {
+      if (!can('api.import')) { run.log('import', `Your role (${user?.role || 'unknown'}) is not allowed to import APIs.`, 'error'); return; }
+      setImportOpen(true); return;
+    }
     if (v === 'tools') setToolsSeed(toolsSearch ?? '');
     setView(v);
     if (v !== 'runs') setOpenRunId(null);
@@ -103,7 +128,10 @@ export default function ApiStudio() {
   const openRun = (id: string) => { setOpenRunId(id); setView('runs'); };
 
   /* The actual kickoff — split out so the validation gate can defer it. */
-  const startGeneration = (endpoints: CatalogEndpoint[]) => run.runScenarios({ endpoints, strategy: catalog.strategy, profile: catalog.profile, environment: envStore.activeEnvironment });
+  const startGeneration = (endpoints: CatalogEndpoint[]) => {
+    if (!can('api.run')) { run.log('run', `Your role (${user?.role || 'unknown'}) is not allowed to run or generate tests.`, 'error'); return; }
+    run.runScenarios({ endpoints, strategy: catalog.strategy, profile: catalog.profile, environment: envStore.activeEnvironment });
+  };
 
   /* Generation gate — re-validate the endpoints against the active environment
      before a run starts. A clean set runs straight through; anything with
@@ -237,7 +265,7 @@ export default function ApiStudio() {
       {/* ── Active tab ── */}
       <div role="tabpanel" id={`panel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="flex-1 min-h-0 mt-4">
         {view === 'overview' && <OverviewView catalog={catalog} onNavigate={navigate} onOpenRun={openRun} onOpenManual={() => setManualOpen(true)} refreshKey={overviewKey} />}
-        {view === 'endpoints' && <EndpointsView catalog={catalog} running={run.running} onDesign={design} onImport={() => setImportOpen(true)} scenarios={run.scenarios} />}
+        {view === 'endpoints' && <EndpointsView catalog={catalog} running={run.running} onDesign={design} onImport={() => navigate('import')} scenarios={run.scenarios} canImport={can('api.import')} canRun={can('api.run')} />}
         {view === 'scenarios' && (
           run.scenarios.length === 0 && run.phase !== 'generating' ? (
             <div className="h-full flex flex-col">

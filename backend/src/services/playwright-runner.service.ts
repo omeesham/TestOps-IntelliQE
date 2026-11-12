@@ -6,6 +6,7 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import pool from '../db.js';
 import { isApiRun } from '../agents/apiHealingAgent.js';
+import { defaultEnvProcessVars } from './api-environments.service.js';
 import { runTuning } from '../utils/playwright-tuning.js';
 
 const execFileAsync = promisify(execFile);
@@ -347,8 +348,13 @@ ${tuning.projectsLine}});
   // from backend/node_modules. Failing tests still return exit code 1 — that's a real result,
   // not a fatal error. Only spawn failures should abort.
   const logPath = path.join(workspace, 'pw-run.log');
+  // IQE-040.x: generated scripts read secrets via `process.env.<KEY>` (never
+  // embedded). A re-run has no environment linkage, so inject the tenant's
+  // default environment's vars (best-effort) so secured endpoints still auth.
+  const injectedEnvVars = await defaultEnvProcessVars(tenantId);
   const env = {
     ...process.env,
+    ...injectedEnvVars,
     CI: '1',
     PLAYWRIGHT_JSON_OUTPUT_NAME: path.join(workspace, 'pw-summary.json'),
     // Let Node fall back to backend/node_modules when resolving reporters or

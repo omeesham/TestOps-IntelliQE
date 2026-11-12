@@ -20,6 +20,65 @@ import { buildRequestInit, fetchFull, isWriteMethod, clampInt, type HttpEndpoint
 import { resolveHttpAuth } from './api-oauth.service.js';
 import { queryPath, compareJson, type CompareMode } from '../utils/assert-engine.js';
 import { evalExpressionSafe } from '../utils/expr-engine.js';
+import { isSecretName } from '../utils/secret-mask.js';
+
+/**
+ * Mask secret-bearing header values (Authorization, Cookie, X-API-Key, …) so the
+ * request/response echo shown with a result never exposes a live credential
+ * (IQE-043.10 "Authorization and other secret headers are masked in logs/reports").
+ * The header is kept (the tester sees it was sent) but its value is bulleted.
+ */
+const SECRET_HEADER_RE = /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key|x-auth-token|x-amz-security-token|authentication)$/i;
+function maskHeaderMap(headers: Record<string, string> | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers || {})) {
+    const secret = SECRET_HEADER_RE.test(k) || isSecretName(k);
+    out[k] = secret && v ? (v.length > 10 ? `${v.slice(0, 4)}•••${v.slice(-2)}` : '•••••') : v;
+  }
+  return out;
+}
+
+// ── IQE-043.9 cookie jar ──────────────────────────────────────────────────
+function hostOf(url: string): string { try { return new URL(url).host; } catch { return ''; } }
+
+/** Parse one Set-Cookie line into name/value, and whether it DELETES the cookie (Max-Age≤0 or a past Expires). */
+function parseSetCookie(line: string): { name: string; value: string; remove: boolean } | null {
+  const segs = String(line).split(';');
+  const first = segs[0] || '';
+  const eq = first.indexOf('=');
+  if (eq < 0) return null;
+  const name = first.slice(0, eq).trim();
+  if (!name) return null;
+  const value = first.slice(eq + 1).trim();
+  let remove = false;
+  for (const a of segs.slice(1)) {
+    const i = a.indexOf('=');
+    const key = (i === -1 ? a : a.slice(0, i)).trim().toLowerCase();
+    const v = i === -1 ? '' : a.slice(i + 1).trim();
+    if (key === 'max-age' && Number(v) <= 0) remove = true;
+    else if (key === 'expires' && v) { const t = Date.parse(v); if (Number.isFinite(t) && t <= Date.now()) remove = true; }
+  }
+  return { name, value, remove };
+}
+
+/** Fold a response's Set-Cookie headers into the jar for `host` — new cookies are stored, deletions removed. */
+function updateCookieJar(ctx: ExecCtx, host: string, setCookies: string[] | undefined): void {
+  if (!host || !setCookies || !setCookies.length) return;
+  const jar = ctx.cookies[host] || (ctx.cookies[host] = {});
+  for (const line of setCookies) {
+    const c = parseSetCookie(line);
+    if (!c) continue;
+    if (c.remove) delete jar[c.name];
+    else jar[c.name] = c.value;
+  }
+}
+
+/** Build the `Cookie` request header for `host` from the jar ('' when none). */
+function cookieHeaderFor(ctx: ExecCtx, host: string): string {
+  const jar = ctx.cookies[host];
+  if (!jar) return '';
+  return Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
+}
 
 // JSON Schema (contract) validation for the `schema` check kind. One Ajv instance,
 // with compiled validators cached by schema text so repeated runs don't recompile.
@@ -57,12 +116,18 @@ export interface FlowExtract {
 export interface FlowCheck {
   kind: 'status' | 'jsonPathExists' | 'jsonPathEquals' | 'bodyContains' | 'responseTimeUnderMs'
     // ── richer assertions ──
+    | 'bodyNotContains' // assert the raw body does NOT contain a string (HTML/text negative — IQE-044.3)
+    | 'contentType'   // assert the response Content-Type (the gate checked BEFORE the body is parsed — IQE-043.4)
     | 'header'        // assert a response header (exists | equals | contains)
     | 'bodyMatches'   // structural JSON compare vs an expected body, with a compareMode
     | 'xpath'         // XPath over an XML/SOAP response (exists | equals | contains)
     | 'expr'          // a boolean expression over status/timing/headers/body + captured vars
     | 'schema'        // validate the body (or a path-selected part) against a JSON Schema (ajv)
     | 'graphql'       // GraphQL envelope has no `errors` (a failed query still returns HTTP 200)
+    | 'countAtMost'   // the array at `path` has no more than `max` items (page ≤ limit — IQE-043.5)
+    | 'everyMatches'  // EVERY item in the array at `path` matches (field op value) — search/filter correctness (IQE-043.5)
+    | 'sortedBy'      // the array at `path` is sorted by `field` in `direction` (IQE-043.5)
+    | 'noDuplicates'  // the array at `path` has no duplicate items (by `field`, or whole item) (IQE-043.5)
     | 'noSecrets'     // the response body leaks no credential-named field (password/secret/apiKey/…)
     | 'noError';      // the body is not a "200 but failed" REST error envelope (error/errors/success:false/status:'error')
   equals?: number | string;
@@ -76,8 +141,16 @@ export interface FlowCheck {
   ms?: number;
   /** header: the header name. */
   name?: string;
-  /** header / xpath operator. Defaults to 'exists'. */
+  /** header / xpath / everyMatches operator. Defaults to 'exists' (header/xpath) or 'equals' (everyMatches). */
   op?: 'equals' | 'contains' | 'exists';
+  /** everyMatches / sortedBy / noDuplicates: the item field to compare/sort/dedupe by (dotted). Omit ⇒ whole item. */
+  field?: string;
+  /** sortedBy: sort direction. Defaults to 'asc'. */
+  direction?: 'asc' | 'desc';
+  /** countAtMost: the maximum number of items allowed in the array at `path`. */
+  max?: number;
+  /** everyMatches / bodyNotContains / contentType: compare case-insensitively when true. */
+  caseInsensitive?: boolean;
   /** bodyMatches: how strict the structural comparison is. Defaults to 'lenient'. */
   compareMode?: CompareMode;
   /**
@@ -91,7 +164,7 @@ export interface FlowCheck {
   schema?: string;
 }
 
-export type FlowStepType = 'request' | 'if' | 'loop' | 'wait' | 'group' | 'retry';
+export type FlowStepType = 'request' | 'if' | 'loop' | 'wait' | 'group' | 'retry' | 'parallel';
 /**
  * Lifecycle phase of a step. `setup` runs first (fixtures, login); `main` is the
  * journey under test; `teardown` ALWAYS runs at the end — even when setup or main
@@ -146,6 +219,18 @@ export interface FlowStep {
   checks?: FlowCheck[];
   /** Per-request timeout in ms (100–120000). Omitted ⇒ 15000. A slow/stuck dependency fails the step instead of hanging. */
   timeoutMs?: number;
+  /** When false, redirects are NOT followed — the 3xx status and Location header can then be asserted (IQE-043.8). Omitted ⇒ follow. */
+  followRedirects?: boolean;
+  /** IQE-043.8 per-request retry: retry THIS request while its status is in this list, up to `maxAttempts`.
+   *  A status NOT in the list (e.g. 400) is never retried. Empty/omitted ⇒ no retry. */
+  retryOnStatuses?: number[];
+  /** Max attempts (incl. the first). Clamped 1–10. Only used with retryOnStatuses. */
+  maxAttempts?: number;
+  /** Delay between retry attempts in ms (0–15000). */
+  retryDelayMs?: number;
+  /** Allow retrying NON-idempotent methods (POST/PATCH). Default false — only
+   *  safe/idempotent methods (GET/PUT/DELETE/HEAD/OPTIONS) retry automatically. */
+  retryNonIdempotent?: boolean;
   // ── control-flow fields ──
   condition?: FlowCondition;   // if
   then?: FlowStep[];           // if branch
@@ -171,6 +256,13 @@ export interface FlowStepResult {
   extracted: Record<string, string>;
   checks: { kind: string; label: string; pass: boolean; detail?: string }[];
   bodyPreview: string;
+  /** The exact request that was sent — method, resolved URL, headers (secrets masked) and body preview.
+   *  Surfaced so a failed check can show the full request (IQE-044.1/.2/.3, IQE-043.3, IQE-043.10). */
+  request?: { method: string; url: string; headers: Record<string, string>; body?: string };
+  /** Response headers (secrets masked) — Date/Server/Content-Length/correlation id etc. (IQE-044.1, IQE-043.10). */
+  responseHeaders?: Record<string, string>;
+  /** Number of HTTP attempts made for this request (1 = no retry). Shown when a retry fired (IQE-043.8). */
+  attempts?: number;
 }
 
 /** At-a-glance aggregates over a run, for CI/dashboards (latency, pass/fail, check counts). */
@@ -425,6 +517,73 @@ async function runChecks(checks: FlowCheck[] | undefined, res: { status?: number
       const first = list[0];
       const firstMsg = first && typeof first === 'object' ? String((first as Record<string, unknown>).message ?? '') : String(first ?? '');
       out.push({ kind: c.kind, label: 'graphql: no errors', pass: list.length === 0, detail: list.length ? `${list.length} error(s): ${firstMsg.slice(0, 100)}` : undefined });
+    } else if (c.kind === 'bodyNotContains') {
+      // IQE-044.3: assert the (HTML/text/JSON) body does NOT contain a string.
+      const needle = String(c.text ?? '');
+      const hay = c.caseInsensitive ? res.bodyText.toLowerCase() : res.bodyText;
+      const probe = c.caseInsensitive ? needle.toLowerCase() : needle;
+      out.push({ kind: c.kind, label: `body excludes "${needle.slice(0, 40)}"`, pass: !hay.includes(probe) });
+    } else if (c.kind === 'contentType') {
+      // IQE-043.4: the Content-Type is checked (the gate applied before the body is
+      // parsed) — a mismatch fails with a clear message naming expected vs actual.
+      const actual = String(headers['content-type'] || '');
+      const want = String(c.value ?? c.text ?? c.equals ?? '');
+      const op = c.op || 'contains';
+      const a = c.caseInsensitive === false ? actual : actual.toLowerCase();
+      const w = c.caseInsensitive === false ? want : want.toLowerCase();
+      const pass = !want ? actual !== '' : op === 'equals' ? a === w : a.includes(w);
+      out.push({ kind: c.kind, label: `content-type ${want ? `${op} "${want}"` : 'present'}`, pass, detail: `got "${actual.slice(0, 80) || '—'}"` });
+    } else if (c.kind === 'countAtMost') {
+      // IQE-043.5: a page returns no more items than the requested limit.
+      const arr = readPath(parsed, c.path);
+      const n = Array.isArray(arr) ? arr.length : NaN;
+      const max = Number(c.max ?? c.value ?? 0);
+      const pass = Array.isArray(arr) && n <= max;
+      out.push({ kind: c.kind, label: `${c.path || 'items'} ≤ ${max}`, pass, detail: Array.isArray(arr) ? `got ${n}` : 'not an array' });
+    } else if (c.kind === 'everyMatches') {
+      // IQE-043.5: EVERY item in the array matches (field op value) — search/filter correctness.
+      const arr = readPath(parsed, c.path);
+      const want = String(c.value ?? c.text ?? c.equals ?? '');
+      const op = c.op || 'equals';
+      if (!Array.isArray(arr)) { out.push({ kind: c.kind, label: `every ${c.path || 'item'} ${op} "${want}"`, pass: false, detail: 'not an array' }); continue; }
+      const norm = (s: string) => (c.caseInsensitive ? s.toLowerCase() : s);
+      let bad = -1;
+      for (let i = 0; i < arr.length; i++) {
+        const fv = norm(toStr(c.field ? readPath(arr[i], c.field) : arr[i]));
+        const ok = op === 'contains' ? fv.includes(norm(want)) : op === 'exists' ? fv !== '' : fv === norm(want);
+        if (!ok) { bad = i; break; }
+      }
+      out.push({ kind: c.kind, label: `every ${c.field || c.path || 'item'} ${op} "${want.slice(0, 30)}"`, pass: bad === -1, detail: bad === -1 ? `${arr.length} item(s)` : `item [${bad}] = "${toStr(c.field ? readPath(arr[bad], c.field) : arr[bad]).slice(0, 60)}"` });
+    } else if (c.kind === 'sortedBy') {
+      // IQE-043.5: the array is sorted by `field` in `direction`.
+      const arr = readPath(parsed, c.path);
+      const dir = c.direction === 'desc' ? 'desc' : 'asc';
+      if (!Array.isArray(arr)) { out.push({ kind: c.kind, label: `sorted by ${c.field || 'value'} ${dir}`, pass: false, detail: 'not an array' }); continue; }
+      const key = (x: unknown) => (c.field ? readPath(x, c.field) : x);
+      const cmp = (a: unknown, b: unknown) => {
+        const na = Number(a), nb = Number(b);
+        if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+        return String(a ?? '').localeCompare(String(b ?? ''));
+      };
+      let bad = -1;
+      for (let i = 1; i < arr.length; i++) {
+        const d = cmp(key(arr[i - 1]), key(arr[i]));
+        if ((dir === 'asc' && d > 0) || (dir === 'desc' && d < 0)) { bad = i; break; }
+      }
+      out.push({ kind: c.kind, label: `sorted by ${c.field || 'value'} ${dir}`, pass: bad === -1, detail: bad === -1 ? `${arr.length} item(s)` : `out of order at [${bad}]` });
+    } else if (c.kind === 'noDuplicates') {
+      // IQE-043.5: no duplicate items (by `field`, or the whole item) — e.g. consecutive
+      // pages contain no repeats once merged into one array via an extract/var.
+      const arr = readPath(parsed, c.path);
+      if (!Array.isArray(arr)) { out.push({ kind: c.kind, label: `no duplicate ${c.field || 'items'}`, pass: false, detail: 'not an array' }); continue; }
+      const seen = new Set<string>();
+      let dup = '';
+      for (const it of arr) {
+        const k = toStr(c.field ? readPath(it, c.field) : it);
+        if (seen.has(k)) { dup = k; break; }
+        seen.add(k);
+      }
+      out.push({ kind: c.kind, label: `no duplicate ${c.field || 'items'}`, pass: !dup, detail: dup ? `duplicate: "${dup.slice(0, 60)}"` : `${arr.length} unique` });
     } else if (c.kind === 'noSecrets') {
       // Fail if the body exposes a credential-named field with a real value — an
       // API should never return a password/secret/private key. (`token` and
@@ -546,6 +705,9 @@ interface ExecCtx {
   groups: Record<string, FlowStep[]>;
   /** Shared holder (by reference, like `budget`) so a retry sub-context's request updates reach the parent's `until`. */
   resp: { last?: LastResponse };
+  /** IQE-043.9 cookie jar: host → { name: value }. Set-Cookie from a response is stored
+   *  here and re-sent on later same-host requests in the SAME scenario. Shared by reference. */
+  cookies: Record<string, Record<string, string>>;
 }
 
 /**
@@ -647,6 +809,19 @@ async function execSteps(steps: FlowStep[], ctx: ExecCtx, depth: number): Promis
       continue;
     }
 
+    if (kind === 'parallel') {
+      // IQE-043.6: run independent child requests CONCURRENTLY, each checked
+      // separately. Children share the var bag, cookie jar and request budget
+      // (all by reference), but each runs into its OWN results buffer so the
+      // rows stay in child order regardless of which response lands first.
+      const body = s.steps || [];
+      const subs = body.map(() => ({ ...ctx, results: [] as FlowStepResult[] }));
+      const outcomes = await Promise.all(body.map((child, i) => execSteps([child], subs[i]!, depth + 1)));
+      for (const sub of subs) for (const rr of sub.results) { rr.index = ctx.results.length; ctx.results.push(rr); }
+      if (outcomes.includes('abort')) return 'abort';
+      continue;
+    }
+
     if (kind === 'retry') {
       const spec = s.retry || {};
       const body = s.steps || [];
@@ -711,9 +886,41 @@ async function execSteps(steps: FlowStep[], ctx: ExecCtx, depth: number): Promis
       bodyContentType: s.bodyContentType,
     };
     const { url, init } = buildRequestInit(ep);
-    // Per-step timeout (default 15s) so a slow/stuck dependency fails fast instead of hanging the journey.
-    const res = await fetchFull(url, init, clampInt(s.timeoutMs, 15_000, 100, 120_000));
+    // IQE-043.8: when the step opts out of following redirects, keep the 3xx so its
+    // status and Location header can be asserted instead of being transparently chased.
+    if (s.followRedirects === false) (init as RequestInit).redirect = 'manual';
+    // IQE-043.9: send jar cookies set by earlier responses in this scenario — unless
+    // the step already carries its own Cookie header (the user's explicit cookie wins).
+    const host = hostOf(url);
+    const initHeaders = init.headers as Record<string, string>;
+    if (!Object.keys(initHeaders).some((k) => k.toLowerCase() === 'cookie')) {
+      const jarCookie = cookieHeaderFor(ctx, host);
+      if (jarCookie) initHeaders['Cookie'] = jarCookie;
+    }
+    const timeout = clampInt(s.timeoutMs, 15_000, 100, 120_000);
+    // IQE-043.8 per-request retry: retry only on the configured statuses, up to
+    // maxAttempts, and only for safe/idempotent methods unless the user overrides.
+    // A status not in the list (e.g. 400) is never retried.
+    const retryStatuses = Array.isArray(s.retryOnStatuses) ? s.retryOnStatuses.map(Number).filter((n) => Number.isFinite(n)) : [];
+    const maxAttempts = retryStatuses.length ? clampInt(s.maxAttempts, 1, 1, 10) : 1;
+    const retryDelay = clampInt(s.retryDelayMs, 0, 0, MAX_WAIT_MS);
+    const nonIdempotent = method === 'POST' || method === 'PATCH';
+    const retryAllowed = s.retryNonIdempotent === true || !nonIdempotent;
+    let attempts = 1;
+    let res = await fetchFull(url, init, timeout);
     ctx.budget.used++;
+    while (
+      attempts < maxAttempts && retryAllowed &&
+      retryStatuses.includes(res.status ?? -1) &&
+      ctx.budget.used < EXEC_BUDGET
+    ) {
+      if (retryDelay) await sleep(retryDelay);
+      attempts++;
+      res = await fetchFull(url, init, timeout);
+      ctx.budget.used++;
+    }
+    // IQE-043.9: fold this response's Set-Cookie into the jar for later same-host steps.
+    updateCookieJar(ctx, host, res.setCookies);
     const parsed = tryParse(res.bodyText);
     // Record this as the "last response" so later conditions (if / loop / retry)
     // can assert on its status / timing / body without an explicit extract.
@@ -754,6 +961,16 @@ async function execSteps(steps: FlowStep[], ctx: ExecCtx, depth: number): Promis
       extracted,
       checks,
       bodyPreview: res.bodyText.slice(0, 1200),
+      // Echo the exact request + response headers (secrets masked) so a failed check
+      // can show the full request and full response (IQE-044.1/.2/.3, 043.3, 043.10).
+      request: {
+        method,
+        url,
+        headers: maskHeaderMap(init.headers as Record<string, string> | undefined),
+        body: typeof init.body === 'string' ? init.body.slice(0, 2000) : (ep.bodyMode && ep.bodyMode !== 'raw' && ep.bodyMode !== 'json' ? `[${ep.bodyMode} body]` : undefined),
+      },
+      responseHeaders: maskHeaderMap(res.headers),
+      attempts,
     });
     if (res.error) return 'abort';   // later steps usually depend on this one
   }
@@ -777,6 +994,7 @@ export async function runFlow(input: { steps: FlowStep[]; variables?: Record<str
     budget: { used: 0 },
     groups: input.groups && typeof input.groups === 'object' ? input.groups : {},
     resp: {},
+    cookies: {},
   };
 
   // Run a phase and tag the results it produced with that phase.
