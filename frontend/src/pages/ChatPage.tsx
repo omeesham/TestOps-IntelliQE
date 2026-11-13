@@ -1634,11 +1634,11 @@ export default function ChatPage() {
       try {
         const result = await getConfigurations();
         const configs = result.configs || [];
-        const PROVIDER_NAME: Record<string, string> = { github: 'GitHub', gitlab: 'GitLab', bitbucket: 'Bitbucket' };
+        const PROVIDER_NAME: Record<string, string> = { github: 'GitHub', gitlab: 'GitLab', bitbucket: 'Bitbucket', 'azure-repos': 'Azure DevOps Repos' };
         // All connected git-repo integrations. The /configurations payload has
         // no `category` field — match on the integration id instead.
         const repos: ConnectedRepo[] = configs
-          .filter((c: any) => ['github', 'gitlab', 'bitbucket'].includes(c.integrationId) && c.status === 'connected')
+          .filter((c: any) => ['github', 'gitlab', 'bitbucket', 'azure-repos'].includes(c.integrationId) && c.status === 'connected')
           .map((c: any) => ({
             integrationId: c.integrationId,
             name: PROVIDER_NAME[c.integrationId] || c.integrationId,
@@ -1723,7 +1723,7 @@ export default function ChatPage() {
       if (!integrationId) {
         const result = await getConfigurations();
         const repo = (result.configs || []).find(
-          (c: any) => ['github', 'gitlab', 'bitbucket'].includes(c.integrationId) && c.status === 'connected',
+          (c: any) => ['github', 'gitlab', 'bitbucket', 'azure-repos'].includes(c.integrationId) && c.status === 'connected',
         );
         integrationId = repo?.integrationId;
         if (integrationId) setSelectedRepoId(integrationId);

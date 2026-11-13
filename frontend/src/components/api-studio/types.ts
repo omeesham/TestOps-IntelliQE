@@ -26,7 +26,7 @@ export type ApiStyle = 'rest' | 'graphql' | 'soap' | 'jsonrpc' | 'webhook' | 'mc
 /** The ways an API can enter the workspace. */
 export type ImportMethod =
   | 'openapi' | 'postman' | 'bruno' | 'endpoint' | 'curl' | 'docs-url' | 'connector'
-  | 'sdk' | 'webhook' | 'graphql' | 'mcp' | 'middleware' | 'manual' | 'file' | 'capture'
+  | 'sdk' | 'webhook' | 'graphql' | 'mcp' | 'middleware' | 'manual' | 'file' | 'capture' | 'wsdl'
   // Requirement-driven sources (Module 1): Jira issue, Azure DevOps work item,
   // Confluence page, or an uploaded Business/Functional Requirements Document.
   | 'jira' | 'ado' | 'confluence' | 'brd' | 'frd';
@@ -144,6 +144,8 @@ export interface ApiEnvironment {
   isDefault: boolean;
   /** Stands in for the customer's environment — required by a Phase 3 sign-off. */
   customerLike?: boolean;
+  /** Parallel test workers for runs against this environment (1–10); unset ⇒ global default. */
+  workers?: number;
   createdBy?: string;
   createdAt: string;
   updatedAt: string;

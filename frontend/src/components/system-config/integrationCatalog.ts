@@ -25,6 +25,7 @@ export const LOGOS: Record<string, string> = {
   github: 'https://cdn.simpleicons.org/github/181717',
   gitlab: 'https://cdn.simpleicons.org/gitlab/FC6D26',
   bitbucket: 'https://cdn.simpleicons.org/bitbucket/0052CC',
+  'azure-repos': 'https://cdn.simpleicons.org/azuredevops/0078D7',
   'notif-email': 'https://api.iconify.design/selfhst/microsoft-outlook-2018.svg',
   'notif-slack': 'https://api.iconify.design/logos/slack-icon.svg',
   'notif-teams': 'https://api.iconify.design/logos/microsoft-teams.svg',
@@ -124,6 +125,17 @@ export const INTEGRATION_CATALOG: CatalogItem[] = [
       { key: 'scripts_path', label: 'Scripts Path (folder)', placeholder: 'tests/', optional: true, hint: 'Folder in the repo where generated scripts are committed. Leave blank to use tests/.' },
       { key: 'username', label: 'Username', placeholder: 'your-username' },
       { key: 'app_password', label: 'App Password', placeholder: 'Bitbucket app password', type: 'password' },
+    ],
+  },
+  {
+    id: 'azure-repos', name: 'Azure DevOps Repos', category: 'Version Control', categoryKey: 'git-repo',
+    description: 'Push automation scripts to Azure DevOps Repos as a branch + pull request',
+    comingSoon: false,
+    fields: [
+      { key: 'repo_url', label: 'Repository URL', placeholder: 'https://dev.azure.com/org/project/_git/repo' },
+      { key: 'branch', label: 'Default Branch (PR target)', placeholder: 'main' },
+      { key: 'scripts_path', label: 'Scripts Path (folder)', placeholder: 'tests/', optional: true, hint: 'Folder in the repo where generated scripts are committed. Leave blank to use tests/.' },
+      { key: 'access_token', label: 'Personal Access Token', placeholder: 'PAT with Code (Read & Write)', type: 'password', optional: true, hint: 'Leave blank to reuse the PAT from your Azure DevOps (Boards) connection — it must include Code scope.' },
     ],
   },
 

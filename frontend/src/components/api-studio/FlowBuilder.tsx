@@ -26,7 +26,7 @@ type ExtractRow = NonNullable<FlowStep['extract']>[number];
 
 interface EditExtract { _k: string; name: string; from: ExtractRow['from']; path: string; regex: string }
 interface VarRow { _k: string; key: string; value: string }
-interface EditCheck { _k: string; kind: FlowCheck['kind']; oneOf: string; path: string; value: string; text: string; ms: string; name: string; op: string; compareMode: string; ignore: string; expr: string; schema: string; field: string; direction: string; max: string; caseInsensitive: boolean }
+interface EditCheck { _k: string; kind: FlowCheck['kind']; oneOf: string; path: string; value: string; text: string; ms: string; name: string; op: string; compareMode: string; ignore: string; expr: string; schema: string; field: string; direction: string; max: string; caseInsensitive: boolean; expectFault: boolean; faultCode: string }
 interface EditStep {
   id: string;
   name: string;
@@ -78,6 +78,8 @@ const CHECK_LABELS: Record<FlowCheck['kind'], string> = {
   sortedBy: 'Sorted by',
   noDuplicates: 'No duplicate items',
   noSecrets: 'No leaked secrets',
+  soapFault: 'SOAP fault (XML)',
+  xmlSchema: 'XML schema (WSDL)',
   noError: 'No error envelope (REST)',
 };
 
@@ -126,6 +128,8 @@ function editCheckToApi(c: EditCheck): FlowCheck {
     case 'sortedBy': return { kind: 'sortedBy', path: c.path, field: c.field, direction: (c.direction === 'desc' ? 'desc' : 'asc') as FlowCheck['direction'] };
     case 'noDuplicates': return { kind: 'noDuplicates', path: c.path, ...(c.field.trim() ? { field: c.field } : {}) };
     case 'noSecrets': return { kind: 'noSecrets' };
+    case 'soapFault': return { kind: 'soapFault', ...(c.expectFault ? { expectFault: true } : {}), ...(c.faultCode.trim() ? { faultCode: c.faultCode.trim() } : {}) };
+    case 'xmlSchema': return { kind: 'xmlSchema', ...(c.schema.trim() ? { schema: c.schema.trim() } : {}) };
     case 'noError': return { kind: 'noError' };
   }
 }
@@ -315,6 +319,8 @@ export default function FlowBuilder({ catalog, onClose, initialFlow }: { catalog
       direction: c.direction || 'asc',
       max: c.max != null ? String(c.max) : '',
       caseInsensitive: !!c.caseInsensitive,
+      expectFault: !!c.expectFault,
+      faultCode: c.faultCode || '',
     })),
     open: false,
     };
@@ -455,7 +461,7 @@ export default function FlowBuilder({ catalog, onClose, initialFlow }: { catalog
   const delVar = (k: string) => setVars((p) => p.filter((v) => v._k !== k));
   // Seed variables available to {{...}} from step 1, before any extract (baseUrl, a static token, test data). Blank keys dropped.
   const varsToRecord = (): Record<string, string> => { const o: Record<string, string> = {}; for (const v of vars) if (v.key.trim()) o[v.key.trim()] = v.value; return o; };
-  const addCheck = (s: EditStep) => patchStep(s.id, { checks: [...s.checks, { _k: nextId('k'), kind: 'status', oneOf: '200', path: '', value: '', text: '', ms: '', name: '', op: 'exists', compareMode: 'lenient', ignore: '', expr: '', schema: '', field: '', direction: 'asc', max: '', caseInsensitive: false }] });
+  const addCheck = (s: EditStep) => patchStep(s.id, { checks: [...s.checks, { _k: nextId('k'), kind: 'status', oneOf: '200', path: '', value: '', text: '', ms: '', name: '', op: 'exists', compareMode: 'lenient', ignore: '', expr: '', schema: '', field: '', direction: 'asc', max: '', caseInsensitive: false, expectFault: false, faultCode: '' }] });
   const setCheck = (s: EditStep, k: string, patch: Partial<EditCheck>) => patchStep(s.id, { checks: s.checks.map((c) => (c._k === k ? { ...c, ...patch } : c)) });
   const delCheck = (s: EditStep, k: string) => patchStep(s.id, { checks: s.checks.filter((c) => c._k !== k) });
 
@@ -772,6 +778,12 @@ export default function FlowBuilder({ catalog, onClose, initialFlow }: { catalog
                             {c.kind === 'graphql' && <span className="flex-1 min-w-0 text-[11px] text-gray-400 self-center">Fails if the response body has a non-empty <code className="font-mono">errors</code> array (GraphQL replies 200 even on failure).</span>}
                             {c.kind === 'noSecrets' && <span className="flex-1 min-w-0 text-[11px] text-gray-400 self-center">Fails if the body exposes a credential field (<code className="font-mono">password</code>, <code className="font-mono">secret</code>, <code className="font-mono">apiKey</code>, private key…) with a real value.</span>}
                             {c.kind === 'noError' && <span className="flex-1 min-w-0 text-[11px] text-gray-400 self-center">Fails on a "200 but failed" body: <code className="font-mono">error</code>, <code className="font-mono">errors[]</code>, <code className="font-mono">success:false</code>, or <code className="font-mono">status:"error"</code>.</span>}
+                            {c.kind === 'soapFault' && <label className="flex items-center gap-1 text-[11px] text-gray-600 self-center flex-shrink-0" title="Default: any SOAP fault fails the test. Tick to EXPECT a fault (a negative test).">
+                              <input type="checkbox" checked={c.expectFault} onChange={(e) => setCheck(s, c._k, { expectFault: e.target.checked })} className="w-3 h-3" />expect a fault
+                            </label>}
+                            {c.kind === 'soapFault' && c.expectFault && <input value={c.faultCode} onChange={(e) => setCheck(s, c._k, { faultCode: e.target.value })} placeholder="fault code (e.g. Client / soap:Receiver)" title="The expected fault code (substring match). Blank = any fault." className={`${FIELD} flex-1 min-w-0`} />}
+                            {c.kind === 'soapFault' && !c.expectFault && <span className="flex-1 min-w-0 text-[11px] text-gray-400 self-center">Fails if the SOAP response is a <code className="font-mono">&lt;Fault&gt;</code> (1.1 &amp; 1.2); shows the fault code + message.</span>}
+                            {c.kind === 'xmlSchema' && <input value={c.schema} onChange={(e) => setCheck(s, c._k, { schema: e.target.value })} placeholder='{"element":"AddResponse","required":["AddResult"]}' title="WSDL-derived contract (JSON) or just the expected response element name. Validates the XML structurally and names a missing element." className={`${FIELD} flex-1 min-w-0 font-mono text-[11px]`} />}
                             {c.kind === 'bodyNotContains' && <input value={c.text} onChange={(e) => setCheck(s, c._k, { text: e.target.value })} placeholder="text that must be ABSENT" title="Fails if the response body contains this text (HTML/text negative)" className={`${FIELD} flex-1 min-w-0`} />}
                             {c.kind === 'contentType' && <input value={c.value} onChange={(e) => setCheck(s, c._k, { value: e.target.value })} placeholder="application/json" title="Checked before the body is parsed; a mismatch fails with expected vs actual" className={`${FIELD} flex-1 min-w-0`} />}
                             {c.kind === 'contentType' && <select value={c.op} onChange={(e) => setCheck(s, c._k, { op: e.target.value })} className={`${FIELD} flex-shrink-0`}><option value="contains">contains</option><option value="equals">equals</option></select>}

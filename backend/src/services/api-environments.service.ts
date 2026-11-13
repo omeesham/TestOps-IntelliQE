@@ -30,6 +30,9 @@ export interface ApiEnvironment {
   isDefault: boolean;
   /** Stands in for the customer's environment — what a Phase 3 sign-off requires. */
   customerLike: boolean;
+  /** Parallel test workers for runs against this environment (1–10). Omitted ⇒
+   *  use the global API_TEST_WORKERS default. */
+  workers?: number;
   createdBy?: string;
   createdAt: string;
   updatedAt: string;
@@ -66,10 +69,19 @@ function rowToEnv(row: any, opts: { reveal: boolean }): ApiEnvironment {
     })),
     isDefault: !!row.is_default,
     customerLike: !!row.customer_like,
+    workers: row.workers != null && Number.isFinite(Number(row.workers)) ? Number(row.workers) : undefined,
     createdBy: row.created_by || undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+/** Clamp a per-environment worker count to 1–10, or null when unset/invalid. */
+function sanitizeWorkers(input: unknown): number | null {
+  if (input === null || input === undefined || input === '') return null;
+  const n = Math.floor(Number(input));
+  if (!Number.isFinite(n)) return null;
+  return Math.max(1, Math.min(10, n));
 }
 
 function sanitizeVariables(input: unknown, previous: EnvVariable[] = []): EnvVariable[] {
@@ -120,7 +132,7 @@ export async function getEnvironment(tenantId: string, id: string, opts: { revea
 export async function createEnvironment(
   tenantId: string,
   username: string,
-  input: { name: string; baseUrl?: string; color?: string; variables?: unknown; isDefault?: boolean; customerLike?: boolean },
+  input: { name: string; baseUrl?: string; color?: string; variables?: unknown; isDefault?: boolean; customerLike?: boolean; workers?: unknown },
 ): Promise<ApiEnvironment> {
   const name = String(input.name || '').trim().slice(0, NAME_MAX);
   if (!name) throw new Error('An environment needs a name.');
@@ -128,11 +140,12 @@ export async function createEnvironment(
   if (baseUrl && !/^https?:\/\//i.test(baseUrl)) throw new Error('The base URL must be an absolute http(s) URL.');
   const color = sanitizeColor(input.color);
   const vars = sanitizeVariables(input.variables);
+  const workers = sanitizeWorkers(input.workers);
   if (input.isDefault) await pool.query(`UPDATE api_environments SET is_default = 0 WHERE tenant_id = $1`, [tenantId]);
   const { rows } = await pool.query(
-    `INSERT INTO api_environments (tenant_id, name, base_url, color, variables, is_default, customer_like, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-    [tenantId, name, baseUrl || null, color, JSON.stringify(vars), input.isDefault ? 1 : 0, input.customerLike ? 1 : 0, username],
+    `INSERT INTO api_environments (tenant_id, name, base_url, color, variables, is_default, customer_like, workers, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+    [tenantId, name, baseUrl || null, color, JSON.stringify(vars), input.isDefault ? 1 : 0, input.customerLike ? 1 : 0, workers, username],
   );
   return rowToEnv(rows[0], { reveal: false });
 }
@@ -140,7 +153,7 @@ export async function createEnvironment(
 export async function updateEnvironment(
   tenantId: string,
   id: string,
-  input: { name?: string; baseUrl?: string; color?: string; variables?: unknown; isDefault?: boolean; customerLike?: boolean },
+  input: { name?: string; baseUrl?: string; color?: string; variables?: unknown; isDefault?: boolean; customerLike?: boolean; workers?: unknown },
 ): Promise<ApiEnvironment | null> {
   const existing = await getEnvironment(tenantId, id);
   if (!existing) return null;
@@ -152,13 +165,26 @@ export async function updateEnvironment(
   const vars = input.variables !== undefined ? sanitizeVariables(input.variables, await storedVariables(tenantId, id)) : await storedVariables(tenantId, id);
   const isDefault = input.isDefault !== undefined ? !!input.isDefault : existing.isDefault;
   const customerLike = input.customerLike !== undefined ? !!input.customerLike : existing.customerLike;
+  const workers = input.workers !== undefined ? sanitizeWorkers(input.workers) : (existing.workers ?? null);
   if (isDefault) await pool.query(`UPDATE api_environments SET is_default = 0 WHERE tenant_id = $1 AND id <> $2`, [tenantId, id]);
   const { rows } = await pool.query(
-    `UPDATE api_environments SET name = $1, base_url = $2, color = $3, variables = $4, is_default = $5, customer_like = $6, updated_at = SYSUTCDATETIME()
-     WHERE tenant_id = $7 AND id = $8 RETURNING *`,
-    [name, baseUrl || null, color, JSON.stringify(vars), isDefault ? 1 : 0, customerLike ? 1 : 0, tenantId, id],
+    `UPDATE api_environments SET name = $1, base_url = $2, color = $3, variables = $4, is_default = $5, customer_like = $6, workers = $7, updated_at = SYSUTCDATETIME()
+     WHERE tenant_id = $8 AND id = $9 RETURNING *`,
+    [name, baseUrl || null, color, JSON.stringify(vars), isDefault ? 1 : 0, customerLike ? 1 : 0, workers, tenantId, id],
   );
   return rows.length ? rowToEnv(rows[0], { reveal: false }) : null;
+}
+
+/** The default environment's configured worker count (1–10), or null when unset. */
+export async function defaultEnvWorkers(tenantId: string): Promise<number | null> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT workers FROM api_environments WHERE tenant_id = $1 AND is_default = 1`,
+      [tenantId],
+    );
+    const w = rows[0]?.workers;
+    return w != null && Number.isFinite(Number(w)) ? Number(w) : null;
+  } catch { return null; }
 }
 
 export type VariableImportStrategy = 'skip' | 'update' | 'new';

@@ -8,7 +8,7 @@
  */
 import {
   FileJson, Package, PackageOpen, Link2, Terminal, BookOpen, Puzzle, Code2, Webhook, Braces, Bot, Route, Send,
-  Ticket, Cloud, FileText, ClipboardCheck, BookMarked,
+  Ticket, Cloud, FileText, ClipboardCheck, BookMarked, FileCode2,
 } from 'lucide-react';
 import type { ImportMethod } from './types';
 
@@ -45,6 +45,7 @@ export const IMPORT_METHODS: ImportMethodDef[] = [
   { id: 'sdk', label: 'SDK', short: 'SDK', desc: 'Client library source', detail: 'Client-library source (TypeScript, Python, Java, C#, Go…). Every method that issues an HTTP call becomes an endpoint.', icon: Code2, accent: '#14B8A6', inputs: ['files', 'text'], accept: '.ts,.js,.py,.java,.cs,.go,.rb,.php,.kt,.txt,.md', format: 'sdk', ai: true, placeholder: 'Paste the SDK / client source…' },
   { id: 'webhook', label: 'Webhook', short: 'Webhook', desc: 'Your consumer endpoint + events', detail: 'The consumer endpoint your system exposes plus the event payloads it should accept. Deliveries are HMAC-signed with your secret.', icon: Webhook, accent: '#F43F5E', inputs: ['webhook'] },
   { id: 'graphql', label: 'GraphQL', short: 'GraphQL', desc: 'Introspect the schema', detail: 'Introspects the schema and creates one operation per Query and Mutation field with a ready selection set.', icon: Braces, accent: '#EC4899', inputs: ['graphql', 'text'], format: 'graphql', placeholder: 'Or paste the SDL schema…' },
+  { id: 'wsdl', label: 'SOAP / WSDL', short: 'SOAP', desc: 'A WSDL file or its URL', detail: 'A SOAP service described by a WSDL 1.1 document — by file upload, URL or paste. Every operation becomes an endpoint with a ready sample SOAP envelope, the right Content-Type and SOAPAction (SOAP 1.1 and 1.2). Parsed deterministically from the WSDL/XSD — no AI needed.', icon: FileCode2, accent: '#0EA5A4', inputs: ['files', 'url', 'text'], accept: '.wsdl,.xml', format: 'wsdl', placeholder: 'Paste the WSDL document (XML)…' },
   { id: 'mcp', label: 'MCP Server', short: 'MCP', desc: 'A server’s tools, imported', detail: 'A Model Context Protocol server over Streamable HTTP. The handshake, tools/list and one tools/call per tool are imported.', icon: Bot, accent: '#7C3AED', inputs: ['mcp'] },
   { id: 'middleware', label: 'Middleware', short: 'Middleware', desc: 'Server route definitions', detail: 'Server route definitions — Express/Nest/Fastify, Spring, FastAPI/Flask, ASP.NET, gateway route tables. Every registered route becomes an endpoint.', icon: Route, accent: '#06B6D4', inputs: ['files', 'text'], accept: '.ts,.js,.py,.java,.cs,.go,.rb,.php,.kt,.yaml,.yml,.json,.txt', format: 'middleware', ai: true, placeholder: 'Paste the router / controller source…' },
   { id: 'manual', label: 'Manual HTTP Request', short: 'Manual', desc: 'Build one request by hand', detail: 'Build one request by hand — method, URL, params, headers, auth, body and the expected response.', icon: Send, accent: '#3B82F6', inputs: ['manual'] },

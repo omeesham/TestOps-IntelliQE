@@ -26,6 +26,10 @@ export interface GitProviderConfig {
   /** Optional repo subdirectory the generated scripts are committed into
    *  (e.g. "tests/e2e"). Defaults to "tests" when unset. */
   scriptsPath?: string;
+  /** Azure DevOps-only: a pre-built `Basic <base64>` header to use INSTEAD of
+   *  deriving one from accessToken. Lets the code-push integration reuse the
+   *  PAT already stored by the work-item (`azure-devops`) connection. */
+  authHeader?: string;
 }
 
 /** Result of a read-only connectivity test (no branch/PR is created). */
@@ -39,7 +43,7 @@ export interface GitTestResult {
 
 /** Result of a successful publish. */
 export interface PublishResult {
-  provider: 'github' | 'gitlab' | 'bitbucket';
+  provider: 'github' | 'gitlab' | 'bitbucket' | 'azure';
   /** 'direct' = files were committed straight onto the configured branch (no
    *  PR); 'pr' = a new branch was created and a PR/MR opened. */
   mode: 'pr' | 'direct';
@@ -59,7 +63,7 @@ export interface PublishResult {
  */
 export interface GitProvider {
   /** Provider identifier used in the response so the UI can label it. */
-  readonly id: 'github' | 'gitlab' | 'bitbucket';
+  readonly id: 'github' | 'gitlab' | 'bitbucket' | 'azure';
 
   /**
    * Create a branch off `defaultBranch`, commit `files` under `tests/`
@@ -87,14 +91,16 @@ export interface GitProvider {
  * even when the user has multiple integrations connected.
  */
 export interface RepoCoords {
-  provider: 'github' | 'gitlab' | 'bitbucket';
-  /** GitHub owner / GitLab group(+subgroups) / Bitbucket workspace */
+  provider: 'github' | 'gitlab' | 'bitbucket' | 'azure';
+  /** GitHub owner / GitLab group(+subgroups) / Bitbucket workspace / Azure DevOps org */
   owner: string;
   /** Repository / project slug */
   repo: string;
   /** GitLab only — the URL-encoded "group/subgroup/repo" form needed for API calls */
   projectPath?: string;
-  /** Host name (api.github.com, gitlab.com, bitbucket.org, or self-hosted) */
+  /** Azure DevOps only — the team project the repository belongs to */
+  project?: string;
+  /** Host name (api.github.com, gitlab.com, bitbucket.org, dev.azure.com, or self-hosted) */
   host: string;
 }
 
@@ -120,11 +126,52 @@ export function parseRepoUrl(repoUrl: string): RepoCoords {
   if (host === 'bitbucket.org' || host.endsWith('.bitbucket.org')) {
     return { provider: 'bitbucket', owner: parts[0]!, repo: parts[1]!, host };
   }
+  if (host === 'dev.azure.com' || host.endsWith('.visualstudio.com')) {
+    // Azure DevOps Repos URL forms (the `_git` segment separates project from repo):
+    //   https://dev.azure.com/{org}/{project}/_git/{repo}
+    //   https://dev.azure.com/{org}/_git/{repo}              (repo name == project)
+    //   https://{org}.visualstudio.com/{project}/_git/{repo}
+    //   https://{org}.visualstudio.com/_git/{repo}
+    // A clone URL may carry a leading "{org}@" userinfo — URL parsing drops it from the path.
+    // Path segments are URL-encoded (projects may contain spaces); decode each
+    // so the caller holds raw names and re-encodes exactly once for the API.
+    const dec = (s: string | undefined) => { try { return decodeURIComponent(s || ''); } catch { return s || ''; } };
+    const legacy = host.endsWith('.visualstudio.com');
+    const gitIdx = parts.indexOf('_git');
+    let owner: string;
+    let project: string;
+    let repo: string;
+    if (gitIdx >= 0) {
+      repo = dec(parts[gitIdx + 1]);
+      const before = parts.slice(0, gitIdx);
+      if (legacy) {
+        owner = host.split('.')[0]!;
+        project = dec(before[0]) || repo;
+      } else {
+        owner = dec(before[0]);
+        project = dec(before[1]) || repo;
+      }
+    } else if (legacy) {
+      // {org}.visualstudio.com/{project}[/{repo}] — no _git segment.
+      owner = host.split('.')[0]!;
+      project = dec(parts[0]);
+      repo = dec(parts[1]) || project;
+    } else {
+      // dev.azure.com/{org}/{project}[/{repo}] — no _git segment.
+      owner = dec(parts[0]);
+      project = dec(parts[1]);
+      repo = dec(parts[2]) || project;
+    }
+    if (!owner || !repo) {
+      throw new Error(`Azure DevOps URL must include the organization and repository: ${repoUrl}`);
+    }
+    return { provider: 'azure', owner, repo, project: project || repo, host };
+  }
   if (host === 'gitlab.com' || host.endsWith('.gitlab.com') || host.includes('gitlab')) {
     // GitLab supports nested subgroups: group/subgroup/.../project
     const owner = parts.slice(0, -1).join('/');
     const repo = parts[parts.length - 1]!;
     return { provider: 'gitlab', owner, repo, projectPath: path, host };
   }
-  throw new Error(`Unsupported git host: ${host}. Supported: github.com, gitlab.com, bitbucket.org.`);
+  throw new Error(`Unsupported git host: ${host}. Supported: github.com, gitlab.com, bitbucket.org, dev.azure.com.`);
 }

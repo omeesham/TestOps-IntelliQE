@@ -48,7 +48,7 @@ interface Props {
   onReview?: (ids?: string[]) => void;
 }
 
-interface Outcome { method: ImportMethod; name: string; res: ApiImportResponse; added: number; duplicates: number }
+interface Outcome { method: ImportMethod; name: string; res: ApiImportResponse; added: number; duplicates: number; changed?: number; removed?: number }
 
 /** What the drop zone takes, named the way a tester thinks of them. */
 const ACCEPTED = ['OpenAPI', 'Swagger', 'Postman', 'HAR', 'Bruno', 'WSDL / XML', 'PDF', 'Word', 'Excel', 'Markdown', 'Source code'];
@@ -89,17 +89,36 @@ export default function ImportView({ catalog, onOpenCatalogue, log, environment,
 
   /** Every import funnels through here so the catalogue, log and result panel agree. */
   const finish = useCallback((method: ImportMethod, name: string, res: ApiImportResponse) => {
-    const { added, duplicates, addedIds } = catalog.addEndpoints(res.endpoints || [], {
+    // Full-snapshot sources (a whole spec/collection) reconcile on re-import:
+    // changed endpoints are updated in place and endpoints dropped from the spec
+    // are removed. Incremental sources (cURL, HAR, a single probe) only add/update.
+    const FULL_SNAPSHOT = new Set<ImportMethod>(['openapi', 'postman', 'bruno', 'connector', 'graphql', 'mcp']);
+    const { added, changed, removed, duplicates, addedIds, removedNames } = catalog.addEndpoints(res.endpoints || [], {
       method, name, format: res.format, parser: res.parser, warnings: res.warnings, notice: res.notice, profile: res.profile,
+      reconcile: FULL_SNAPSHOT.has(method),
     });
-    setOutcome({ method, name, res, added, duplicates });
+    setOutcome({ method, name, res, added, duplicates, changed, removed });
     if ((res.endpoints || []).length === 0) {
       log('import', `${name}: no endpoints found${res.warnings?.[0] ? ` — ${res.warnings[0]}` : ''}`, 'warn');
       toast.warning('Nothing imported', res.warnings?.[0] || 'No endpoints could be read from that source.');
     } else {
-      log('import', `${name}: ${added} endpoint${added === 1 ? '' : 's'} added${duplicates ? ` (${duplicates} already in the catalogue)` : ''} via ${res.parser}`, 'ok');
+      const reimport = changed > 0 || removed > 0;
+      if (reimport) {
+        log('import', `${name}: re-import — ${added} added, ${changed} changed, ${removed} removed via ${res.parser}`, 'ok');
+        if (removed > 0) log('import', `Removed (no longer in the spec): ${removedNames.slice(0, 10).join(', ')}${removedNames.length > 10 ? ` +${removedNames.length - 10} more` : ''}`, 'warn');
+        toast.success('Re-import synced', `${added} added · ${changed} changed · ${removed} removed`);
+      } else {
+        log('import', `${name}: ${added} endpoint${added === 1 ? '' : 's'} added${duplicates ? ` (${duplicates} already in the catalogue)` : ''} via ${res.parser}`, 'ok');
+      }
       for (const w of res.warnings || []) log('import', w, 'warn');
-      toast.success(`${added} endpoint${added === 1 ? '' : 's'} imported`, name);
+      // Secrets lifted into an Environment (masked) — cURL / HAR / GraphQL (IQE-050/051/052).
+      const sm = res.secretsMoved;
+      if (sm && (sm.added.length || sm.existing.length)) {
+        const keys = [...sm.added, ...sm.existing];
+        log('import', `${keys.length} secret${keys.length === 1 ? '' : 's'} moved to environment "${sm.environmentName}" (masked): ${keys.join(', ')}${sm.existing.length ? ` — ${sm.existing.length} already existed and were kept` : ''}`, 'ok');
+        toast.success(`${keys.length} secret${keys.length === 1 ? '' : 's'} moved to "${sm.environmentName}"`, 'Masked in the environment; endpoints now reference {{variables}}.');
+      }
+      if (!reimport) toast.success(`${added} endpoint${added === 1 ? '' : 's'} imported`, name);
       // Strict readiness applies to EVERY import: if anything the import produced
       // is not automation-ready (missing purpose/inputs/responses/business rules/
       // schema), open the review so it's validated — and fixed or removed — now.
@@ -270,6 +289,9 @@ export default function ImportView({ catalog, onOpenCatalogue, log, environment,
 
 function OutcomePanel({ outcome, onOpenCatalogue, onOpenStory, onReview, onDismiss }: { outcome: Outcome; onOpenCatalogue: () => void; onOpenStory?: () => void; onReview?: (ids?: string[]) => void; onDismiss: () => void }) {
   const { res, added, duplicates, method } = outcome;
+  const changed = outcome.changed || 0;
+  const removed = outcome.removed || 0;
+  const reimport = changed > 0 || removed > 0;
   const none = (res.endpoints || []).length === 0;
   // Requirement-driven sources can also feed the Story generator for a brief.
   const fromRequirements = method === 'jira' || method === 'ado' || method === 'confluence' || method === 'brd' || method === 'frd';
@@ -290,8 +312,11 @@ function OutcomePanel({ outcome, onOpenCatalogue, onOpenStory, onReview, onDismi
         </span>
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-semibold text-gray-900">
-            {none ? 'No endpoints found' : `${added} endpoint${added === 1 ? '' : 's'} added to the catalogue`}
-            {duplicates > 0 && <span className="font-normal text-gray-500"> · {duplicates} already present</span>}
+            {none ? 'No endpoints found'
+              : reimport ? `Re-import synced — ${added} added, ${changed} changed, ${removed} removed`
+              : `${added} endpoint${added === 1 ? '' : 's'} added to the catalogue`}
+            {!reimport && duplicates > 0 && <span className="font-normal text-gray-500"> · {duplicates} already present</span>}
+            {reimport && duplicates > 0 && <span className="font-normal text-gray-500"> · {duplicates} unchanged</span>}
           </p>
           {res.notice && <p className="mt-2 text-[11.5px] text-[#4C1D95] bg-[#F5F3FF] border border-[#DDD6FE] rounded-md px-2.5 py-1.5">{res.notice}</p>}
           {!none && (

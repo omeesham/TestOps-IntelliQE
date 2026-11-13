@@ -29,6 +29,7 @@ import { parseRepoUrl, type GitProvider, type GitFile, type GitProviderConfig } 
 import { githubProvider } from '../services/git/github.provider.js';
 import { gitlabProvider } from '../services/git/gitlab.provider.js';
 import { bitbucketProvider } from '../services/git/bitbucket.provider.js';
+import { azureProvider } from '../services/git/azure.provider.js';
 import { assembleClientPackage } from '../services/client-package.service.js';
 import { getReportStats, readAllureResults, readBasicReport } from '../services/allure-report.service.js';
 import { scanFilesForSecrets, formatSecretFindings } from '../services/git/secret-scan.js';
@@ -98,7 +99,28 @@ const PROVIDERS: Record<string, GitProvider> = {
   github: githubProvider,
   gitlab: gitlabProvider,
   bitbucket: bitbucketProvider,
+  azure: azureProvider,
 };
+
+/** The git-repo integration ids that back a code-push provider. */
+const GIT_REPO_INTEGRATIONS = ['github', 'gitlab', 'bitbucket', 'azure-repos'];
+
+/**
+ * IQE-056.1 crit 6 — reuse the existing Azure DevOps (work-item) connection's
+ * PAT for code push when the code-repo config carries no token of its own.
+ * The `azure-devops` connection stores a ready `Basic <base64>` auth_header;
+ * borrow it so the user never re-enters the PAT (it must have Code scope).
+ */
+async function borrowAzureAuthHeader(tenantId: string): Promise<string | undefined> {
+  const r = await pool.query(
+    `SELECT config_data FROM client_configurations
+      WHERE tenant_id = $1 AND integration_id = 'azure-devops' AND status = 'connected'`,
+    [tenantId],
+  );
+  if (r.rows.length === 0) return undefined;
+  const cfg = decryptConfigData(r.rows[0].config_data || {});
+  return cfg.auth_header ? String(cfg.auth_header).trim() : undefined;
+}
 
 /**
  * Look up the user's connected git-repo integration. We prefer an
@@ -118,14 +140,15 @@ async function loadGitConfig(
     );
     if (r.rows.length > 0) {
       const cfg = decryptConfigData(r.rows[0].config_data);
-      return { integrationId: r.rows[0].integration_id, config: cfgToProvider(cfg) };
+      const config = await withAzureReuse(tenantId, r.rows[0].integration_id, cfgToProvider(cfg));
+      return { integrationId: r.rows[0].integration_id, config };
     }
   }
   // 2. Fall back to any connected git-repo integration.
   const r = await pool.query(
     `SELECT integration_id, config_data FROM client_configurations
       WHERE tenant_id = $1
-        AND integration_id IN ('github','gitlab','bitbucket')
+        AND integration_id IN ('github','gitlab','bitbucket','azure-repos')
         AND status = 'connected'
       ORDER BY connected_at DESC
       LIMIT 1`,
@@ -133,7 +156,23 @@ async function loadGitConfig(
   );
   if (r.rows.length === 0) return null;
   const cfg = decryptConfigData(r.rows[0].config_data);
-  return { integrationId: r.rows[0].integration_id, config: cfgToProvider(cfg) };
+  const config = await withAzureReuse(tenantId, r.rows[0].integration_id, cfgToProvider(cfg));
+  return { integrationId: r.rows[0].integration_id, config };
+}
+
+/**
+ * For the Azure code-push integration that was saved without its own PAT,
+ * borrow the auth header from the existing `azure-devops` work-item connection.
+ */
+async function withAzureReuse(
+  tenantId: string,
+  integrationId: string,
+  config: GitProviderConfig,
+): Promise<GitProviderConfig> {
+  if (integrationId === 'azure-repos' && !config.accessToken && !config.authHeader) {
+    config.authHeader = await borrowAzureAuthHeader(tenantId);
+  }
+  return config;
 }
 
 /** Translate the stored config_data shape into the provider-neutral GitProviderConfig. */
@@ -141,7 +180,8 @@ function cfgToProvider(cfg: Record<string, any>): GitProviderConfig {
   return {
     repoUrl: String(cfg.repo_url || cfg.repoUrl || '').trim(),
     defaultBranch: String(cfg.branch || cfg.default_branch || 'main').trim(),
-    accessToken: String(cfg.access_token || cfg.accessToken || cfg.app_password || '').trim(),
+    accessToken: String(cfg.access_token || cfg.accessToken || cfg.app_password || cfg.pat || '').trim(),
+    authHeader: cfg.auth_header ? String(cfg.auth_header).trim() : undefined,
     username: cfg.username ? String(cfg.username).trim() : undefined,
     scriptsPath: String(cfg.scripts_path || cfg.scriptsPath || '').trim() || undefined,
   };
@@ -181,7 +221,7 @@ router.post('/publish', requirePermission('api.run'), async (req: Request, res: 
       res.status(400).json({ error: 'Connected integration is missing the repository URL.' });
       return;
     }
-    if (!config.accessToken) {
+    if (!config.accessToken && !config.authHeader) {
       res.status(400).json({ error: 'Connected integration is missing the access token.' });
       return;
     }
@@ -338,7 +378,7 @@ router.post('/test', async (req: Request, res: Response) => {
     }
 
     if (!config.repoUrl) { res.status(400).json({ ok: false, error: 'Repository URL is required.' }); return; }
-    if (!config.accessToken) { res.status(400).json({ ok: false, error: 'Access token is required.' }); return; }
+    if (!config.accessToken && !config.authHeader) { res.status(400).json({ ok: false, error: 'Access token is required.' }); return; }
 
     const coords = parseRepoUrl(config.repoUrl);
     const provider = PROVIDERS[coords.provider];

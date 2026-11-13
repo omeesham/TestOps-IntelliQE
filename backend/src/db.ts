@@ -764,6 +764,9 @@ export async function initDb(): Promise<void> {
     // Environment colour (Postman-style visual tag) — additive for DBs created
     // before the column existed; existing rows keep NULL (no colour).
     await addColumn('api_environments', 'color', 'NVARCHAR(20)');
+    // Per-environment parallel worker count (1–10) — additive; NULL ⇒ use the
+    // global API_TEST_WORKERS default (IQE parallel-execution per-environment).
+    await addColumn('api_environments', 'workers', 'INT');
     // Import history: every intake (file, URL, cURL, GraphQL, MCP…) with what
     // it produced — the dashboard's "sources" panel and the REST /imports feed.
     await createTable('api_import_sources', `

@@ -504,7 +504,7 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
     log('report', `Pushing ${toPush.length} spec${toPush.length === 1 ? '' : 's'} to the connected repository`);
     try {
       const configs = await getConfigurations();
-      const repo = (configs?.configs || []).find((c: any) => ['github', 'gitlab', 'bitbucket'].includes(c.integrationId) && c.status === 'connected');
+      const repo = (configs?.configs || []).find((c: any) => ['github', 'gitlab', 'bitbucket', 'azure-repos'].includes(c.integrationId) && c.status === 'connected');
       if (!repo) {
         const msg = 'No code repository is connected. Connect one under System Configuration → Code Repositories, then push again.';
         setPushState({ status: 'error', error: msg }); log('report', msg, 'warn');

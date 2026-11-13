@@ -387,6 +387,9 @@ export interface ApiImportResponse {
   files?: { fileName: string; count: number; parser?: string; format?: string; error?: string; warnings: string[] }[];
   /** Live probe only. */
   observed?: { status: number; durationMs: number; contentType: string };
+  /** Secrets lifted out of the imported endpoints and saved to an Environment,
+   *  masked (keys only — never the values). cURL / HAR / GraphQL imports. */
+  secretsMoved?: { environmentId: string; environmentName: string; added: string[]; existing: string[] };
 }
 
 const IMPORT_TIMEOUT = 180_000;
@@ -884,11 +887,11 @@ export async function listApiEnvironments(): Promise<{ environments: any[] }> {
   const { data } = await api.get('/api-automation/environments');
   return data;
 }
-export async function createApiEnvironment(input: { name: string; baseUrl?: string; color?: string; variables?: any[]; isDefault?: boolean }): Promise<{ environment: any }> {
+export async function createApiEnvironment(input: { name: string; baseUrl?: string; color?: string; variables?: any[]; isDefault?: boolean; workers?: number | null }): Promise<{ environment: any }> {
   const { data } = await api.post('/api-automation/environments', input);
   return data;
 }
-export async function updateApiEnvironment(id: string, input: { name?: string; baseUrl?: string; color?: string; variables?: any[]; isDefault?: boolean }): Promise<{ environment: any }> {
+export async function updateApiEnvironment(id: string, input: { name?: string; baseUrl?: string; color?: string; variables?: any[]; isDefault?: boolean; workers?: number | null }): Promise<{ environment: any }> {
   const { data } = await api.put(`/api-automation/environments/${encodeURIComponent(id)}`, input);
   return data;
 }
@@ -1363,7 +1366,7 @@ export async function captureWebPerformance(input: { url: string; engine?: WebEn
 /* ── 1. Visual flow / journey builder ── */
 export interface FlowExtract { name: string; from: 'body' | 'header' | 'status'; path?: string; regex?: string }
 export type CompareMode = 'strict' | 'strict-order' | 'lenient' | 'non-extensible';
-export interface FlowCheck { kind: 'status' | 'jsonPathExists' | 'jsonPathEquals' | 'bodyContains' | 'bodyNotContains' | 'contentType' | 'responseTimeUnderMs' | 'header' | 'bodyMatches' | 'xpath' | 'expr' | 'schema' | 'graphql' | 'countAtMost' | 'everyMatches' | 'sortedBy' | 'noDuplicates' | 'noSecrets' | 'noError'; equals?: number | string; oneOf?: number[]; path?: string; value?: unknown; text?: string; ms?: number; name?: string; op?: 'equals' | 'contains' | 'exists'; field?: string; direction?: 'asc' | 'desc'; max?: number; caseInsensitive?: boolean; compareMode?: CompareMode; ignore?: string[]; expr?: string; schema?: string }
+export interface FlowCheck { kind: 'status' | 'jsonPathExists' | 'jsonPathEquals' | 'bodyContains' | 'bodyNotContains' | 'contentType' | 'responseTimeUnderMs' | 'header' | 'bodyMatches' | 'xpath' | 'expr' | 'schema' | 'graphql' | 'countAtMost' | 'everyMatches' | 'sortedBy' | 'noDuplicates' | 'noSecrets' | 'soapFault' | 'xmlSchema' | 'noError'; equals?: number | string; oneOf?: number[]; path?: string; value?: unknown; text?: string; ms?: number; name?: string; op?: 'equals' | 'contains' | 'exists'; field?: string; direction?: 'asc' | 'desc'; max?: number; caseInsensitive?: boolean; compareMode?: CompareMode; ignore?: string[]; expr?: string; schema?: string; expectFault?: boolean; faultCode?: string }
 export interface ApiOAuth2Config { grant?: string; tokenUrl?: string; clientId?: string; clientSecret?: string; scope?: string; audience?: string; username?: string; password?: string; refreshToken?: string; clientAuthBasic?: boolean }
 export interface ApiHttpAuth { type: string; value?: string; headerName?: string; in?: 'header' | 'query'; oauth2?: ApiOAuth2Config; digest?: { username?: string; password?: string; algorithm?: string }; awsSigV4?: { accessKeyId?: string; secretAccessKey?: string; region?: string; service?: string; sessionToken?: string }; oauth1?: { consumerKey?: string; consumerSecret?: string; token?: string; tokenSecret?: string; signatureMethod?: string }; mtls?: { cert?: string; key?: string; ca?: string; passphrase?: string; rejectUnauthorized?: boolean } }
 export interface ApiFormField { key: string; value?: string; type?: 'text' | 'file'; filename?: string; contentType?: string; dataBase64?: string }

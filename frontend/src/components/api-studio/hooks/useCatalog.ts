@@ -12,6 +12,7 @@ import {
   analyzeApi,
 } from '@/services/api';
 import { newEndpointId } from '../format';
+import { reconcileImport } from './catalogReconcile';
 import type { CatalogEndpoint, ApiProfile, Strategy, StrategyLayerId, ImportMethod } from '../types';
 
 const STORAGE_KEY = 'intelliqe_api_catalog_v2';
@@ -134,30 +135,40 @@ export function useCatalog() {
   const endpointsRef = useRef(endpoints);
   useEffect(() => { endpointsRef.current = endpoints; }, [endpoints]);
 
-  const addEndpoints = useCallback((incoming: any[], meta: { method: ImportMethod; name: string; format: string; parser: string; warnings?: string[]; notice?: string; profile?: ApiProfile | null; replace?: boolean }) => {
+  const addEndpoints = useCallback((incoming: any[], meta: { method: ImportMethod; name: string; format: string; parser: string; warnings?: string[]; notice?: string; profile?: ApiProfile | null; replace?: boolean; reconcile?: boolean }) => {
     const fresh = incoming.map((e) => toCatalogEndpoint(e, meta.method)).map((e) => ({ ...e, source: { ...e.source, method: e.source?.method || meta.method, name: e.source?.name || meta.name } }));
     const base = meta.replace ? [] : endpointsRef.current;
-    const seen = new Set(base.map((e) => `${e.method} ${e.url}`.toLowerCase()));
-    const merged = [...base];
-    const addedIds: string[] = [];
-    for (const e of fresh) {
-      const key = `${e.method} ${e.url}`.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      merged.push(e);
-      addedIds.push(e.id);
-    }
-    const next = merged.slice(0, MAX_ENDPOINTS);
+
+    // Pure reconciliation (added / changed-in-place / removed) — see catalogReconcile.
+    const { next, addedIds, changedIds, removedIds, removedNames } = reconcileImport(base, fresh, {
+      method: meta.method, name: meta.name, reconcile: meta.reconcile, replace: meta.replace, max: MAX_ENDPOINTS,
+    });
+
     endpointsRef.current = next;
     setEndpoints(next);
-    // Everything new is selected to run by default — the reviewer narrows.
-    setSelected((sel) => new Set([...(meta.replace ? [] : [...sel]), ...addedIds.filter((id) => next.some((n) => n.id === id))]));
+    // New + changed endpoints are selected to run; removed ones are dropped.
+    const removedSet = new Set(removedIds);
+    setSelected((sel) => new Set([
+      ...(meta.replace ? [] : [...sel].filter((id) => !removedSet.has(id))),
+      ...[...addedIds, ...changedIds].filter((id) => next.some((n) => n.id === id)),
+    ]));
     // A profile computed by the server for THIS import only describes this
     // import; when it joins an existing catalogue the merged set is re-analysed.
     if (meta.profile && (meta.replace || base.length === 0)) setProfile(meta.profile);
     else void analyze(next);
-    setImports((prev) => [{ id: newEndpointId(), at: Date.now(), method: meta.method, name: meta.name, format: meta.format, parser: meta.parser, count: fresh.length, warnings: meta.warnings || [], notice: meta.notice }, ...prev].slice(0, 30));
-    return { added: addedIds.length, total: fresh.length, duplicates: fresh.length - addedIds.length, addedIds };
+    const reimport = changedIds.length > 0 || removedIds.length > 0;
+    const notice = reimport
+      ? `Re-import: ${addedIds.length} added, ${changedIds.length} changed, ${removedIds.length} removed.`
+      : meta.notice;
+    setImports((prev) => [{ id: newEndpointId(), at: Date.now(), method: meta.method, name: meta.name, format: meta.format, parser: meta.parser, count: fresh.length, warnings: meta.warnings || [], notice }, ...prev].slice(0, 30));
+    return {
+      added: addedIds.length,
+      changed: changedIds.length,
+      removed: removedIds.length,
+      total: fresh.length,
+      duplicates: fresh.length - addedIds.length - changedIds.length,
+      addedIds, changedIds, removedIds, removedNames,
+    };
   }, [analyze]);
 
   const removeEndpoints = useCallback((ids: string[]) => {

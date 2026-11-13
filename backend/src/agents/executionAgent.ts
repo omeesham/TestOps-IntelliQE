@@ -144,6 +144,8 @@ async function runPlaywrightInMemory(
   /** IQE-040.x: the active environment's variables, injected so generated scripts
    *  that read `process.env.<KEY>` (secrets kept out of the script) still authenticate. */
   envVars?: Record<string, string>,
+  /** Per-environment parallel worker count (1–10); overrides the global default. */
+  workersOverride?: number | null,
 ): Promise<{ specResults: SpecResult[]; summary: PwSummary | null }> {
   const workspace = path.join(os.tmpdir(), `jbs-pw-sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const testsDir = path.join(workspace, 'tests');
@@ -221,7 +223,7 @@ async function runPlaywrightInMemory(
   // API suites are I/O-bound and browser suites are CPU-bound, so they get
   // different worker counts, timeouts and artefacts. See utils/playwright-tuning.
   const apiMode = isApiRun(scripts);
-  const tuning = runTuning(apiMode, scripts.length);
+  const tuning = runTuning(apiMode, scripts.length, workersOverride);
   if (apiMode) {
     console.log(`[executionAgent] API run — ${scripts.length} specs across ${tuning.workers} workers, ${tuning.testTimeoutMs / 1000}s per test`);
   }
@@ -447,7 +449,7 @@ export async function executionAgent(
 
   try {
     const envVars = envProcessVars((state as any).apiEnvironment);
-    const { specResults } = await runPlaywrightInMemory(scripts, state.pageObjects || [], targetUrl, opts?.htmlReportDir, opts?.allureResultsDir, envVars);
+    const { specResults } = await runPlaywrightInMemory(scripts, state.pageObjects || [], targetUrl, opts?.htmlReportDir, opts?.allureResultsDir, envVars, (state as any).apiEnvironment?.workers);
 
     // Primary lookup is by test case id (from the spec file name); scenario
     // title is only a fallback for results we couldn't map by file.

@@ -35,6 +35,7 @@ export function mapEnv(e: any): ApiEnvironment {
       : [],
     isDefault: !!e?.isDefault,
     customerLike: !!e?.customerLike,
+    workers: typeof e?.workers === 'number' && Number.isFinite(e.workers) ? e.workers : undefined,
     createdBy: e?.createdBy,
     createdAt: String(e?.createdAt ?? ''),
     updatedAt: String(e?.updatedAt ?? ''),

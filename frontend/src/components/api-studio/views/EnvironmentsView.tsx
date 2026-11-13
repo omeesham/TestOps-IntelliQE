@@ -40,12 +40,12 @@ export default function EnvironmentsView({ store }: { store: ApiEnvironmentsStor
   const [saving, setSaving] = useState(false);
   const [readinessFor, setReadinessFor] = useState<ApiEnvironment | null>(null);
 
-  const save = async (env: { id?: string; name: string; baseUrl: string; color: string; variables: EnvVariable[]; isDefault: boolean }) => {
+  const save = async (env: { id?: string; name: string; baseUrl: string; color: string; variables: EnvVariable[]; isDefault: boolean; workers: number | null }) => {
     if (!env.name.trim()) { toast.warning('Name required', 'Give the environment a name.'); return; }
     setSaving(true);
     try {
       const variables = env.variables.filter((v) => v.key.trim());
-      const payload = { name: env.name.trim(), baseUrl: env.baseUrl, color: env.color, variables, isDefault: env.isDefault };
+      const payload = { name: env.name.trim(), baseUrl: env.baseUrl, color: env.color, variables, isDefault: env.isDefault, workers: env.workers };
       if (env.id) {
         await updateApiEnvironment(env.id, payload);
       } else {
@@ -172,12 +172,13 @@ export default function EnvironmentsView({ store }: { store: ApiEnvironmentsStor
   );
 }
 
-function EnvForm({ initial, saving, onCancel, onSave }: { initial: Partial<ApiEnvironment>; saving: boolean; onCancel: () => void; onSave: (env: { id?: string; name: string; baseUrl: string; color: string; variables: EnvVariable[]; isDefault: boolean }) => void }) {
+function EnvForm({ initial, saving, onCancel, onSave }: { initial: Partial<ApiEnvironment>; saving: boolean; onCancel: () => void; onSave: (env: { id?: string; name: string; baseUrl: string; color: string; variables: EnvVariable[]; isDefault: boolean; workers: number | null }) => void }) {
   const [name, setName] = useState(initial.name || '');
   const [baseUrl, setBaseUrl] = useState(initial.baseUrl || '');
   const [color, setColor] = useState(initial.id ? (initial.color || '') : (initial.color || DEFAULT_ENV_COLOR));
   const [colorTouched, setColorTouched] = useState(false);
   const [isDefault, setIsDefault] = useState(!!initial.isDefault);
+  const [workers, setWorkers] = useState<string>(initial.workers != null ? String(initial.workers) : '');
   const presetNames = ENV_PRESETS.map((p) => p.name);
   const isPreset = (n: string) => presetNames.includes(n.trim().toUpperCase());
   // An existing environment with a non-tier name (e.g. "Production") edits as a
@@ -187,9 +188,9 @@ function EnvForm({ initial, saving, onCancel, onSave }: { initial: Partial<ApiEn
   const [vars, setVars] = useState<EnvVariable[]>(initial.variables?.length ? initial.variables : [{ key: '', value: '', secret: false }]);
   const update = (i: number, patch: Partial<EnvVariable>) => setVars((p) => p.map((v, j) => (j === i ? { ...v, ...patch } : v)));
   return (
-    <form onSubmit={(e) => { e.preventDefault(); onSave({ id: initial.id, name, baseUrl: baseUrl.trim(), color, variables: vars, isDefault }); }} className={`${CARD} p-4 space-y-3`}>
+    <form onSubmit={(e) => { e.preventDefault(); onSave({ id: initial.id, name, baseUrl: baseUrl.trim(), color, variables: vars, isDefault, workers: workers.trim() ? Math.max(1, Math.min(10, Math.round(Number(workers)) || 1)) : null }); }} className={`${CARD} p-4 space-y-3`}>
       <div className="flex items-center gap-2 mb-1"><Server className="w-4 h-4 text-[#7C3AED]" /><h3 className="text-[12.5px] font-semibold text-gray-900">{initial.id ? 'Edit environment' : 'New environment'}</h3><button type="button" onClick={onCancel} className="ml-auto p-1 text-gray-400 hover:text-[#7C3AED]"><X className="w-4 h-4" /></button></div>
-      <div className="grid grid-cols-[220px_1fr_auto] gap-3 items-end">
+      <div className="grid grid-cols-[220px_1fr_auto_auto] gap-3 items-end">
         <div>
           <label className={LABEL}>Name</label>
           <div className="space-y-1">
@@ -214,7 +215,8 @@ function EnvForm({ initial, saving, onCancel, onSave }: { initial: Partial<ApiEn
           </div>
         </div>
         <div><label className={LABEL}>Base URL</label><input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://staging-api.acme.com/v1" spellCheck={false} className={`${INPUT} font-mono`} /></div>
-        <label className="flex items-center gap-1.5 text-[11.5px] text-gray-600 pb-2 cursor-pointer"><input type="checkbox" checked={isDefault} onChange={(e) => setIsDefault(e.target.checked)} className="w-3.5 h-3.5 rounded border-gray-300 text-[#7C3AED] focus:ring-[#A5B4FC]" />Default</label>
+        <div><label className={LABEL} title="Parallel test workers for runs against this environment (1–10). Blank uses the global default.">Workers</label><input type="number" min={1} max={10} value={workers} onChange={(e) => setWorkers(e.target.value)} placeholder="auto" className={`${INPUT} w-[76px] text-center`} /></div>
+      <label className="flex items-center gap-1.5 text-[11.5px] text-gray-600 pb-2 cursor-pointer"><input type="checkbox" checked={isDefault} onChange={(e) => setIsDefault(e.target.checked)} className="w-3.5 h-3.5 rounded border-gray-300 text-[#7C3AED] focus:ring-[#A5B4FC]" />Default</label>
       </div>
       <div>
         <label className={LABEL}>Colour</label>

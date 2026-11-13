@@ -77,7 +77,7 @@ function browserMatrix(): { projectsLine: string; useExtraLine: string } {
   return { projectsLine, useExtraLine: extra };
 }
 
-export function runTuning(apiMode: boolean, specCount: number): RunTuning {
+export function runTuning(apiMode: boolean, specCount: number, workersOverride?: number | null): RunTuning {
   if (!apiMode) {
     // Browser runs keep every existing default; only the process ceiling grows
     // with the suite so a large-but-healthy run is never killed mid-flight. The
@@ -97,8 +97,12 @@ export function runTuning(apiMode: boolean, specCount: number): RunTuning {
     };
   }
 
-  // API run.
-  const cap = envInt('API_TEST_WORKERS', 10, 1, 32);
+  // API run. A per-environment override (1–10, set on the IntelliQE environment)
+  // takes precedence over the global API_TEST_WORKERS cap; otherwise the env var
+  // (default 10) applies. Either way the pool never exceeds the spec count.
+  const cap = Number.isFinite(workersOverride as number) && (workersOverride as number) > 0
+    ? Math.max(1, Math.min(10, Math.floor(workersOverride as number)))
+    : envInt('API_TEST_WORKERS', 10, 1, 32);
   const workers = Math.max(1, Math.min(specCount || 1, cap));
   const testTimeoutMs = envInt('API_TEST_TIMEOUT_MS', 30_000, 5_000, 300_000);
   const expectTimeoutMs = Math.min(testTimeoutMs, envInt('API_EXPECT_TIMEOUT_MS', 10_000, 1_000, 60_000));

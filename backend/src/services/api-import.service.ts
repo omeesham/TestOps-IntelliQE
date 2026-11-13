@@ -41,7 +41,7 @@ import { cleanAuthValue, isPlaceholderSecret } from '../utils/api-auth.js';
 
 export type ImportMethod =
   | 'openapi' | 'postman' | 'bruno' | 'endpoint' | 'curl' | 'docs-url' | 'connector'
-  | 'sdk' | 'webhook' | 'graphql' | 'mcp' | 'middleware' | 'manual' | 'file'
+  | 'sdk' | 'webhook' | 'graphql' | 'mcp' | 'middleware' | 'manual' | 'file' | 'wsdl'
   // Requirement-driven sources (Module 1): a Jira issue, an Azure DevOps work
   // item, a Confluence page, or an uploaded Business/Functional Requirements
   // Document — each read for the API endpoints it describes.
@@ -51,7 +51,7 @@ export type ApiStyle = 'rest' | 'graphql' | 'soap' | 'jsonrpc' | 'webhook' | 'mc
 
 export type ParserId =
   | 'openapi' | 'postman' | 'bruno' | 'har' | 'curl' | 'graphql' | 'mcp'
-  | 'connector' | 'webhook' | 'probe' | 'llm';
+  | 'connector' | 'webhook' | 'probe' | 'llm' | 'wsdl';
 
 export interface ImportedEndpoint extends ParsedApiSpec {
   description?: string;
@@ -73,6 +73,16 @@ export interface ImportedEndpoint extends ParsedApiSpec {
   /** Set on endpoints that were auto-discovered (e.g. an OpenAPI document found
       on the origin of a probed URL) rather than named by the user. */
   discovered?: boolean;
+  /** SOAP (WSDL) metadata — version, SOAPAction, and the WSDL-derived response
+   *  contract used to seed a SOAP fault + xmlSchema check (IQE-046.1/046.2). */
+  soap?: {
+    version: '1.1' | '1.2';
+    action?: string;
+    /** The expected successful response element (e.g. "AddResponse"). */
+    responseElement?: string;
+    /** Required child elements of the response (minOccurs ≠ 0). */
+    responseRequired?: string[];
+  };
 }
 
 /** Per-request outcome of an import, so the UI can show an accurate
@@ -112,7 +122,14 @@ export interface ImportResult {
   items?: ImportItemResult[];
   /** Reconciling imported/skipped/failed tally over the items evaluated. */
   summary?: ImportSummary;
+  /** Secrets lifted out of the imported endpoints (tokens, passwords, API keys,
+   *  cookies) and replaced by `{{VAR}}` references — to be saved into an
+   *  Environment, masked (IQE-050.1/051.1/052.1). */
+  envVars?: ImportEnvVar[];
 }
+
+/** A secret moved out of an endpoint into an environment variable (always secret-flagged). */
+export interface ImportEnvVar { key: string; value: string; secret: true }
 
 export type SniffedFormat =
   | 'openapi' | 'postman' | 'har' | 'bruno' | 'curl' | 'connector'
@@ -266,6 +283,117 @@ export function dedupeEndpoints(list: ImportedEndpoint[]): ImportedEndpoint[] {
     out.push(e);
   }
   return out;
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Secret lifting — move tokens/passwords/API keys/cookies found in an
+   imported endpoint into environment variables (masked), replacing the
+   literal with a `{{VAR}}` reference (IQE-050.1 #3 / 051.1 #3 / 052.1 #4).
+   ──────────────────────────────────────────────────────────────── */
+
+const SECRET_HEADER_EXACT = new Set(['authorization', 'proxy-authorization', 'cookie', 'set-cookie', 'x-csrf-token', 'x-xsrf-token']);
+/** Header names that carry a secret value (exact set + a name heuristic). */
+function isSecretHeaderName(name: string): boolean {
+  const n = name.toLowerCase();
+  if (SECRET_HEADER_EXACT.has(n)) return true;
+  return /(^|[-_])(api[-_]?key|apikey|token|secret|auth|session|credential|access[-_]?key|signature|sig|password|pwd)([-_]|$)/i.test(n);
+}
+/** Query-parameter names whose value is a secret. */
+const SECRET_QUERY_RE = /^(access_?token|api[_-]?key|apikey|token|key|sig|signature|password|pwd|secret|auth|session|sessionid|sid)$/i;
+/** Values that are already a placeholder/template and must NOT be moved. */
+const NON_MOVABLE_VAL = /^\s*(\{\{[^}]*\}\}|<[^>]*>|\$\{?[A-Za-z0-9_]+\}?|x{3,}|\*{3,}|•+|…|changeme|your[-_].*|token|secret|api[-_]?key|password)\s*$/i;
+
+/** A value worth lifting into the environment: non-empty and not already a placeholder/template. */
+function isMovableSecret(v: string): boolean {
+  const s = (v || '').trim();
+  if (!s) return false;
+  if (/\{\{[^}]*\}\}/.test(s)) return false; // already references a variable
+  if (NON_MOVABLE_VAL.test(s)) return false;
+  return true;
+}
+
+/** A stable, readable env-var name for a header/param/auth source. */
+function secretVarName(source: string, scheme?: string): string {
+  const n = source.toLowerCase();
+  if (n === 'authorization' || n === 'proxy-authorization') return scheme === 'basic' ? 'BASIC_AUTH' : 'AUTH_TOKEN';
+  if (n === 'cookie' || n === 'set-cookie') return 'COOKIE';
+  if (/^(x-)?api[-_]?key$/.test(n) || n === 'apikey') return 'API_KEY';
+  const s = source.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase();
+  return s || 'SECRET';
+}
+
+/** Allocates env-var names, reusing one name when the same value recurs. */
+class SecretRegistry {
+  private byValue = new Map<string, string>();
+  private used = new Map<string, string>();
+  readonly vars: ImportEnvVar[] = [];
+  ref(base: string, value: string): string {
+    const existing = this.byValue.get(value);
+    if (existing) return existing;
+    let key = base; let i = 2;
+    while (this.used.has(key) && this.used.get(key) !== value) key = `${base}_${i++}`;
+    this.used.set(key, value);
+    this.byValue.set(value, key);
+    this.vars.push({ key, value, secret: true });
+    return key;
+  }
+}
+
+/** Replace secret query-string parameter values with `{{VAR}}`, keeping the `{{}}` literal. */
+function secretizeUrl(url: string, reg: SecretRegistry): string {
+  const qi = url.indexOf('?');
+  if (qi < 0) return url;
+  const base = url.slice(0, qi);
+  const hashIdx = url.indexOf('#', qi);
+  const qs = hashIdx >= 0 ? url.slice(qi + 1, hashIdx) : url.slice(qi + 1);
+  const frag = hashIdx >= 0 ? url.slice(hashIdx) : '';
+  const parts = qs.split('&').map((pair) => {
+    const eq = pair.indexOf('=');
+    if (eq < 0) return pair;
+    const name = (() => { try { return decodeURIComponent(pair.slice(0, eq)); } catch { return pair.slice(0, eq); } })();
+    const rawVal = pair.slice(eq + 1);
+    const val = (() => { try { return decodeURIComponent(rawVal); } catch { return rawVal; } })();
+    if (SECRET_QUERY_RE.test(name) && isMovableSecret(val)) {
+      const key = reg.ref(secretVarName(name), val);
+      return `${pair.slice(0, eq)}={{${key}}}`;
+    }
+    return pair;
+  });
+  return `${base}?${parts.join('&')}${frag}`;
+}
+
+/**
+ * Lift every secret found in the endpoints into environment variables, replacing
+ * the literal with a `{{VAR}}` reference so the stored endpoint is masked. The
+ * same value reuses one variable across endpoints. Returns the rewritten
+ * endpoints plus the collected (secret-flagged) variables.
+ */
+export function secretizeEndpoints(endpoints: ImportedEndpoint[]): { endpoints: ImportedEndpoint[]; envVars: ImportEnvVar[]; moved: number } {
+  const reg = new SecretRegistry();
+  const out = endpoints.map((ep0) => {
+    const ep: ImportedEndpoint = { ...ep0, headers: (ep0.headers || []).map((h) => ({ ...h })), auth: ep0.auth ? { ...ep0.auth } : ep0.auth };
+    // 1. Auth object (bearer/basic/apikey) — the parsers pull Authorization/api-key here.
+    if (ep.auth && ep.auth.type && ep.auth.type !== 'none' && typeof ep.auth.value === 'string' && isMovableSecret(ep.auth.value)) {
+      const base = ep.auth.type === 'basic' ? 'BASIC_AUTH' : ep.auth.type === 'apikey' ? secretVarName((ep.auth as any).headerName || 'api-key') : 'AUTH_TOKEN';
+      ep.auth = { ...ep.auth, value: `{{${reg.ref(base, ep.auth.value)}}}` };
+    }
+    // 2. Secret-bearing headers (Authorization kept-in-headers, Cookie, X-API-Key, custom *-token…).
+    for (const h of ep.headers) {
+      const name = h.key.toLowerCase();
+      if (!isSecretHeaderName(name) || !isMovableSecret(h.value)) continue;
+      if (name === 'authorization' || name === 'proxy-authorization') {
+        const m = h.value.match(/^(bearer|basic|digest|negotiate)\s+(.+)$/i);
+        if (m && isMovableSecret(m[2]!)) h.value = `${m[1]} {{${reg.ref(secretVarName(name, m[1]!.toLowerCase()), m[2]!.trim())}}}`;
+        else h.value = `{{${reg.ref('AUTH_TOKEN', h.value.trim())}}}`;
+      } else {
+        h.value = `{{${reg.ref(secretVarName(h.key), h.value.trim())}}}`;
+      }
+    }
+    // 3. Secret query-string parameters (?access_token=…, ?apikey=…).
+    ep.url = secretizeUrl(ep.url, reg);
+    return ep;
+  });
+  return { endpoints: out, envVars: reg.vars, moved: reg.vars.length };
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -984,8 +1112,10 @@ export function parseHar(doc: any, sourceName = 'HAR recording'): ImportResult {
     const mime = String(res?.content?.mimeType || '');
     // Only API traffic — skip page assets.
     if (!/json|xml|graphql|text\/plain/i.test(mime) && !/\/api\//i.test(String(req.url))) continue;
+    // Keep Cookie (it is masked into the environment below — IQE-051.1 #3);
+    // still drop pseudo-headers and non-request noise.
     const headers = (Array.isArray(req.headers) ? req.headers : [])
-      .filter((h: any) => isObj(h) && h.name && !/^(:|host$|cookie$|content-length$|user-agent$|accept-encoding$|origin$|referer$|sec-)/i.test(String(h.name)))
+      .filter((h: any) => isObj(h) && h.name && !/^(:|host$|content-length$|user-agent$|accept-encoding$|origin$|referer$|sec-)/i.test(String(h.name)))
       .map((h: any) => ({ key: String(h.name), value: String(h.value ?? '') }));
     let auth: any = { type: 'none' };
     const authH = headers.find((h) => h.key.toLowerCase() === 'authorization');
@@ -1006,7 +1136,9 @@ export function parseHar(doc: any, sourceName = 'HAR recording'): ImportResult {
     }, source);
     if (ep) endpoints.push(ep);
   }
-  return { endpoints: dedupeEndpoints(endpoints), parser: 'har', format: 'HAR 1.2', warnings: [], notice: `${endpoints.length} API request${endpoints.length === 1 ? '' : 's'} recovered from the recording.` };
+  const sec = secretizeEndpoints(dedupeEndpoints(endpoints));
+  const notice = `${sec.endpoints.length} API request${sec.endpoints.length === 1 ? '' : 's'} recovered from the recording.${sec.moved ? ` ${sec.moved} secret${sec.moved === 1 ? '' : 's'} (cookies/tokens) moved to the environment.` : ''}`;
+  return { endpoints: sec.endpoints, parser: 'har', format: 'HAR 1.2', warnings: [], notice, ...(sec.moved ? { envVars: sec.envVars } : {}) };
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -1274,7 +1406,11 @@ export function parseCurlCommands(text: string, sourceName = 'cURL'): ImportResu
     if (ep) endpoints.push(ep);
   }
   if (!endpoints.length && !warnings.length) warnings.push('No cURL command with an absolute http(s) URL was found.');
-  return { endpoints: dedupeEndpoints(endpoints), parser: 'curl', format: 'cURL', warnings, notice: endpoints.length ? `${endpoints.length} request${endpoints.length === 1 ? '' : 's'} parsed from cURL.` : undefined };
+  const sec = secretizeEndpoints(dedupeEndpoints(endpoints));
+  const notice = endpoints.length
+    ? `${sec.endpoints.length} request${sec.endpoints.length === 1 ? '' : 's'} parsed from cURL.${sec.moved ? ` ${sec.moved} secret${sec.moved === 1 ? '' : 's'} moved to the environment.` : ''}`
+    : undefined;
+  return { endpoints: sec.endpoints, parser: 'curl', format: 'cURL', warnings, notice, ...(sec.moved ? { envVars: sec.envVars } : {}) };
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -1579,7 +1715,10 @@ export async function introspectGraphql(url: string, headers: Record<string, str
   };
   build(schema.queryType?.name, 'query');
   build(schema.mutationType?.name, 'mutation');
-  return { endpoints, parser: 'graphql', format: 'GraphQL (introspected)', warnings: [], notice: `${endpoints.length} operation${endpoints.length === 1 ? '' : 's'} discovered by introspecting ${url}.` };
+  // Mask any auth headers supplied for introspection into the environment (IQE-052.1 #4).
+  const sec = secretizeEndpoints(endpoints);
+  const notice = `${sec.endpoints.length} operation${sec.endpoints.length === 1 ? '' : 's'} discovered by introspecting ${url}.${sec.moved ? ` ${sec.moved} auth secret${sec.moved === 1 ? '' : 's'} moved to the environment.` : ''}`;
+  return { endpoints: sec.endpoints, parser: 'graphql', format: 'GraphQL (introspected)', warnings: [], notice, ...(sec.moved ? { envVars: sec.envVars } : {}) };
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -1760,6 +1899,11 @@ export async function importFromText(text: string, opts: TextImportOptions = {})
     result = parseCurlCommands(text, name);
   } else if (sniffed === 'bruno' || hint === 'bruno') {
     result = parseBrunoCollection(text, { variables: opts.variables, sourceName: name });
+  } else if (sniffed === 'wsdl' || hint === 'wsdl' || hint === 'soap' || hint === 'xml') {
+    // Deterministic WSDL 1.1 → SOAP operations (IQE-046.1), no LLM needed.
+    const { parseWsdl } = await import('./wsdl-import.service.js');
+    const wres = await parseWsdl(text, name);
+    if (wres) result = wres; // authoritative for WSDL; may carry warnings/summary even with 0 endpoints
   }
 
   if (result && result.endpoints.length) {

@@ -46,9 +46,10 @@ import { publishRunResults as publishAzureResults, runJUnit } from '../services/
 import {
   importFromText, importFromUrl, parseCurlCommands, parseHar, introspectGraphql, discoverMcpTools,
   parseConnectorManifest, endpointsFromWebhook, probeEndpoint, parseStructured, dedupeEndpoints,
-  parsePostmanCollection, postmanOutline,
+  parsePostmanCollection, postmanOutline, fetchRemote,
   type ImportResult, type ImportedEndpoint, type ImportMethod,
 } from '../services/api-import.service.js';
+import { parseWsdl } from '../services/wsdl-import.service.js';
 import { parsePostmanEnvironment, collectionVariables, mergePostmanVariables } from '../utils/postman-env.js';
 import { analyzeApiSurface, enrichProfileWithLlm } from '../services/api-intelligence.service.js';
 import { validateContract } from '../services/api-contract.service.js';
@@ -302,11 +303,44 @@ function endpointsFromBody(raw: unknown, max = 500): ImportedEndpoint[] {
   return out;
 }
 
+/**
+ * Persist secrets lifted out of imported endpoints (IQE-050.1/051.1/052.1) into
+ * an Environment, masked. Targets the tenant's default environment when one
+ * exists (never clobbering an existing key — strategy 'skip'); otherwise reuses
+ * or creates a single "Imported Secrets" environment. Best-effort: a failure
+ * never fails the import (the endpoints are already masked with {{VAR}}).
+ * Returns a keys-only summary — secret VALUES are never echoed back.
+ */
+async function persistImportedSecrets(
+  req: Request,
+  result: ImportResult,
+): Promise<{ environmentId: string; environmentName: string; added: string[]; existing: string[] } | undefined> {
+  const vars = result.envVars || [];
+  if (!vars.length) return undefined;
+  try {
+    const envs = await listEnvironments(req.user!.tenantId);
+    const target = envs.find((e) => e.isDefault) || envs.find((e) => e.name.toLowerCase() === 'imported secrets');
+    const r = target
+      ? await importVariables(req.user!.tenantId, req.user!.username, { targetId: target.id, variables: vars, strategy: 'skip' })
+      : await importVariables(req.user!.tenantId, req.user!.username, { name: 'Imported Secrets', variables: vars, strategy: 'new' });
+    return {
+      environmentId: r.environment.id,
+      environmentName: r.environment.name,
+      added: r.applied.filter((a) => a.action === 'added').map((a) => a.key),
+      existing: r.applied.filter((a) => a.action === 'skipped').map((a) => a.key),
+    };
+  } catch (err) {
+    console.warn('[import] could not persist moved secrets:', (err as Error)?.message);
+    return undefined;
+  }
+}
+
 async function respondImport(req: Request, res: Response, method: ImportMethod, name: string, result: ImportResult, extra?: Record<string, unknown>): Promise<void> {
   const endpoints = dedupeEndpoints(result.endpoints);
   await recordImport(req.user!.tenantId, req.user!.username, {
     method, name, format: result.format, parser: result.parser, endpointCount: endpoints.length, warnings: result.warnings,
   });
+  const secretsMoved = await persistImportedSecrets(req, result);
   res.json({
     endpoints,
     count: endpoints.length,
@@ -318,6 +352,9 @@ async function respondImport(req: Request, res: Response, method: ImportMethod, 
     // (Postman today) — so the UI can show imported/skipped/failed with reasons.
     ...(result.items ? { items: result.items } : {}),
     ...(result.summary ? { summary: result.summary } : {}),
+    // Secrets lifted into an Environment (masked) — keys + target env only,
+    // never the secret values (IQE-050.1/051.1/052.1).
+    ...(secretsMoved ? { secretsMoved } : {}),
     // Pattern intelligence comes back with every import so the UI can show
     // what was understood immediately, without a second round-trip.
     profile: endpoints.length ? analyzeApiSurface(endpoints) : null,
@@ -851,6 +888,39 @@ router.post('/import/connector', async (req: Request, res: Response) => {
     const result = parseConnectorManifest(manifest, String(req.body?.name || 'Custom connector'));
     if (!result.endpoints.length) { res.status(400).json({ error: result.warnings[0] || 'No endpoints in the manifest.' }); return; }
     await respondImport(req, res, 'connector', String(manifest?.name || req.body?.name || 'Custom connector'), result);
+  } catch (err) { fail(res, err); }
+});
+
+/**
+ * IQE-046.1 — SOAP: import operations from a WSDL (deterministic, no LLM).
+ * Accepts a WSDL by paste (`text`/`wsdl`), by URL (`url`), or by file upload
+ * (`file`). Produces one endpoint per SOAP operation, each with a sample XML
+ * request, plus an imported/skipped summary. An invalid WSDL returns a clear
+ * 400 (AC#4), never a crash.
+ */
+router.post('/import/wsdl', upload.single('file'), async (req: Request, res: Response) => {
+  try {
+    let text = String(req.body?.text || req.body?.wsdl || '');
+    let name = String(req.body?.name || 'WSDL').slice(0, 200);
+    const url = String(req.body?.url || '').trim();
+
+    if (req.file) {
+      text = req.file.buffer.toString('utf8');
+      name = req.file.originalname || name;
+    } else if (!text && url) {
+      if (!/^https?:\/\//i.test(url)) { res.status(400).json({ error: 'Enter a full WSDL URL, e.g. https://host/service?wsdl' }); return; }
+      const r = await fetchRemote(url, { headers: bodyHeaders(req.body?.headers) });
+      if (r.status >= 400) { res.status(400).json({ error: `${url} answered ${r.status}${r.status === 401 || r.status === 403 ? ' — the WSDL needs credentials' : ''}.` }); return; }
+      text = r.text;
+      name = url;
+    }
+
+    if (text.trim().length < 20) { res.status(400).json({ error: 'Paste a WSDL document, give its URL, or upload a .wsdl file.' }); return; }
+
+    const result = await parseWsdl(text, name);
+    if (!result) { res.status(400).json({ error: 'This does not look like a WSDL document (no <definitions> element was found).' }); return; }
+    if (!result.endpoints.length) { res.status(400).json({ error: result.warnings[0] || 'No SOAP operations could be imported from this WSDL.' }); return; }
+    await respondImport(req, res, 'wsdl', name, result);
   } catch (err) { fail(res, err); }
 });
 

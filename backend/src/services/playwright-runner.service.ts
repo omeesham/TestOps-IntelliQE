@@ -6,7 +6,7 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import pool from '../db.js';
 import { isApiRun } from '../agents/apiHealingAgent.js';
-import { defaultEnvProcessVars } from './api-environments.service.js';
+import { defaultEnvProcessVars, defaultEnvWorkers } from './api-environments.service.js';
 import { runTuning } from '../utils/playwright-tuning.js';
 
 const execFileAsync = promisify(execFile);
@@ -317,7 +317,9 @@ export async function runPlaywrightForRun(
   // honor NODE_PATH and would force absolute file:// URLs everywhere.
   const configPath = path.join(workspace, 'playwright.config.cjs');
   const apiMode = isApiRun(rows.map((r: any) => ({ code: String(r.code || '') })));
-  const tuning = runTuning(apiMode, rows.length);
+  // Re-run path has no environment_id on the run, so fall back to the tenant's
+  // DEFAULT environment's configured worker count (IQE per-environment workers).
+  const tuning = runTuning(apiMode, rows.length, apiMode ? await defaultEnvWorkers(tenantId) : null);
   const configSrc = `const { defineConfig } = require('@playwright/test');
 module.exports = defineConfig({
   testDir: './tests',

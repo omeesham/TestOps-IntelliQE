@@ -129,6 +129,8 @@ export interface FlowCheck {
     | 'sortedBy'      // the array at `path` is sorted by `field` in `direction` (IQE-043.5)
     | 'noDuplicates'  // the array at `path` has no duplicate items (by `field`, or whole item) (IQE-043.5)
     | 'noSecrets'     // the response body leaks no credential-named field (password/secret/apiKey/…)
+    | 'soapFault'     // SOAP fault gate — fail on a fault unless the test expects it; shows code+message (IQE-046.2)
+    | 'xmlSchema'     // validate a SOAP/XML response against a WSDL-derived structural contract; names a missing/mismatched element (IQE-046.2)
     | 'noError';      // the body is not a "200 but failed" REST error envelope (error/errors/success:false/status:'error')
   equals?: number | string;
   oneOf?: number[];
@@ -160,8 +162,14 @@ export interface FlowCheck {
    * e.g. `createdAt`, `items.*.id`, `data[*].updatedAt`.
    */
   ignore?: string[];
-  /** schema: a JSON Schema (as text) the response body — or the `path`-selected part — must satisfy. */
+  /** schema: a JSON Schema (as text) the response body — or the `path`-selected part — must satisfy.
+   *  xmlSchema: a WSDL-derived structural contract as JSON — `{ element, required?[], elements?[] }`. */
   schema?: string;
+  /** soapFault: when true the test EXPECTS a SOAP fault (pass on fault, fail on none);
+   *  default/false fails on any fault. */
+  expectFault?: boolean;
+  /** soapFault: the fault code the test expects (substring match), e.g. "Client" / "soap:Receiver". */
+  faultCode?: string;
 }
 
 export type FlowStepType = 'request' | 'if' | 'loop' | 'wait' | 'group' | 'retry' | 'parallel';
@@ -386,6 +394,90 @@ async function evalXPath(xml: string, expr: string): Promise<{ value: string; ma
   }
 }
 
+/** DOM-parse XML with @xmldom/xmldom; returns the document or an error string. */
+async function parseXmlDom(xml: string): Promise<{ doc: any } | { error: string }> {
+  try {
+    const xmldomSpec = '@xmldom/xmldom';
+    const { DOMParser } = await import(xmldomSpec);
+    let fatal = '';
+    const doc = new DOMParser({ onError: (_l: string, m: string) => { if (!fatal) fatal = String(m || '').split('\n')[0]; } }).parseFromString(xml, 'text/xml');
+    if (!doc) return { error: fatal || 'could not parse XML' };
+    return { doc };
+  } catch (e) {
+    const msg = (e as Error).message || String(e);
+    return { error: /Cannot find (module|package)|ERR_MODULE_NOT_FOUND/i.test(msg) ? 'XML support is not installed on the server (npm i @xmldom/xmldom).' : msg.split('\n')[0] };
+  }
+}
+
+function xmlLocalName(node: any): string {
+  return String(node?.localName || String(node?.nodeName || '').split(':').pop() || '');
+}
+/** First descendant element (self included) whose local name matches, else null. */
+function firstByLocal(root: any, name: string): any {
+  if (!root?.getElementsByTagName) return null;
+  if (xmlLocalName(root).toLowerCase() === name.toLowerCase()) return root;
+  const list = root.getElementsByTagName('*');
+  for (let i = 0; i < list.length; i++) if (xmlLocalName(list[i]).toLowerCase() === name.toLowerCase()) return list[i];
+  return null;
+}
+function textOf(node: any): string {
+  return String(node?.textContent ?? '').trim();
+}
+
+/**
+ * Detect a SOAP fault in a response body (SOAP 1.1 and 1.2), returning its code
+ * and message. Namespace-prefix agnostic (matches on local names).
+ *   1.1: <Fault><faultcode>…</faultcode><faultstring>…</faultstring></Fault>
+ *   1.2: <Fault><Code><Value>…</Value></Code><Reason><Text>…</Text></Reason></Fault>
+ */
+async function detectSoapFault(xml: string): Promise<{ present: boolean; code?: string; message?: string; error?: string }> {
+  const p = await parseXmlDom(xml);
+  if ('error' in p) return { present: false, error: p.error };
+  const fault = firstByLocal(p.doc, 'Fault');
+  if (!fault) return { present: false };
+  // Code: 1.1 faultcode, else 1.2 Code>Value.
+  let code = textOf(firstByLocal(fault, 'faultcode'));
+  if (!code) { const value = firstByLocal(firstByLocal(fault, 'Code') || fault, 'Value'); code = textOf(value); }
+  // Message: 1.1 faultstring, else 1.2 Reason>Text.
+  let message = textOf(firstByLocal(fault, 'faultstring'));
+  if (!message) { const text = firstByLocal(firstByLocal(fault, 'Reason') || fault, 'Text'); message = textOf(text); }
+  return { present: true, code: code || undefined, message: message || undefined };
+}
+
+interface XmlContract { element?: string; required?: string[]; elements?: string[] }
+
+/**
+ * Validate an XML/SOAP response against a WSDL-derived structural contract:
+ * the expected response element is present and every required child element
+ * exists. Deterministic (no external XSD engine) and names the first offender.
+ */
+async function validateXmlContract(xml: string, contract: XmlContract): Promise<{ pass: boolean; detail: string }> {
+  const p = await parseXmlDom(xml);
+  if ('error' in p) return { pass: false, detail: `response is not well-formed XML: ${p.error.slice(0, 90)}` };
+  // A fault response can never satisfy the success schema — name it.
+  const fault = firstByLocal(p.doc, 'Fault');
+  if (fault) {
+    const f = await detectSoapFault(xml);
+    return { pass: false, detail: `SOAP fault instead of a valid response${f.code ? ` — ${f.code}` : ''}${f.message ? `: ${f.message.slice(0, 80)}` : ''}` };
+  }
+  const rootName = contract.element;
+  const root = rootName ? firstByLocal(p.doc, rootName) : (firstByLocal(p.doc, 'Body') ? childElementsOf(firstByLocal(p.doc, 'Body'))[0] : null);
+  if (rootName && !root) return { pass: false, detail: `expected response element <${rootName}> is missing` };
+  const scope = root || p.doc;
+  for (const req of contract.required || []) {
+    if (!firstByLocal(scope, req)) return { pass: false, detail: `required element <${req}> is missing from <${rootName || 'response'}>` };
+  }
+  const n = (contract.required || []).length;
+  return { pass: true, detail: `${rootName ? `<${rootName}>` : 'response'} valid${n ? ` (${n} required element${n === 1 ? '' : 's'})` : ''}` };
+}
+/** Direct element children of a node. */
+function childElementsOf(parent: any): any[] {
+  const out: any[] = [];
+  let n = parent?.firstChild;
+  while (n) { if (n.nodeType === 1) out.push(n); n = n.nextSibling; }
+  return out;
+}
+
 function toStr(v: unknown): string {
   if (v == null) return '';
   return typeof v === 'string' ? v : JSON.stringify(v);
@@ -489,6 +581,26 @@ async function runChecks(checks: FlowCheck[] | undefined, res: { status?: number
         const pass = op === 'equals' ? r.value === want : op === 'contains' ? r.value.includes(want) : r.matched;
         out.push({ kind: c.kind, label: `xpath ${String(c.path || '').slice(0, 40)} ${op}${op === 'exists' ? '' : ` "${want.slice(0, 30)}"`}`, pass, detail: r.matched ? `got "${r.value.slice(0, 80)}"` : 'no match' });
       }
+    } else if (c.kind === 'soapFault') {
+      // IQE-046.2 — a SOAP fault fails the test unless the test EXPECTS that fault.
+      const f = await detectSoapFault(res.bodyText);
+      if (f.error) { out.push({ kind: c.kind, label: 'no SOAP fault', pass: false, detail: f.error }); continue; }
+      const wantCode = String(c.faultCode ?? c.value ?? c.equals ?? '').trim();
+      const faultLabel = f.present ? `fault ${f.code || '(no code)'}${f.message ? `: ${f.message.slice(0, 80)}` : ''}` : 'no fault';
+      if (c.expectFault) {
+        const codeOk = !wantCode || (f.code || '').includes(wantCode);
+        const pass = f.present && codeOk;
+        out.push({ kind: c.kind, label: `expects SOAP fault${wantCode ? ` ${wantCode}` : ''}`, pass, detail: pass ? faultLabel : (f.present ? `got ${faultLabel}` : 'no fault returned') });
+      } else {
+        out.push({ kind: c.kind, label: 'no SOAP fault', pass: !f.present, detail: f.present ? faultLabel : undefined });
+      }
+    } else if (c.kind === 'xmlSchema') {
+      // IQE-046.2 — validate the XML response against the WSDL-derived contract.
+      let contract: XmlContract = {};
+      const raw = String(c.schema ?? c.value ?? c.text ?? '').trim();
+      if (raw) { try { const j = JSON.parse(raw); if (j && typeof j === 'object') contract = j; } catch { /* treat as element name */ contract = { element: raw }; } }
+      const r = await validateXmlContract(res.bodyText, contract);
+      out.push({ kind: c.kind, label: `xml schema${contract.element ? ` <${contract.element}>` : ''}`, pass: r.pass, detail: r.detail.slice(0, 160) });
     } else if (c.kind === 'expr') {
       // Evaluate a boolean expression over a bag of the response (status,
       // responseTimeMs, header.<name>, flattened body fields) plus captured vars.
