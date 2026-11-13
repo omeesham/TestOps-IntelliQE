@@ -468,7 +468,7 @@ function ReqEditForm({ draft, setDraft }: { draft: ReqEdit; setDraft: (d: ReqEdi
 }
 
 export default function StoryGen({
-  endpoints, environment, onApply, onClose, onMineEndpoints,
+  endpoints, environment, onApply, onClose, onMineEndpoints, embedded = false,
 }: {
   endpoints: CatalogEndpoint[];
   /** The environment the run would target — decides the customer-similar check. */
@@ -478,6 +478,8 @@ export default function StoryGen({
   onClose: () => void;
   /** Mine endpoints from an uploaded requirement document into the catalogue. */
   onMineEndpoints?: (file: File) => Promise<{ added: number; duplicates: number; total: number }>;
+  /** Render inline (as a first-class Requirements tab) instead of a modal overlay. */
+  embedded?: boolean;
 }) {
   const toast = useToast();
   const [story, setStory] = useState('');
@@ -664,14 +666,14 @@ export default function StoryGen({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#1E1B4B]/45 backdrop-blur-md p-4" onClick={onClose}>
-      <div className={`${CARD} w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden`} onClick={(e) => e.stopPropagation()}>
+    <div className={embedded ? 'h-full' : 'fixed inset-0 z-50 flex items-center justify-center bg-[#1E1B4B]/45 backdrop-blur-md p-4'} onClick={embedded ? undefined : onClose}>
+      <div className={`${CARD} flex flex-col overflow-hidden ${embedded ? 'w-full h-full max-w-[1000px] mx-auto' : 'w-full max-w-2xl max-h-[85vh]'}`} onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className={`flex items-center gap-2 px-4 h-12 border-b border-[#EDE9FE] flex-shrink-0 ${STRIP}`}>
           <FileText className="w-4 h-4 text-[#7C3AED]" />
-          <h3 className="text-[13px] font-semibold text-gray-900">Story-driven generation</h3>
+          <h3 className="text-[13px] font-semibold text-gray-900">{embedded ? 'Requirement Agent' : 'Story-driven generation'}</h3>
           <span className="text-[11px] text-gray-400">Jira story / PRD → a reviewed test plan</span>
-          <button type="button" onClick={onClose} className="ml-auto p-1.5 rounded-md text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]"><X className="w-4 h-4" /></button>
+          {!embedded && <button type="button" onClick={onClose} className="ml-auto p-1.5 rounded-md text-gray-400 hover:text-[#7C3AED] hover:bg-[#F5F3FF]"><X className="w-4 h-4" /></button>}
         </div>
 
         {/* Body */}

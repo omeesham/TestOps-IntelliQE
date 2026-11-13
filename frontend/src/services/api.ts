@@ -272,12 +272,16 @@ export async function publishToGit(payload: {
   pageObjects?: { path: string; code: string }[];
   testCases?: any[];
   branch?: string;
+  /** IQE-053.1 push mode: 'pr' opens a pull request (a new branch) on any
+   *  provider — incl. GitHub, whose default is a direct commit; 'direct' commits
+   *  straight onto the branch where supported (GitHub). Omitted ⇒ provider default. */
+  mode?: 'pr' | 'direct';
   title?: string;
   description?: string;
   commitMessage?: string;
   directory?: string;
   testRunId?: string;
-  integrationId?: 'github' | 'gitlab' | 'bitbucket';
+  integrationId?: 'github' | 'gitlab' | 'bitbucket' | 'azure-repos';
 }): Promise<GitPublishResult> {
   const { data } = await api.post('/git/publish', payload, { timeout: 120_000 });
   return data;
@@ -390,6 +394,12 @@ export interface ApiImportResponse {
   /** Secrets lifted out of the imported endpoints and saved to an Environment,
    *  masked (keys only — never the values). cURL / HAR / GraphQL imports. */
   secretsMoved?: { environmentId: string; environmentName: string; added: string[]; existing: string[] };
+  /** Deployment targets from an OpenAPI/Swagger `servers:` list turned into
+   *  Environment base URLs — created (new/filled-in) and reused (IQE-047.1#6). */
+  serversImported?: { created: { id: string; name: string; baseUrl: string }[]; existing: string[] };
+  /** Bruno stored environments (`environments/*.bru`) turned into IntelliQE
+   *  Environments — created, and same-named ones left untouched (IQE-049). */
+  environmentsImported?: { created: string[]; existing: string[] };
 }
 
 const IMPORT_TIMEOUT = 180_000;
@@ -1411,11 +1421,15 @@ export interface FlowStep {
   maxAttempts?: number;
   retryDelayMs?: number;
   retryNonIdempotent?: boolean;
+  /** IQE-037.1 gating: stop the flow if this step fails; and opt out of the
+   *  default abort-on-connection-error. */
+  gate?: boolean;
+  continueOnError?: boolean;
 }
 export interface SavedApiFlow { id: string; name: string; steps: FlowStep[]; variables: Record<string, string>; createdBy: string; createdAt: string; updatedAt: string }
-export interface FlowStepResult { index: number; name: string; method: string; url: string; phase?: StepPhase; ok: boolean; status?: number; elapsedMs: number; error?: string; extracted: Record<string, string>; checks: { kind: string; label: string; pass: boolean; detail?: string }[]; bodyPreview: string; request?: { method: string; url: string; headers: Record<string, string>; body?: string }; responseHeaders?: Record<string, string>; attempts?: number }
+export interface FlowStepResult { index: number; name: string; method: string; url: string; phase?: StepPhase; ok: boolean; status?: number; elapsedMs: number; error?: string; extracted: Record<string, string>; checks: { kind: string; label: string; pass: boolean; detail?: string }[]; bodyPreview: string; request?: { method: string; url: string; headers: Record<string, string>; body?: string }; responseHeaders?: Record<string, string>; attempts?: number; gated?: boolean }
 export interface FlowRunSummary { requests: number; passed: number; failed: number; checks: number; checksPassed: number; maxStepMs: number; avgStepMs: number; slowestStep?: string }
-export interface FlowRunResult { passed: boolean; steps: FlowStepResult[]; variables: Record<string, string>; durationMs: number; stepsRun: number; stepsTotal: number; summary?: FlowRunSummary }
+export interface FlowRunResult { passed: boolean; steps: FlowStepResult[]; variables: Record<string, string>; durationMs: number; stepsRun: number; stepsTotal: number; summary?: FlowRunSummary; gatedAtStep?: number; gatedStepName?: string }
 export async function listApiFlows(): Promise<{ flows: SavedApiFlow[] }> { const { data } = await api.get('/api-automation/flows'); return data; }
 export async function saveApiFlow(input: { id?: string; name: string; steps: FlowStep[]; variables?: Record<string, string> }): Promise<{ flow: SavedApiFlow }> { const { data } = await api.post('/api-automation/flows', input); return data; }
 export async function deleteApiFlow(id: string): Promise<{ ok: boolean }> { const { data } = await api.delete(`/api-automation/flows/${encodeURIComponent(id)}`); return data; }

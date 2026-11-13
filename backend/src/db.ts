@@ -428,6 +428,10 @@ export async function initDb(): Promise<void> {
     await addColumn('test_runs', 'tenant_id', 'UNIQUEIDENTIFIER');
     await addColumn('test_runs', 'module', 'NVARCHAR(200)');
     await addColumn('test_runs', 'submodule', 'NVARCHAR(200)');
+    // IQE-053.1/054/055/056: the code-push result (PR/MR link, branch, mode,
+    // provider, number, file count, who/when) stored WITH the run as JSON, so a
+    // run's report can link to the pull request it was pushed into.
+    await addColumn('test_runs', 'push_info', 'NVARCHAR(MAX)');
 
     await createTable('test_cases', `
       CREATE TABLE ${SCHEMA}.test_cases (

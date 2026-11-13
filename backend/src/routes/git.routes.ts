@@ -175,6 +175,33 @@ async function withAzureReuse(
   return config;
 }
 
+/**
+ * Resolve the branch to publish to from the requested push `mode` (IQE-053.1).
+ * Only GitHub supports a direct commit (committing straight onto the default
+ * branch); GitLab/Bitbucket/Azure always branch + open a PR/MR.
+ *
+ *   - An explicit `requestedBranch` always wins (a named branch ⇒ PR).
+ *   - `mode: 'pr'`     → a fresh `intelliqe/tests-*` branch (PR) for EVERY provider,
+ *                        so GitHub opens a PR instead of its direct-commit default.
+ *   - `mode: 'direct'` → the default branch (direct commit) on GitHub; on the
+ *                        other providers direct isn't possible, so it falls back
+ *                        to a PR branch.
+ *   - no `mode`        → unchanged defaults: GitHub direct, others PR.
+ */
+export function resolvePublishBranch(opts: {
+  mode?: 'pr' | 'direct';
+  requestedBranch?: string;
+  provider: 'github' | 'gitlab' | 'bitbucket' | 'azure';
+  defaultBranch: string;
+  ts: string;
+}): string {
+  const explicit = opts.requestedBranch && String(opts.requestedBranch).trim();
+  if (explicit) return explicit;
+  const canDirect = opts.provider === 'github';
+  const wantDirect = opts.mode ? (opts.mode === 'direct' && canDirect) : canDirect;
+  return wantDirect ? opts.defaultBranch : `intelliqe/tests-${opts.ts}`;
+}
+
 /** Translate the stored config_data shape into the provider-neutral GitProviderConfig. */
 function cfgToProvider(cfg: Record<string, any>): GitProviderConfig {
   return {
@@ -192,6 +219,7 @@ router.post('/publish', requirePermission('api.run'), async (req: Request, res: 
     const user = req.user!;
     const {
       branch: requestedBranch,
+      mode: requestedMode,
       title: requestedTitle,
       description: requestedDescription,
       commitMessage: requestedCommitMessage,
@@ -293,12 +321,14 @@ router.post('/publish', requirePermission('api.run'), async (req: Request, res: 
     }
 
     // 4. Defaults — branch name, PR title, commit message, PR body.
-    // GitHub publishes go STRAIGHT onto the configured branch (no
-    // intelliqe/tests-* branches, no PR) — the connected branch is the
-    // delivery target. GitLab/Bitbucket keep the branch+MR flow.
+    // The push `mode` (IQE-053.1) lets the caller choose: 'pr' opens a pull
+    // request (a fresh branch) on ANY provider — so GitHub can raise a PR
+    // instead of its direct-commit default — and 'direct' commits straight onto
+    // the configured branch where the provider supports it (GitHub only). With
+    // no mode, the long-standing defaults hold: GitHub direct, others PR/MR.
+    const mode = (requestedMode === 'pr' || requestedMode === 'direct') ? requestedMode : undefined;
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const branch = (requestedBranch && String(requestedBranch).trim())
-      || (coords.provider === 'github' ? config.defaultBranch : `intelliqe/tests-${ts}`);
+    const branch = resolvePublishBranch({ mode, requestedBranch, provider: coords.provider, defaultBranch: config.defaultBranch, ts });
     const title = (requestedTitle && String(requestedTitle).trim())
       || `IntelliQE: ${scripts.length} generated test script(s)${testRunId ? ` (run ${testRunId})` : ''}`;
     const commitMessage = (requestedCommitMessage && String(requestedCommitMessage).trim()) || title;
@@ -313,6 +343,31 @@ router.post('/publish', requirePermission('api.run'), async (req: Request, res: 
       `UPDATE client_configurations SET last_sync_at = NOW() WHERE tenant_id = $1 AND integration_id = $2`,
       [user.tenantId, resolvedIntegrationId],
     );
+
+    // 6b. IQE-053.1/054/055/056: store the PR/MR link WITH the run, so a run's
+    // report can always deep-link to the pull request it was pushed into — even
+    // after the one-off push response is gone. Best-effort: a failure here must
+    // never fail a push that already succeeded.
+    if (testRunId) {
+      try {
+        const pushInfo = {
+          provider: result.provider,
+          prUrl: result.prUrl,
+          prNumber: result.prNumber,
+          branch: result.branch,
+          mode: result.mode,
+          fileCount: result.fileCount,
+          pushedAt: new Date().toISOString(),
+          by: user.username,
+        };
+        await pool.query(
+          `UPDATE test_runs SET push_info = $1 WHERE id = $2 AND tenant_id = $3`,
+          [JSON.stringify(pushInfo), String(testRunId), user.tenantId],
+        );
+      } catch (persistErr: any) {
+        console.warn(`[git.publish] could not store PR link with run ${testRunId}:`, persistErr?.message);
+      }
+    }
 
     console.log(`[git.publish] ${user.username} (tenant=${user.tenantId}) published ${result.fileCount} file(s) to ${result.provider}: ${result.prUrl}`);
     res.json(result);

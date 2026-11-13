@@ -494,7 +494,7 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
   }, [testRunId, toast]);
 
   /* ── Push to the connected repository ── */
-  const handlePushToRepo = useCallback(async () => {
+  const handlePushToRepo = useCallback(async (mode?: 'pr' | 'direct') => {
     if (pushState.status === 'pushing') return;
     const chosen = scenarios.filter((s) => selected.has(s.id));
     const chosenIds = new Set(chosen.map((c) => c.id));
@@ -515,6 +515,7 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
         pageObjects: serviceObjects.map((o) => ({ path: o.path, code: o.code })),
         testCases: chosen.map((c) => c.raw),
         integrationId: repo.integrationId,
+        ...(mode ? { mode } : {}),
         testRunId: testRunId || undefined,
         title: `API tests — ${runLabel}`,
         description: `${report?.passed ?? 0} of ${report?.total ?? toPush.length} scenarios passed.`,

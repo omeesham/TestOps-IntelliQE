@@ -28,6 +28,9 @@ export interface ApiRunSummary {
   stats: ReportStats | null;
   reportUrl?: string;
   hasAllure: boolean;
+  /** IQE-053.1/054/055/056: the code-push result stored with the run — the PR/MR
+   *  link, branch, mode and provider — so the report can deep-link to it. */
+  pushInfo?: { provider: string; prUrl: string; prNumber?: number; branch?: string; mode?: string; fileCount?: number; pushedAt?: string; by?: string };
 }
 
 export interface ApiOverview {
@@ -58,7 +61,7 @@ function reportUrlFor(runId: string, hasAllure: boolean): string {
 /** Every API run for the tenant (newest first) with its case metadata. */
 export async function loadApiRuns(tenantId: string, limit = 200): Promise<Map<string, ApiRunSummary>> {
   const { rows } = await pool.query(
-    `SELECT tr.id, tr.story_title, tr.source, tr.username, tr.created_at,
+    `SELECT tr.id, tr.story_title, tr.source, tr.username, tr.created_at, tr.push_info,
             tc.type, tc.api_meta
        FROM test_runs tr
        JOIN test_cases tc ON tc.test_run_id = tr.id
@@ -73,9 +76,11 @@ export async function loadApiRuns(tenantId: string, limit = 200): Promise<Map<st
     let run = runs.get(id);
     if (!run) {
       if (runs.size >= limit) continue;
+      const push = typeof r.push_info === 'string' ? safeParse(r.push_info) : r.push_info;
       run = {
         runId: String(r.id), title: r.story_title || 'API run', createdAt: r.created_at, createdBy: r.username || '',
         source: r.source || 'api', caseCount: 0, categories: {}, endpoints: 0, stats: null, hasAllure: false,
+        ...(push && typeof push === 'object' && push.prUrl ? { pushInfo: push } : {}),
       };
       runs.set(id, run);
       endpointSets.set(id, new Set());
@@ -296,7 +301,7 @@ export interface ApiRunDetail extends ApiRunSummary {
 
 export async function getApiRunDetail(tenantId: string, runId: string): Promise<ApiRunDetail | null> {
   const { rows } = await pool.query(
-    `SELECT tr.id, tr.story_title, tr.source, tr.username, tr.created_at,
+    `SELECT tr.id, tr.story_title, tr.source, tr.username, tr.created_at, tr.push_info,
             tc.tc_number, tc.title, tc.type, tc.priority, tc.feature, tc.api_meta, tc.status, tc.sort_order
        FROM test_runs tr JOIN test_cases tc ON tc.test_run_id = tr.id
       WHERE tr.tenant_id = $1 AND tr.id = $2 AND tc.module = 'API'
@@ -305,9 +310,11 @@ export async function getApiRunDetail(tenantId: string, runId: string): Promise<
   );
   if (!rows.length) return null;
   const first = rows[0];
+  const push = typeof first.push_info === 'string' ? safeParse(first.push_info) : first.push_info;
   const run: ApiRunSummary = {
     runId: String(first.id), title: first.story_title || 'API run', createdAt: first.created_at, createdBy: first.username || '',
     source: first.source || 'api', caseCount: rows.length, categories: {}, endpoints: 0, stats: null, hasAllure: false,
+    ...(push && typeof push === 'object' && push.prUrl ? { pushInfo: push } : {}),
   };
   const reports = await listReports(tenantId);
   const rep = reports.find((r) => r.runId.toUpperCase() === String(first.id).toUpperCase());

@@ -15,7 +15,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   RotateCcw, AlertTriangle, X, ListChecks, ArrowRight, Upload,
-  LayoutDashboard, Layers, FileCheck2, PlayCircle, BarChart3, Server, RefreshCw, Wrench,
+  LayoutDashboard, Layers, FileCheck2, PlayCircle, BarChart3, Server, RefreshCw, Wrench, FileSearch,
 } from 'lucide-react';
 import { useCatalog, toCatalogEndpoint } from './hooks/useCatalog';
 import { useApiRun } from './hooks/useApiRun';
@@ -27,6 +27,7 @@ import ReportTab from './ReportTab';
 import OverviewView from './views/OverviewView';
 import ImportView from './views/ImportView';
 import EndpointsView from './views/EndpointsView';
+import StoryGen from './StoryGen';
 import RunsView from './views/RunsView';
 import EnvironmentsView from './views/EnvironmentsView';
 import EnvironmentPicker from './views/EnvironmentPicker';
@@ -38,13 +39,13 @@ import { EmptyState } from './primitives';
 import { PRIMARY_BTN, SECONDARY_BTN } from './format';
 import PageTabs, { type TabItem } from '@/components/ui/PageTabs';
 import { useAuth } from '@/contexts/AuthContext';
-import { getAccessPermissions } from '@/services/api';
+import { getAccessPermissions, importApiFiles } from '@/services/api';
 import Loader from '@/components/feedback/Loader';
-import type { NavView, Phase, CatalogEndpoint } from './types';
+import type { NavView, Phase, CatalogEndpoint, StrategyLayerId } from './types';
 import type { ApiFlowSeed } from '@/services/api';
 
 /** The tabs, left to right, in the order you walk the workflow. */
-const TAB_IDS = new Set<NavView>(['overview', 'endpoints', 'scenarios', 'runs', 'report', 'environments', 'tools']);
+const TAB_IDS = new Set<NavView>(['overview', 'endpoints', 'requirements', 'scenarios', 'runs', 'report', 'environments', 'tools']);
 
 export default function ApiStudio() {
   const catalog = useCatalog();
@@ -200,6 +201,7 @@ export default function ApiStudio() {
   const tabs: TabItem[] = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard },
     { id: 'endpoints', label: 'Endpoints', icon: Layers, count: catalog.endpoints.length || undefined },
+    { id: 'requirements', label: 'Requirements', icon: FileSearch },
     { id: 'scenarios', label: 'Scenarios', icon: FileCheck2, count: run.scenarios.length || undefined },
     { id: 'runs', label: 'Runs', icon: PlayCircle },
     { id: 'report', label: 'Reports', icon: BarChart3 },
@@ -266,6 +268,28 @@ export default function ApiStudio() {
       <div role="tabpanel" id={`panel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="flex-1 min-h-0 mt-4">
         {view === 'overview' && <OverviewView catalog={catalog} onNavigate={navigate} onOpenRun={openRun} onOpenManual={() => setManualOpen(true)} refreshKey={overviewKey} />}
         {view === 'endpoints' && <EndpointsView catalog={catalog} running={run.running} onDesign={design} onImport={() => navigate('import')} scenarios={run.scenarios} canImport={can('api.import')} canRun={can('api.run')} />}
+        {view === 'requirements' && (
+          <StoryGen
+            embedded
+            endpoints={catalog.endpoints}
+            environment={envStore.activeEnvironment}
+            onMineEndpoints={async (file) => {
+              const res = await importApiFiles([file], 'auto');
+              const { added, duplicates, total } = catalog.addEndpoints(res.endpoints || [], { method: 'file', name: file.name, format: res.format || 'document', parser: res.parser || 'llm', profile: res.profile });
+              return { added, duplicates, total };
+            }}
+            onApply={(brief, approvedUrls) => {
+              // The Requirement Agent's reviewed brief grounds planning: coverage,
+              // layers and the requirements text land on the strategy (threaded into
+              // designApiScenarios), and planning proceeds on exactly the approved
+              // endpoints — a rejected requirement is never planned.
+              catalog.setStrategy({ coverage: brief.coverage, layers: brief.layers as StrategyLayerId[], requirements: brief.requirements });
+              const approved = approvedUrls.length ? catalog.endpoints.filter((e) => approvedUrls.includes(e.url)) : catalog.endpoints;
+              if (can('api.run')) design(approved.length ? approved : catalog.endpoints);
+            }}
+            onClose={() => navigate('endpoints')}
+          />
+        )}
         {view === 'scenarios' && (
           run.scenarios.length === 0 && run.phase !== 'generating' ? (
             <div className="h-full flex flex-col">

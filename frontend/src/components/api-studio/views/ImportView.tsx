@@ -51,11 +51,11 @@ interface Props {
 interface Outcome { method: ImportMethod; name: string; res: ApiImportResponse; added: number; duplicates: number; changed?: number; removed?: number }
 
 /** What the drop zone takes, named the way a tester thinks of them. */
-const ACCEPTED = ['OpenAPI', 'Swagger', 'Postman', 'HAR', 'Bruno', 'WSDL / XML', 'PDF', 'Word', 'Excel', 'Markdown', 'Source code'];
+const ACCEPTED = ['OpenAPI', 'Swagger', 'Postman', 'HAR', 'Bruno (.bru / .zip)', 'WSDL / XML', 'PDF', 'Word', 'Excel', 'Markdown', 'Source code'];
 
 /** A brand-ish hue per accepted format, so the chips read in colour. */
 const FORMAT_COLOR: Record<string, string> = {
-  OpenAPI: '#10B981', Swagger: '#65A30D', Postman: '#F97316', HAR: '#0EA5E9', Bruno: '#EA580C',
+  OpenAPI: '#10B981', Swagger: '#65A30D', Postman: '#F97316', HAR: '#0EA5E9', 'Bruno (.bru / .zip)': '#EA580C',
   'WSDL / XML': '#6366F1', PDF: '#EF4444', Word: '#2563EB', Excel: '#16A34A', Markdown: '#64748B', 'Source code': '#8B5CF6',
 };
 
@@ -118,6 +118,28 @@ export default function ImportView({ catalog, onOpenCatalogue, log, environment,
         log('import', `${keys.length} secret${keys.length === 1 ? '' : 's'} moved to environment "${sm.environmentName}" (masked): ${keys.join(', ')}${sm.existing.length ? ` — ${sm.existing.length} already existed and were kept` : ''}`, 'ok');
         toast.success(`${keys.length} secret${keys.length === 1 ? '' : 's'} moved to "${sm.environmentName}"`, 'Masked in the environment; endpoints now reference {{variables}}.');
       }
+      // Deployment targets from the spec's servers: → Environment base URLs (IQE-047.1#6).
+      const si = res.serversImported;
+      if (si && (si.created.length || si.existing.length)) {
+        if (si.created.length) {
+          log('import', `${si.created.length} environment${si.created.length === 1 ? '' : 's'} created from the spec's servers: ${si.created.map((e) => `${e.name} → ${e.baseUrl}`).join(', ')}${si.existing.length ? ` · ${si.existing.length} already existed` : ''}`, 'ok');
+          toast.success(`${si.created.length} environment${si.created.length === 1 ? '' : 's'} ready`, `Base URL${si.created.length === 1 ? '' : 's'} set from the spec — pick one to run against.`);
+        } else {
+          log('import', `${si.existing.length} server URL${si.existing.length === 1 ? '' : 's'} already matched an existing environment: ${si.existing.join(', ')}`, 'info');
+        }
+        if (si.created.length) onEnvironmentsChanged?.();
+      }
+      // Bruno stored environments (environments/*.bru) → IntelliQE Environments (IQE-049).
+      const ei = res.environmentsImported;
+      if (ei && (ei.created.length || ei.existing.length)) {
+        if (ei.created.length) {
+          log('import', `${ei.created.length} environment${ei.created.length === 1 ? '' : 's'} imported from the Bruno collection: ${ei.created.join(', ')}${ei.existing.length ? ` · ${ei.existing.length} already existed and were kept` : ''}`, 'ok');
+          toast.success(`${ei.created.length} environment${ei.created.length === 1 ? '' : 's'} imported`, 'Variables and base URL set from the collection — secrets masked.');
+          onEnvironmentsChanged?.();
+        } else {
+          log('import', `${ei.existing.length} Bruno environment${ei.existing.length === 1 ? '' : 's'} already existed and were kept: ${ei.existing.join(', ')}`, 'info');
+        }
+      }
       if (!reimport) toast.success(`${added} endpoint${added === 1 ? '' : 's'} imported`, name);
       // Strict readiness applies to EVERY import: if anything the import produced
       // is not automation-ready (missing purpose/inputs/responses/business rules/
@@ -125,7 +147,7 @@ export default function ImportView({ catalog, onOpenCatalogue, log, environment,
       const rr = buildReadinessReview(res.endpoints || []);
       if (added > 0 && !rr.allReady && onReview) onReview(addedIds);
     }
-  }, [catalog, log, toast, onReview]);
+  }, [catalog, log, toast, onReview, onEnvironmentsChanged]);
 
   const run = useCallback(async (key: string, method: ImportMethod, name: string, fn: () => Promise<ApiImportResponse>) => {
     setBusy(key); setError(''); setOutcome(null);

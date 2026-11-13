@@ -126,10 +126,74 @@ export interface ImportResult {
    *  cookies) and replaced by `{{VAR}}` references — to be saved into an
    *  Environment, masked (IQE-050.1/051.1/052.1). */
   envVars?: ImportEnvVar[];
+  /** Deployment targets declared by the document (OpenAPI `servers:` / Swagger
+   *  host+schemes) — surfaced so each can become an Environment base URL
+   *  (IQE-047.1#6). Absolute http(s) URLs only. */
+  servers?: ImportServer[];
+  /** Stored Bruno environments (`environments/*.bru`) turned into importable
+   *  Environments — name, base URL and variables (secrets flagged) — IQE-049. */
+  brunoEnvironments?: ParsedBrunoEnv[];
 }
 
 /** A secret moved out of an endpoint into an environment variable (always secret-flagged). */
 export interface ImportEnvVar { key: string; value: string; secret: true }
+
+/** One deployment target from a spec, destined to become an Environment base URL. */
+export interface ImportServer { url: string; name: string; description?: string }
+
+/** Strip a trailing generic word so "Production server" → "Production". */
+function cleanServerName(desc: string | undefined, url: string): string {
+  let n = String(desc || '').trim().split('\n')[0]!.trim();
+  n = n.replace(/\s*(server|endpoint|environment|host|api|url)\s*$/i, '').trim();
+  if (!n) {
+    try { n = new URL(url).hostname; } catch { n = url; }
+  }
+  return n.slice(0, 60) || 'Imported';
+}
+
+/**
+ * Pull the full list of deployment targets out of an OpenAPI/Swagger document.
+ * Unlike the base-URL derivation (which only needs the first), this keeps every
+ * absolute server so the UI can offer one Environment per target. Relative
+ * servers ("/v1") are skipped — they can't stand alone as a base URL. Server
+ * variables are expanded from their `default`/first `enum`. Names are derived
+ * from each server's description (or host) and de-duplicated.
+ */
+export function extractOpenApiServers(doc: any, isV2: boolean): ImportServer[] {
+  const out: ImportServer[] = [];
+  const seen = new Set<string>();
+  const push = (rawUrl: string, description?: string) => {
+    const u = String(rawUrl || '').trim();
+    if (!u || !isAbsolute(u)) return;
+    const key = u.replace(/\/+$/, '').toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ url: u, name: cleanServerName(description, u), description: String(description || '').trim() || undefined });
+  };
+  if (!isV2 && Array.isArray(doc?.servers)) {
+    for (const s of doc.servers) {
+      let u = String(s?.url || '');
+      if (isObj(s?.variables)) {
+        for (const [k, v] of Object.entries<any>(s.variables)) {
+          u = u.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v?.default ?? v?.enum?.[0] ?? ''));
+        }
+      }
+      push(u, s?.description);
+    }
+  } else if (isV2 && doc?.host) {
+    const schemes = Array.isArray(doc.schemes) && doc.schemes.length ? doc.schemes : ['https'];
+    for (const scheme of schemes) push(`${scheme}://${doc.host}${doc.basePath || ''}`, doc?.info?.title);
+  }
+  // De-duplicate display names so two targets never collide in the Environment list.
+  const nameCount = new Map<string, number>();
+  for (const srv of out) {
+    const lc = srv.name.toLowerCase();
+    const n = (nameCount.get(lc) || 0) + 1;
+    nameCount.set(lc, n);
+    if (n > 1) srv.name = `${srv.name} ${n}`;
+  }
+  return out;
+}
 
 export type SniffedFormat =
   | 'openapi' | 'postman' | 'har' | 'bruno' | 'curl' | 'connector'
@@ -779,12 +843,14 @@ export function parseOpenApiDocument(doc: any, opts: { baseUrl?: string; sourceN
   if (Object.keys(paths).length && endpoints.length >= MAX_BULK_ENDPOINTS) {
     warnings.push(`The document describes more than ${MAX_BULK_ENDPOINTS} operations — the first ${MAX_BULK_ENDPOINTS} were imported.`);
   }
+  const servers = extractOpenApiServers(doc, isV2);
   return {
     endpoints: dedupeEndpoints(endpoints),
     parser: 'openapi',
     format: `${isV2 ? 'Swagger' : 'OpenAPI'} ${version}`.trim(),
     warnings,
     notice: `${endpoints.length} operation${endpoints.length === 1 ? '' : 's'} read from ${doc.info?.title ? `"${doc.info.title}"` : 'the document'}${doc.info?.version ? ` v${doc.info.version}` : ''}.`,
+    ...(servers.length ? { servers } : {}),
   };
 }
 
@@ -1312,6 +1378,152 @@ export function parseBrunoCollection(text: string, opts: { variables?: Record<st
 /** Back-compat single-entry wrapper; delegates to the collection parser. */
 export function parseBruno(text: string, sourceName = 'Bruno request'): ImportResult {
   return parseBrunoCollection(text, { sourceName });
+}
+
+/* ── Bruno collection as a file TREE (folders + stored environments) — IQE-049 ──
+   A dropped folder / uploaded `.zip` preserves each request's folder path and
+   the `environments/*.bru` files. Parsing the tree (rather than one concatenated
+   blob) lets us tag endpoints by folder and turn each stored environment into a
+   real IntelliQE Environment. Reuses the single-collection request builder per
+   folder group so request parsing stays in one place. */
+
+/** One file from a Bruno collection tree. `path` may include folder segments. */
+export interface BrunoTreeFile { path: string; text: string }
+
+/** A Bruno `environments/<name>.bru` parsed into an importable Environment. */
+export interface ParsedBrunoEnv {
+  name: string;
+  baseUrl?: string;
+  variables: { key: string; value: string; secret: boolean }[];
+}
+
+const BRUNO_BASEURL_KEYS = new Set(['baseurl', 'base_url', 'baseuri', 'base_uri', 'host', 'url', 'apiurl', 'api_url', 'server', 'endpoint']);
+
+/** Parse one Bruno environment `.bru` into {name, baseUrl?, variables[]}. */
+export function parseBrunoEnvFile(fileName: string, text: string): ParsedBrunoEnv {
+  const blocks = brunoBlocks(text);
+  const varsObj = brunoVars(blocks);
+  // `vars:secret [ a, b ]` is a list (square brackets), not a key:value block —
+  // brunoBlocks only captures `name { … }`, so read the list separately.
+  const secretNames = new Set<string>();
+  const sm = /vars:secret\s*\[([\s\S]*?)\]/m.exec(text);
+  if (sm) for (const part of sm[1]!.split(/[\s,]+/)) { const k = part.trim(); if (k) secretNames.add(k); }
+  const variables = Object.entries(varsObj).map(([key, value]) => ({ key, value, secret: secretNames.has(key) }));
+  let baseUrl: string | undefined;
+  for (const [k, v] of Object.entries(varsObj)) {
+    if (BRUNO_BASEURL_KEYS.has(k.toLowerCase()) && /^https?:\/\//i.test(v)) { baseUrl = v; break; }
+  }
+  const name = fileName.replace(/\.bru$/i, '').split('/').pop()!.trim() || 'environment';
+  return { name, baseUrl, variables };
+}
+
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+
+/**
+ * Parse a Bruno collection presented as a file tree: requests keep their folder
+ * (→ tags + resource), `environments/*.bru` become importable Environments, and
+ * `collection.bru` / `folder.bru` contribute inherited auth/headers/vars. The
+ * returned `brunoEnvironments` are persisted into IntelliQE Environments by the
+ * route (IQE-049).
+ */
+export function parseBrunoTree(files: BrunoTreeFile[], opts: { sourceName?: string; variables?: Record<string, string> } = {}): ImportResult {
+  const sourceName = opts.sourceName || 'Bruno collection';
+  const norm = (p: string) => p.replace(/\\/g, '/').replace(/^\.?\//, '');
+
+  const envFiles: BrunoTreeFile[] = [];
+  const collFiles: { segs: string[]; text: string }[] = [];
+  const requests: { segs: string[]; text: string }[] = [];
+
+  for (const f of files) {
+    const p = norm(f.path);
+    const base = (p.split('/').pop() || p).toLowerCase();
+    const segs = p.includes('/') ? p.slice(0, p.lastIndexOf('/')).split('/').filter((s) => s && s !== '.') : [];
+    if (!/\.bru$/i.test(base) && base !== 'bruno.json') continue;
+    if (base === 'bruno.json') continue;
+    if (segs.some((s) => s.toLowerCase() === 'environments')) { envFiles.push({ path: f.path, text: f.text }); continue; }
+    if (base === 'collection.bru' || base === 'folder.bru') { collFiles.push({ segs, text: f.text }); continue; }
+    requests.push({ segs, text: f.text });
+  }
+
+  // The collection root is the common leading directory of the request files, so
+  // folder tags read "Auth"/"Users" not "MyCollection/Auth". Config files
+  // (collection.bru/folder.bru) and environments are resolved relative to it.
+  let commonSegs: string[] = [];
+  if (requests.length) {
+    commonSegs = [...requests[0]!.segs];
+    for (const r of requests) { let i = 0; while (i < commonSegs.length && i < r.segs.length && r.segs[i] === commonSegs[i]) i++; commonSegs = commonSegs.slice(0, i); }
+    // If every request sits in the very same folder, keep its last segment as a
+    // folder rather than stripping it away, so the grouping still has a tag.
+    if (commonSegs.length && requests.every((r) => r.segs.length === commonSegs.length)) commonSegs = commonSegs.slice(0, -1);
+  }
+  const rel = (segs: string[]): string[] =>
+    (segs.length >= commonSegs.length && commonSegs.every((s, i) => segs[i] === s)) ? segs.slice(commonSegs.length)
+    : (commonSegs.slice(0, segs.length).every((s, i) => segs[i] === s) ? [] : segs);
+
+  // A config file at the root ('' after rel) applies to every folder; a deeper
+  // one applies to its own subtree.
+  const rootCollection = collFiles.filter((c) => rel(c.segs).length === 0).map((c) => c.text).join('\n\n');
+  const folderBru = new Map<string, string>();
+  for (const c of collFiles) { const rl = rel(c.segs).join('/'); if (rl) folderBru.set(rl, folderBru.has(rl) ? `${folderBru.get(rl)}\n\n${c.text}` : c.text); }
+
+  // Variables for {{substitution}}: caller-supplied, then every stored env, then collection vars.
+  const vars: Record<string, string> = { ...(opts.variables || {}) };
+  const brunoEnvironments = envFiles.map((f) => parseBrunoEnvFile(f.path, f.text));
+  // Non-secret vars (e.g. baseUrl) resolve into the endpoints; secret-flagged
+  // vars are left as `{{templates}}` so the created Environment supplies them at
+  // run time instead of baking the literal secret into a request (IQE-049).
+  for (const env of brunoEnvironments) for (const v of env.variables) if (!v.secret && vars[v.key] === undefined) vars[v.key] = v.value;
+  if (rootCollection) for (const [k, v] of Object.entries(brunoVars(brunoBlocks(rootCollection)))) if (vars[k] === undefined) vars[k] = v;
+
+  // Group requests by folder (relative to root), parse each group through the
+  // single-collection builder, then tag the endpoints with their folder.
+  const groups = new Map<string, { folder: string[]; texts: string[] }>();
+  for (const r of requests) {
+    const folder = rel(r.segs);
+    const key = folder.join('/');
+    if (!groups.has(key)) groups.set(key, { folder, texts: [] });
+    groups.get(key)!.texts.push(r.text);
+  }
+
+  const endpoints: ImportedEndpoint[] = [];
+  const warnings: string[] = [];
+  for (const { folder, texts } of groups.values()) {
+    const folderBits: string[] = [];
+    if (rootCollection) folderBits.push(rootCollection);
+    // Ancestor-or-equal folder config inherits into nested folders.
+    for (const [k, v] of folderBru) { const ks = k.split('/').filter(Boolean); if (ks.length <= folder.length && ks.every((s, i) => folder[i] === s)) folderBits.push(v); }
+    const blob = [...folderBits, ...texts].join('\n\n');
+    // The collection/folder-level auth template (e.g. `{{apiKey}}`) — used to
+    // restore a templated secret value that finalizeEndpoint strips, so the
+    // endpoint still authenticates from the stored Environment at run time.
+    const grpAuth = brunoAuth(brunoBlocks(folderBits.join('\n\n')));
+    const r = parseBrunoCollection(blob, { sourceName, variables: vars });
+    for (const ep of r.endpoints) {
+      if (folder.length) {
+        ep.tags = [...new Set([...(ep.tags || []), ...folder])];
+        ep.resource = slug(folder[folder.length - 1]!); // folder intent wins over a path-derived resource
+      }
+      if (ep.auth && ep.auth.type !== 'none' && !ep.auth.value && grpAuth?.value && /\{\{/.test(grpAuth.value)) {
+        ep.auth = { ...ep.auth, value: grpAuth.value };
+      }
+      endpoints.push(ep);
+    }
+    for (const w of r.warnings) if (!warnings.includes(w)) warnings.push(w);
+  }
+
+  const deduped = dedupeEndpoints(endpoints);
+  if (!deduped.length) warnings.unshift('No Bruno request (a get/post/… block) was found in the collection.');
+  const folderCount = new Set([...groups.keys()].filter(Boolean)).size;
+  return {
+    endpoints: deduped,
+    parser: 'bruno',
+    format: 'Bruno collection',
+    warnings,
+    notice: deduped.length
+      ? `${deduped.length} request${deduped.length === 1 ? '' : 's'} read from the Bruno collection${folderCount ? ` across ${folderCount} folder${folderCount === 1 ? '' : 's'}` : ''}${brunoEnvironments.length ? ` · ${brunoEnvironments.length} environment${brunoEnvironments.length === 1 ? '' : 's'}` : ''}.`
+      : undefined,
+    ...(brunoEnvironments.length ? { brunoEnvironments } : {}),
+  };
 }
 
 /* ────────────────────────────────────────────────────────────────

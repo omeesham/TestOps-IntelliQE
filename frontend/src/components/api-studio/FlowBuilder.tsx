@@ -44,6 +44,11 @@ interface EditStep {
   retryStatuses: string;
   maxAttempts: string;
   retryNonIdempotent: boolean;
+  /** IQE-037.1 gating: stop the flow if THIS step fails (a failed check/status,
+   *  not only a connection error) — dependent steps are skipped. */
+  gate: boolean;
+  /** When true, a connection error on this step does not abort the flow. */
+  continueOnError: boolean;
   // Poll/retry: when enabled, the request is wrapped in a retry that re-runs it
   // until `pollUntil` holds (eventual consistency). Empty ⇒ a plain request.
   pollEnabled: boolean;
@@ -150,6 +155,8 @@ function editStepToApi(s: EditStep): FlowStep {
     if (Number(s.maxAttempts) > 1) req.maxAttempts = Number(s.maxAttempts);
     if (s.retryNonIdempotent) req.retryNonIdempotent = true;
   }
+  if (s.gate) req.gate = true;
+  if (s.continueOnError) req.continueOnError = true;
   const ex: ExtractRow[] = s.extract
     .filter((x) => x.name.trim())
     .map((x) => ({ name: x.name.trim(), from: x.from, ...(x.path.trim() ? { path: x.path.trim() } : {}), ...(x.regex.trim() ? { regex: x.regex.trim() } : {}) }));
@@ -182,6 +189,7 @@ function StepResult({ s }: { s: FlowRunResult['steps'][number] }) {
         {s.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" /> : <XCircle className="w-4 h-4 text-red-600 flex-shrink-0" />}
         <MethodBadge method={s.method} />
         <span className="text-[12px] font-medium text-gray-800 truncate">{s.name || s.url}</span>
+        {s.gated && <span className="flex-shrink-0 inline-flex items-center px-1.5 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-700 text-[9.5px] font-semibold uppercase tracking-wide" title="This gate step failed — the remaining steps were skipped (IQE-037.1)">Gated — stopped flow</span>}
         <span className="ml-auto text-[11px] text-gray-400 flex-shrink-0">{s.status ?? '—'} · {s.elapsedMs}ms{s.attempts && s.attempts > 1 ? ` · ${s.attempts}×` : ''}</span>
       </div>
       <div className="px-3 pb-2.5 space-y-1.5">
@@ -258,7 +266,7 @@ export default function FlowBuilder({ catalog, onClose, initialFlow }: { catalog
   const hasWrites = steps.some((s) => isWrite(s.method));
 
   /* ── Builders ── */
-  const blankStep = (): EditStep => ({ id: nextId('s'), name: '', method: 'GET', url: '', headers: [], body: '', phase: 'main', timeout: '', noFollowRedirects: false, retryStatuses: '', maxAttempts: '', retryNonIdempotent: false, pollEnabled: false, pollUntil: '', pollAttempts: '', pollDelayMs: '', extract: [], checks: [], open: true });
+  const blankStep = (): EditStep => ({ id: nextId('s'), name: '', method: 'GET', url: '', headers: [], body: '', phase: 'main', timeout: '', noFollowRedirects: false, retryStatuses: '', maxAttempts: '', retryNonIdempotent: false, gate: false, continueOnError: false, pollEnabled: false, pollUntil: '', pollAttempts: '', pollDelayMs: '', extract: [], checks: [], open: true });
   const seedStep = (ep: CatalogEndpoint): EditStep => ({
     id: nextId('s'),
     name: ep.title || '',
@@ -271,6 +279,7 @@ export default function FlowBuilder({ catalog, onClose, initialFlow }: { catalog
     timeout: '',
     noFollowRedirects: false,
     retryStatuses: '', maxAttempts: '', retryNonIdempotent: false,
+    gate: false, continueOnError: false,
     pollEnabled: false, pollUntil: '', pollAttempts: '', pollDelayMs: '',
     extract: [],
     checks: [],
@@ -296,6 +305,8 @@ export default function FlowBuilder({ catalog, onClose, initialFlow }: { catalog
     retryStatuses: (req.retryOnStatuses || []).join(', '),
     maxAttempts: req.maxAttempts != null ? String(req.maxAttempts) : '',
     retryNonIdempotent: req.retryNonIdempotent === true,
+    gate: req.gate === true,
+    continueOnError: req.continueOnError === true,
     pollEnabled: isRetry,
     pollUntil: poll?.until?.expr || '',
     pollAttempts: poll?.attempts != null ? String(poll.attempts) : '',
@@ -672,6 +683,16 @@ export default function FlowBuilder({ catalog, onClose, initialFlow }: { catalog
                         <input type="checkbox" checked={s.noFollowRedirects} onChange={(e) => patchStep(s.id, { noFollowRedirects: e.target.checked })} className="accent-[#7C3AED]" />
                         Don't follow redirects
                       </label>
+                      <label className="flex items-center gap-1.5 text-[12px] text-gray-600" title="Stop the flow here if this step fails (a failed check/status, not only a connection error) — the remaining steps are skipped so they don't run against a broken precondition (IQE-037.1)">
+                        <input type="checkbox" checked={s.gate} onChange={(e) => patchStep(s.id, { gate: e.target.checked })} className="accent-[#7C3AED]" />
+                        Gate: stop if this fails
+                      </label>
+                      {!s.gate && (
+                        <label className="flex items-center gap-1.5 text-[12px] text-gray-600" title="By default a connection error here stops the flow (later steps usually depend on this one). Tick to run on past a connection error instead.">
+                          <input type="checkbox" checked={s.continueOnError} onChange={(e) => patchStep(s.id, { continueOnError: e.target.checked })} className="accent-[#7C3AED]" />
+                          Continue on connection error
+                        </label>
+                      )}
                       <label className="flex items-center gap-1.5 text-[12px] text-gray-600" title="Retry this request while the response status is one of these (e.g. 429, 503), up to max attempts. A status not listed (e.g. 400) is never retried.">
                         Retry on
                         <input value={s.retryStatuses} onChange={(e) => patchStep(s.id, { retryStatuses: e.target.value })} placeholder="429, 503" className={`${FIELD} w-24 flex-shrink-0`} />
@@ -850,6 +871,7 @@ export default function FlowBuilder({ catalog, onClose, initialFlow }: { catalog
               <div className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border ${result.passed ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
                 {result.passed ? <CheckCircle2 className="w-5 h-5 text-emerald-600" /> : <XCircle className="w-5 h-5 text-red-600" />}
                 <div className={`text-[13px] font-semibold ${result.passed ? 'text-emerald-700' : 'text-red-700'}`}>{result.passed ? 'Flow passed' : 'Flow failed'}</div>
+                {result.gatedAtStep != null && <span className="text-[10.5px] font-semibold text-amber-700 bg-amber-50 border border-amber-300 rounded px-1.5 py-0.5" title="A gate step failed — the steps after it were skipped (IQE-037.1)">Gated at “{result.gatedStepName || `step ${result.gatedAtStep + 1}`}” — rest skipped</span>}
                 <span className="ml-auto text-[11px] text-gray-500">{result.stepsRun}/{result.stepsTotal} steps · {formatDuration(result.durationMs)}</span>
                 <button type="button" onClick={() => void copyReport()} title="Copy a Markdown run report (for a PR, bug report or Slack)" className="inline-flex items-center gap-1 px-2 py-1 rounded border border-gray-200 bg-white text-[11px] text-gray-600 hover:text-[#6D28D9] hover:border-[#DDD6FE]"><Copy className="w-3.5 h-3.5" />Report</button>
                 <button type="button" onClick={() => void downloadReport()} title="Download this run as a Markdown report" className="inline-flex items-center gap-1 px-2 py-1 rounded border border-gray-200 bg-white text-[11px] text-gray-600 hover:text-[#6D28D9] hover:border-[#DDD6FE]"><FileText className="w-3.5 h-3.5" />.md</button>

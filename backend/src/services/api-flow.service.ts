@@ -239,6 +239,15 @@ export interface FlowStep {
   /** Allow retrying NON-idempotent methods (POST/PATCH). Default false — only
    *  safe/idempotent methods (GET/PUT/DELETE/HEAD/OPTIONS) retry automatically. */
   retryNonIdempotent?: boolean;
+  /** IQE-037.1 step-sequential gating: when true, a FAILED result for this step
+   *  (a failed check/status, not only a transport error) stops the remaining
+   *  steps — so dependent steps don't run against a broken precondition. Default
+   *  false ⇒ the flow continues past a failed step (unchanged behaviour). */
+  gate?: boolean;
+  /** When true, a transport error on this step does NOT abort the flow (the
+   *  default aborts, since later steps usually need this one). The step still
+   *  fails; the flow runs on. Omitted ⇒ abort on transport error. */
+  continueOnError?: boolean;
   // ── control-flow fields ──
   condition?: FlowCondition;   // if
   then?: FlowStep[];           // if branch
@@ -271,6 +280,8 @@ export interface FlowStepResult {
   responseHeaders?: Record<string, string>;
   /** Number of HTTP attempts made for this request (1 = no retry). Shown when a retry fired (IQE-043.8). */
   attempts?: number;
+  /** Set when this step is a gate that failed and stopped the remaining steps (IQE-037.1). */
+  gated?: boolean;
 }
 
 /** At-a-glance aggregates over a run, for CI/dashboards (latency, pass/fail, check counts). */
@@ -293,6 +304,10 @@ export interface FlowRunResult {
   stepsRun: number;
   stepsTotal: number;
   summary?: FlowRunSummary;
+  /** IQE-037.1: when a gate step failed and stopped the flow, the step index +
+   *  name that gated it — so the report can say the rest was skipped, not passed. */
+  gatedAtStep?: number;
+  gatedStepName?: string;
 }
 
 const MAX_STEPS = 40;          // authored top-level steps kept per saved flow
@@ -820,6 +835,9 @@ interface ExecCtx {
   /** IQE-043.9 cookie jar: host → { name: value }. Set-Cookie from a response is stored
    *  here and re-sent on later same-host requests in the SAME scenario. Shared by reference. */
   cookies: Record<string, Record<string, string>>;
+  /** IQE-037.1 gating: shared holder (by reference) recording the first gate step
+   *  that failed and stopped the flow, so runFlow can surface it. */
+  gated: { index?: number; name?: string };
 }
 
 /**
@@ -1084,7 +1102,19 @@ async function execSteps(steps: FlowStep[], ctx: ExecCtx, depth: number): Promis
       responseHeaders: maskHeaderMap(res.headers),
       attempts,
     });
-    if (res.error) return 'abort';   // later steps usually depend on this one
+    // IQE-037.1 step-sequential gating: a step marked `gate` stops the remaining
+    // steps whenever IT failed — a failed check or status, not only a transport
+    // error — so dependent steps never run against a broken precondition. Record
+    // the first gate so the report can say the rest was skipped, not passed.
+    if (s.gate && !stepOk) {
+      const row = ctx.results[ctx.results.length - 1]!;
+      row.gated = true;
+      if (ctx.gated.index == null) { ctx.gated.index = row.index; ctx.gated.name = row.name; }
+      return 'abort';
+    }
+    // A transport error aborts by default (later steps usually need this one),
+    // unless the step opts out — then the flow runs on though this step failed.
+    if (res.error && !s.continueOnError) return 'abort';
   }
   return 'ok';
 }
@@ -1107,6 +1137,7 @@ export async function runFlow(input: { steps: FlowStep[]; variables?: Record<str
     groups: input.groups && typeof input.groups === 'object' ? input.groups : {},
     resp: {},
     cookies: {},
+    gated: {},
   };
 
   // Run a phase and tag the results it produced with that phase.
@@ -1142,6 +1173,7 @@ export async function runFlow(input: { steps: FlowStep[]; variables?: Record<str
     stepsRun: ctx.results.length,
     stepsTotal: all.length,
     summary: summarize(ctx.results),
+    ...(ctx.gated.index != null ? { gatedAtStep: ctx.gated.index, gatedStepName: ctx.gated.name } : {}),
   };
 }
 

@@ -46,9 +46,10 @@ import { publishRunResults as publishAzureResults, runJUnit } from '../services/
 import {
   importFromText, importFromUrl, parseCurlCommands, parseHar, introspectGraphql, discoverMcpTools,
   parseConnectorManifest, endpointsFromWebhook, probeEndpoint, parseStructured, dedupeEndpoints,
-  parsePostmanCollection, postmanOutline, fetchRemote,
-  type ImportResult, type ImportedEndpoint, type ImportMethod,
+  parsePostmanCollection, postmanOutline, fetchRemote, parseBrunoTree,
+  type ImportResult, type ImportedEndpoint, type ImportMethod, type BrunoTreeFile, type ParsedBrunoEnv,
 } from '../services/api-import.service.js';
+import JSZip from 'jszip';
 import { parseWsdl } from '../services/wsdl-import.service.js';
 import { parsePostmanEnvironment, collectionVariables, mergePostmanVariables } from '../utils/postman-env.js';
 import { analyzeApiSurface, enrichProfileWithLlm } from '../services/api-intelligence.service.js';
@@ -335,12 +336,92 @@ async function persistImportedSecrets(
   }
 }
 
+/**
+ * Turn the deployment targets a spec declares (OpenAPI `servers:` / Swagger
+ * host) into Environments, so a freshly-imported API can be run against the
+ * right base URL without hand-typing it (IQE-047.1#6). Additive and idempotent:
+ * an existing env with the same base URL is reused (never duplicated); a
+ * same-named env that has no base URL yet is filled in; a same-named env that
+ * already points elsewhere is left untouched (never clobbered); a brand-new
+ * target becomes a new non-default env. Never flips which env is the default.
+ */
+async function persistImportedServers(
+  req: Request,
+  result: ImportResult,
+): Promise<{ created: { id: string; name: string; baseUrl: string }[]; existing: string[] } | undefined> {
+  const servers = result.servers || [];
+  if (!servers.length) return undefined;
+  const norm = (u: string) => u.replace(/\/+$/, '').toLowerCase();
+  try {
+    const envs = await listEnvironments(req.user!.tenantId);
+    const byName = new Map(envs.map((e) => [e.name.trim().toLowerCase(), e] as const));
+    const byUrl = new Map(envs.filter((e) => e.baseUrl).map((e) => [norm(e.baseUrl), e] as const));
+    const created: { id: string; name: string; baseUrl: string }[] = [];
+    const existing: string[] = [];
+    for (const s of servers) {
+      const urlKey = norm(s.url);
+      const already = byUrl.get(urlKey);
+      if (already) { if (!existing.includes(already.name)) existing.push(already.name); continue; }
+      const sameName = byName.get(s.name.trim().toLowerCase());
+      if (sameName && !sameName.baseUrl) {
+        const upd = await updateEnvironment(req.user!.tenantId, sameName.id, { baseUrl: s.url });
+        if (upd) { created.push({ id: upd.id, name: upd.name, baseUrl: upd.baseUrl }); byUrl.set(urlKey, upd); }
+        continue;
+      }
+      if (sameName) { if (!existing.includes(sameName.name)) existing.push(sameName.name); continue; }
+      const env = await createEnvironment(req.user!.tenantId, req.user!.username, { name: s.name, baseUrl: s.url });
+      created.push({ id: env.id, name: env.name, baseUrl: env.baseUrl });
+      byName.set(env.name.trim().toLowerCase(), env);
+      byUrl.set(urlKey, env);
+    }
+    return created.length || existing.length ? { created, existing } : undefined;
+  } catch (err) {
+    console.warn('[import] could not persist servers as environments:', (err as Error)?.message);
+    return undefined;
+  }
+}
+
+/**
+ * Turn a Bruno collection's stored environments (`environments/*.bru`) into
+ * IntelliQE Environments — name, base URL and variables (secrets encrypted at
+ * rest by the env service) — IQE-049. Conservative and non-destructive: a new
+ * environment is created; an existing env of the same name is left untouched
+ * (reported as skipped) so a re-import never overwrites hand-edited values.
+ */
+async function persistBrunoEnvironments(
+  req: Request,
+  envs: ParsedBrunoEnv[],
+): Promise<{ created: string[]; existing: string[] } | undefined> {
+  if (!envs.length) return undefined;
+  try {
+    const names = new Set((await listEnvironments(req.user!.tenantId)).map((e) => e.name.trim().toLowerCase()));
+    const created: string[] = [];
+    const existing: string[] = [];
+    for (const env of envs) {
+      const key = env.name.trim().toLowerCase();
+      if (names.has(key)) { if (!existing.includes(env.name)) existing.push(env.name); continue; }
+      const e = await createEnvironment(req.user!.tenantId, req.user!.username, {
+        name: env.name,
+        baseUrl: env.baseUrl,
+        variables: env.variables.map((v) => ({ key: v.key, value: v.value, secret: v.secret })),
+      });
+      created.push(e.name);
+      names.add(key);
+    }
+    return created.length || existing.length ? { created, existing } : undefined;
+  } catch (err) {
+    console.warn('[import] could not persist Bruno environments:', (err as Error)?.message);
+    return undefined;
+  }
+}
+
 async function respondImport(req: Request, res: Response, method: ImportMethod, name: string, result: ImportResult, extra?: Record<string, unknown>): Promise<void> {
   const endpoints = dedupeEndpoints(result.endpoints);
   await recordImport(req.user!.tenantId, req.user!.username, {
     method, name, format: result.format, parser: result.parser, endpointCount: endpoints.length, warnings: result.warnings,
   });
   const secretsMoved = await persistImportedSecrets(req, result);
+  const serversImported = await persistImportedServers(req, result);
   res.json({
     endpoints,
     count: endpoints.length,
@@ -355,6 +436,9 @@ async function respondImport(req: Request, res: Response, method: ImportMethod, 
     // Secrets lifted into an Environment (masked) — keys + target env only,
     // never the secret values (IQE-050.1/051.1/052.1).
     ...(secretsMoved ? { secretsMoved } : {}),
+    // Deployment targets turned into Environments (base URLs) — created +
+    // reused, so the UI can point the user at the right env (IQE-047.1#6).
+    ...(serversImported ? { serversImported } : {}),
     // Pattern intelligence comes back with every import so the UI can show
     // what was understood immediately, without a second round-trip.
     profile: endpoints.length ? analyzeApiSurface(endpoints) : null,
@@ -400,36 +484,63 @@ router.post('/import/files', upload.array('files', 20), async (req: Request, res
   const warnings: string[] = [];
   const notices: string[] = [];
 
-  // A dropped Bruno collection arrives as many `.bru` files — the request
-  // files plus an optional `collection.bru` (folder-level auth/headers) and
-  // `environments/*.bru` (variable values). Parse them TOGETHER, once, so
-  // collection-level auth is inherited and {{variables}} resolve — exactly as
-  // pasting the collection does. Every other file keeps per-file handling.
-  const brunoFiles = files.filter((f) => /\.bru$/i.test(f.originalname));
-  const otherFiles = files.filter((f) => !/\.bru$/i.test(f.originalname));
-
-  if (brunoFiles.length) {
-    const names = brunoFiles.map((f) => f.originalname);
-    const label = brunoFiles.length === 1 ? names[0]! : `Bruno collection (${brunoFiles.length} files)`;
+  // A dropped `.zip` (a whole Bruno collection, or a zipped spec) is expanded
+  // up front into its entries so it imports exactly like a dropped folder —
+  // folder paths and `environments/*.bru` preserved (IQE-049).
+  type LooseDoc = { buffer: Buffer; mimetype: string; originalname: string; path: string };
+  const zipFiles = files.filter((f) => /\.zip$/i.test(f.originalname) || /zip/i.test(f.mimetype || ''));
+  const extracted: LooseDoc[] = [];
+  for (const z of zipFiles) {
     try {
-      const texts: string[] = [];
-      for (const f of brunoFiles) {
-        const parsed = await parseDocument(f.buffer, f.mimetype, f.originalname);
-        if (parsed.text?.trim()) texts.push(parsed.text);
+      const zip = await JSZip.loadAsync(z.buffer);
+      let n = 0;
+      for (const entry of Object.values(zip.files)) {
+        if (entry.dir) continue;
+        if (n >= 1000) { warnings.push(`${z.originalname}: only the first 1000 files in the archive were read.`); break; }
+        if (/(^|\/)(__MACOSX\/|\._|\.DS_Store)/.test(entry.name)) continue;
+        if (!/\.(bru|json|ya?ml|har|xml|wsdl|txt|md)$/i.test(entry.name)) continue;
+        const buf = Buffer.from(await entry.async('nodebuffer'));
+        if (buf.length > 5_000_000) { warnings.push(`${entry.name}: skipped (over 5 MB).`); continue; }
+        extracted.push({ buffer: buf, mimetype: '', originalname: entry.name.split('/').pop() || entry.name, path: entry.name });
+        n++;
       }
-      if (!texts.length) throw new Error('No extractable text in the .bru file(s).');
-      const result = await importFromText(texts.join('\n\n'), { fileName: label, formatHint: 'bruno', llm, sourceMethod: 'file' });
+    } catch (err) {
+      perFile.push({ fileName: z.originalname, count: 0, error: `Could not read the .zip archive: ${(err as Error).message}`, warnings: [] });
+    }
+  }
+
+  // A Bruno collection arrives as many `.bru` files (a dropped folder, or now a
+  // `.zip`) — request files plus `collection.bru`/`folder.bru` (inherited
+  // auth/headers/vars) and `environments/*.bru`. Parse the TREE so each request
+  // keeps its folder (→ tags) and each stored environment becomes an Environment
+  // (IQE-049). Every non-Bruno file keeps per-file handling.
+  const looseNonZip = files.filter((f) => !zipFiles.includes(f));
+  const brunoTree: BrunoTreeFile[] = [];
+  for (const f of looseNonZip) if (/\.bru$/i.test(f.originalname)) brunoTree.push({ path: f.originalname, text: f.buffer.toString('utf8') });
+  for (const e of extracted) if (/\.bru$/i.test(e.path) || /(^|\/)bruno\.json$/i.test(e.path)) brunoTree.push({ path: e.path, text: e.buffer.toString('utf8') });
+
+  const docFiles: LooseDoc[] = [
+    ...looseNonZip.filter((f) => !/\.bru$/i.test(f.originalname)).map((f) => ({ buffer: f.buffer, mimetype: f.mimetype, originalname: f.originalname, path: f.originalname })),
+    ...extracted.filter((e) => !/\.bru$/i.test(e.path) && !/(^|\/)bruno\.json$/i.test(e.path)),
+  ];
+
+  let environmentsImported: { created: string[]; existing: string[] } | undefined;
+  if (brunoTree.length) {
+    const label = brunoTree.length === 1 ? (brunoTree[0]!.path.split('/').pop() || 'Bruno') : `Bruno collection (${brunoTree.length} files)`;
+    try {
+      const result = parseBrunoTree(brunoTree, { sourceName: label });
       all.push(...result.endpoints);
-      perFile.push({ fileName: brunoFiles.length === 1 ? names[0]! : `${label}: ${names.join(', ')}`.slice(0, 300), count: result.endpoints.length, parser: result.parser, format: result.format, warnings: result.warnings });
+      perFile.push({ fileName: label, count: result.endpoints.length, parser: result.parser, format: result.format, warnings: result.warnings });
       warnings.push(...result.warnings.map((w) => `${label}: ${w}`));
       if (result.notice) notices.push(result.notice);
+      environmentsImported = await persistBrunoEnvironments(req, result.brunoEnvironments || []);
       await recordImport(req.user!.tenantId, req.user!.username, { method: 'file', name: label, format: result.format, parser: result.parser, endpointCount: result.endpoints.length, warnings: result.warnings });
     } catch (err) {
       perFile.push({ fileName: label, count: 0, error: (err as Error).message, warnings: [] });
     }
   }
 
-  for (const f of otherFiles) {
+  for (const f of docFiles) {
     try {
       const parsed = await parseDocument(f.buffer, f.mimetype, f.originalname);
       if (!parsed.text?.trim()) throw new Error('No extractable text (image-only or password-protected?)');
@@ -452,6 +563,8 @@ router.post('/import/files', upload.array('files', 20), async (req: Request, res
   res.json({
     endpoints, count: endpoints.length, files: perFile, warnings, notice: notices.join(' '),
     parser: perFile.find((p) => p.parser)?.parser || 'llm', format: perFile.map((p) => p.format).filter(Boolean).join(', '),
+    // Bruno stored environments turned into IntelliQE Environments (IQE-049).
+    ...(environmentsImported ? { environmentsImported } : {}),
     profile: analyzeApiSurface(endpoints),
   });
 });

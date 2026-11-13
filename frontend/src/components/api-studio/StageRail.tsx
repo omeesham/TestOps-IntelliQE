@@ -87,7 +87,7 @@ function PushAction({ push }: { push: PushRailProps }) {
     return (
       <button
         type="button"
-        onClick={onPushToRepo}
+        onClick={() => onPushToRepo()}
         title={pushState.error}
         className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[11.5px] font-semibold rounded-md transition-all whitespace-nowrap text-red-700 bg-gradient-to-b from-white to-[#FEF4F4] border border-red-200 hover:border-red-300 ${SECONDARY_3D}`}
       >
@@ -99,7 +99,7 @@ function PushAction({ push }: { push: PushRailProps }) {
   return (
     <button
       type="button"
-      onClick={onPushToRepo}
+      onClick={() => onPushToRepo()}
       disabled={!canPush || pushing}
       title={canPush
         ? 'Commit the generated specs to the repository connected under System Configuration → Code Repositories'

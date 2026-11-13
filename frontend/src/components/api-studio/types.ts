@@ -273,6 +273,9 @@ export interface ApiRunSummary {
   stats: ReportStats | null;
   reportUrl?: string;
   hasAllure: boolean;
+  /** The code-push result stored with the run — PR/MR link, branch, mode,
+   *  provider — so the run can deep-link to its pull request (IQE-053.1/054/055/056). */
+  pushInfo?: { provider: string; prUrl: string; prNumber?: number; branch?: string; mode?: string; fileCount?: number; pushedAt?: string; by?: string };
 }
 
 export interface ApiOverview {
@@ -297,4 +300,4 @@ export interface ApiRunDetail extends ApiRunSummary {
    Navigation
    ═══════════════════════════════════════════════════════════════ */
 
-export type NavView = 'overview' | 'import' | 'integrations' | 'endpoints' | 'scenarios' | 'runs' | 'report' | 'environments' | 'tools' | 'developer';
+export type NavView = 'overview' | 'import' | 'integrations' | 'endpoints' | 'requirements' | 'scenarios' | 'runs' | 'report' | 'environments' | 'tools' | 'developer';

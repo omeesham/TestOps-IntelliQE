@@ -12,7 +12,7 @@
  * nothing new is fetched and no run logic changes.
  */
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronDown, ChevronRight, ExternalLink, RefreshCw, Activity, AlertTriangle, ListChecks, CheckCircle2, XCircle, MinusCircle, Clock, Search } from 'lucide-react';
+import { ChevronLeft, ChevronDown, ChevronRight, ExternalLink, RefreshCw, Activity, AlertTriangle, ListChecks, CheckCircle2, XCircle, MinusCircle, Clock, Search, GitPullRequest } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import { listApiRuns, getApiRun } from '@/services/api';
 import { StatusPill, MethodBadge, CategoryChip, PriorityChip, EmptyState, PassRing, FilterChip, DurationBar, TabHero } from '../primitives';
@@ -272,7 +272,16 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
                 <h2 className="text-[17px] font-bold text-gray-900 leading-tight truncate">{detail.title}</h2>
                 <p className="text-[12.5px] text-gray-500 mt-0.5 font-mono truncate">{detail.runId} · {detail.createdBy} · {relativeTime(detail.createdAt)}</p>
               </div>
-              {detail.reportUrl && <a href={detail.reportUrl} target="_blank" rel="noreferrer" className={`ml-auto ${SECONDARY_BTN}`}><ExternalLink className="w-3.5 h-3.5" />{detail.hasAllure ? 'Allure report' : 'Report'}</a>}
+              <div className="ml-auto flex items-center gap-2 flex-shrink-0">
+                {detail.pushInfo?.prUrl && (
+                  <a href={detail.pushInfo.prUrl} target="_blank" rel="noreferrer" className={SECONDARY_BTN}
+                     title={`Pushed to ${detail.pushInfo.provider}${detail.pushInfo.branch ? ` on ${detail.pushInfo.branch}` : ''}${detail.pushInfo.pushedAt ? ` · ${relativeTime(detail.pushInfo.pushedAt)}` : ''}`}>
+                    <GitPullRequest className="w-3.5 h-3.5" />
+                    {detail.pushInfo.mode === 'pr' ? (detail.pushInfo.provider === 'gitlab' ? 'Merge request' : 'Pull request') : 'View branch'}
+                  </a>
+                )}
+                {detail.reportUrl && <a href={detail.reportUrl} target="_blank" rel="noreferrer" className={SECONDARY_BTN}><ExternalLink className="w-3.5 h-3.5" />{detail.hasAllure ? 'Allure report' : 'Report'}</a>}
+              </div>
             </>
           )}
         </div>

@@ -41,8 +41,10 @@ interface Props {
   onExport: (format: 'excel' | 'json') => void;
   exporting: boolean;
   canExport: boolean;
-  /** Commit the generated specs to the connected code repository. */
-  onPushToRepo: () => void;
+  /** Commit the generated specs to the connected code repository.
+   *  `mode` (IQE-053.1): 'pr' opens a pull request, 'direct' commits onto the
+   *  branch (GitHub); omitted ⇒ provider default. */
+  onPushToRepo: (mode?: 'pr' | 'direct') => void;
   pushState: PushState;
   /** False when the run produced no specs to push. */
   canPush: boolean;
@@ -79,6 +81,10 @@ export default function ReportTab({
   onPushToRepo, pushState, canPush,
 }: Props) {
   const [diagnoseFor, setDiagnoseFor] = useState<FailurePayload | null>(null);
+  // IQE-053.1: how the generated specs land in the repo. 'pr' opens a pull
+  // request on any provider (incl. GitHub, whose default is a direct commit);
+  // 'direct' commits onto the branch where the provider supports it (GitHub).
+  const [pushMode, setPushMode] = useState<'pr' | 'direct'>('pr');
   const [clustersFor, setClustersFor] = useState<ClusterFailureInput[] | null>(null);
   const [bucket, setBucket] = useState<Bucket>('all');
   const [q, setQ] = useState('');
@@ -163,10 +169,22 @@ export default function ReportTab({
                 <a href={report.reportUrl} target="_blank" rel="noopener noreferrer" className={PRIMARY_BTN}><ExternalLink className="w-3.5 h-3.5" />HTML report</a>
               )}
               {SHOW_PUSH_TO_REPO && (
-                <button type="button" onClick={onPushToRepo} disabled={!canPush || pushState.status === 'pushing'} className={SECONDARY_BTN}>
-                  {pushState.status === 'pushing' ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <GitBranch className="w-3.5 h-3.5" />}
-                  {pushState.status === 'pushing' ? 'Pushing…' : 'Push to repo'}
-                </button>
+                <div className="flex items-center rounded-md border border-gray-200 overflow-hidden">
+                  <select
+                    value={pushMode}
+                    onChange={(e) => setPushMode(e.target.value as 'pr' | 'direct')}
+                    disabled={pushState.status === 'pushing'}
+                    title="How the generated specs land in the connected repository. 'Pull request' opens a PR on any provider (incl. GitHub); 'Direct commit' commits onto the branch (GitHub)."
+                    className="h-full px-2 py-1.5 text-[12px] text-gray-600 bg-gray-50 border-r border-gray-200 focus:outline-none cursor-pointer"
+                  >
+                    <option value="pr">Pull request</option>
+                    <option value="direct">Direct commit</option>
+                  </select>
+                  <button type="button" onClick={() => onPushToRepo(pushMode)} disabled={!canPush || pushState.status === 'pushing'} className={`${SECONDARY_BTN} !border-0 !rounded-none`}>
+                    {pushState.status === 'pushing' ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <GitBranch className="w-3.5 h-3.5" />}
+                    {pushState.status === 'pushing' ? 'Pushing…' : 'Push to repo'}
+                  </button>
+                </div>
               )}
               <button type="button" onClick={() => onExport('excel')} disabled={exporting || !canExport} className={SECONDARY_BTN}>
                 {exporting ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}CSV
