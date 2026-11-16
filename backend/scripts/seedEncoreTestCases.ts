@@ -273,7 +273,6 @@ async function main() {
   for (const r of summary) console.log(`  ${r.module.padEnd(22)} ${r.submodule.padEnd(40)} ${r.count}`);
   console.log(`Total: ${summary.reduce((s, r) => s + r.count, 0)} test cases across ${summary.length} submodules`);
 
-  await pool.end();
 }
 
 main().catch((err) => {
