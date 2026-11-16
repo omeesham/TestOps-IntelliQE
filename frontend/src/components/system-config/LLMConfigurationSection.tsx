@@ -33,7 +33,7 @@ const AGENT_STAGES: { key: string; label: string; hint: string }[] = [
   { key: 'audit',       label: 'Edge-Case & Security Audit', hint: 'Add security / boundary scenarios' },
   { key: 'planner',     label: 'Test Planning', hint: 'Risk-based test strategy' },
   { key: 'generator',   label: 'Test Case Generation', hint: 'Author the test cases' },
-  { key: 'script',      label: 'Script Generation', hint: 'Playwright automation scripts' },
+  { key: 'script',      label: 'Script Generation', hint: 'Test automation scripts' },
   { key: 'heal',        label: 'Auto-Healing', hint: 'Fix failing tests' },
 ];
 
