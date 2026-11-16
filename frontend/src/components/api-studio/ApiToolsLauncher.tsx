@@ -211,6 +211,22 @@ const DIFFERENTIATORS = new Set<string>([
   'Unified cross-layer test', 'API + UI hybrid test', 'Monitoring', 'Public status page',
 ]);
 
+/**
+ * MVP3 tools — capabilities that belong to a later milestone and must NOT be
+ * surfaced in the MVP2 gallery (IQE-043.2 #4). Hidden unless MVP3 is enabled,
+ * so they can be re-exposed without deleting any wiring. Flip the flag (or an
+ * env/build gate) when MVP3 ships.
+ */
+const MVP3_TOOLS = new Set<string>([
+  'Autopilot (autonomous loop)', // Autopilot
+  'Breaking-change gate',        // Spec Diff / breaking-change gate
+  'MCP server',                  // MCP server
+  'Traffic capture',             // Traffic capture
+  'CI / GitHub Action',          // CI pipeline
+]);
+const MVP3_ENABLED =
+  String((import.meta as any).env?.VITE_ENABLE_MVP3_TOOLS ?? '').toLowerCase() === 'true';
+
 export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearch = '', onNavigate, environment, initialFlow, onConsumeFlow }: Props) {
   const { endpoints, selected } = catalog;
   const toast = useToast();
@@ -478,16 +494,23 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
     },
   ], []);
 
-  const totalTools = useMemo(() => GROUPS.reduce((n, g) => n + g.items.length, 0), [GROUPS]);
+  // MVP3 tools are hidden in MVP2 (IQE-043.2 #4) — filter them out everywhere the
+  // gallery consumes the catalogue (count, search, and the admin toggle keys), so a
+  // hidden tool can't be re-enabled via the per-tenant toggles either.
+  const visibleGroups = useMemo(() => (MVP3_ENABLED ? GROUPS : GROUPS
+    .map((g) => ({ ...g, items: g.items.filter((t) => !MVP3_TOOLS.has(t.label)) }))
+    .filter((g) => g.items.length > 0)), [GROUPS]);
+
+  const totalTools = useMemo(() => visibleGroups.reduce((n, g) => n + g.items.length, 0), [visibleGroups]);
   const needle = q.trim().toLowerCase();
-  const filtered = useMemo(() => GROUPS
+  const filtered = useMemo(() => visibleGroups
     .map((g) => ({ ...g, items: needle ? g.items.filter((t) => t.label.toLowerCase().includes(needle) || t.desc.toLowerCase().includes(needle)) : g.items }))
     .filter((g) => g.items.length > 0)
-    .sort((a, b) => GROUP_ORDER.indexOf(a.title) - GROUP_ORDER.indexOf(b.title)), [GROUPS, needle]);
+    .sort((a, b) => GROUP_ORDER.indexOf(a.title) - GROUP_ORDER.indexOf(b.title)), [visibleGroups, needle]);
   const shownCount = filtered.reduce((n, g) => n + g.items.length, 0);
 
   // ── Toggle state: keys, counts, load, and persistence ──
-  const allKeys = useMemo(() => GROUPS.flatMap((g) => g.items.map((t) => toolKey(t.label))), [GROUPS]);
+  const allKeys = useMemo(() => visibleGroups.flatMap((g) => g.items.map((t) => toolKey(t.label))), [visibleGroups]);
   const enabledCount = allKeys.length - disabledTools.size;
   const allOn = disabledTools.size === 0;
   const isOn = (key: string) => !disabledTools.has(key);

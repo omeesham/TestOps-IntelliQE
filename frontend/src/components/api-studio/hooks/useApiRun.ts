@@ -17,7 +17,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/feedback/ToastProvider';
 import {
   designApiScenarios, getApiJob, executePipeline, healPipeline, saveTestCases, exportTestCases, publishToGit, getConfigurations,
-  renderApiRun, notifyApiRun, type ApiSpecPayload, type ApiJob,
+  renderApiRun, notifyApiRun, getApiWorkspace, saveApiWorkspace, type ApiSpecPayload, type ApiJob,
 } from '@/services/api';
 import { envRunKey } from './useApiEnvironments';
 import { formatDuration } from '../format';
@@ -141,6 +141,33 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
   const log = useCallback((stage: LogLine['stage'], text: string, level: LogLevel = 'info') => {
     setLogs((prev) => [...prev, { id: ++logIdRef.current, at: Date.now(), stage, level, text }].slice(-500));
   }, []);
+
+  // Persist the reviewed scenarios server-side so leave-and-return (incl. logout)
+  // doesn't lose the design work (IQE-037.1 #6). The server merges this partial
+  // update, so it never disturbs the catalogue fields useCatalog saves.
+  const scenariosHydrated = useRef(false);
+  const scenarioSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const remote = await getApiWorkspace();
+        if (!cancelled && remote && Array.isArray(remote.scenarios) && remote.scenarios.length) {
+          setScenarios((prev) => (prev.length ? prev : (remote.scenarios as Scenario[])));
+        }
+      } catch { /* keep in-memory scenarios */ }
+      finally { scenariosHydrated.current = true; }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    if (!scenariosHydrated.current) return;
+    if (scenarioSaveTimer.current) clearTimeout(scenarioSaveTimer.current);
+    scenarioSaveTimer.current = setTimeout(() => {
+      void saveApiWorkspace({ scenarios }).catch(() => { /* best-effort */ });
+    }, 1500);
+    return () => { if (scenarioSaveTimer.current) clearTimeout(scenarioSaveTimer.current); };
+  }, [scenarios]);
 
   const setStage = useCallback((key: StageKey, status: StageStatus, detail: string) => {
     setStages((prev) => prev.map((s) => {

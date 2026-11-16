@@ -44,13 +44,14 @@ import { getCredsForTenant as getAdoCreds, getStory as getAdoStory, getStoryAtta
 import { syncDefects as syncAzureDefects, listSyncHistory as listAzureSyncHistory, listDefectLinks as listAzureDefectLinks } from '../services/api-azure-sync.service.js';
 import { publishRunResults as publishAzureResults, runJUnit } from '../services/api-azure-results.service.js';
 import {
-  importFromText, importFromUrl, parseCurlCommands, parseHar, introspectGraphql, discoverMcpTools,
+  importFromText, importFromUrl, parseCurlCommands, parseHar, harDomains, introspectGraphql, discoverMcpTools,
   parseConnectorManifest, endpointsFromWebhook, probeEndpoint, parseStructured, dedupeEndpoints,
   parsePostmanCollection, postmanOutline, fetchRemote, parseBrunoTree,
-  type ImportResult, type ImportedEndpoint, type ImportMethod, type BrunoTreeFile, type ParsedBrunoEnv,
+  type ImportResult, type ImportedEndpoint, type ImportMethod, type BrunoTreeFile, type ParsedBrunoEnv, type ImportItemResult,
 } from '../services/api-import.service.js';
 import JSZip from 'jszip';
 import { parseWsdl } from '../services/wsdl-import.service.js';
+import { getWorkspace, saveWorkspace, clearWorkspace, type WorkspacePatch } from '../services/api-workspace.service.js';
 import { parsePostmanEnvironment, collectionVariables, mergePostmanVariables } from '../utils/postman-env.js';
 import { analyzeApiSurface, enrichProfileWithLlm } from '../services/api-intelligence.service.js';
 import { validateContract } from '../services/api-contract.service.js';
@@ -481,6 +482,7 @@ router.post('/import/files', upload.array('files', 20), async (req: Request, res
 
   const perFile: { fileName: string; count: number; parser?: string; format?: string; error?: string; warnings: string[] }[] = [];
   const all: ImportedEndpoint[] = [];
+  const allItems: ImportItemResult[] = [];   // per-request outcomes (Bruno/Postman) for the imported/skipped/failed tally
   const warnings: string[] = [];
   const notices: string[] = [];
 
@@ -530,6 +532,7 @@ router.post('/import/files', upload.array('files', 20), async (req: Request, res
     try {
       const result = parseBrunoTree(brunoTree, { sourceName: label });
       all.push(...result.endpoints);
+      if (Array.isArray(result.items)) allItems.push(...result.items);
       perFile.push({ fileName: label, count: result.endpoints.length, parser: result.parser, format: result.format, warnings: result.warnings });
       warnings.push(...result.warnings.map((w) => `${label}: ${w}`));
       if (result.notice) notices.push(result.notice);
@@ -546,6 +549,7 @@ router.post('/import/files', upload.array('files', 20), async (req: Request, res
       if (!parsed.text?.trim()) throw new Error('No extractable text (image-only or password-protected?)');
       const result = await importFromText(parsed.text, { fileName: f.originalname, formatHint, llm, sourceMethod: docMethod });
       all.push(...result.endpoints);
+      if (Array.isArray(result.items)) allItems.push(...result.items);
       perFile.push({ fileName: f.originalname, count: result.endpoints.length, parser: result.parser, format: result.format, warnings: [...result.warnings, ...(parsed.warning ? [parsed.warning] : [])] });
       warnings.push(...result.warnings.map((w) => `${f.originalname}: ${w}`));
       if (parsed.warning) warnings.push(`${f.originalname}: ${parsed.warning}`);
@@ -560,13 +564,64 @@ router.post('/import/files', upload.array('files', 20), async (req: Request, res
     res.status(400).json({ error: perFile.map((p) => `${p.fileName}: ${p.error || 'no endpoints found'}`).join(' · '), files: perFile });
     return;
   }
+  const summary = allItems.length ? {
+    imported: allItems.filter((i) => i.outcome === 'imported').length,
+    skipped: allItems.filter((i) => i.outcome === 'skipped').length,
+    failed: allItems.filter((i) => i.outcome === 'failed').length,
+    total: allItems.length,
+  } : undefined;
   res.json({
     endpoints, count: endpoints.length, files: perFile, warnings, notice: notices.join(' '),
     parser: perFile.find((p) => p.parser)?.parser || 'llm', format: perFile.map((p) => p.format).filter(Boolean).join(', '),
+    // Per-request outcomes + reconciling tally (Bruno/Postman) so the UI shows
+    // imported/skipped/failed with reasons (IQE-049.1 #5).
+    ...(allItems.length ? { items: allItems, summary } : {}),
     // Bruno stored environments turned into IntelliQE Environments (IQE-049).
     ...(environmentsImported ? { environmentsImported } : {}),
     profile: analyzeApiSurface(endpoints),
   });
+});
+
+/**
+ * Dedicated HAR import — PREVIEW and COMMIT in one stateless route (IQE-051.1 #4).
+ * A HAR recording routinely mixes the app's own API with CDNs and third-party
+ * analytics/auth hosts, so the reviewer chooses which domains to turn into
+ * endpoints before any are created.
+ *   - Upload the `.har` file (field "file") with NO `domains` → preview: returns
+ *     the distinct domains with request counts.
+ *   - Re-post the same file WITH `domains` (JSON array or comma list) → commit:
+ *     only entries from the chosen hosts become endpoints.
+ */
+router.post('/import/har', upload.single('file'), async (req: Request, res: Response) => {
+  try {
+    const file = req.file as Express.Multer.File | undefined;
+    const rawHar = file ? file.buffer.toString('utf8') : String(req.body?.har || '');
+    if (!rawHar.trim()) { res.status(400).json({ error: 'Upload a .har recording in the "file" field.' }); return; }
+    let doc: any;
+    try { doc = JSON.parse(rawHar); } catch { res.status(400).json({ error: 'That file is not valid JSON — a HAR export is a JSON document.' }); return; }
+    if (!doc?.log || !Array.isArray(doc.log.entries)) { res.status(400).json({ error: 'That file is not a valid HAR recording (missing log.entries).' }); return; }
+    const name = (file?.originalname || String(req.body?.name || 'HAR recording')).slice(0, 200);
+
+    // Normalise the chosen domains (JSON array, comma list, or repeated field).
+    const rawDomains = req.body?.domains;
+    let domains: string[] = [];
+    if (Array.isArray(rawDomains)) domains = rawDomains.map((d) => String(d));
+    else if (typeof rawDomains === 'string' && rawDomains.trim()) {
+      try { const p = JSON.parse(rawDomains); domains = Array.isArray(p) ? p.map((d) => String(d)) : [String(rawDomains)]; }
+      catch { domains = rawDomains.split(',').map((d) => d.trim()).filter(Boolean); }
+    }
+
+    if (!domains.length) {
+      // PREVIEW — choose domains first, create nothing.
+      res.json({ preview: true, name, domains: harDomains(doc) });
+      return;
+    }
+
+    // COMMIT — import only the chosen hosts.
+    const result = parseHar(doc, name, { domains });
+    if (!result.endpoints.length) { res.status(400).json({ error: 'No API requests were found for the chosen domain(s).' }); return; }
+    await respondImport(req, res, 'file', name, result);
+  } catch (err) { fail(res, err); }
 });
 
 router.post('/import/text', async (req: Request, res: Response) => {
@@ -1079,6 +1134,46 @@ for (const method of ['sdk', 'middleware'] as const) {
 router.get('/imports', async (req: Request, res: Response) => {
   try { res.json({ items: await listImports(req.user!.tenantId, Number(req.query.limit) || 50) }); }
   catch (err) { fail(res, err, 500); }
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   Workspace (the reviewer's working catalogue + scenarios, persisted
+   server-side per tenant+user so it survives logout — IQE-037.1 #6 / 043.2 #2)
+   ═══════════════════════════════════════════════════════════════ */
+
+/** Build a sanitised partial update from the request body — only known fields. */
+function workspacePatchFromBody(body: any): WorkspacePatch {
+  const patch: WorkspacePatch = {};
+  if (Array.isArray(body?.endpoints)) patch.endpoints = body.endpoints;
+  if (Array.isArray(body?.selected)) patch.selected = body.selected.map((s: unknown) => String(s));
+  if (body?.profile !== undefined) patch.profile = body.profile;      // object or null
+  if (body?.strategy !== undefined) patch.strategy = body.strategy;   // object or null
+  if (Array.isArray(body?.imports)) patch.imports = body.imports;
+  if (Array.isArray(body?.scenarios)) patch.scenarios = body.scenarios;
+  return patch;
+}
+
+router.get('/workspace', async (req: Request, res: Response) => {
+  try {
+    const ws = await getWorkspace(req.user!.tenantId, req.user!.username);
+    res.json({ workspace: ws });   // null when nothing saved yet
+  } catch (err) { fail(res, err, 500); }
+});
+
+router.put('/workspace', async (req: Request, res: Response) => {
+  try {
+    const patch = workspacePatchFromBody(req.body);
+    if (Object.keys(patch).length === 0) { res.status(400).json({ error: 'No workspace fields to save.' }); return; }
+    const ws = await saveWorkspace(req.user!.tenantId, req.user!.username, patch);
+    res.json({ workspace: ws });
+  } catch (err) { fail(res, err, 500); }
+});
+
+router.delete('/workspace', async (req: Request, res: Response) => {
+  try {
+    await clearWorkspace(req.user!.tenantId, req.user!.username);
+    res.json({ ok: true });
+  } catch (err) { fail(res, err, 500); }
 });
 
 /* ═══════════════════════════════════════════════════════════════

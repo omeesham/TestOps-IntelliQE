@@ -27,6 +27,7 @@ import { PRIMARY_BTN, SECONDARY_BTN, INPUT, FIELD, LABEL, CARD, CARD_HOVER, CHIP
 import { KeyValueRows } from '../EndpointEditor';
 import EndpointEditor from '../EndpointEditor';
 import PostmanImportWizard from '../PostmanImportWizard';
+import HarImportWizard from '../HarImportWizard';
 import type { Catalog } from '../hooks/useCatalog';
 import { buildReadinessReview } from '../apiValidation';
 import type { AuthType, HeaderPair, ImportMethod, LogLine, ApiEnvironment } from '../types';
@@ -166,8 +167,12 @@ export default function ImportView({ catalog, onOpenCatalogue, log, environment,
   /* ── Bulk drop zone ── */
   const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  // A single HAR goes through the domain-chooser wizard (IQE-051.1 #4) instead of
+  // a straight bulk import, so the reviewer picks which hosts become endpoints.
+  const [harFile, setHarFile] = useState<File | null>(null);
   const bulk = (files: File[]) => {
     if (!files.length) return;
+    if (files.length === 1 && /\.har$/i.test(files[0]!.name)) { setActive(null); setHarFile(files[0]!); return; }
     const name = files.length === 1 ? files[0]!.name : `${files.length} files`;
     void run('bulk', 'file', name, () => importApiFiles(files, 'auto'));
   };
@@ -287,6 +292,17 @@ export default function ImportView({ catalog, onOpenCatalogue, log, environment,
               busy={busy === active.id}
               onClose={() => setActive(null)}
               onRun={(name, fn) => run(active.id, active.id, name, fn)}
+            />
+          </div>
+        )}
+
+        {/* HAR domain chooser (IQE-051.1 #4) */}
+        {harFile && (
+          <div ref={formRef} className="scroll-mt-2">
+            <HarImportWizard
+              file={harFile}
+              onClose={() => setHarFile(null)}
+              onImported={(name, res) => { finish('file', name, res); setHarFile(null); }}
             />
           </div>
         )}

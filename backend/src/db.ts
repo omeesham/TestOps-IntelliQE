@@ -1214,6 +1214,23 @@ export async function initDb(): Promise<void> {
         config      NVARCHAR(MAX) NOT NULL DEFAULT '{}',
         updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
       )`);
+    // API Studio working set — the catalogue/selection/strategy/imports + scenarios
+    // a reviewer builds before a run. Persisted per tenant+user so the work survives
+    // logout and device changes (IQE-037.1 #6 / IQE-043.2 #2); the frontend keeps a
+    // sessionStorage mirror only as an offline cache. One row per (tenant, owner).
+    await createTable('api_catalog_workspace', `
+      CREATE TABLE ${SCHEMA}.api_catalog_workspace (
+        tenant_id   UNIQUEIDENTIFIER NOT NULL,
+        owner       NVARCHAR(100) NOT NULL,
+        endpoints   NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        selected    NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        profile     NVARCHAR(MAX),
+        strategy    NVARCHAR(MAX),
+        imports     NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        scenarios   NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT PK_api_catalog_workspace PRIMARY KEY (tenant_id, owner)
+      )`);
 
     // ─── Testsigma-gap batch: data profiles, step groups, orchestrator, security (all opt-in) ───
     await createTable('api_data_profiles', `

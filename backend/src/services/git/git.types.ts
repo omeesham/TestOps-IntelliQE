@@ -30,6 +30,10 @@ export interface GitProviderConfig {
    *  deriving one from accessToken. Lets the code-push integration reuse the
    *  PAT already stored by the work-item (`azure-devops`) connection. */
   authHeader?: string;
+  /** Bitbucket Server / Data Center-only: the self-hosted base URL
+   *  (e.g. "https://bitbucket.mycorp.com"). When unset it's derived from the
+   *  repo URL's host. The REST API lives at `${baseUrl}/rest/api/1.0`. */
+  baseUrl?: string;
 }
 
 /** Result of a read-only connectivity test (no branch/PR is created). */
@@ -43,7 +47,7 @@ export interface GitTestResult {
 
 /** Result of a successful publish. */
 export interface PublishResult {
-  provider: 'github' | 'gitlab' | 'bitbucket' | 'azure';
+  provider: 'github' | 'gitlab' | 'bitbucket' | 'bitbucket-server' | 'azure';
   /** 'direct' = files were committed straight onto the configured branch (no
    *  PR); 'pr' = a new branch was created and a PR/MR opened. */
   mode: 'pr' | 'direct';
@@ -63,7 +67,7 @@ export interface PublishResult {
  */
 export interface GitProvider {
   /** Provider identifier used in the response so the UI can label it. */
-  readonly id: 'github' | 'gitlab' | 'bitbucket' | 'azure';
+  readonly id: 'github' | 'gitlab' | 'bitbucket' | 'bitbucket-server' | 'azure';
 
   /**
    * Create a branch off `defaultBranch`, commit `files` under `tests/`
@@ -91,8 +95,8 @@ export interface GitProvider {
  * even when the user has multiple integrations connected.
  */
 export interface RepoCoords {
-  provider: 'github' | 'gitlab' | 'bitbucket' | 'azure';
-  /** GitHub owner / GitLab group(+subgroups) / Bitbucket workspace / Azure DevOps org */
+  provider: 'github' | 'gitlab' | 'bitbucket' | 'bitbucket-server' | 'azure';
+  /** GitHub owner / GitLab group(+subgroups) / Bitbucket workspace / Bitbucket Server project key / Azure DevOps org */
   owner: string;
   /** Repository / project slug */
   repo: string;
@@ -125,6 +129,25 @@ export function parseRepoUrl(repoUrl: string): RepoCoords {
   }
   if (host === 'bitbucket.org' || host.endsWith('.bitbucket.org')) {
     return { provider: 'bitbucket', owner: parts[0]!, repo: parts[1]!, host };
+  }
+  // Bitbucket Server / Data Center (self-hosted) — a DIFFERENT REST API than
+  // Cloud (/rest/api/1.0/projects/{KEY}/repos/{slug}). Recognise its URL shapes:
+  //   browse: https://{host}/projects/{KEY}/repos/{slug}/browse
+  //   clone:  https://{host}/scm/{KEY}/{slug}.git
+  // plus a name-based fallback for a "bitbucket.*" host that uses {KEY}/{slug}.
+  {
+    const projIdx = parts.indexOf('projects');
+    const reposIdx = parts.indexOf('repos');
+    const scmIdx = parts.indexOf('scm');
+    let bb: { key: string; slug: string } | null = null;
+    if (projIdx >= 0 && reposIdx === projIdx + 2 && parts[projIdx + 1] && parts[reposIdx + 1]) {
+      bb = { key: parts[projIdx + 1]!, slug: parts[reposIdx + 1]! };
+    } else if (scmIdx >= 0 && parts[scmIdx + 1] && parts[scmIdx + 2]) {
+      bb = { key: parts[scmIdx + 1]!, slug: parts[scmIdx + 2]! };
+    } else if (host.includes('bitbucket') && parts.length >= 2) {
+      bb = { key: parts[0]!, slug: parts[1]! };
+    }
+    if (bb) return { provider: 'bitbucket-server', owner: bb.key, repo: bb.slug, host };
   }
   if (host === 'dev.azure.com' || host.endsWith('.visualstudio.com')) {
     // Azure DevOps Repos URL forms (the `_git` segment separates project from repo):
@@ -173,5 +196,5 @@ export function parseRepoUrl(repoUrl: string): RepoCoords {
     const repo = parts[parts.length - 1]!;
     return { provider: 'gitlab', owner, repo, projectPath: path, host };
   }
-  throw new Error(`Unsupported git host: ${host}. Supported: github.com, gitlab.com, bitbucket.org, dev.azure.com.`);
+  throw new Error(`Unsupported git host: ${host}. Supported: github.com, gitlab.com (incl. self-managed), bitbucket.org, Bitbucket Server/Data Center, dev.azure.com.`);
 }

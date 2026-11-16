@@ -253,11 +253,11 @@ export async function loadAllureReport(runId: string) {
 }
 
 /* ─────────────────────────────────────────────────────────────
-   Git publish — GitHub commits straight onto the configured branch
-   (mode 'direct'); GitLab/Bitbucket open a real MR/PR (mode 'pr').
+   Git publish — every provider defaults to a branch + PR/MR; a direct commit
+   onto the configured branch (GitHub only) requires an explicit mode 'direct'.
    ───────────────────────────────────────────────────────────── */
 export interface GitPublishResult {
-  provider: 'github' | 'gitlab' | 'bitbucket';
+  provider: 'github' | 'gitlab' | 'bitbucket' | 'bitbucket-server' | 'azure';
   /** 'direct' = committed onto the configured branch; 'pr' = PR/MR opened. */
   mode: 'pr' | 'direct';
   /** PR/MR URL in 'pr' mode; the branch's web URL in 'direct' mode. */
@@ -409,6 +409,27 @@ export async function importApiFiles(files: File[], format = 'auto'): Promise<Ap
   for (const f of files) form.append('files', f);
   form.append('format', format);
   const { data } = await api.post('/api-automation/import/files', form, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: IMPORT_TIMEOUT });
+  return data;
+}
+
+/* ── HAR import with a domain chooser (IQE-051.1 #4) ── */
+export interface HarDomain { host: string; requestCount: number; apiRequestCount: number }
+export interface HarPreviewResponse { preview: true; name: string; domains: HarDomain[] }
+
+/** Step 1 — list the distinct domains in a HAR without creating any endpoints. */
+export async function previewHarDomains(file: File): Promise<HarPreviewResponse> {
+  const form = new FormData();
+  form.append('file', file);
+  const { data } = await api.post('/api-automation/import/har', form, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: IMPORT_TIMEOUT });
+  return data;
+}
+
+/** Step 2 — import only the chosen domains' requests as endpoints. */
+export async function importHarDomains(file: File, domains: string[]): Promise<ApiImportResponse> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('domains', JSON.stringify(domains));
+  const { data } = await api.post('/api-automation/import/har', form, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: IMPORT_TIMEOUT });
   return data;
 }
 
@@ -591,6 +612,35 @@ export async function getApiJob<T = any>(jobId: string): Promise<ApiJob<T>> {
 export async function analyzeApi(endpoints: any[], deep = false): Promise<{ profile: any }> {
   const { data } = await api.post('/api-automation/analyze', { endpoints, deep }, { timeout: deep ? 120_000 : 30_000 });
   return data;
+}
+
+/* ── API Studio workspace (server-side working catalogue + scenarios) ── */
+export interface ApiWorkspaceState {
+  endpoints: any[];
+  selected: string[];
+  profile: any | null;
+  strategy: any | null;
+  imports: any[];
+  scenarios: any[];
+  updatedAt?: string;
+}
+export type ApiWorkspacePatch = Partial<Omit<ApiWorkspaceState, 'updatedAt'>>;
+
+/** Load the signed-in user's saved workspace (null when nothing saved yet). */
+export async function getApiWorkspace(): Promise<ApiWorkspaceState | null> {
+  const { data } = await api.get('/api-automation/workspace');
+  return data?.workspace ?? null;
+}
+
+/** Persist a partial update to the user's workspace (merged server-side). */
+export async function saveApiWorkspace(patch: ApiWorkspacePatch): Promise<ApiWorkspaceState | null> {
+  const { data } = await api.put('/api-automation/workspace', patch);
+  return data?.workspace ?? null;
+}
+
+/** Clear the user's saved workspace. */
+export async function clearApiWorkspace(): Promise<void> {
+  await api.delete('/api-automation/workspace');
 }
 
 /* ── Contract / schema validation (opt-in, standalone) ── */

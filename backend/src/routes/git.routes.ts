@@ -29,6 +29,7 @@ import { parseRepoUrl, type GitProvider, type GitFile, type GitProviderConfig } 
 import { githubProvider } from '../services/git/github.provider.js';
 import { gitlabProvider } from '../services/git/gitlab.provider.js';
 import { bitbucketProvider } from '../services/git/bitbucket.provider.js';
+import { bitbucketServerProvider } from '../services/git/bitbucket-server.provider.js';
 import { azureProvider } from '../services/git/azure.provider.js';
 import { assembleClientPackage } from '../services/client-package.service.js';
 import { getReportStats, readAllureResults, readBasicReport } from '../services/allure-report.service.js';
@@ -99,6 +100,7 @@ const PROVIDERS: Record<string, GitProvider> = {
   github: githubProvider,
   gitlab: gitlabProvider,
   bitbucket: bitbucketProvider,
+  'bitbucket-server': bitbucketServerProvider,
   azure: azureProvider,
 };
 
@@ -181,24 +183,27 @@ async function withAzureReuse(
  * branch); GitLab/Bitbucket/Azure always branch + open a PR/MR.
  *
  *   - An explicit `requestedBranch` always wins (a named branch ⇒ PR).
- *   - `mode: 'pr'`     → a fresh `intelliqe/tests-*` branch (PR) for EVERY provider,
- *                        so GitHub opens a PR instead of its direct-commit default.
+ *   - `mode: 'pr'`     → a fresh `intelliqe/tests-*` branch (PR) for EVERY provider.
  *   - `mode: 'direct'` → the default branch (direct commit) on GitHub; on the
  *                        other providers direct isn't possible, so it falls back
  *                        to a PR branch.
- *   - no `mode`        → unchanged defaults: GitHub direct, others PR.
+ *   - no `mode`        → branch + PR for EVERY provider, GitHub included (IQE-053.1 #2):
+ *                        a direct commit now requires an explicit `mode: 'direct'`,
+ *                        so GitHub behaves like GitLab/Bitbucket/Azure by default.
  */
 export function resolvePublishBranch(opts: {
   mode?: 'pr' | 'direct';
   requestedBranch?: string;
-  provider: 'github' | 'gitlab' | 'bitbucket' | 'azure';
+  provider: 'github' | 'gitlab' | 'bitbucket' | 'bitbucket-server' | 'azure';
   defaultBranch: string;
   ts: string;
 }): string {
   const explicit = opts.requestedBranch && String(opts.requestedBranch).trim();
   if (explicit) return explicit;
   const canDirect = opts.provider === 'github';
-  const wantDirect = opts.mode ? (opts.mode === 'direct' && canDirect) : canDirect;
+  // Default to a PR for every provider; only commit straight to the default
+  // branch when the caller explicitly asks for it (and only where supported).
+  const wantDirect = opts.mode === 'direct' && canDirect;
   return wantDirect ? opts.defaultBranch : `intelliqe/tests-${opts.ts}`;
 }
 
@@ -211,6 +216,9 @@ function cfgToProvider(cfg: Record<string, any>): GitProviderConfig {
     authHeader: cfg.auth_header ? String(cfg.auth_header).trim() : undefined,
     username: cfg.username ? String(cfg.username).trim() : undefined,
     scriptsPath: String(cfg.scripts_path || cfg.scriptsPath || '').trim() || undefined,
+    // Bitbucket Server / Data Center self-hosted base URL (optional — otherwise
+    // derived from the repo URL's host).
+    baseUrl: String(cfg.base_url || cfg.baseUrl || cfg.server_url || '').trim() || undefined,
   };
 }
 
@@ -322,10 +330,10 @@ router.post('/publish', requirePermission('api.run'), async (req: Request, res: 
 
     // 4. Defaults — branch name, PR title, commit message, PR body.
     // The push `mode` (IQE-053.1) lets the caller choose: 'pr' opens a pull
-    // request (a fresh branch) on ANY provider — so GitHub can raise a PR
-    // instead of its direct-commit default — and 'direct' commits straight onto
-    // the configured branch where the provider supports it (GitHub only). With
-    // no mode, the long-standing defaults hold: GitHub direct, others PR/MR.
+    // request (a fresh branch) on ANY provider, and 'direct' commits straight
+    // onto the configured branch where the provider supports it (GitHub only).
+    // With no mode, the default is now branch + PR/MR for EVERY provider,
+    // GitHub included (IQE-053.1 #2) — a direct commit requires mode:'direct'.
     const mode = (requestedMode === 'pr' || requestedMode === 'direct') ? requestedMode : undefined;
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const branch = resolvePublishBranch({ mode, requestedBranch, provider: coords.provider, defaultBranch: config.defaultBranch, ts });

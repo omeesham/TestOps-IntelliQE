@@ -247,6 +247,7 @@ export default function AccessControl({ onClose }: { onClose: () => void }) {
                         <option value="admin">admin</option>
                         <option value="qa_lead">qa_lead</option>
                         <option value="qa_engineer">qa_engineer</option>
+                        <option value="data_analyst">data_analyst</option>
                         <option value="viewer">viewer</option>
                       </select>
                     </div>

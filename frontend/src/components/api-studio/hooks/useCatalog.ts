@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  analyzeApi,
+  analyzeApi, getApiWorkspace, saveApiWorkspace, clearApiWorkspace,
 } from '@/services/api';
 import { newEndpointId } from '../format';
 import { reconcileImport } from './catalogReconcile';
@@ -102,13 +102,58 @@ export function useCatalog() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState('');
 
+  // The current list is mirrored in a ref so mutations (and the server hydrate)
+  // can read/write it synchronously without a state-updater side effect.
+  const endpointsRef = useRef(endpoints);
+  useEffect(() => { endpointsRef.current = endpoints; }, [endpoints]);
 
-  /* ── Persist ── */
+  // Server persistence: hydrate once from the saved workspace on mount, then
+  // debounce-save changes. sessionStorage stays as a synchronous offline cache
+  // (instant first paint); the server copy is what survives logout/device change
+  // (IQE-037.1 #6 / IQE-043.2 #2).
+  const hydratedRef = useRef(false);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /* ── Hydrate from the server (once) ── */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const remote = await getApiWorkspace();
+        // Adopt the server copy only when the local cache has nothing — this is the
+        // post-logout / new-device case. A mid-session refresh keeps its live local
+        // cache (which the debounced save keeps in step with the server).
+        if (!cancelled && remote && Array.isArray(remote.endpoints) && remote.endpoints.length
+            && endpointsRef.current.length === 0) {
+          endpointsRef.current = remote.endpoints as CatalogEndpoint[];
+          setEndpoints(remote.endpoints as CatalogEndpoint[]);
+          setSelected(new Set(Array.isArray(remote.selected) ? remote.selected : []));
+          setProfile((remote.profile as ApiProfile | null) ?? null);
+          if (remote.strategy && Array.isArray((remote.strategy as Strategy).layers)) setStrategyState(remote.strategy as Strategy);
+          setImports(Array.isArray(remote.imports) ? (remote.imports as ImportRecord[]) : []);
+        }
+      } catch { /* offline / not signed in — keep the local cache */ }
+      finally { hydratedRef.current = true; }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* ── Persist — sessionStorage immediately, server debounced ── */
   useEffect(() => {
     try {
       const p: Persisted = { endpoints, selected: [...selected], profile, strategy, imports: imports.slice(0, 30) };
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify(p));
     } catch { /* quota — the session simply is not persisted */ }
+
+    if (!hydratedRef.current) return;                // don't echo the initial/hydrated state back
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      // Catalogue fields only — scenarios are saved by useApiRun, and the server
+      // merges partial updates so neither caller clobbers the other.
+      void saveApiWorkspace({ endpoints, selected: [...selected], profile, strategy, imports: imports.slice(0, 30) }).catch(() => { /* best-effort */ });
+    }, 1500);
+    return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
   }, [endpoints, selected, profile, strategy, imports]);
 
   /* ── Analysis — re-derived whenever the catalogue changes ── */
@@ -129,12 +174,9 @@ export function useCatalog() {
   }, []);
 
   /* ── Catalogue mutations ──
-     The current list is mirrored in a ref so mutations can compute the next
-     list synchronously (and kick off analysis) without side effects inside a
-     state updater, which strict mode would run twice. */
-  const endpointsRef = useRef(endpoints);
-  useEffect(() => { endpointsRef.current = endpoints; }, [endpoints]);
-
+     The current list is mirrored in `endpointsRef` (declared above) so mutations
+     can compute the next list synchronously (and kick off analysis) without a
+     side effect inside a state updater, which strict mode would run twice. */
   const addEndpoints = useCallback((incoming: any[], meta: { method: ImportMethod; name: string; format: string; parser: string; warnings?: string[]; notice?: string; profile?: ApiProfile | null; replace?: boolean; reconcile?: boolean }) => {
     const fresh = incoming.map((e) => toCatalogEndpoint(e, meta.method)).map((e) => ({ ...e, source: { ...e.source, method: e.source?.method || meta.method, name: e.source?.name || meta.name } }));
     const base = meta.replace ? [] : endpointsRef.current;
@@ -208,6 +250,7 @@ export function useCatalog() {
     setImports([]);
     setAnalysisError('');
     try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+    void clearApiWorkspace().catch(() => { /* best-effort; server row will be overwritten on next save */ });
   }, []);
 
   const toggle = useCallback((id: string) => setSelected((prev) => {

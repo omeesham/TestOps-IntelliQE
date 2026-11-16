@@ -253,6 +253,14 @@ AUTH (ONLY when Authorization is configured above — otherwise skip this block)
   [wide] Malformed credential — includeAuth false plus an explicit bogus
          Authorization header → 401/403.
   [deep] Expired/revoked-shaped token — a well-formed but invalid value → 401.
+  [wide] Cross-user / IDOR (object-level authorization) — ONLY when the URL
+         carries a resource id (a path segment id like /users/{id}, /orders/42,
+         or an id/ownerId/userId query param): repeat the happy-path request with
+         includeAuth true (a VALID token) but SUBSTITUTE a different, non-owned
+         resource id → expect 403 or 404 ({ "kind": "status", "oneOf": [403, 404] }),
+         never the owner's 200. A protected, user-scoped object must not be
+         readable/writable by another authenticated user. Skip entirely when the
+         URL exposes no resource id (e.g. collection roots like GET /users).
 
 RESILIENCE
   [wide] Header sanity — content-type on the happy path is the documented type.

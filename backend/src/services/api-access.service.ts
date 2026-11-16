@@ -47,6 +47,11 @@ const DEFAULT_ROLE_PERMS: Record<string, string[]> = {
   admin: ALL_PERMS,
   qa_lead: ALL_PERMS.filter((p) => p !== 'api.access_manage'),
   qa_engineer: ['api.run', 'api.import', 'api.security_scan', 'api.load_test', 'api.chaos', 'api.db_validate', 'api.reviews_signoff', 'api.quarantine_manage'],
+  // Analyst (IQE-043.2 #3) — reuses the existing `data_analyst` identity role.
+  // Read-heavy with authoring: can import APIs, generate/run suites and sign off
+  // runs, but gets none of the Admin/Virtualization/Contracts or destructive
+  // (delete/chaos/load) permissions.
+  data_analyst: ['api.run', 'api.import', 'api.reviews_signoff'],
   viewer: [],
 };
 
@@ -363,19 +368,23 @@ export async function userHasMfa(userId: string): Promise<boolean> {
 /* ── RBAC enforcement ──
    The core allow/deny decision for ONE permission, shared by the per-route
    `requirePermission` factory and the router-level `rbacGate` so both behave
-   identically: platform/admin always pass; a lookup error fails OPEN (never
-   hard-breaks a route); otherwise the role→permission map decides.
+   identically: platform/admin always pass; a lookup error fails CLOSED (denies)
+   so a DB outage can't silently grant permissions (IQE-043.2 #3); otherwise the
+   role→permission map decides. Note platform/admin short-circuit BEFORE the DB
+   call, and read routes bypass this gate entirely, so a fail-closed denies only
+   non-admin mutating requests while the permission store is unreachable.
    Returns: 'allow' | 'deny'. */
 export async function checkPermission(
   user: { role: string; tenantId: string; isPlatform?: boolean } | undefined,
   permission: string,
 ): Promise<'allow' | 'deny'> {
   if (!user) return 'deny';
+  if (user.isPlatform || user.role === 'admin') return 'allow';   // platform/admin bypass (before any DB call)
   try {
-    if (user.isPlatform || user.role === 'admin') return 'allow';   // platform/admin bypass
     return (await hasPermission(user.tenantId, user.role, permission)) ? 'allow' : 'deny';
-  } catch {
-    return 'allow';   // fail-open on lookup error → never hard-break a route
+  } catch (err) {
+    console.error(`[rbac] permission lookup failed for role="${user.role}" perm="${permission}" — denying:`, (err as Error)?.message);
+    return 'deny';   // fail-closed on lookup error → never silently grant access
   }
 }
 

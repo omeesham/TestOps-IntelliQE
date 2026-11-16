@@ -652,6 +652,27 @@ export function sampleFromSchema(schema: any, resolve: (n: any) => any, depth = 
 
 const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options'];
 
+/**
+ * Explain WHY a document isn't a usable OpenAPI/Swagger spec, naming the actual
+ * parse or structural problem (IQE-047.1 #3) instead of the generic "not a
+ * machine-readable API description" message. Returns null when the document is a
+ * valid-enough OpenAPI 3.x / Swagger 2.0 spec to parse.
+ */
+export function describeOpenApiProblem(text: string, doc: any): string | null {
+  if (!isObj(doc)) {
+    const t = (text || '').trim();
+    if (!t) return 'the file is empty.';
+    if (t.startsWith('{') || t.startsWith('[')) return 'it looks like JSON but did not parse — check for an unbalanced brace/bracket, a trailing comma, or an unquoted value.';
+    return 'it did not parse as JSON or YAML — check the indentation and look for a syntax error.';
+  }
+  const ver = String(doc.openapi || doc.swagger || '');
+  if (!doc.openapi && !doc.swagger) return 'it has no "openapi" (3.x) or "swagger" (2.0) version field, so it is not an OpenAPI/Swagger document.';
+  if (doc.openapi && !/^3\./.test(ver)) return `it declares openapi "${ver}", which isn't supported — only OpenAPI 3.x is read deterministically.`;
+  if (doc.swagger && !/^2\./.test(ver)) return `it declares swagger "${ver}", which isn't supported — only Swagger 2.0 is read.`;
+  if (!isObj(doc.paths) || Object.keys(doc.paths).length === 0) return 'it has no "paths" object (or it is empty), so there are no operations to import.';
+  return null;
+}
+
 /** Parse an OpenAPI 3.x or Swagger 2.0 document object into endpoints. */
 export function parseOpenApiDocument(doc: any, opts: { baseUrl?: string; sourceName?: string } = {}): ImportResult {
   const warnings: string[] = [];
@@ -910,6 +931,20 @@ export function postmanSchemaInfo(doc: any): { label: string; warning?: string }
   };
 }
 
+/** Which Postman script kinds (pre-request/test) a node carries with real code. */
+function postmanScriptKinds(node: any): ('prerequest' | 'test')[] {
+  if (!isObj(node) || !Array.isArray(node.event)) return [];
+  const out: ('prerequest' | 'test')[] = [];
+  for (const e of node.event) {
+    if (!isObj(e)) continue;
+    const exec = Array.isArray(e.script?.exec) ? e.script.exec.join('\n') : String(e.script?.exec ?? '');
+    const listen = String(e.listen || '');
+    if (exec.trim() && (listen === 'prerequest' || listen === 'test')) out.push(listen as 'prerequest' | 'test');
+  }
+  return out;
+}
+const POSTMAN_SCRIPT_LABEL: Record<'prerequest' | 'test', string> = { prerequest: 'pre-request script', test: 'test script' };
+
 export function parsePostmanCollection(doc: any, opts: { variables?: Record<string, string>; sourceName?: string } = {}): ImportResult {
   const warnings: string[] = [];
   const items: ImportItemResult[] = [];
@@ -926,15 +961,31 @@ export function parsePostmanCollection(doc: any, opts: { variables?: Record<stri
   const source: ImportedEndpoint['source'] = { method: 'postman', name: opts.sourceName || String(doc.info?.name || 'Postman collection') };
   let unresolved = 0;
   let capped = false;
+  let scriptsSkipped = 0;
   // Per-request dedupe (method+url), so `items` and `endpoints` agree on duplicates.
   const seen = new Set<string>();
+
+  // Pre-request/test scripts aren't executed — record each as a skipped item
+  // (with reason) so it shows in the imported/skipped/failed tally (IQE-048.1 #5).
+  const recordScripts = (node: any, label: string, folderPath: string[], method?: string, url?: string): void => {
+    for (const kind of postmanScriptKinds(node)) {
+      scriptsSkipped++;
+      items.push({
+        name: `${label} — ${POSTMAN_SCRIPT_LABEL[kind]}`,
+        folderPath, method, url,
+        outcome: 'skipped',
+        code: kind === 'prerequest' ? 'POSTMAN_PREREQUEST_SKIPPED' : 'POSTMAN_TEST_SKIPPED',
+        message: `The Postman ${POSTMAN_SCRIPT_LABEL[kind]} was not imported — IntelliQE does not execute collection scripts. Recreate the logic as a flow step if it is needed.`,
+      });
+    }
+  };
 
   const walk = (list: any[], folder: string[], inheritedAuth: typeof collectionAuth) => {
     for (const it of list) {
       if (!isObj(it)) continue;
       const itemAuth = it.auth ? postmanAuth(it.auth) : inheritedAuth;
       // A folder (has nested `item`) — recurse; it is not itself a request.
-      if (Array.isArray(it.item)) { walk(it.item, [...folder, String(it.name || '')], itemAuth); continue; }
+      if (Array.isArray(it.item)) { recordScripts(it, String(it.name || 'folder'), folder); walk(it.item, [...folder, String(it.name || '')], itemAuth); continue; }
       const req = isObj(it.request) ? it.request : (typeof it.request === 'string' ? { url: it.request, method: 'GET' } : null);
       // Neither a folder nor a request — not a countable item.
       if (!req) continue;
@@ -1056,12 +1107,15 @@ export function parsePostmanCollection(doc: any, opts: { variables?: Record<stri
       if (bodyNote) { warnings.push(`"${name}": ${bodyNote}`); record('imported', 'POSTMAN_BODY_FILE_UNSUPPORTED', bodyNote, urlTemplate); }
       else if (hadUnresolved) { record('imported', 'POSTMAN_UNRESOLVED_VAR', 'Imported with unresolved {{variables}} — a placeholder host was substituted. Map the variables to an Environment before running.', urlTemplate); }
       else { record('imported', 'OK', 'Imported.', urlTemplate); }
+      recordScripts(it, name, folderPath, method, urlTemplate);
     }
   };
+  recordScripts(doc, String(doc.info?.name || 'collection'), []);   // collection-level scripts
   walk(Array.isArray(doc.item) ? doc.item : [], [], collectionAuth);
 
   if (unresolved) warnings.push(`${unresolved} request${unresolved === 1 ? '' : 's'} used collection variables with no value (e.g. {{baseUrl}}) — placeholders were substituted. Define them in an Environment before running.`);
   if (capped) warnings.push(`The collection has more than ${MAX_BULK_ENDPOINTS} requests — the first ${MAX_BULK_ENDPOINTS} were imported.`);
+  if (scriptsSkipped) warnings.push(`${scriptsSkipped} pre-request/test script${scriptsSkipped === 1 ? '' : 's'} were not imported (IntelliQE does not run Postman scripts) — see the skipped items for each.`);
 
   const summary: ImportSummary = {
     imported: items.filter((i) => i.outcome === 'imported').length,
@@ -1167,17 +1221,54 @@ export function postmanOutline(doc: any): {
    HAR recordings (browser DevTools → Save all as HAR)
    ──────────────────────────────────────────────────────────────── */
 
-export function parseHar(doc: any, sourceName = 'HAR recording'): ImportResult {
+/** True when a HAR entry looks like API traffic (not a page asset). */
+function isApiHarEntry(req: any, res: any): boolean {
+  if (!isObj(req) || !req.url) return false;
+  const mime = String(res?.content?.mimeType || '');
+  return /json|xml|graphql|text\/plain/i.test(mime) || /\/api\//i.test(String(req.url));
+}
+
+function harHost(url: string): string {
+  try { return new URL(url).host; } catch { return ''; }
+}
+
+/**
+ * Distinct domains in a HAR, with request counts — so the import UI can let the
+ * reviewer choose which hosts to turn into endpoints before any are created
+ * (IQE-051.1 #4). A browsing recording routinely mixes the app's own API with
+ * CDNs and third-party analytics/auth hosts; this disambiguates them.
+ */
+export function harDomains(doc: any): { host: string; requestCount: number; apiRequestCount: number }[] {
+  const entries: any[] = Array.isArray(doc?.log?.entries) ? doc.log.entries : [];
+  const byHost = new Map<string, { host: string; requestCount: number; apiRequestCount: number }>();
+  for (const e of entries) {
+    const req = e?.request; const res = e?.response;
+    if (!isObj(req) || !req.url) continue;
+    const host = harHost(String(req.url));
+    if (!host) continue;
+    const row = byHost.get(host) || { host, requestCount: 0, apiRequestCount: 0 };
+    row.requestCount += 1;
+    if (isApiHarEntry(req, res)) row.apiRequestCount += 1;
+    byHost.set(host, row);
+  }
+  return [...byHost.values()].sort((a, b) => b.apiRequestCount - a.apiRequestCount || b.requestCount - a.requestCount);
+}
+
+export function parseHar(doc: any, sourceName = 'HAR recording', opts: { domains?: string[] } = {}): ImportResult {
   const entries: any[] = Array.isArray(doc?.log?.entries) ? doc.log.entries : [];
   const endpoints: ImportedEndpoint[] = [];
   const source: ImportedEndpoint['source'] = { method: 'postman', name: sourceName };
+  // When a domain filter is supplied, only import entries from the chosen hosts.
+  const domainSet = Array.isArray(opts.domains) && opts.domains.length
+    ? new Set(opts.domains.map((d) => String(d).toLowerCase())) : null;
   for (const e of entries) {
     if (endpoints.length >= MAX_BULK_ENDPOINTS) break;
     const req = e?.request; const res = e?.response;
     if (!isObj(req) || !req.url) continue;
+    if (domainSet && !domainSet.has(harHost(String(req.url)).toLowerCase())) continue;
     const mime = String(res?.content?.mimeType || '');
     // Only API traffic — skip page assets.
-    if (!/json|xml|graphql|text\/plain/i.test(mime) && !/\/api\//i.test(String(req.url))) continue;
+    if (!isApiHarEntry(req, res)) continue;
     // Keep Cookie (it is masked into the environment below — IQE-051.1 #3);
     // still drop pseudo-headers and non-request noise.
     const headers = (Array.isArray(req.headers) ? req.headers : [])
@@ -1219,6 +1310,19 @@ export function parseHar(doc: any, sourceName = 'HAR recording'): ImportResult {
    ──────────────────────────────────────────────────────────────── */
 
 const BRUNO_METHODS = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'connect', 'trace'];
+
+/** Bruno blocks that carry logic IntelliQE does not execute — recorded as
+ *  skipped (with reason) so they are never dropped silently (IQE-049.1 #4). */
+const BRUNO_SCRIPT_BLOCKS: { key: string; label: string; code: string }[] = [
+  { key: 'script:pre-request', label: 'pre-request script', code: 'BRUNO_PREREQUEST_SKIPPED' },
+  { key: 'script:post-response', label: 'post-response script', code: 'BRUNO_POSTRESPONSE_SKIPPED' },
+  { key: 'tests', label: 'tests block', code: 'BRUNO_TESTS_SKIPPED' },
+  { key: 'assert', label: 'assertions block', code: 'BRUNO_ASSERT_SKIPPED' },
+];
+/** The script/test/assert blocks present (with content) in one Bruno request doc. */
+function brunoSkippedBlocks(blocks: Record<string, string>): { label: string; code: string }[] {
+  return BRUNO_SCRIPT_BLOCKS.filter((b) => (blocks[b.key] || '').trim().length > 0).map((b) => ({ label: b.label, code: b.code }));
+}
 
 /** Parse one `.bru` document into its named blocks ("meta", "get", "headers", …). */
 function brunoBlocks(text: string): Record<string, string> {
@@ -1303,8 +1407,10 @@ export function parseBrunoCollection(text: string, opts: { variables?: Record<st
 
   // Pass 2 — build an endpoint per request document.
   const endpoints: ImportedEndpoint[] = [];
+  const items: ImportItemResult[] = [];
   const source: ImportedEndpoint['source'] = { method: 'bruno', name: sourceName };
   let unresolved = 0;
+  let scriptsSkipped = 0;
   for (const blocks of reqDocs) {
     if (endpoints.length >= MAX_BULK_ENDPOINTS) break;
     const methodKey = Object.keys(blocks).find((k) => BRUNO_METHODS.includes(k))!;
@@ -1360,18 +1466,42 @@ export function parseBrunoCollection(text: string, opts: { variables?: Record<st
       queryParams: queryParams.length ? queryParams : undefined,
       style: isGraphql ? 'graphql' : 'rest',
     }, source);
-    if (ep) endpoints.push(ep);
+
+    const method = methodKey.toUpperCase();
+    const urlTemplate = String(req.url || '');
+    const itemName = meta.name || `${method} ${urlTemplate || url}`;
+    const hadUnresolved = /\{\{/.test(urlTemplate);
+    if (ep) {
+      endpoints.push(ep);
+      items.push({ name: itemName, folderPath: [], method, url: urlTemplate || url, outcome: 'imported', code: hadUnresolved ? 'BRUNO_UNRESOLVED_VAR' : 'OK', message: hadUnresolved ? 'Imported with unresolved {{variables}} — a placeholder host was substituted. Map them to an Environment before running.' : 'Imported.' });
+    } else {
+      items.push({ name: itemName, folderPath: [], method, url: urlTemplate, outcome: 'failed', code: 'BRUNO_INVALID_ENDPOINT', message: 'The request could not be turned into a valid endpoint (missing or malformed URL/method).' });
+    }
+    // Script/tests/assert blocks aren't executed — record each as skipped (IQE-049.1 #4).
+    for (const b of brunoSkippedBlocks(blocks)) {
+      scriptsSkipped++;
+      items.push({ name: `${itemName} — ${b.label}`, folderPath: [], method, url: urlTemplate, outcome: 'skipped', code: b.code, message: `The Bruno ${b.label} was not imported — IntelliQE does not execute Bruno scripts/assertions. Recreate the logic as a flow step if it is needed.` });
+    }
   }
 
   if (!endpoints.length) warnings.push('No Bruno request (a get/post/… block) was found. Paste the request .bru file(s), or drop the whole collection folder.');
   if (unresolved) warnings.push(`${unresolved} request${unresolved === 1 ? '' : 's'} used {{variables}} with no value — placeholders were substituted. Add the collection's environment file, or define the variables in an Environment, before running.`);
+  if (scriptsSkipped) warnings.push(`${scriptsSkipped} Bruno script/tests/assert block${scriptsSkipped === 1 ? '' : 's'} were not imported (IntelliQE does not run Bruno scripts) — see the skipped items for each.`);
   const many = endpoints.length > 1 || reqDocs.length > 1;
+  // Structured imported/skipped/failed tally, like Postman (IQE-049.1 #5).
+  const summary: ImportSummary = {
+    imported: items.filter((i) => i.outcome === 'imported').length,
+    skipped: items.filter((i) => i.outcome === 'skipped').length,
+    failed: items.filter((i) => i.outcome === 'failed').length,
+    total: items.length,
+  };
   return {
     endpoints: dedupeEndpoints(endpoints),
     parser: 'bruno',
     format: many ? 'Bruno collection' : 'Bruno',
     warnings,
     notice: endpoints.length ? `${endpoints.length} request${endpoints.length === 1 ? '' : 's'} read from the Bruno ${many ? 'collection' : 'file'}.` : undefined,
+    ...(items.length ? { items, summary } : {}),
   };
 }
 
@@ -1487,6 +1617,7 @@ export function parseBrunoTree(files: BrunoTreeFile[], opts: { sourceName?: stri
 
   const endpoints: ImportedEndpoint[] = [];
   const warnings: string[] = [];
+  const items: ImportItemResult[] = [];
   for (const { folder, texts } of groups.values()) {
     const folderBits: string[] = [];
     if (rootCollection) folderBits.push(rootCollection);
@@ -1509,11 +1640,19 @@ export function parseBrunoTree(files: BrunoTreeFile[], opts: { sourceName?: stri
       endpoints.push(ep);
     }
     for (const w of r.warnings) if (!warnings.includes(w)) warnings.push(w);
+    // Carry each folder group's per-request outcomes up, tagged with its folder.
+    for (const it of r.items || []) items.push({ ...it, folderPath: folder });
   }
 
   const deduped = dedupeEndpoints(endpoints);
   if (!deduped.length) warnings.unshift('No Bruno request (a get/post/… block) was found in the collection.');
   const folderCount = new Set([...groups.keys()].filter(Boolean)).size;
+  const summary: ImportSummary = {
+    imported: items.filter((i) => i.outcome === 'imported').length,
+    skipped: items.filter((i) => i.outcome === 'skipped').length,
+    failed: items.filter((i) => i.outcome === 'failed').length,
+    total: items.length,
+  };
   return {
     endpoints: deduped,
     parser: 'bruno',
@@ -1522,6 +1661,7 @@ export function parseBrunoTree(files: BrunoTreeFile[], opts: { sourceName?: stri
     notice: deduped.length
       ? `${deduped.length} request${deduped.length === 1 ? '' : 's'} read from the Bruno collection${folderCount ? ` across ${folderCount} folder${folderCount === 1 ? '' : 's'}` : ''}${brunoEnvironments.length ? ` · ${brunoEnvironments.length} environment${brunoEnvironments.length === 1 ? '' : 's'}` : ''}.`
       : undefined,
+    ...(items.length ? { items, summary } : {}),
     ...(brunoEnvironments.length ? { brunoEnvironments } : {}),
   };
 }
@@ -1574,6 +1714,7 @@ export function parseCurlCommands(text: string, sourceName = 'cURL'): ImportResu
     let auth: any = { type: 'none' };
     let body: string | undefined;
     const form: Record<string, string> = {};
+    const dropped: string[] = [];   // un-importable options, enumerated (IQE-050.1 #5)
     for (let i = 0; i < toks.length; i++) {
       const t = toks[i]!;
       const next = () => toks[++i] ?? '';
@@ -1592,7 +1733,13 @@ export function parseCurlCommands(text: string, sourceName = 'cURL'): ImportResu
       else if (t === '-F' || t === '--form') { const f = next(); const eq = f.indexOf('='); if (eq > 0) form[f.slice(0, eq)] = f.slice(eq + 1); }
       else if (t === '-u' || t === '--user') auth = { type: 'basic', value: next() };
       else if (t === '--url') url = next();
-      else if (t === '-A' || t === '--user-agent' || t === '-o' || t === '--output' || t === '-b' || t === '--cookie' || t === '-e' || t === '--referer' || t === '--max-time' || t === '--connect-timeout') next();
+      // Options that map cleanly to a request header — import them, don't drop them.
+      else if (t === '-A' || t === '--user-agent') headers.push({ key: 'User-Agent', value: next() });
+      else if (t === '-e' || t === '--referer') headers.push({ key: 'Referer', value: next().replace(/;auto$/i, '') });
+      else if (t === '-b' || t === '--cookie') { const v = next(); if (v.includes('=')) headers.push({ key: 'Cookie', value: v }); else dropped.push(`${t} (cookie file "${v}" — not read)`); }
+      // Options with no request equivalent — enumerate them instead of silently dropping.
+      else if (t === '-o' || t === '--output' || t === '-O' || t === '--remote-name') { if (t === '-o' || t === '--output') next(); dropped.push(`${t} (writes the response to a file)`); }
+      else if (t === '--max-time' || t === '--connect-timeout') { const v = next(); dropped.push(`${t} ${v} (a client timeout, not part of the request)`); }
       else if (t === '-G' || t === '--get') method = method || 'GET';
       else if (t.startsWith('-')) { /* flag without value */ }
       else if (!url && /^https?:\/\//i.test(t.replace(/^['"]|['"]$/g, ''))) url = t.replace(/^['"]|['"]$/g, '');
@@ -1610,6 +1757,7 @@ export function parseCurlCommands(text: string, sourceName = 'cURL'): ImportResu
     const apiKeyH = headers.findIndex((h) => /^(x-api-key|api-key|apikey)$/i.test(h.key));
     if (apiKeyH !== -1 && auth.type === 'none') { auth = { type: 'apikey', value: headers[apiKeyH]!.value, headerName: headers[apiKeyH]!.key }; headers.splice(apiKeyH, 1); }
     if (!url) { warnings.push(`A cURL command had no URL and was skipped: "${chunk.slice(0, 60)}…"`); continue; }
+    if (dropped.length) warnings.push(`${method} ${url}: ignored unsupported cURL option(s) — ${[...new Set(dropped)].join('; ')}.`);
     const ep = finalizeEndpoint({
       title: `${method} ${(() => { try { return new URL(url).pathname; } catch { return url; } })()}`,
       method, url, headers, auth, body,
@@ -1854,19 +2002,21 @@ function unwrapType(t: any): { name: string; kind: string; list: boolean; nonNul
   return { name: cur?.name || 'String', kind: cur?.kind || 'SCALAR', list, nonNull };
 }
 
-export async function introspectGraphql(url: string, headers: Record<string, string> = {}, auth?: { type: string; value?: string }): Promise<ImportResult> {
-  const h: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json', ...headers };
-  if (auth?.value && auth.type === 'bearer') h.Authorization = `Bearer ${cleanAuthValue(auth.value)}`;
-  if (auth?.value && auth.type === 'basic') h.Authorization = `Basic ${Buffer.from(cleanAuthValue(auth.value)).toString('base64')}`;
-  if (auth?.value && auth.type === 'apikey') h['X-API-Key'] = cleanAuthValue(auth.value);
-  const r = await fetchRemote(url, { method: 'POST', headers: h, body: JSON.stringify({ query: INTROSPECTION_QUERY }) });
-  if (r.status >= 400) throw new Error(`The GraphQL endpoint answered ${r.status} to the introspection query${r.status === 401 || r.status === 403 ? ' — add credentials' : ''}.`);
-  let schema: any;
-  try { schema = JSON.parse(r.text)?.data?.__schema; } catch { /* handled below */ }
-  if (!schema) throw new Error('The endpoint did not return a GraphQL introspection result — introspection may be disabled. Paste the SDL as text instead.');
-
-  const types = new Map<string, any>();
-  for (const t of schema.types || []) types.set(t.name, t);
+/**
+ * Build GraphQL operation endpoints (one per Query/Mutation field) from a type
+ * map in introspection shape. Shared by the live introspection path and the
+ * deterministic SDL parser so both produce identical operations (IQE-052.1 #1).
+ */
+function buildGraphqlEndpoints(cfg: {
+  types: Map<string, any>;
+  queryTypeName?: string;
+  mutationTypeName?: string;
+  url: string;
+  headers: Record<string, string>;
+  auth?: { type: string; value?: string };
+  source: ImportedEndpoint['source'];
+}): ImportedEndpoint[] {
+  const { types, url, headers, auth, source } = cfg;
   const scalarSample = (name: string, argName = ''): string => {
     if (name === 'Int') return '1';
     if (name === 'Float') return '1.5';
@@ -1898,15 +2048,12 @@ export async function introspectGraphql(url: string, headers: Record<string, str
   };
 
   const endpoints: ImportedEndpoint[] = [];
-  const source: ImportedEndpoint['source'] = { method: 'graphql', name: url };
   const build = (rootName: string | undefined, op: 'query' | 'mutation') => {
     if (!rootName) return;
     const root = types.get(rootName);
     for (const f of root?.fields || []) {
       if (endpoints.length >= MAX_BULK_ENDPOINTS) return;
-      const args = (f.args || []).filter((a: any) => unwrapType(a.type).nonNull || a.defaultValue === null || a.defaultValue === undefined).slice(0, 6);
       const argStr = (f.args || []).length ? `(${(f.args || []).slice(0, 6).map((a: any) => `${a.name}: ${argSample(a.type, a.name, 0)}`).join(', ')})` : '';
-      void args;
       const query = `${op} { ${f.name}${argStr} ${selection(f.type, 0)} }`;
       const ep = finalizeEndpoint({
         title: `${op === 'query' ? 'QUERY' : 'MUTATION'} ${f.name}`,
@@ -1925,11 +2072,181 @@ export async function introspectGraphql(url: string, headers: Record<string, str
       if (ep) endpoints.push(ep);
     }
   };
-  build(schema.queryType?.name, 'query');
-  build(schema.mutationType?.name, 'mutation');
+  build(cfg.queryTypeName, 'query');
+  build(cfg.mutationTypeName, 'mutation');
+  return endpoints;
+}
+
+/** Count the non-built-in types in a schema (for surfacing — IQE-052.1 #2). */
+function graphqlTypeSummary(types: Map<string, any>): { objects: string[]; enums: string[]; inputs: string[]; interfaces: string[]; scalars: string[] } {
+  const out = { objects: [] as string[], enums: [] as string[], inputs: [] as string[], interfaces: [] as string[], scalars: [] as string[] };
+  const BUILTIN = new Set(['String', 'Int', 'Float', 'Boolean', 'ID']);
+  const ROOTS = new Set(['Query', 'Mutation', 'Subscription']);
+  for (const t of types.values()) {
+    const n = String(t.name || '');
+    if (!n || n.startsWith('__') || BUILTIN.has(n)) continue;
+    if (t.kind === 'OBJECT') { if (!ROOTS.has(n)) out.objects.push(n); }
+    else if (t.kind === 'ENUM') out.enums.push(n);
+    else if (t.kind === 'INPUT_OBJECT') out.inputs.push(n);
+    else if (t.kind === 'INTERFACE') out.interfaces.push(n);
+    else if (t.kind === 'SCALAR') out.scalars.push(n);
+  }
+  return out;
+}
+
+/** A short, user-facing summary of the schema's types (IQE-052.1 #2). */
+function graphqlTypeSummaryText(types: Map<string, any>): string {
+  const s = graphqlTypeSummary(types);
+  const bits: string[] = [];
+  if (s.objects.length) bits.push(`${s.objects.length} object type${s.objects.length === 1 ? '' : 's'}`);
+  if (s.inputs.length) bits.push(`${s.inputs.length} input${s.inputs.length === 1 ? '' : 's'}`);
+  if (s.enums.length) bits.push(`${s.enums.length} enum${s.enums.length === 1 ? '' : 's'}`);
+  if (s.interfaces.length) bits.push(`${s.interfaces.length} interface${s.interfaces.length === 1 ? '' : 's'}`);
+  if (s.scalars.length) bits.push(`${s.scalars.length} custom scalar${s.scalars.length === 1 ? '' : 's'}`);
+  if (!bits.length) return '';
+  const named = s.objects.slice(0, 12).join(', ');
+  return ` Schema types: ${bits.join(', ')}${named ? ` (${named}${s.objects.length > 12 ? ', …' : ''})` : ''}.`;
+}
+
+/* ── Deterministic GraphQL SDL parser (no LLM) — IQE-052.1 #1 ──
+   Parses a schema document (the SDL a `.graphql`/text upload carries) into the
+   same type map the introspection path builds, then emits one operation per
+   Query/Mutation field. A best-effort structural parser: it does not validate
+   the schema, but it never needs an LLM. */
+
+/** Split a comma list respecting (), [] and {} nesting. */
+function splitTopLevel(s: string, sep: string): string[] {
+  const out: string[] = [];
+  let depth = 0, buf = '';
+  for (const ch of s) {
+    if ('([{'.includes(ch)) depth++;
+    else if (')]}'.includes(ch)) depth--;
+    if (ch === sep && depth <= 0) { out.push(buf); buf = ''; } else buf += ch;
+  }
+  if (buf.trim()) out.push(buf);
+  return out;
+}
+
+/** Strip comments and descriptions so block/field regexes don't trip on them. */
+function stripGraphqlComments(sdl: string): string {
+  return sdl
+    .replace(/"""[\s\S]*?"""/g, ' ')          // block descriptions
+    .replace(/"(?:[^"\\]|\\.)*"/g, ' ')        // single-line descriptions / string defaults
+    .replace(/#[^\n]*/g, ' ');                 // line comments
+}
+
+/** An SDL type string (`[User!]!`) → introspection TypeRef, resolving the base kind. */
+function sdlTypeRef(typeStr: string, kindOf: (n: string) => string): any {
+  let s = typeStr.trim();
+  const outerNonNull = s.endsWith('!'); if (outerNonNull) s = s.slice(0, -1).trim();
+  const list = s.startsWith('[') && s.endsWith(']');
+  let inner = list ? s.slice(1, -1).trim() : s;
+  const innerNonNull = inner.endsWith('!'); if (innerNonNull) inner = inner.slice(0, -1).trim();
+  const baseName = inner.replace(/[[\]!]/g, '').trim() || 'String';
+  let ref: any = { kind: kindOf(baseName), name: baseName, ofType: null };
+  if (innerNonNull) ref = { kind: 'NON_NULL', name: null, ofType: ref };
+  if (list) ref = { kind: 'LIST', name: null, ofType: ref };
+  if (outerNonNull) ref = { kind: 'NON_NULL', name: null, ofType: ref };
+  return ref;
+}
+
+export function parseGraphqlSdl(sdl: string, sourceName = 'GraphQL SDL'): ImportResult {
+  const clean = stripGraphqlComments(sdl);
+
+  // 1. Extract type/input/interface/enum blocks with balanced-brace scanning.
+  const blocks: { keyword: string; name: string; body: string }[] = [];
+  const re = /\b(type|input|interface|enum)\s+([A-Za-z_]\w*)[^{]*\{/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(clean)) !== null) {
+    let depth = 1; let i = re.lastIndex;
+    for (; i < clean.length && depth > 0; i++) { if (clean[i] === '{') depth++; else if (clean[i] === '}') depth--; }
+    blocks.push({ keyword: m[1]!, name: m[2]!, body: clean.slice(re.lastIndex, i - 1) });
+    re.lastIndex = i;
+  }
+
+  // 2. First pass — know every declared type's kind (so field types resolve).
+  const kindByName = new Map<string, string>();
+  const KW_KIND: Record<string, string> = { type: 'OBJECT', input: 'INPUT_OBJECT', interface: 'INTERFACE', enum: 'ENUM' };
+  for (const b of blocks) kindByName.set(b.name, KW_KIND[b.keyword] || 'OBJECT');
+  for (const sm of clean.matchAll(/\bscalar\s+([A-Za-z_]\w*)/g)) kindByName.set(sm[1]!, 'SCALAR');
+  const kindOf = (n: string): string => kindByName.get(n) || 'SCALAR';
+
+  // 3. Second pass — build the introspection-shape type map.
+  const parseFields = (body: string): any[] => {
+    const fields: any[] = [];
+    const fre = /([A-Za-z_]\w*)[ \t]*(\(([\s\S]*?)\))?[ \t]*:[ \t]*([^\n{,]+)/g;
+    let fm: RegExpExecArray | null;
+    while ((fm = fre.exec(body)) !== null) {
+      const args = (fm[3] || '').trim()
+        ? splitTopLevel(fm[3]!, ',').map((p) => { const am = /^\s*([A-Za-z_]\w*)\s*:\s*([^=]+?)(?:=|$)/.exec(p); return am ? { name: am[1]!, type: sdlTypeRef(am[2]!, kindOf) } : null; }).filter(Boolean)
+        : [];
+      fields.push({ name: fm[1]!, type: sdlTypeRef(fm[4]!.trim(), kindOf), args });
+    }
+    return fields;
+  };
+  const types = new Map<string, any>();
+  for (const b of blocks) {
+    if (b.keyword === 'enum') {
+      // Enum values may be one-per-line or comma-separated on one line.
+      const enumValues = b.body.split(/[\s,]+/).map((l) => l.trim()).filter((l) => /^[A-Za-z_]\w*$/.test(l)).map((name) => ({ name }));
+      types.set(b.name, { kind: 'ENUM', name: b.name, enumValues });
+    } else if (b.keyword === 'input') {
+      types.set(b.name, { kind: 'INPUT_OBJECT', name: b.name, inputFields: parseFields(b.body) });
+    } else {
+      types.set(b.name, { kind: KW_KIND[b.keyword], name: b.name, fields: parseFields(b.body) });
+    }
+  }
+
+  // 4. Root type names — from an explicit `schema { query: … }` or the defaults.
+  let queryName = types.has('Query') ? 'Query' : undefined;
+  let mutationName = types.has('Mutation') ? 'Mutation' : undefined;
+  const schemaM = /\bschema\b[^{]*\{([\s\S]*?)\}/.exec(clean);
+  if (schemaM) {
+    const q = /query\s*:\s*([A-Za-z_]\w*)/.exec(schemaM[1]!); if (q) queryName = q[1];
+    const mu = /mutation\s*:\s*([A-Za-z_]\w*)/.exec(schemaM[1]!); if (mu) mutationName = mu[1];
+  }
+
+  const source: ImportedEndpoint['source'] = { method: 'graphql', name: sourceName };
+  // Every GraphQL operation shares the endpoint URL + POST method, so they must
+  // NOT be deduped by method+url (that would collapse them to one) — they differ
+  // by operation/body, exactly as the introspection path keeps them.
+  const endpoints = buildGraphqlEndpoints({ types, queryTypeName: queryName, mutationTypeName: mutationName, url: PLACEHOLDER_HOST, headers: {}, source });
+  const warnings: string[] = [];
+  if (!endpoints.length) warnings.push('No Query or Mutation operations were found in the SDL — check that the schema defines a Query (or Mutation) type.');
+  else warnings.push(`The GraphQL endpoint URL isn't in the SDL — ${PLACEHOLDER_HOST} was used as a placeholder. Set the real URL in an Environment (or re-import by URL to introspect) before running.`);
+  return {
+    endpoints,
+    parser: 'graphql',
+    format: 'GraphQL SDL',
+    warnings,
+    notice: endpoints.length ? `${endpoints.length} operation${endpoints.length === 1 ? '' : 's'} parsed from the GraphQL SDL.${graphqlTypeSummaryText(types)}` : undefined,
+  };
+}
+
+export async function introspectGraphql(url: string, headers: Record<string, string> = {}, auth?: { type: string; value?: string }): Promise<ImportResult> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json', ...headers };
+  if (auth?.value && auth.type === 'bearer') h.Authorization = `Bearer ${cleanAuthValue(auth.value)}`;
+  if (auth?.value && auth.type === 'basic') h.Authorization = `Basic ${Buffer.from(cleanAuthValue(auth.value)).toString('base64')}`;
+  if (auth?.value && auth.type === 'apikey') h['X-API-Key'] = cleanAuthValue(auth.value);
+  const r = await fetchRemote(url, { method: 'POST', headers: h, body: JSON.stringify({ query: INTROSPECTION_QUERY }) });
+  if (r.status >= 400) throw new Error(`The GraphQL endpoint answered ${r.status} to the introspection query${r.status === 401 || r.status === 403 ? ' — add credentials' : ''}.`);
+  let schema: any;
+  try { schema = JSON.parse(r.text)?.data?.__schema; } catch { /* handled below */ }
+  if (!schema) throw new Error('The endpoint did not return a GraphQL introspection result — introspection may be disabled. Paste the SDL as text instead.');
+
+  const types = new Map<string, any>();
+  for (const t of schema.types || []) types.set(t.name, t);
+
+  const source: ImportedEndpoint['source'] = { method: 'graphql', name: url };
+  const endpoints = buildGraphqlEndpoints({
+    types,
+    queryTypeName: schema.queryType?.name,
+    mutationTypeName: schema.mutationType?.name,
+    url, headers, auth, source,
+  });
   // Mask any auth headers supplied for introspection into the environment (IQE-052.1 #4).
   const sec = secretizeEndpoints(endpoints);
-  const notice = `${sec.endpoints.length} operation${sec.endpoints.length === 1 ? '' : 's'} discovered by introspecting ${url}.${sec.moved ? ` ${sec.moved} auth secret${sec.moved === 1 ? '' : 's'} moved to the environment.` : ''}`;
+  const notice = `${sec.endpoints.length} operation${sec.endpoints.length === 1 ? '' : 's'} discovered by introspecting ${url}.${sec.moved ? ` ${sec.moved} auth secret${sec.moved === 1 ? '' : 's'} moved to the environment.` : ''}${graphqlTypeSummaryText(types)}`;
   return { endpoints: sec.endpoints, parser: 'graphql', format: 'GraphQL (introspected)', warnings: [], notice, ...(sec.moved ? { envVars: sec.envVars } : {}) };
 }
 
@@ -2116,6 +2433,10 @@ export async function importFromText(text: string, opts: TextImportOptions = {})
     const { parseWsdl } = await import('./wsdl-import.service.js');
     const wres = await parseWsdl(text, name);
     if (wres) result = wres; // authoritative for WSDL; may carry warnings/summary even with 0 endpoints
+  } else if (sniffed === 'graphql-sdl' || hint === 'graphql') {
+    // Deterministic GraphQL SDL → operations (IQE-052.1 #1), no LLM needed.
+    const g = parseGraphqlSdl(text, name);
+    if (g.endpoints.length) result = g; // else fall through to the LLM reader
   }
 
   if (result && result.endpoints.length) {
@@ -2124,6 +2445,15 @@ export async function importFromText(text: string, opts: TextImportOptions = {})
       source: { method: opts.sourceMethod!, name: e.source?.name || name, ...(opts.sourceRef?.key ? { key: opts.sourceRef.key } : {}), ...(opts.sourceRef?.url ? { url: opts.sourceRef.url } : {}) },
     }));
     return result;
+  }
+
+  // A document the user meant as (or that sniffed as) OpenAPI/Swagger but that
+  // produced no endpoints: name the actual parse/structural problem rather than
+  // falling through to the generic message or the LLM (IQE-047.1 #3).
+  if ((!result || !result.endpoints.length) && (hint === 'openapi' || hint === 'swagger' || sniffed === 'openapi')) {
+    const doc = structured?.doc ?? parseStructured(text)?.doc;
+    const problem = describeOpenApiProblem(text, doc);
+    if (problem) throw new Error(`This isn't a valid OpenAPI/Swagger document: ${problem}`);
   }
 
   // Everything else — prose, code, WSDL, spreadsheets, or a structured file the
