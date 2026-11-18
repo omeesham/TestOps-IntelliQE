@@ -21,6 +21,9 @@ export interface WorkspaceState {
   strategy: unknown | null;
   imports: unknown[];
   scenarios: unknown[];
+  /** Generated/edited Playwright specs (one per scenario, joined by testCaseId).
+   *  Persisted so the Scripts tab survives logout/reload. */
+  scripts: unknown[];
   updatedAt?: string;
 }
 
@@ -45,7 +48,7 @@ function clampJson(value: unknown, fallback: string): string {
 /** Load a user's workspace, or null when they have none saved yet. */
 export async function getWorkspace(tenantId: string, owner: string): Promise<WorkspaceState | null> {
   const { rows } = await pool.query(
-    `SELECT endpoints, selected, profile, strategy, imports, scenarios, updated_at
+    `SELECT endpoints, selected, profile, strategy, imports, scenarios, scripts, updated_at
        FROM api_catalog_workspace WHERE tenant_id = $1 AND owner = $2`,
     [tenantId, owner],
   );
@@ -58,6 +61,7 @@ export async function getWorkspace(tenantId: string, owner: string): Promise<Wor
     strategy: parseJson<unknown | null>(r.strategy, null),
     imports: parseJson<unknown[]>(r.imports, []),
     scenarios: parseJson<unknown[]>(r.scenarios, []),
+    scripts: parseJson<unknown[]>(r.scripts, []),
     updatedAt: r.updated_at ? String(r.updated_at) : undefined,
   };
 }
@@ -65,7 +69,7 @@ export async function getWorkspace(tenantId: string, owner: string): Promise<Wor
 /** Merge a partial update into the user's workspace row (creating it if needed). */
 export async function saveWorkspace(tenantId: string, owner: string, patch: WorkspacePatch): Promise<WorkspaceState> {
   const current = (await getWorkspace(tenantId, owner)) || {
-    endpoints: [], selected: [], profile: null, strategy: null, imports: [], scenarios: [],
+    endpoints: [], selected: [], profile: null, strategy: null, imports: [], scenarios: [], scripts: [],
   };
   const next: WorkspaceState = {
     endpoints: patch.endpoints ?? current.endpoints,
@@ -74,6 +78,7 @@ export async function saveWorkspace(tenantId: string, owner: string, patch: Work
     strategy: patch.strategy !== undefined ? patch.strategy : current.strategy,
     imports: patch.imports ?? current.imports,
     scenarios: patch.scenarios ?? current.scenarios,
+    scripts: patch.scripts ?? current.scripts,
   };
   await pool.query(
     `MERGE INTO api_catalog_workspace WITH (HOLDLOCK) AS t
@@ -81,9 +86,9 @@ export async function saveWorkspace(tenantId: string, owner: string, patch: Work
          ON t.tenant_id = s.tenant_id AND t.owner = s.owner
        WHEN MATCHED THEN UPDATE SET
          endpoints = $3, selected = $4, profile = $5, strategy = $6,
-         imports = $7, scenarios = $8, updated_at = SYSUTCDATETIME()
-       WHEN NOT MATCHED THEN INSERT (tenant_id, owner, endpoints, selected, profile, strategy, imports, scenarios)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8);`,
+         imports = $7, scenarios = $8, scripts = $9, updated_at = SYSUTCDATETIME()
+       WHEN NOT MATCHED THEN INSERT (tenant_id, owner, endpoints, selected, profile, strategy, imports, scenarios, scripts)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);`,
     [
       tenantId, owner,
       clampJson(next.endpoints, '[]'),
@@ -92,6 +97,7 @@ export async function saveWorkspace(tenantId: string, owner: string, patch: Work
       next.strategy == null ? null : clampJson(next.strategy, 'null'),
       clampJson(next.imports, '[]'),
       clampJson(next.scenarios, '[]'),
+      clampJson(next.scripts, '[]'),
     ],
   );
   return (await getWorkspace(tenantId, owner))!;

@@ -185,6 +185,7 @@ import { getApiOverview, listApiRuns, getApiRunDetail, recordImport, listImports
 import { runHeadlessApiRun } from '../services/api-run.service.js';
 import { startJob, getJob, setJobProgress } from '../services/async-jobs.service.js';
 import { runGenerationOnly } from '../agents/pipeline.js';
+import { assembleRequirementGrounding, hasRequirementRefs, type RequirementRefs } from '../services/api-requirement-grounding.service.js';
 import { sanitizeApiSpec } from '../utils/api-spec.js';
 import type { ApiSpec } from '../agents/state.js';
 
@@ -1150,6 +1151,7 @@ function workspacePatchFromBody(body: any): WorkspacePatch {
   if (body?.strategy !== undefined) patch.strategy = body.strategy;   // object or null
   if (Array.isArray(body?.imports)) patch.imports = body.imports;
   if (Array.isArray(body?.scenarios)) patch.scenarios = body.scenarios;
+  if (Array.isArray(body?.scripts)) patch.scripts = body.scripts;
   return patch;
 }
 
@@ -1796,7 +1798,28 @@ router.post('/design', async (req: Request, res: Response) => {
 
   const rawLayers = req.body?.apiLayers;
   const rawProfile = req.body?.apiProfile;
-  const requirements = typeof req.body?.requirements === 'string' ? req.body.requirements.slice(0, 4000) : '';
+  const freeText = typeof req.body?.requirements === 'string' ? req.body.requirements.slice(0, 4000) : '';
+  // Optional structured requirement grounding: ids of BRD/FRD documents the
+  // tenant already imported. Their acceptance criteria / business rules /
+  // FR→endpoint maps are read back server-side and folded into the generation
+  // grounding (closing the gap where stored requirements never reached the
+  // generator). Absent = free-text only, as before.
+  const rawRefs = req.body?.requirementRefs;
+  const requirementRefs: RequirementRefs | null =
+    rawRefs && typeof rawRefs === 'object'
+      ? {
+          brdDocIds: Array.isArray(rawRefs.brdDocIds) ? rawRefs.brdDocIds.map((x: unknown) => String(x)).slice(0, 20) : undefined,
+          frdDocIds: Array.isArray(rawRefs.frdDocIds) ? rawRefs.frdDocIds.map((x: unknown) => String(x)).slice(0, 20) : undefined,
+        }
+      : null;
+  // Run the Requirement/Audit/Planner LLM stages ahead of generation. Defaults
+  // ON whenever there is requirement context to ground in — structured BRD/FRD
+  // refs OR a free-text brief (e.g. a StoryGen-authored strategy). A plain run
+  // with no requirement context stays single-stage (no added token cost). An
+  // explicit `enrichWithAgents` flag overrides the default either way.
+  const enrichWithAgents = typeof req.body?.enrichWithAgents === 'boolean'
+    ? req.body.enrichWithAgents
+    : (hasRequirementRefs(requirementRefs) || freeText.trim().length > 0);
   // Optional active environment: the generator resolves {{vars}} + the base URL
   // against it at render time (secrets revealed server-side). Absent = design the
   // endpoints exactly as sent (the prior behaviour).
@@ -1804,6 +1827,10 @@ router.post('/design', async (req: Request, res: Response) => {
   const jobId = startJob(tenantId, async (id) => {
     setJobProgress(id, { phase: 'design', done: 0, total: specs.length, message: 'Starting…' });
     const env = environmentId ? await getEnvironment(tenantId, environmentId, { reveal: true }) : null;
+    // Compose free text + stored BRD/FRD grounding into the requirements the
+    // pipeline grounds generation in.
+    const grounding = enrichWithAgents ? await assembleRequirementGrounding(tenantId, requirementRefs) : '';
+    const requirements = [freeText, grounding].filter(Boolean).join('\n\n').slice(0, 12000);
     const state = await runGenerationOnly(requirements, {
       llm, tenantId,
       apiSpecs: specs,
@@ -1812,6 +1839,7 @@ router.post('/design', async (req: Request, res: Response) => {
         ? { insights: rawProfile.insights.map((i: unknown) => String(i)).slice(0, 8) }
         : null,
       apiEnvironment: env,
+      enrichWithAgents,
       appContext: { targetUrl: env?.baseUrl || specs[0]!.baseUrl, appName: 'API', environment: undefined, explorePrompt: undefined, roles: undefined },
       onProgress: (p) => setJobProgress(id, p),
     });

@@ -579,7 +579,7 @@ export async function importPostmanPlan(collection: File, environment?: File, ap
  * Design scenarios as a background job — one model call per endpoint means a
  * big catalogue outlives any single HTTP request. Returns the jobId to poll.
  */
-export async function designApiScenarios(input: { apiSpecs: ApiSpecPayload[]; apiLayers?: string[]; apiProfile?: { insights?: string[] } | null; requirements?: string; environmentId?: string }): Promise<{ jobId: string; pollUrl: string }> {
+export async function designApiScenarios(input: { apiSpecs: ApiSpecPayload[]; apiLayers?: string[]; apiProfile?: { insights?: string[] } | null; requirements?: string; requirementRefs?: { brdDocIds?: string[]; frdDocIds?: string[] }; enrichWithAgents?: boolean; environmentId?: string }): Promise<{ jobId: string; pollUrl: string }> {
   const { data } = await api.post('/api-automation/design', input, { timeout: 60_000 });
   return data;
 }
@@ -622,6 +622,7 @@ export interface ApiWorkspaceState {
   strategy: any | null;
   imports: any[];
   scenarios: any[];
+  scripts: any[];
   updatedAt?: string;
 }
 export type ApiWorkspacePatch = Partial<Omit<ApiWorkspaceState, 'updatedAt'>>;
@@ -2588,7 +2589,7 @@ export async function getReportsHistory(params: { page?: number; pageSize?: numb
 }
 
 /** Download a report as Excel or PDF; triggers a browser download. */
-export async function downloadReportExport(runId: string, format: 'xlsx' | 'pdf') {
+export async function downloadReportExport(runId: string, format: 'xlsx' | 'html' | 'pdf') {
   const res = await api.get(`/reports/${encodeURIComponent(runId)}/export`, {
     params: { format },
     responseType: 'blob',

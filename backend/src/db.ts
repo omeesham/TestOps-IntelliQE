@@ -1228,9 +1228,13 @@ export async function initDb(): Promise<void> {
         strategy    NVARCHAR(MAX),
         imports     NVARCHAR(MAX) NOT NULL DEFAULT '[]',
         scenarios   NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        scripts     NVARCHAR(MAX) NOT NULL DEFAULT '[]',
         updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
         CONSTRAINT PK_api_catalog_workspace PRIMARY KEY (tenant_id, owner)
       )`);
+    // Upgrade existing workspaces: the Scripts tab persists generated/edited
+    // Playwright specs so they survive reload (they were memory-only before).
+    await addColumn('api_catalog_workspace', 'scripts', "NVARCHAR(MAX) NOT NULL DEFAULT '[]'");
 
     // ─── Testsigma-gap batch: data profiles, step groups, orchestrator, security (all opt-in) ───
     await createTable('api_data_profiles', `

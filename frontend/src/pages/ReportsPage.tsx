@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   FileText, BarChart3, Download, ArrowLeft,
-  CheckCircle2, XCircle, Clock, FileSpreadsheet, Hammer, AlertTriangle,
+  CheckCircle2, XCircle, Clock, FileSpreadsheet, FileCode2, Hammer, AlertTriangle,
 } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import {
@@ -111,12 +111,12 @@ export default function ReportsPage() {
     }
   }, [toast]);
 
-  const doDownload = useCallback(async (runId: string, format: 'xlsx' | 'pdf') => {
+  const doDownload = useCallback(async (runId: string, format: 'xlsx' | 'html' | 'pdf') => {
     const key = `${runId}:${format}`;
     setDownloadingKey(key);
     try {
       await downloadReportExport(runId, format);
-      toast.success(`${format === 'xlsx' ? 'Excel' : 'PDF'} downloaded`);
+      toast.success(`${format === 'xlsx' ? 'Excel' : format === 'html' ? 'HTML' : 'PDF'} downloaded`);
     } catch (err) {
       toast.error('Download failed', normalizeError(err).message);
     } finally {
@@ -196,6 +196,9 @@ export default function ReportsPage() {
             <div className="flex items-center gap-2">
               <button onClick={() => doDownload(viewItem.runId, 'xlsx')} disabled={downloadingKey === `${viewItem.runId}:xlsx`} title="Download Excel" className="p-2 rounded-lg border border-[#DDD6FE] text-emerald-600 bg-white hover:bg-emerald-50 disabled:opacity-50 transition-colors">
                 {downloadingKey === `${viewItem.runId}:xlsx` ? <Spinner className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+              </button>
+              <button onClick={() => doDownload(viewItem.runId, 'html')} disabled={downloadingKey === `${viewItem.runId}:html`} title="Download HTML" className="p-2 rounded-lg border border-[#DDD6FE] text-[#7C3AED] bg-white hover:bg-[#F5F3FF] disabled:opacity-50 transition-colors">
+                {downloadingKey === `${viewItem.runId}:html` ? <Spinner className="w-4 h-4 animate-spin" /> : <FileCode2 className="w-4 h-4" />}
               </button>
               <button onClick={() => doDownload(viewItem.runId, 'pdf')} disabled={downloadingKey === `${viewItem.runId}:pdf`} title="Download PDF" className="p-2 rounded-lg border border-[#DDD6FE] text-red-500 bg-white hover:bg-red-50 disabled:opacity-50 transition-colors">
                 {downloadingKey === `${viewItem.runId}:pdf` ? <Spinner className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}

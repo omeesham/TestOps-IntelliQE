@@ -278,10 +278,12 @@ router.get('/history', async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/reports/:runId/export?format=xlsx|pdf
- * Download a report as Excel (summary + per-test sheets) or PDF (rendered
- * summary). Per-test rows come from the Allure suite data; the summary comes
- * from the Allure statistic widget.
+ * GET /api/reports/:runId/export?format=xlsx|html|pdf
+ * Download a report as Excel (summary + per-test sheets), a self-contained HTML
+ * file, or a PDF (rendered summary). The HTML and the PDF are rendered from the
+ * same `buildReportHtml` markup, so they are byte-for-byte the same report in
+ * two downloadable forms. Per-test rows come from the Allure suite data; the
+ * summary comes from the Allure statistic widget.
  */
 router.get('/:runId/export', async (req: Request, res: Response) => {
   try {
@@ -395,6 +397,14 @@ router.get('/:runId/export', async (req: Request, res: Response) => {
       return;
     }
 
+    if (format === 'html') {
+      const html = buildReportHtml({ title, runId, source, module: meta?.module, createdBy: meta?.created_by, generatedAt, stats, results });
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeName}.html"`);
+      res.send(html);
+      return;
+    }
+
     if (format === 'pdf') {
       const pdf = await renderReportPdf({ title, runId, source, module: meta?.module, createdBy: meta?.created_by, generatedAt, stats, results });
       res.setHeader('Content-Type', 'application/pdf');
@@ -403,32 +413,40 @@ router.get('/:runId/export', async (req: Request, res: Response) => {
       return;
     }
 
-    res.status(400).json({ error: "format must be 'xlsx' or 'pdf'" });
+    res.status(400).json({ error: "format must be 'xlsx', 'html' or 'pdf'" });
   } catch (err: any) {
     console.error('Report export error:', err.message);
     res.status(500).json({ error: `Failed to export report: ${err.message}` });
   }
 });
 
-/** Render a clean one-page PDF summary of a report via headless Chromium. */
-async function renderReportPdf(r: {
+type ReportForRender = {
   title: string; runId: string; source: string; module?: string; createdBy?: string;
   generatedAt: string; stats: any; results: { name: string; status: string; durationMs: number }[];
-}): Promise<Buffer> {
-  const { chromium } = await import('playwright-core');
+};
+
+/**
+ * Build a self-contained, printable HTML summary of a report. Inlined styles and
+ * no external assets, so it opens stand-alone from disk and renders identically
+ * when fed to the PDF renderer. This is the single source for both the `html`
+ * and `pdf` export formats.
+ */
+function buildReportHtml(r: ReportForRender): string {
   const esc = (s: any) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] || c));
   const st = r.stats || { total: r.results.length, passed: 0, failed: 0, broken: 0, skipped: 0, passRate: 0, durationMs: 0 };
+  const skipped = st.skipped ?? r.results.filter((t) => t.status === 'skipped').length;
+  const broken = st.broken ?? r.results.filter((t) => t.status === 'broken').length;
   const badge = (status: string) => {
     const color = status === 'passed' ? '#059669' : status === 'failed' ? '#dc2626' : status === 'broken' ? '#d97706' : '#6b7280';
     return `<span style="color:#fff;background:${color};padding:2px 8px;border-radius:10px;font-size:11px;text-transform:capitalize">${esc(status)}</span>`;
   };
   const rows = r.results.map((t, i) =>
     `<tr><td>${i + 1}</td><td>${esc(t.name)}</td><td>${badge(t.status)}</td><td>${fmtDuration(t.durationMs)}</td></tr>`).join('');
-  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>IntelliQE Test Report — ${esc(r.title)}</title><style>
     body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1e1b4b;margin:32px;font-size:12px}
     h1{font-size:20px;margin:0 0 4px} .sub{color:#6b7280;font-size:12px;margin-bottom:16px}
-    .cards{display:flex;gap:10px;margin:16px 0}
-    .card{flex:1;border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px}
+    .cards{display:flex;flex-wrap:wrap;gap:10px;margin:16px 0}
+    .card{flex:1;min-width:110px;border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px}
     .card .n{font-size:22px;font-weight:700} .card .l{color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
     table{width:100%;border-collapse:collapse;margin-top:8px} th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #eee;font-size:11px;vertical-align:top}
     th{background:#f5f3ff;color:#4c1d95} .meta{color:#6b7280;font-size:11px}
@@ -440,11 +458,19 @@ async function renderReportPdf(r: {
       <div class="card"><div class="n">${st.total}</div><div class="l">Total</div></div>
       <div class="card"><div class="n" style="color:#059669">${st.passed}</div><div class="l">Passed</div></div>
       <div class="card"><div class="n" style="color:#dc2626">${st.failed}</div><div class="l">Failed</div></div>
+      <div class="card"><div class="n" style="color:#d97706">${broken}</div><div class="l">Broken</div></div>
+      <div class="card"><div class="n" style="color:#6b7280">${skipped}</div><div class="l">Skipped</div></div>
       <div class="card"><div class="n">${st.passRate}%</div><div class="l">Pass rate</div></div>
       <div class="card"><div class="n" style="font-size:16px">${fmtDuration(st.durationMs)}</div><div class="l">Duration</div></div>
     </div>
     <table><thead><tr><th>#</th><th>Test Case</th><th>Status</th><th>Duration</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="meta">No per-test data available.</td></tr>'}</tbody></table>
   </body></html>`;
+}
+
+/** Render a clean one-page PDF summary of a report via headless Chromium. */
+async function renderReportPdf(r: ReportForRender): Promise<Buffer> {
+  const { chromium } = await import('playwright-core');
+  const html = buildReportHtml(r);
 
   const browser = await chromium.launch({ headless: true });
   try {

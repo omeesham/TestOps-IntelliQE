@@ -1290,6 +1290,27 @@ export async function apiGeneratorAgent(state: TestOpsState): Promise<TestOpsSta
   const insights: string[] = Array.isArray(state.apiProfile?.insights) ? state.apiProfile!.insights.map(String) : [];
   const insightBlock = insights.length ? `\nARCHITECT INSIGHTS (from the AI review of the whole API):\n${insights.slice(0, 6).map((i) => `- ${i}`).join('\n')}` : '';
 
+  // Requirement grounding — present only when the Requirement/Planner stages ran
+  // ahead of generation (enrichWithAgents). Additive: when absent this is '' and
+  // the prompt is byte-for-byte what it was before. Folds the parsed acceptance
+  // criteria, edge cases and security concerns, plus the planner's coverage
+  // focus, into every endpoint's context so cases trace back to real requirements.
+  const pr = state.parsedRequirements;
+  const groundingLines: string[] = [];
+  if (pr) {
+    const ac = (pr.acceptanceCriteria || []).slice(0, 10);
+    if (ac.length) groundingLines.push(`Acceptance criteria to cover:\n${ac.map((a) => `  - ${a}`).join('\n')}`);
+    const edges = (pr.edgeCases || []).slice(0, 12);
+    if (edges.length) groundingLines.push(`Edge cases / concerns from the requirements:\n${edges.map((e) => `  - ${e}`).join('\n')}`);
+    const sec = pr.nonFunctionalRequirements?.security || [];
+    if (sec.length) groundingLines.push(`Security requirements:\n${sec.slice(0, 8).map((s) => `  - ${s}`).join('\n')}`);
+  }
+  const coverageAreas = Array.isArray(state.testPlan?.coverageAreas) ? state.testPlan!.coverageAreas : [];
+  if (coverageAreas.length) groundingLines.push(`Planner coverage focus: ${coverageAreas.slice(0, 10).join(', ')}`);
+  const groundingBlock = groundingLines.length
+    ? `\nREQUIREMENT GROUNDING (design cases that trace to these; do not invent beyond the endpoint + these):\n${groundingLines.join('\n')}`
+    : '';
+
   const llm = llmForStage(state.llm, 'generator');
   const normalized: NormalizedApiCase[] = [];
   const failedEndpoints: string[] = [];
@@ -1307,7 +1328,7 @@ export async function apiGeneratorAgent(state: TestOpsState): Promise<TestOpsSta
   const bumpCoverage = (c: ApiSpec['coverage']): ApiSpec['coverage'] =>
     c === 'essential' ? 'standard' : c === 'standard' ? 'exhaustive' : 'exhaustive';
   const results = await mapWithConcurrency(specs, ENDPOINT_CONCURRENCY, async (spec, i) => {
-    const context = profileContextFor(profile, specs as unknown as ImportedEndpoint[], i) + insightBlock;
+    const context = profileContextFor(profile, specs as unknown as ImportedEndpoint[], i) + insightBlock + groundingBlock;
     const genSpec: ApiSpec = profile.endpointRisk[i] === 'high'
       ? { ...spec, coverage: bumpCoverage(spec.coverage || 'standard') }
       : spec;

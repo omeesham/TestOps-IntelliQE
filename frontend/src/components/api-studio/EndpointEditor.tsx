@@ -45,6 +45,69 @@ const BODY_MODES: { id: BodyMode; label: string }[] = [
   { id: 'urlencoded', label: 'URL-encoded' }, { id: 'binary', label: 'Binary' },
 ];
 
+/* ── Path parameters ──
+ * A URL template carries path placeholders — OpenAPI-style `{id}` or
+ * Express-style `:id`. We surface them as editable fields and substitute the
+ * values back into the URL at Send / Save / Automate time (the Postman model),
+ * so the URL bar stays the single source of truth and no backend change is
+ * needed. Two things are deliberately NOT treated as path params: a `{{var}}`
+ * environment template (resolved server-side) and a `:port` in the host. */
+const PATH_TOKEN_RE = /\{\{[^}]*\}\}|\{([A-Za-z0-9_.-]+)\}|:([A-Za-z0-9_]+)/g;
+
+/** Split a URL into its scheme://host prefix, the path, and the ?query — so a
+ *  `:port` in the host is never mistaken for a path parameter. */
+function splitUrl(url: string): { prefix: string; path: string; query: string } {
+  const q = url.indexOf('?');
+  const beforeQuery = q === -1 ? url : url.slice(0, q);
+  const query = q === -1 ? '' : url.slice(q);
+  const m = beforeQuery.match(/^([a-zA-Z][\w+.-]*:\/\/[^/]*)([\s\S]*)$/);
+  return m ? { prefix: m[1]!, path: m[2]!, query } : { prefix: '', path: beforeQuery, query };
+}
+
+/** The ordered, de-duped path-param names in a URL template (path only). */
+function extractPathParams(url: string): string[] {
+  const { path } = splitUrl(url);
+  const names: string[] = [];
+  PATH_TOKEN_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = PATH_TOKEN_RE.exec(path))) {
+    if (m[0].startsWith('{{')) continue; // env template — not a path param
+    const name = m[1] ?? m[2];
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
+/** Substitute path-param values into the URL's placeholders. A blank value
+ *  leaves the placeholder in place (so an unfilled template round-trips). */
+function resolvePathParams(url: string, values: Record<string, string>): string {
+  const { prefix, path, query } = splitUrl(url);
+  const resolved = path.replace(PATH_TOKEN_RE, (full, brace, colon) => {
+    if (full.startsWith('{{')) return full; // leave env templates for the server
+    const name = brace ?? colon;
+    const v = (values[name] ?? '').trim();
+    return v ? encodeURIComponent(v) : full;
+  });
+  return prefix + resolved + query;
+}
+
+/** Seed the path-value map from an endpoint's structured pathParams examples. */
+function seedPathValues(eps?: { name: string; example?: string }[] | null): Record<string, string> {
+  return Object.fromEntries((eps || []).map((p) => [p.name, p.example ?? '']));
+}
+
+/** A hand-added path variable the user names themselves (not auto-detected). */
+interface ManualPathParam { id: string; name: string; value: string }
+
+/** Seed manual rows from structured pathParams whose name isn't a URL token —
+ *  so imported variables that don't appear literally in the URL aren't lost. */
+function seedManualParams(ep?: { url?: string; pathParams?: { name: string; example?: string }[] | null } | null): ManualPathParam[] {
+  const detected = new Set(extractPathParams(ep?.url || ''));
+  return (ep?.pathParams || [])
+    .filter((p) => !detected.has(p.name))
+    .map((p) => ({ id: newEndpointId(), name: p.name, value: p.example ?? '' }));
+}
+
 /** Read a File into base64 (no data: prefix) + its content type. */
 function fileToBase64(file: File): Promise<{ dataBase64: string; contentType: string; filename: string }> {
   return new Promise((resolve, reject) => {
@@ -95,6 +158,10 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
   const [formFields, setFormFields] = useState<EndpointFormField[]>(initial?.formFields?.length ? initial.formFields : [{ key: '', value: '', type: 'text' }]);
   const [bodyBase64, setBodyBase64] = useState(initial?.bodyBase64 || '');
   const [binaryMeta, setBinaryMeta] = useState<{ filename: string; contentType: string }>({ filename: '', contentType: initial?.bodyContentType || '' });
+  // Path-param values for auto-detected URL tokens, keyed by placeholder name.
+  const [pathValues, setPathValues] = useState<Record<string, string>>(() => seedPathValues(initial?.pathParams));
+  // Hand-added path variables (another way to use it, beyond URL-token detection).
+  const [manualParams, setManualParams] = useState<ManualPathParam[]>(() => seedManualParams(initial));
   const [oauth2, setOauth2] = useState<OAuth2Config>(initial?.auth?.oauth2 || { grant: 'client_credentials', clientAuthBasic: true });
   const [digestCfg, setDigestCfg] = useState<DigestConfig>(initial?.auth?.digest || { algorithm: 'MD5' });
   const [awsCfg, setAwsCfg] = useState<AwsSigV4Config>(initial?.auth?.awsSigV4 || { region: 'us-east-1', service: 'execute-api' });
@@ -181,6 +248,8 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
     setFormFields(ep.formFields?.length ? ep.formFields : [{ key: '', value: '', type: 'text' }]);
     setBodyBase64(ep.bodyBase64 || '');
     setBinaryMeta({ filename: '', contentType: ep.bodyContentType || '' });
+    setPathValues(seedPathValues(ep.pathParams));
+    setManualParams(seedManualParams(ep));
     setExpectedStatus(String(ep.expectedStatus || 200));
     setExpectedResponse(ep.expectedResponse || '');
     setDescription(ep.description || '');
@@ -228,11 +297,35 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
   const clearHistory = () => { setHistory([]); saveImportHistory([]); };
 
   const hasBody = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
-  const urlValid = useMemo(() => { try { const u = new URL(url); return u.protocol === 'http:' || u.protocol === 'https:'; } catch { return false; } }, [url]);
+  // Path params detected in the URL, and the URL with their values substituted in.
+  // `effectiveUrl` is what we actually send / save — the URL bar stays the template.
+  // Two sources feed one value map: auto-detected URL tokens and hand-added rows
+  // (the latter win on a name clash). Detected rows whose name a manual row
+  // already covers are hidden so a name never shows twice.
+  const pathNames = useMemo(() => extractPathParams(url), [url]);
+  const manualNameSet = useMemo(() => new Set(manualParams.map((p) => p.name.trim()).filter(Boolean)), [manualParams]);
+  const detectedRows = useMemo(() => pathNames.filter((n) => !manualNameSet.has(n)), [pathNames, manualNameSet]);
+  const allPathValues = useMemo(() => {
+    const m: Record<string, string> = { ...pathValues };
+    for (const p of manualParams) { const n = p.name.trim(); if (n) m[n] = p.value; }
+    return m;
+  }, [pathValues, manualParams]);
+  const effectiveUrl = useMemo(() => resolvePathParams(url, allPathValues), [url, allPathValues]);
+  const hasUnresolvedPath = useMemo(() => pathNames.some((n) => !(allPathValues[n] ?? '').trim()), [pathNames, allPathValues]);
+  // The structured path-param list to persist — detected tokens first, then
+  // named manual rows, de-duped by name.
+  const pathParamList = useMemo((): { name: string; example?: string; required?: boolean }[] => {
+    const seen = new Set<string>();
+    const list: { name: string; example?: string; required?: boolean }[] = [];
+    for (const n of detectedRows) { if (!seen.has(n)) { seen.add(n); list.push({ name: n, example: (allPathValues[n] ?? '').trim() || undefined, required: true }); } }
+    for (const p of manualParams) { const n = p.name.trim(); if (n && !seen.has(n)) { seen.add(n); list.push({ name: n, example: p.value.trim() || undefined, required: true }); } }
+    return list;
+  }, [detectedRows, allPathValues, manualParams]);
+  const urlValid = useMemo(() => { try { const u = new URL(effectiveUrl); return u.protocol === 'http:' || u.protocol === 'https:'; } catch { return false; } }, [effectiveUrl]);
   // A `{{var}}` URL isn't a valid absolute URL client-side, but the server resolves
   // it against the active environment — so Send is allowed when one is selected.
   const urlHasTemplate = useMemo(() => /\{\{\s*[\w.\-]+\s*\}\}/.test(url), [url]);
-  const canSend = urlValid || (!!environment?.id && urlHasTemplate && url.trim().length > 0);
+  const canSend = (urlValid || (!!environment?.id && urlHasTemplate && url.trim().length > 0)) && !hasUnresolvedPath;
 
   const applyParams = (rows: QueryParamRow[]) => { setParams(rows); setUrl((u) => buildUrlWithParams(u, rows)); };
   const changeUrl = (v: string) => { setUrl(v); setParams(parseQueryParams(v)); };
@@ -275,7 +368,7 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
       const b = buildBodyFields();
       setSendResult(await sendApiRequest({
         method,
-        url: url.trim(),
+        url: effectiveUrl.trim(),
         headers: headers.filter((h) => h.key.trim()).map((h) => ({ key: h.key.trim(), value: h.value })),
         auth: buildAuth(),
         body: b.body,
@@ -334,7 +427,7 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
       const status = parseInt(expectedStatus, 10);
       const res = await healApiRequest({
         method,
-        url: url.trim(),
+        url: effectiveUrl.trim(),
         headers: headers.filter((h) => h.key.trim()).map((h) => ({ key: h.key.trim(), value: h.value })),
         auth: buildAuth(),
         body: b.body,
@@ -359,7 +452,7 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
     return {
       title: name.trim() || `${method} ${url}`,
       method,
-      url: url.trim(),
+      url: effectiveUrl.trim(),
       headers: headers.filter((h) => h.key.trim()).map((h) => ({ key: h.key.trim(), value: h.value })),
       auth: buildAuth(),
       body: b.body,
@@ -372,8 +465,9 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
       description: description.trim() || undefined,
       style: initial?.style || 'rest',
       source: initial?.source || { method: 'manual', name: 'Manual request' },
-      operationId: initial?.operationId, tags: initial?.tags, resource: initial?.resource, pathTemplate: initial?.pathTemplate,
-      pathParams: initial?.pathParams, queryParams: initial?.queryParams, deprecated: initial?.deprecated, discovered: initial?.discovered,
+      operationId: initial?.operationId, tags: initial?.tags, resource: initial?.resource, pathTemplate: initial?.pathTemplate || (pathNames.length ? url.trim() : undefined),
+      pathParams: pathParamList.length ? pathParamList : initial?.pathParams,
+      queryParams: initial?.queryParams, deprecated: initial?.deprecated, discovered: initial?.discovered,
     };
   };
 
@@ -396,7 +490,7 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
   );
 
   const automate = () => {
-    if (!urlValid) { setShowRequired(true); return; }
+    if (!urlValid || hasUnresolvedPath) { setShowRequired(true); return; }
     const ep = buildEndpoint();
     // A tested request already knows its real status + body: fold them in (when the
     // reviewer left them blank) so automation runs against genuine expectations
@@ -535,6 +629,33 @@ export default function EndpointEditor({ initial, title, onSave, onAutomate, all
               <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What this endpoint does — helps the generator design better scenarios" className={INPUT} />
             </div>
           </div>
+
+          <Section title="Path params" badge={(detectedRows.length + manualParams.filter((p) => p.name.trim()).length) || ''} defaultOpen={pathNames.length > 0 || manualParams.length > 0} action={showRequired && hasUnresolvedPath ? <span className="inline-flex items-center gap-1 text-[9.5px] font-semibold text-red-700 bg-red-50 border border-red-200 rounded px-1 py-0.5"><AlertTriangle className="w-2.5 h-2.5" />Required</span> : undefined}>
+            <div className="space-y-1">
+              {/* Auto-detected URL tokens — name is read-only (it comes from the URL). */}
+              {detectedRows.map((n) => (
+                <div key={`detected-${n}`} className="flex items-center gap-1">
+                  <span className="flex-[2] px-2.5 py-1.5 font-mono text-[11.5px] text-[#6D28D9] bg-[#F5F3FF] border border-[#DDD6FE] rounded-md truncate" title={`${n} — detected in the URL`}>{n}</span>
+                  <input value={pathValues[n] ?? ''} onChange={(e) => setPathValues((p) => ({ ...p, [n]: e.target.value }))} placeholder="value" spellCheck={false} className={`${INPUT} font-mono text-[11.5px] flex-[3] ${showRequired && !(allPathValues[n] ?? '').trim() ? 'border-red-300 ring-2 ring-red-100' : ''}`} />
+                  <span className="w-[26px] flex-shrink-0" aria-hidden />
+                </div>
+              ))}
+              {/* Hand-added rows — name AND value editable, removable. */}
+              {manualParams.map((p) => {
+                const named = p.name.trim();
+                const inUrl = named ? pathNames.includes(named) : true;
+                return (
+                  <div key={p.id} className="flex items-center gap-1">
+                    <input value={p.name} onChange={(e) => setManualParams((rows) => rows.map((r) => (r.id === p.id ? { ...r, name: e.target.value } : r)))} placeholder="name" spellCheck={false} title={named && !inUrl ? `Reference it as {${named}} or :${named} in the URL to use this value` : undefined} className={`${INPUT} font-mono text-[11.5px] flex-[2] ${named && !inUrl ? 'border-amber-300' : ''}`} />
+                    <input value={p.value} onChange={(e) => setManualParams((rows) => rows.map((r) => (r.id === p.id ? { ...r, value: e.target.value } : r)))} placeholder="value" spellCheck={false} className={`${INPUT} font-mono text-[11.5px] flex-[3]`} />
+                    <button type="button" onClick={() => setManualParams((rows) => rows.filter((r) => r.id !== p.id))} className="p-1 text-gray-300 hover:text-red-500 flex-shrink-0" title="Remove"><Trash2 className="w-3.5 h-3.5" /></button>
+                  </div>
+                );
+              })}
+              <button type="button" onClick={() => setManualParams((rows) => [...rows, { id: newEndpointId(), name: '', value: '' }])} className="inline-flex items-center gap-1 text-[11px] font-medium text-[#7C3AED] hover:text-[#6D28D9]"><Plus className="w-3 h-3" />Add path variable</button>
+              <p className="text-[10.5px] text-gray-400 leading-relaxed">Auto-detected from <code className="font-mono text-[#6D28D9]">{'{name}'}</code> or <code className="font-mono text-[#6D28D9]">:name</code> in the path, or add your own. Values are substituted into the URL when you Send, Save or Automate.</p>
+            </div>
+          </Section>
 
           <Section title="Query params" badge={params.filter((p) => p.enabled && p.key).length || ''} defaultOpen={params.length > 0}>
             <KeyValueRows rows={params.map((p) => ({ key: p.key, value: p.value, enabled: p.enabled }))} withEnabled onChange={(rows) => applyParams(rows.map((r) => ({ key: r.key, value: r.value, enabled: r.enabled ?? true })))} placeholderKey="page" placeholderValue="1" />

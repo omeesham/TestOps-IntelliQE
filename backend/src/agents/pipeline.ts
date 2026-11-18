@@ -132,6 +132,14 @@ export async function runGenerationOnly(
     apiSpec?: ApiSpec | null; apiSpecs?: ApiSpec[] | null;
     apiProfile?: Record<string, any> | null; apiLayers?: string[] | null;
     apiEnvironment?: any;
+    /**
+     * API Automation — when true, run the Requirement → [Audit ∥ Planner] LLM
+     * stages before generation (parity with the web pipeline), grounding the
+     * generator in parsed requirements + a risk-based plan. These are LLM calls,
+     * so they add token cost per design run; false restores the single-stage,
+     * generator-only path. No effect on the non-API path below.
+     */
+    enrichWithAgents?: boolean;
     onProgress?: TestOpsState['onProgress'];
   },
 ): Promise<TestOpsState> {
@@ -142,9 +150,14 @@ export async function runGenerationOnly(
   }
 
   // API Automation path — the user gave a concrete HTTP endpoint (method, URL,
-  // headers, auth, body). Skip the browser/UI pipeline entirely (no explore,
-  // no requirement/audit/planner UI passes) and generate real HTTP test cases
-  // plus self-contained Playwright `request` specs grounded in that endpoint.
+  // headers, auth, body). Skip the browser-crawl/UI generator and produce real
+  // HTTP test cases plus self-contained Playwright `request` specs.
+  //
+  // When `enrichWithAgents` is set, first run the same Requirement → [Audit ∥
+  // Planner] LLM stages the web pipeline uses, so generation is grounded in
+  // structured requirements (acceptance criteria, edge cases) and a risk-based
+  // plan. When it is not set, the path stays single-stage (generator only),
+  // exactly as before — no added token cost.
   if (options?.apiSpec || (options?.apiSpecs && options.apiSpecs.length)) {
     const multi = options.apiSpecs && options.apiSpecs.length ? options.apiSpecs : null;
     state.apiSpecs = multi;
@@ -153,6 +166,32 @@ export async function runGenerationOnly(
     state.apiLayers = options.apiLayers && options.apiLayers.length ? options.apiLayers : null;
     state.apiEnvironment = options.apiEnvironment || null;
     state.onProgress = options.onProgress || null;
+
+    if (options.enrichWithAgents && (state.requirements || '').trim().length > 0) {
+      // Requirement → parsedRequirements. Grounded in the assembled
+      // BRD/FRD/Story requirements the route placed on state.requirements.
+      state.onProgress?.({ phase: 'requirement', done: 0, total: 1, message: 'Analysing requirements' });
+      state = await timed(tenantId, 'requirement', () => requirementAgent(state),
+        (s) => ({ features: s.parsedRequirements?.features?.length ?? 0 }));
+
+      // Audit (enhances edge cases) and Planner (risk-based plan) both depend
+      // only on parsedRequirements — run in PARALLEL, then merge, mirroring the
+      // web pipeline. Both read the SAME pre-audit state (planner does not see
+      // audit's extra edge cases), matching runPipeline's behaviour.
+      state.onProgress?.({ phase: 'planning', done: 0, total: 1, message: 'Auditing edge cases & planning strategy' });
+      const [audited, planned] = await Promise.all([
+        timed(tenantId, 'audit', () => auditAgent(state)),
+        timed(tenantId, 'planner', () => plannerAgent(state),
+          (s) => ({ apiTests: s.testPlan?.apiTests ?? 0 })),
+      ]);
+      state = {
+        ...state,
+        parsedRequirements: audited.parsedRequirements,
+        testPlan: planned.testPlan,
+        extendedTestPlan: planned.extendedTestPlan,
+      };
+    }
+
     state = await timed(tenantId, 'generator', () => apiGeneratorAgent(state),
       (s) => ({ testCases: s.testCases.length }));
     return state;

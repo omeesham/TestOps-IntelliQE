@@ -147,6 +147,7 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
   // update, so it never disturbs the catalogue fields useCatalog saves.
   const scenariosHydrated = useRef(false);
   const scenarioSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const specsSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -154,6 +155,11 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
         const remote = await getApiWorkspace();
         if (!cancelled && remote && Array.isArray(remote.scenarios) && remote.scenarios.length) {
           setScenarios((prev) => (prev.length ? prev : (remote.scenarios as Scenario[])));
+          // Restore the generated/edited specs too, so the Scripts tab is
+          // populated after a reload (specs were memory-only before).
+          if (Array.isArray(remote.scripts) && remote.scripts.length) {
+            setSpecs((prev) => (prev.length ? prev : (remote.scripts as Spec[])));
+          }
         }
       } catch { /* keep in-memory scenarios */ }
       finally { scenariosHydrated.current = true; }
@@ -168,6 +174,16 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
     }, 1500);
     return () => { if (scenarioSaveTimer.current) clearTimeout(scenarioSaveTimer.current); };
   }, [scenarios]);
+  // Persist the specs (generated and hand-edited Playwright code) on their own
+  // debounce so a Scripts-tab edit survives reload without re-saving scenarios.
+  useEffect(() => {
+    if (!scenariosHydrated.current) return;
+    if (specsSaveTimer.current) clearTimeout(specsSaveTimer.current);
+    specsSaveTimer.current = setTimeout(() => {
+      void saveApiWorkspace({ scripts: specs }).catch(() => { /* best-effort */ });
+    }, 1500);
+    return () => { if (specsSaveTimer.current) clearTimeout(specsSaveTimer.current); };
+  }, [specs]);
 
   const setStage = useCallback((key: StageKey, status: StageStatus, detail: string) => {
     setStages((prev) => prev.map((s) => {
@@ -593,11 +609,21 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
       : s)));
   }, []);
 
+  /** Edit a scenario's generated Playwright spec code in place (Scripts tab).
+   *  The debounced effect above persists it so the edit survives reload. */
+  const updateSpec = useCallback((testCaseId: string, code: string) => {
+    setSpecs((prev) => prev.map((s) => (s.testCaseId === testCaseId ? { ...s, code } : s)));
+  }, []);
+
+  /** Re-generate all specs deterministically from the templated cases (no model
+   *  call — reuses the /render path). Overwrites hand-edits by design. */
+  const regenerateSpecs = useCallback(() => reresolve(runEnv), [reresolve, runEnv]);
+
   return {
     phase, stages, scenarios, specs, serviceObjects, selected, rows, report, testRunId, runError, exporting, pushState,
     runEndpoints, runLabel, runEnvName, runEnvKey, runCases, reresolving, logs, running, started, finished, baseUrl,
     runScenarios, runSuite, reresolve, resetRun, handleExport, handlePushToRepo,
-    toggleScenario, selectScenarios, clearScenarios, deleteScenario, updateScenario, setRunError, log,
+    toggleScenario, selectScenarios, clearScenarios, deleteScenario, updateScenario, updateSpec, regenerateSpecs, setRunError, log,
     elapsedMs: () => (startedAtRef.current ? Date.now() - startedAtRef.current : 0),
   };
 }

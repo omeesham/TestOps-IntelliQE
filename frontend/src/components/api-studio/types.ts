@@ -300,4 +300,4 @@ export interface ApiRunDetail extends ApiRunSummary {
    Navigation
    ═══════════════════════════════════════════════════════════════ */
 
-export type NavView = 'overview' | 'import' | 'integrations' | 'endpoints' | 'requirements' | 'scenarios' | 'runs' | 'report' | 'environments' | 'tools' | 'developer';
+export type NavView = 'overview' | 'import' | 'integrations' | 'endpoints' | 'requirements' | 'scenarios' | 'scripts' | 'runs' | 'report' | 'environments' | 'tools' | 'developer';

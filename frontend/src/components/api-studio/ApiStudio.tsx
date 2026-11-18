@@ -15,7 +15,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   RotateCcw, AlertTriangle, X, ListChecks, ArrowRight, Upload,
-  LayoutDashboard, Layers, FileCheck2, PlayCircle, BarChart3, Server, RefreshCw, Wrench,
+  LayoutDashboard, Layers, FileCheck2, PlayCircle, BarChart3, Server, RefreshCw, Wrench, Code2,
 } from 'lucide-react';
 import { useCatalog, toCatalogEndpoint } from './hooks/useCatalog';
 import { useApiRun } from './hooks/useApiRun';
@@ -23,6 +23,7 @@ import EndpointEditor, { clearImportHistory } from './EndpointEditor';
 import { useApiEnvironments, envRunKey } from './hooks/useApiEnvironments';
 import StageRail from './StageRail';
 import ScenariosTab from './ScenariosTab';
+import ScriptsTab from './ScriptsTab';
 import ReportTab from './ReportTab';
 import OverviewView from './views/OverviewView';
 import ImportView from './views/ImportView';
@@ -44,7 +45,7 @@ import type { NavView, Phase, CatalogEndpoint } from './types';
 import type { ApiFlowSeed } from '@/services/api';
 
 /** The tabs, left to right, in the order you walk the workflow. */
-const TAB_IDS = new Set<NavView>(['overview', 'endpoints', 'scenarios', 'runs', 'report', 'environments', 'tools']);
+const TAB_IDS = new Set<NavView>(['overview', 'endpoints', 'scenarios', 'scripts', 'runs', 'report', 'environments', 'tools']);
 
 export default function ApiStudio() {
   const catalog = useCatalog();
@@ -201,6 +202,7 @@ export default function ApiStudio() {
     { id: 'overview', label: 'Overview', icon: LayoutDashboard },
     { id: 'endpoints', label: 'Endpoints', icon: Layers, count: catalog.endpoints.length || undefined },
     { id: 'scenarios', label: 'Scenarios', icon: FileCheck2, count: run.scenarios.length || undefined },
+    { id: 'scripts', label: 'Scripts', icon: Code2, count: run.specs.length || undefined },
     { id: 'runs', label: 'Runs', icon: PlayCircle },
     { id: 'report', label: 'Reports', icon: BarChart3 },
     { id: 'environments', label: 'Environments', icon: Server },
@@ -281,6 +283,18 @@ export default function ApiStudio() {
           ) : (
             <ScenariosTab scenarios={run.scenarios} selected={run.selected} editable={run.phase === 'review' || run.finished} onToggle={run.toggleScenario} onSelectAll={run.selectScenarios} onClearAll={run.clearScenarios} onDelete={run.deleteScenario} onUpdate={run.updateScenario} />
           )
+        )}
+        {view === 'scripts' && (
+          <ScriptsTab
+            specs={run.specs}
+            serviceObjects={run.serviceObjects}
+            scenarios={run.scenarios}
+            editable={run.phase === 'review' || run.finished}
+            regenerating={run.reresolving}
+            canRegenerate={run.runCases.length > 0 && !run.running}
+            onUpdateSpec={run.updateSpec}
+            onRegenerate={run.regenerateSpecs}
+          />
         )}
         {view === 'runs' && <RunsView run={run} openRunId={openRunId} onOpenRun={setOpenRunId} onShowReport={() => navigate('report')} />}
         {view === 'report' && (
