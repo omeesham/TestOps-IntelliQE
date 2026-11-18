@@ -12,7 +12,7 @@
  * objects (the API half of the Page Object Model) are listed below the specs.
  */
 import { useMemo, useState } from 'react';
-import { Code2, Search, Copy, Download, Pencil, Check, X, RefreshCw, FileCode2, Boxes } from 'lucide-react';
+import { Code2, Search, Copy, Download, Pencil, Check, X, RefreshCw, FileCode2, Boxes, Lock } from 'lucide-react';
 import { CodeBlock, EmptyState, FilterChip, TabHero, MethodBadge } from './primitives';
 import { STRIP, RAISED, FIELD, PRIMARY_BTN, SECONDARY_BTN } from './format';
 import type { Scenario, Spec, ServiceObject } from './types';
@@ -21,6 +21,8 @@ interface Props {
   specs: Spec[];
   serviceObjects: ServiceObject[];
   scenarios: Scenario[];
+  /** False until the Automating stage has completed — specs stay hidden before then. */
+  visible: boolean;
   /** False once the run has moved past the review gate — edits are then fixed. */
   editable: boolean;
   /** True while a deterministic regenerate is in flight. */
@@ -46,7 +48,7 @@ function download(fileName: string, code: string) {
 }
 
 export default function ScriptsTab({
-  specs, serviceObjects, scenarios, editable, regenerating, canRegenerate, onUpdateSpec, onRegenerate,
+  specs, serviceObjects, scenarios, visible, editable, regenerating, canRegenerate, onUpdateSpec, onRegenerate,
 }: Props) {
   const byId = useMemo(() => new Map(scenarios.map((s) => [s.id, s])), [scenarios]);
   const [search, setSearch] = useState('');
@@ -80,6 +82,26 @@ export default function ScriptsTab({
     if (!active) return;
     try { await navigator.clipboard.writeText(active.code || ''); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* clipboard blocked */ }
   };
+
+  // Specs are rendered together with the scenarios, but they belong to the
+  // Automating stage — keep them locked until that stage has run, so the review
+  // step never reveals scripts before anything is automated.
+  if (!visible) {
+    return (
+      <div className="h-full flex flex-col px-6">
+        <TabHero
+          icon={Code2}
+          title="Scripts"
+          subtitle="The Playwright specs rendered from your scenarios appear here — view, edit and export them."
+        />
+        <EmptyState
+          icon={Lock}
+          title="Scripts appear after automating"
+          hint="Review your scenarios, then run the suite. Once the Automating stage completes, the rendered Playwright specs show up here to view, edit and export."
+        />
+      </div>
+    );
+  }
 
   if (specs.length === 0) {
     return (

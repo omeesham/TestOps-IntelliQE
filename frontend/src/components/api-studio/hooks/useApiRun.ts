@@ -205,6 +205,17 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
   const running = ['generating', 'automating', 'executing', 'healing'].includes(phase);
   const started = phase !== 'idle';
   const finished = (phase === 'report' || phase === 'failed') && scenarios.length > 0;
+  // The Scripts tab is a product of the Automating stage. Although the specs are
+  // rendered together with the scenarios at design time, they stay hidden until
+  // the Automating stage has actually completed (done/skipped/failed) — so the
+  // review step never shows scripts "before automating". A reopened run (specs
+  // restored from the workspace with no live phase) keeps them visible.
+  const specsVisible = !started
+    ? specs.length > 0
+    : (() => {
+        const a = stages.find((s) => s.key === 'automate');
+        return !!a && a.status !== 'pending' && a.status !== 'running';
+      })();
   const baseUrl = useMemo(() => {
     // Prefer the run environment's base URL — the endpoints are kept templated,
     // so their own host is the imported one, not where the run actually points.
@@ -621,7 +632,7 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
 
   return {
     phase, stages, scenarios, specs, serviceObjects, selected, rows, report, testRunId, runError, exporting, pushState,
-    runEndpoints, runLabel, runEnvName, runEnvKey, runCases, reresolving, logs, running, started, finished, baseUrl,
+    runEndpoints, runLabel, runEnvName, runEnvKey, runCases, reresolving, logs, running, started, finished, specsVisible, baseUrl,
     runScenarios, runSuite, reresolve, resetRun, handleExport, handlePushToRepo,
     toggleScenario, selectScenarios, clearScenarios, deleteScenario, updateScenario, updateSpec, regenerateSpecs, setRunError, log,
     elapsedMs: () => (startedAtRef.current ? Date.now() - startedAtRef.current : 0),

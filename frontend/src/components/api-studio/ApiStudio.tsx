@@ -202,7 +202,7 @@ export default function ApiStudio() {
     { id: 'overview', label: 'Overview', icon: LayoutDashboard },
     { id: 'endpoints', label: 'Endpoints', icon: Layers, count: catalog.endpoints.length || undefined },
     { id: 'scenarios', label: 'Scenarios', icon: FileCheck2, count: run.scenarios.length || undefined },
-    { id: 'scripts', label: 'Scripts', icon: Code2, count: run.specs.length || undefined },
+    { id: 'scripts', label: 'Scripts', icon: Code2, count: run.specsVisible ? (run.specs.length || undefined) : undefined },
     { id: 'runs', label: 'Runs', icon: PlayCircle },
     { id: 'report', label: 'Reports', icon: BarChart3 },
     { id: 'environments', label: 'Environments', icon: Server },
@@ -289,6 +289,7 @@ export default function ApiStudio() {
             specs={run.specs}
             serviceObjects={run.serviceObjects}
             scenarios={run.scenarios}
+            visible={run.specsVisible}
             editable={run.phase === 'review' || run.finished}
             regenerating={run.reresolving}
             canRegenerate={run.runCases.length > 0 && !run.running}
