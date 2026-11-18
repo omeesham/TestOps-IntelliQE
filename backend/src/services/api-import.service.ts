@@ -2017,15 +2017,19 @@ function buildGraphqlEndpoints(cfg: {
   source: ImportedEndpoint['source'];
 }): ImportedEndpoint[] {
   const { types, url, headers, auth, source } = cfg;
-  const scalarSample = (name: string, argName = ''): string => {
+  const scalarSample = (name: string, argName = '', depth = 0): string => {
     if (name === 'Int') return '1';
     if (name === 'Float') return '1.5';
     if (name === 'Boolean') return 'true';
     if (name === 'ID') return '"1"';
+    // Guard the recursion here too: a self-referential INPUT_OBJECT (common in
+    // real schemas, e.g. a nested filter/where input) would otherwise recurse
+    // forever and overflow the stack.
+    if (depth > 3) return 'null';
     const t = types.get(name);
     if (t?.kind === 'ENUM' && t.enumValues?.length) return t.enumValues[0].name;
     if (t?.kind === 'INPUT_OBJECT') {
-      const fields = (t.inputFields || []).slice(0, 8).map((f: any) => `${f.name}: ${argSample(f.type, f.name, 1)}`);
+      const fields = (t.inputFields || []).slice(0, 8).map((f: any) => `${f.name}: ${argSample(f.type, f.name, depth + 1)}`);
       return `{ ${fields.join(', ')} }`;
     }
     return JSON.stringify(exampleForParam(argName));
@@ -2033,7 +2037,7 @@ function buildGraphqlEndpoints(cfg: {
   const argSample = (type: any, name: string, depth: number): string => {
     const u = unwrapType(type);
     if (depth > 3) return 'null';
-    const v = u.kind === 'INPUT_OBJECT' || u.kind === 'ENUM' || u.kind === 'SCALAR' ? scalarSample(u.name, name) : 'null';
+    const v = u.kind === 'INPUT_OBJECT' || u.kind === 'ENUM' || u.kind === 'SCALAR' ? scalarSample(u.name, name, depth) : 'null';
     return u.list ? `[${v}]` : v;
   };
   const selection = (typeRef: any, depth: number): string => {
