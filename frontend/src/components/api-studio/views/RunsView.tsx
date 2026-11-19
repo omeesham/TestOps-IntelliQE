@@ -54,7 +54,7 @@ function LiveRun({ run, onShowReport }: { run: ApiRun; onShowReport: () => void 
         {run.phase === 'report' && <button type="button" onClick={onShowReport} className={SECONDARY_BTN}>Open report</button>}
       </div>
       {run.rows.length === 0 ? (
-        <p className="px-4 py-6 text-[11.5px] text-gray-400 text-center">{run.phase === 'review' ? 'Scenarios are designed — run the suite from the Scenarios page.' : run.phase === 'generating' ? 'Designing scenarios…' : 'Nothing has executed yet.'}</p>
+        <p className="px-4 py-6 text-[11.5px] text-gray-400 text-center">{run.phase === 'review' ? 'Scenarios are designed — run the suite from the Scenarios page.' : run.phase === 'generating' ? 'Designing scenarios…' : run.phase === 'automating' ? 'Rendering request specs and launching the suite…' : 'Nothing has executed yet.'}</p>
       ) : (
         <table className="w-full text-[12px]">
           <thead className={`text-[10.5px] uppercase tracking-wide text-gray-500 ${THEAD}`}><tr><th className="text-left px-4 py-1.5 font-semibold w-[90px]">Case</th><th className="text-left px-2 py-1.5 font-semibold">Scenario</th><th className="text-left px-2 py-1.5 font-semibold w-[110px]">Status</th><th className="text-right px-4 py-1.5 font-semibold w-[90px]">Time</th></tr></thead>

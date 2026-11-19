@@ -336,12 +336,17 @@ export function finalizeEndpoint(e: Partial<ImportedEndpoint>, source?: Imported
   };
 }
 
-/** De-duplicate on method + URL, preserving first occurrence. */
+/** De-duplicate on method + URL, preserving first occurrence.
+ *  GraphQL operations all POST to the SAME endpoint URL and are distinguished
+ *  only by their operation (name/body), so for `graphql`-style endpoints the key
+ *  also includes the operationId (or the query body) — otherwise every query and
+ *  mutation would collapse into a single endpoint. Other styles are unchanged. */
 export function dedupeEndpoints(list: ImportedEndpoint[]): ImportedEndpoint[] {
   const seen = new Set<string>();
   const out: ImportedEndpoint[] = [];
   for (const e of list) {
-    const key = `${e.method} ${e.url}`.toLowerCase();
+    const distinguisher = e.style === 'graphql' ? ` ${e.operationId || e.body || ''}` : '';
+    const key = `${e.method} ${e.url}${distinguisher}`.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(e);
@@ -1796,11 +1801,51 @@ export function parseCurlCommands(text: string, sourceName = 'cURL'): ImportResu
  * A bare array of endpoints (the studio's own export) is accepted too, so an
  * imported catalogue round-trips.
  */
+/**
+ * Normalise a connector manifest `auth` block (either the global block or a
+ * per-action one) into IntelliQE's endpoint auth shape. Handles the common
+ * portable-manifest / Power Platform conventions: `api_key`/`apikey` (header or
+ * query), `basic` (username+password), `oauth2`/`oauth2_client_credentials`
+ * (token-url grant), and `bearer`/`bearer_login` (a Bearer token the user/env
+ * supplies). Returns `{ type:'none' }` for anything unrecognised.
+ */
+function normalizeConnectorAuth(a: any): any {
+  if (!isObj(a)) return { type: 'none' };
+  const t = String(a.type || '').toLowerCase().replace(/[\s-]/g, '_');
+  if (t === 'basic') {
+    const v = a.value || (a.username !== undefined ? `${a.username}:${a.password ?? ''}` : undefined);
+    return { type: 'basic', ...(v ? { value: String(v) } : {}) };
+  }
+  if (t === 'api_key' || t === 'apikey') {
+    const where = String(a.in || 'header').toLowerCase() === 'query' ? 'query' : 'header';
+    return { type: 'apikey', headerName: String(a.name || a.header || a.headerName || 'X-API-Key'), in: where, ...(a.value ? { value: String(a.value) } : {}) };
+  }
+  // OAuth2 (client_credentials etc.) and login-based bearer both resolve to an
+  // `Authorization: Bearer <token>` at run time, so — like the OpenAPI importer,
+  // which maps oauth2/openIdConnect → bearer — they import as a declared Bearer
+  // the user wires to an Environment / OAuth config. (The live token-fetch flow
+  // lives on the manual send / Tools path, not per imported endpoint.)
+  if (t === 'oauth2' || t === 'oauth2_client_credentials' || t === 'client_credentials'
+      || t === 'bearer' || t === 'bearer_login' || t === 'jwt' || t === 'oauth' || t === 'oidc') {
+    return { type: 'bearer', ...(a.value ? { value: String(a.value) } : {}) };
+  }
+  if (t === 'none' || t === '') return { type: 'none' };
+  // Unknown but shaped like our own auth — pass type/value/headerName through.
+  return { type: normaliseAuthType(a.type), value: a.value, headerName: a.headerName || a.header };
+}
+
 export function parseConnectorManifest(doc: any, sourceName = 'Custom connector'): ImportResult {
   const manifest = isObj(doc) && isObj(doc.connector) ? doc.connector : doc;
-  const list: any[] = Array.isArray(manifest) ? manifest : Array.isArray(manifest?.endpoints) ? manifest.endpoints : [];
+  // Accept `endpoints` (IntelliQE's native shape) or `actions`/`operations`
+  // (the Power Platform / portable custom-connector convention).
+  const list: any[] = Array.isArray(manifest) ? manifest
+    : Array.isArray(manifest?.endpoints) ? manifest.endpoints
+    : Array.isArray(manifest?.actions) ? manifest.actions
+    : Array.isArray(manifest?.operations) ? manifest.operations
+    : [];
   const base = isObj(manifest) ? String(manifest.baseUrl || manifest.base_url || '') : '';
   const gAuth = isObj(manifest) && isObj(manifest.auth) ? manifest.auth : null;
+  const globalAuth = gAuth ? normalizeConnectorAuth(gAuth) : { type: 'none' };
   const gHeaders: { key: string; value: string }[] = [];
   if (isObj(manifest) && isObj(manifest.headers)) for (const [k, v] of Object.entries(manifest.headers)) gHeaders.push({ key: k, value: String(v ?? '') });
   else if (isObj(manifest) && Array.isArray(manifest.headers)) for (const h of manifest.headers) if (isObj(h) && h.key) gHeaders.push({ key: String(h.key), value: String(h.value ?? '') });
@@ -1816,17 +1861,29 @@ export function parseConnectorManifest(doc: any, sourceName = 'Custom connector'
     if (isObj(e.query)) {
       const q = Object.entries(e.query).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v ?? ''))}`).join('&');
       if (q) url += (url.includes('?') ? '&' : '?') + q;
+    } else if (Array.isArray(e.query)) {
+      // Power-Platform-style query params: [{ name, type, default }]. Only params
+      // with a concrete default are materialised onto the URL; the rest are left
+      // for the query/path-param editor so the endpoint stays runnable as-is.
+      const q = e.query.filter((p: any) => isObj(p) && p.name && p.default !== undefined && p.default !== null)
+        .map((p: any) => `${encodeURIComponent(String(p.name))}=${encodeURIComponent(String(p.default))}`).join('&');
+      if (q) url += (url.includes('?') ? '&' : '?') + q;
     }
     const headers = [...gHeaders];
     if (isObj(e.headers)) for (const [k, v] of Object.entries(e.headers)) headers.push({ key: k, value: String(v ?? '') });
     else if (Array.isArray(e.headers)) for (const h of e.headers) if (isObj(h) && h.key) headers.push({ key: String(h.key), value: String(h.value ?? '') });
-    const auth = isObj(e.auth) ? e.auth : gAuth;
+    // Per-action auth: an object overrides; `true` (or absent) applies the
+    // connector's global auth; `false` opts out. This matches how portable
+    // connector manifests scope a single auth block across many actions.
+    const epAuth = isObj(e.auth) ? normalizeConnectorAuth(e.auth)
+      : e.auth === false ? { type: 'none' }
+      : globalAuth;
     const ep = finalizeEndpoint({
       title: String(e.name || e.title || `${String(e.method || 'GET').toUpperCase()} ${e.path || url}`),
       method: String(e.method || 'GET'),
       url,
       headers,
-      auth: auth ? { type: auth.type, value: auth.value, headerName: auth.headerName || auth.header } as any : { type: 'none' },
+      auth: epAuth as any,
       body: e.body !== undefined ? str(e.body) : undefined,
       expectedStatus: e.expectedStatus,
       expectedResponse: e.expectedResponse !== undefined ? str(e.expectedResponse) : undefined,
@@ -1838,7 +1895,7 @@ export function parseConnectorManifest(doc: any, sourceName = 'Custom connector'
     }, source);
     if (ep) endpoints.push(ep); else warnings.push(`Endpoint "${e.name || e.path || '?'}" has no absolute URL and was skipped.`);
   }
-  if (!endpoints.length) warnings.push('The manifest contained no usable endpoints. Expected { baseUrl, endpoints: [{ method, path, … }] }.');
+  if (!endpoints.length) warnings.push('The manifest contained no usable endpoints. Expected { baseUrl, endpoints|actions: [{ method, path, … }] }.');
   return { endpoints: dedupeEndpoints(endpoints), parser: 'connector', format: 'Custom connector manifest', warnings, notice: endpoints.length ? `${endpoints.length} endpoint${endpoints.length === 1 ? '' : 's'} read from the connector manifest.` : undefined };
 }
 
@@ -1991,6 +2048,38 @@ export async function discoverOpenApi(origin: string, headers?: Record<string, s
 
 const INTROSPECTION_QUERY = `query IntelliQEIntrospection { __schema { queryType { name } mutationType { name } types { kind name fields(includeDeprecated: false) { name description args { name type { ...TypeRef } defaultValue } type { ...TypeRef } } inputFields { name type { ...TypeRef } } enumValues { name } } } }
 fragment TypeRef on __Type { kind name ofType { kind name ofType { kind name ofType { kind name } } } }`;
+
+// A shallower introspection (ofType nested only 2 deep, inlined — no fragment) for
+// endpoints behind a GraphQL CDN/gateway that enforces a query-DEPTH limit and
+// rejects the full query above with 413 "Query depth limit exceeded"
+// (e.g. GCDN-fronted public APIs). It still returns every type, field, arg and
+// enum — enough to build one operation per Query/Mutation field — but nested
+// list/non-null wrappers beyond two levels (rare, e.g. `[[T!]!]`) may be
+// truncated, so the base type still resolves while deep wrappers are approximate.
+const SHALLOW_INTROSPECTION_QUERY = `query IntelliQEIntrospectionShallow { __schema { queryType { name } mutationType { name } types { kind name fields(includeDeprecated: false) { name args { name type { kind name ofType { kind name ofType { kind name } } } defaultValue } type { kind name ofType { kind name ofType { kind name } } } } inputFields { name type { kind name ofType { kind name ofType { kind name } } } } enumValues { name } } } }`;
+
+/** True when an introspection failure is the server capping query depth/complexity/size
+ *  (so a shallower query, or SDL paste, is the right next step — not credentials). */
+function isIntrospectionLimitError(status: number, errors: any[]): boolean {
+  if (status === 413) return true;
+  for (const e of errors || []) {
+    const msg = String(e?.message || '').toLowerCase();
+    const code = String(e?.extensions?.code || '').toLowerCase();
+    const http = Number(e?.extensions?.httpStatusCode || 0);
+    if (http === 413) return true;
+    if (/depth|complex|query cost|too large|payload|exceed|limit/.test(msg)) return true;
+    if (/depth|complex|limit|cost/.test(code)) return true;
+  }
+  return false;
+}
+
+/** POST one GraphQL query and surface status + parsed schema/errors for the caller. */
+async function postIntrospection(url: string, h: Record<string, string>, query: string): Promise<{ status: number; schema: any; errors: any[] }> {
+  const r = await fetchRemote(url, { method: 'POST', headers: h, body: JSON.stringify({ query }) });
+  let schema: any; let errors: any[] = [];
+  try { const j = JSON.parse(r.text); schema = j?.data?.__schema; errors = Array.isArray(j?.errors) ? j.errors : []; } catch { /* non-JSON handled by caller */ }
+  return { status: r.status, schema, errors };
+}
 
 function unwrapType(t: any): { name: string; kind: string; list: boolean; nonNull: boolean } {
   let list = false; let nonNull = false; let cur = t;
@@ -2232,11 +2321,35 @@ export async function introspectGraphql(url: string, headers: Record<string, str
   if (auth?.value && auth.type === 'bearer') h.Authorization = `Bearer ${cleanAuthValue(auth.value)}`;
   if (auth?.value && auth.type === 'basic') h.Authorization = `Basic ${Buffer.from(cleanAuthValue(auth.value)).toString('base64')}`;
   if (auth?.value && auth.type === 'apikey') h['X-API-Key'] = cleanAuthValue(auth.value);
-  const r = await fetchRemote(url, { method: 'POST', headers: h, body: JSON.stringify({ query: INTROSPECTION_QUERY }) });
-  if (r.status >= 400) throw new Error(`The GraphQL endpoint answered ${r.status} to the introspection query${r.status === 401 || r.status === 403 ? ' — add credentials' : ''}.`);
-  let schema: any;
-  try { schema = JSON.parse(r.text)?.data?.__schema; } catch { /* handled below */ }
-  if (!schema) throw new Error('The endpoint did not return a GraphQL introspection result — introspection may be disabled. Paste the SDL as text instead.');
+
+  const warnings: string[] = [];
+  // Try the full-fidelity introspection first. If the endpoint caps query depth/
+  // complexity (common on CDN-fronted public GraphQL APIs, which answer 413
+  // "Query depth limit exceeded"), fall back to a shallower query so we can still
+  // import the operations rather than failing outright.
+  let first = await postIntrospection(url, h, INTROSPECTION_QUERY);
+  let schema = first.schema;
+  if (!schema && isIntrospectionLimitError(first.status, first.errors)) {
+    const shallow = await postIntrospection(url, h, SHALLOW_INTROSPECTION_QUERY);
+    if (shallow.schema) {
+      schema = shallow.schema;
+      warnings.push('This endpoint caps introspection query depth, so a reduced introspection was used — deeply nested list/non-null type wrappers may be approximate. Paste the schema SDL for full fidelity.');
+    } else {
+      first = shallow.status || shallow.errors.length ? shallow : first;
+    }
+  }
+
+  if (!schema) {
+    if (first.status === 401 || first.status === 403) {
+      throw new Error(`The GraphQL endpoint answered ${first.status} to the introspection query — add credentials (a Bearer token or API key) and re-import.`);
+    }
+    if (isIntrospectionLimitError(first.status, first.errors)) {
+      throw new Error('This GraphQL endpoint restricts introspection (a query depth/complexity limit). Paste the schema SDL as text instead — IntelliQE builds the same operations from it.');
+    }
+    const serverMsg = first.errors?.[0]?.message ? ` (${String(first.errors[0].message).slice(0, 140)})` : '';
+    if (first.status >= 400) throw new Error(`The GraphQL endpoint answered ${first.status} to the introspection query${serverMsg}. Paste the schema SDL as text instead.`);
+    throw new Error(`The endpoint did not return a GraphQL introspection result — introspection may be disabled${serverMsg}. Paste the SDL as text instead.`);
+  }
 
   const types = new Map<string, any>();
   for (const t of schema.types || []) types.set(t.name, t);
@@ -2251,7 +2364,7 @@ export async function introspectGraphql(url: string, headers: Record<string, str
   // Mask any auth headers supplied for introspection into the environment (IQE-052.1 #4).
   const sec = secretizeEndpoints(endpoints);
   const notice = `${sec.endpoints.length} operation${sec.endpoints.length === 1 ? '' : 's'} discovered by introspecting ${url}.${sec.moved ? ` ${sec.moved} auth secret${sec.moved === 1 ? '' : 's'} moved to the environment.` : ''}${graphqlTypeSummaryText(types)}`;
-  return { endpoints: sec.endpoints, parser: 'graphql', format: 'GraphQL (introspected)', warnings: [], notice, ...(sec.moved ? { envVars: sec.envVars } : {}) };
+  return { endpoints: sec.endpoints, parser: 'graphql', format: 'GraphQL (introspected)', warnings, notice, ...(sec.moved ? { envVars: sec.envVars } : {}) };
 }
 
 /* ────────────────────────────────────────────────────────────────

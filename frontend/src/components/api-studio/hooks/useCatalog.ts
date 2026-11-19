@@ -265,6 +265,10 @@ export function useCatalog() {
   }), []);
   const selectAll = useCallback(() => setSelected(new Set(endpoints.map((e) => e.id))), [endpoints]);
   const clearSelection = useCallback(() => setSelected(new Set()), []);
+  /** Replace the whole selection with exactly these ids — used to reconcile the
+      catalogue checkboxes with the endpoints the reviewer accepted, so the
+      catalogue never shows more selected than are actually going forward. */
+  const selectOnly = useCallback((ids: string[]) => setSelected(new Set(ids)), []);
 
   const selectedEndpoints = useMemo(() => endpoints.filter((e) => selected.has(e.id)), [endpoints, selected]);
 
@@ -284,7 +288,7 @@ export function useCatalog() {
     endpoints, selected, selectedEndpoints, profile, strategy, imports,
     analyzing, analysisError,
     addEndpoints, removeEndpoints, updateEndpoint, clearCatalog, clearCache,
-    toggle, selectMany, selectAll, clearSelection,
+    toggle, selectMany, selectAll, clearSelection, selectOnly,
     analyze: (deep = false) => analyze(endpoints, deep),
     setStrategy, toggleLayer, adoptRecommendation,
   };

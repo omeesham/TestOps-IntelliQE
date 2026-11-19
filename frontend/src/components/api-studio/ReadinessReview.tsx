@@ -9,8 +9,9 @@
  * be accepted even with missing fields — they stay flagged as warnings. Reject
  * removes the endpoint from the catalogue entirely, so it goes neither to the
  * next step nor to the Endpoint catalogue screen. Only the ACCEPTED endpoints go
- * forward — planning stays disabled until every endpoint has a decision and at
- * least one is accepted.
+ * forward — planning stays disabled until at least one endpoint is accepted, and
+ * then plans with exactly those accepted endpoints (one, two, or all of them);
+ * any still-to-review endpoints are simply skipped.
  */
 import { useState } from 'react';
 import {
@@ -225,7 +226,11 @@ export default function ReadinessReview({ catalog, endpointIds, onClose, onProce
     return new Set(allIds);
   });
 
-  const canPlan = pendingItems.length === 0 && acceptedEps.length > 0;
+  // Planning needs at least one accepted endpoint — and nothing more. The
+  // reviewer can plan with just the one or two endpoints they accepted; the
+  // still-to-review endpoints simply don't go forward. Only `acceptedEps` are
+  // handed to planning, so leaving endpoints undecided never pulls them in.
+  const canPlan = acceptedEps.length > 0;
 
   const renderCard = (item: EndpointReadiness) => {
     const ep = eps.find((e) => e.id === item.endpointId)!;
@@ -249,7 +254,7 @@ export default function ReadinessReview({ catalog, endpointIds, onClose, onProce
           <div className="min-w-0 flex-1">
             <h3 className="text-[14px] font-semibold text-gray-900">API readiness review</h3>
             <p className="text-[12px] text-gray-500 mt-0.5">
-              Accept each endpoint to send it to the further automation steps, or Reject to remove it — a rejected endpoint is dropped from the catalogue and won't appear in the Endpoint catalogue or go to automation. Fix missing data inline first if you like — an endpoint can be accepted with warnings. Only accepted endpoints go forward; planning starts once every endpoint has a decision.
+              Accept each endpoint to send it to the further automation steps, or Reject to remove it — a rejected endpoint is dropped from the catalogue and won't appear in the Endpoint catalogue or go to automation. Fix missing data inline first if you like — an endpoint can be accepted with warnings. Only accepted endpoints go forward; planning starts once at least one endpoint is accepted, and runs with just the ones you accepted.
             </p>
           </div>
           <button type="button" onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
@@ -295,11 +300,11 @@ export default function ReadinessReview({ catalog, endpointIds, onClose, onProce
         {/* Footer */}
         <div className="flex items-center gap-2 px-5 py-3.5 border-t border-gray-100">
           <p className="text-[11.5px] text-gray-500">
-            {pendingItems.length > 0
-              ? `${pendingItems.length} endpoint${pendingItems.length === 1 ? '' : 's'} awaiting your accept/reject decision.`
-              : acceptedEps.length === 0
-                ? 'No endpoints accepted — accept at least one to start planning.'
-                : `${acceptedEps.length} endpoint${acceptedEps.length === 1 ? '' : 's'} accepted for automation.`}
+            {acceptedEps.length > 0
+              ? `${acceptedEps.length} endpoint${acceptedEps.length === 1 ? '' : 's'} accepted — only these go to planning${pendingItems.length > 0 ? ` (${pendingItems.length} still to review will be skipped)` : ''}.`
+              : pendingItems.length > 0
+                ? `Accept at least one endpoint to start planning — ${pendingItems.length} to review.`
+                : 'No endpoints accepted — accept at least one to start planning.'}
           </p>
           <div className="ml-auto flex items-center gap-2">
             <button type="button" onClick={onClose} className={SECONDARY_BTN}>Close</button>

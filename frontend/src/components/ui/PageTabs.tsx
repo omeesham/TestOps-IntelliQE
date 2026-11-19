@@ -10,6 +10,7 @@
  * render the active panel themselves and should give it `role="tabpanel"`.
  */
 import { useRef, type ElementType, type KeyboardEvent } from 'react';
+import { Check } from 'lucide-react';
 
 export interface TabItem {
   id: string;
@@ -17,6 +18,12 @@ export interface TabItem {
   icon?: ElementType;
   /** Optional count pill (e.g. number of endpoints). */
   count?: number;
+  /**
+   * Live pipeline status driving the icon decoration, so the tab reacts as a
+   * run moves through it: `running` pulses the icon (this step is happening now),
+   * `done` marks it complete with a green check. Left undefined for a resting tab.
+   */
+  live?: 'running' | 'done';
 }
 
 interface PageTabsProps {
@@ -52,6 +59,8 @@ export default function PageTabs({ tabs, active, onChange, ariaLabel = 'Sections
       {tabs.map((t, i) => {
         const isActive = t.id === active;
         const Icon = t.icon;
+        const running = t.live === 'running';
+        const done = t.live === 'done';
         return (
           <button
             key={t.id}
@@ -60,16 +69,34 @@ export default function PageTabs({ tabs, active, onChange, ariaLabel = 'Sections
             id={`tab-${t.id}`}
             aria-selected={isActive}
             aria-controls={`panel-${t.id}`}
+            aria-busy={running || undefined}
             tabIndex={isActive ? 0 : -1}
             onClick={() => onChange(t.id)}
             onKeyDown={(e) => onKeyDown(e, i)}
             className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3.5 py-2 text-[13px] font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#7C3AED]/40 ${
               isActive
                 ? 'bg-gradient-to-r from-[#7C3AED] to-[#6366F1] text-white shadow-sm'
-                : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50'
+                : running
+                  ? 'text-[#6D28D9] bg-purple-50 ring-2 ring-[#7C3AED]/30 ring-inset'
+                  : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50'
             }`}
           >
-            {Icon && <Icon className="w-4 h-4 flex-shrink-0" />}
+            {Icon && (
+              <span className="relative flex-shrink-0 inline-flex">
+                <Icon className={`w-4 h-4 ${running && !isActive ? 'text-[#7C3AED] animate-pulse' : ''}`} />
+                {running && (
+                  <span className="absolute -top-1 -right-1 flex h-2 w-2" aria-hidden="true">
+                    <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping ${isActive ? 'bg-white' : 'bg-[#7C3AED]'}`} />
+                    <span className={`relative inline-flex h-2 w-2 rounded-full ${isActive ? 'bg-white' : 'bg-[#7C3AED]'}`} />
+                  </span>
+                )}
+                {done && !running && (
+                  <span className={`absolute -top-1.5 -right-1.5 inline-flex items-center justify-center h-3 w-3 rounded-full ring-2 ${isActive ? 'bg-white ring-[#7C3AED]' : 'bg-emerald-500 ring-white'}`} aria-hidden="true">
+                    <Check className={`h-2 w-2 ${isActive ? 'text-[#7C3AED]' : 'text-white'}`} strokeWidth={3} />
+                  </span>
+                )}
+              </span>
+            )}
             {t.label}
             {t.count !== undefined && (
               <span className={`ml-0.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-md text-[11px] font-bold tabular-nums ${isActive ? 'bg-white/25 text-white' : 'bg-purple-50 text-[#7C3AED]'}`}>

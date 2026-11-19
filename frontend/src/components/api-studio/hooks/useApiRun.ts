@@ -427,6 +427,11 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
     setStages((prev) => prev.map((st) => st.key === 'scenarios' ? st : { ...st, status: 'pending', detail: 'Not started', startedAt: undefined, durationMs: undefined }));
     setReport(null);
     setPushState({ status: 'idle' });
+    // Surface the selected scenarios in the Runs view immediately — as 'running' —
+    // the moment Automate is clicked. The automate step (rendering specs + saving
+    // the run) runs before execution and, for a large suite, takes a while; without
+    // this the Runs view sat on a blank "Nothing has executed yet" the whole time.
+    setRows(chosen.map((c) => ({ testCaseId: c.id, name: c.title, status: 'running', duration: '' })));
 
     /* ── Automate ── */
     setPhase('automating');
@@ -599,6 +604,21 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
     setRunEnvName(''); setRunEnvKey(''); setRunEnv(null); setRunCases([]); setReresolving(false);
   }, []);
 
+  /** Re-enter the review gate for scenarios restored from a previous session.
+   *  On reload the scenarios/specs are rehydrated from the workspace but the live
+   *  phase is lost (resets to idle), which freezes the Scenarios screen — nothing
+   *  is selectable and the Automate gate never appears. This puts the run back at
+   *  the review gate: every restored scenario selected, phase 'review', so the
+   *  user can edit, deselect and automate them without regenerating. */
+  const resumeReview = useCallback(() => {
+    if (scenarios.length === 0) return;
+    runIdRef.current++;
+    startedAtRef.current = Date.now();
+    setSelected(new Set(scenarios.map((s) => s.id)));
+    setRunError('');
+    setPhase('review');
+  }, [scenarios]);
+
   const toggleScenario = useCallback((id: string) => setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; }), []);
   const selectScenarios = useCallback((ids: string[]) => setSelected((prev) => new Set([...prev, ...ids])), []);
   const clearScenarios = useCallback(() => setSelected(new Set()), []);
@@ -633,7 +653,7 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
   return {
     phase, stages, scenarios, specs, serviceObjects, selected, rows, report, testRunId, runError, exporting, pushState,
     runEndpoints, runLabel, runEnvName, runEnvKey, runCases, reresolving, logs, running, started, finished, specsVisible, baseUrl,
-    runScenarios, runSuite, reresolve, resetRun, handleExport, handlePushToRepo,
+    runScenarios, runSuite, reresolve, resetRun, resumeReview, handleExport, handlePushToRepo,
     toggleScenario, selectScenarios, clearScenarios, deleteScenario, updateScenario, updateSpec, regenerateSpecs, setRunError, log,
     elapsedMs: () => (startedAtRef.current ? Date.now() - startedAtRef.current : 0),
   };
