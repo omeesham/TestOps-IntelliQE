@@ -21,6 +21,7 @@ import { getTenantLlm } from './llm.service.js';
 import { sanitizeApiSpec } from '../utils/api-spec.js';
 import { analyzeApiSurface, type ApiProfile } from './api-intelligence.service.js';
 import { applyEnvironment, getEnvironment, listEnvironments, spansMultipleHosts } from './api-environments.service.js';
+import { mintAuthToken, injectAuthToken } from './api-auth-setup.service.js';
 import { executeStage, healStage } from '../routes/pipeline-flow.routes.js';
 import { setJobProgress } from './async-jobs.service.js';
 import type { ImportedEndpoint } from './api-import.service.js';
@@ -108,6 +109,15 @@ export async function runHeadlessApiRun(
     const all = await listEnvironments(tenantId);
     const def = all.find((e) => e.isDefault);
     if (def) env = await getEnvironment(tenantId, def.id, { reveal: true });
+  }
+  // Mint a runtime token from the environment's login setup (if configured) and
+  // inject it so authenticated endpoints resolve a valid bearer, instead of
+  // being sent with no Authorization header → 401.
+  if (env) {
+    const mint = await mintAuthToken(env);
+    env = injectAuthToken(env, mint);
+    if (mint.diagnostic) mark('auth', mint.diagnostic);
+    else if (mint.token) mark('auth', `Minted a ${mint.varName} token from the environment's login setup`);
   }
   const preserveRealHosts = spansMultipleHosts(input.endpoints);
   const resolved = input.endpoints.map((e) => applyEnvironment(e, env, { preserveRealHosts }));

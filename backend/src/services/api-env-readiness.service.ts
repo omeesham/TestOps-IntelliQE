@@ -19,6 +19,7 @@
  */
 import pool from '../db.js';
 import { getEnvironment, type ApiEnvironment } from './api-environments.service.js';
+import { mintAuthToken } from './api-auth-setup.service.js';
 import { buildRequestInit, timedFetch } from '../utils/api-http.js';
 
 export type ReadinessContext = 'preview' | 'pre-run';
@@ -231,6 +232,13 @@ export async function evaluateReadiness(
 
   if (config.checkAuth) {
     const url = joinUrl(env.baseUrl, config.authProbePath || '/');
+    // A configured login setup mints a runtime token — fold it into the vars the
+    // probe resolves from, so a password-login API passes the gate and a missing
+    // credential (no static var AND no working login) is flagged clearly.
+    if (env.authSetup?.enabled) {
+      const m = await mintAuthToken(env);
+      if (m.token && m.varName) vars[m.varName] = m.token;
+    }
     const value = resolveAuthValue(config.authType, vars);
     if (!url) {
       checks.push({ id: 'auth', label: 'Auth probe', pass: false, actual: 'could not form probe URL', severity: 'critical' });

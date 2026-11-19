@@ -12,9 +12,9 @@
  * same one the picker points at.
  */
 import { useState } from 'react';
-import { Plus, Server, Star, Trash2, Pencil, Save, X, Lock, Check, Zap, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { Plus, Server, Star, Trash2, Pencil, Save, X, Lock, Check, Zap, ShieldCheck, ShieldAlert, KeyRound, AlertTriangle } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
-import { createApiEnvironment, updateApiEnvironment, deleteApiEnvironment } from '@/services/api';
+import { createApiEnvironment, updateApiEnvironment, deleteApiEnvironment, sendApiRequest } from '@/services/api';
 import EnvironmentReadinessPanel from './EnvironmentReadinessPanel';
 import { useToast } from '@/components/feedback/ToastProvider';
 import Loader from '@/components/feedback/Loader';
@@ -25,7 +25,7 @@ import {
 import { EmptyState, TabHero } from '../primitives';
 import { ENV_COLORS, DEFAULT_ENV_COLOR, envColor, ENV_PRESETS, presetColor } from '../env-colors';
 import type { ApiEnvironmentsStore } from '../hooks/useApiEnvironments';
-import type { ApiEnvironment, EnvVariable } from '../types';
+import type { ApiEnvironment, EnvVariable, AuthSetup } from '../types';
 
 /** Sensible starting variables for a fresh environment. */
 const SUGGESTED: EnvVariable[] = [
@@ -40,12 +40,12 @@ export default function EnvironmentsView({ store }: { store: ApiEnvironmentsStor
   const [saving, setSaving] = useState(false);
   const [readinessFor, setReadinessFor] = useState<ApiEnvironment | null>(null);
 
-  const save = async (env: { id?: string; name: string; baseUrl: string; color: string; variables: EnvVariable[]; isDefault: boolean; workers: number | null }) => {
+  const save = async (env: { id?: string; name: string; baseUrl: string; color: string; variables: EnvVariable[]; isDefault: boolean; workers: number | null; authSetup: AuthSetup }) => {
     if (!env.name.trim()) { toast.warning('Name required', 'Give the environment a name.'); return; }
     setSaving(true);
     try {
       const variables = env.variables.filter((v) => v.key.trim());
-      const payload = { name: env.name.trim(), baseUrl: env.baseUrl, color: env.color, variables, isDefault: env.isDefault, workers: env.workers };
+      const payload = { name: env.name.trim(), baseUrl: env.baseUrl, color: env.color, variables, isDefault: env.isDefault, workers: env.workers, authSetup: env.authSetup };
       if (env.id) {
         await updateApiEnvironment(env.id, payload);
       } else {
@@ -172,7 +172,9 @@ export default function EnvironmentsView({ store }: { store: ApiEnvironmentsStor
   );
 }
 
-function EnvForm({ initial, saving, onCancel, onSave }: { initial: Partial<ApiEnvironment>; saving: boolean; onCancel: () => void; onSave: (env: { id?: string; name: string; baseUrl: string; color: string; variables: EnvVariable[]; isDefault: boolean; workers: number | null }) => void }) {
+const EMPTY_AUTH_SETUP: AuthSetup = { enabled: false, request: { method: 'POST', url: '', headers: [], body: '' }, tokenPath: '$.token', varName: 'token' };
+
+function EnvForm({ initial, saving, onCancel, onSave }: { initial: Partial<ApiEnvironment>; saving: boolean; onCancel: () => void; onSave: (env: { id?: string; name: string; baseUrl: string; color: string; variables: EnvVariable[]; isDefault: boolean; workers: number | null; authSetup: AuthSetup }) => void }) {
   const [name, setName] = useState(initial.name || '');
   const [baseUrl, setBaseUrl] = useState(initial.baseUrl || '');
   const [color, setColor] = useState(initial.id ? (initial.color || '') : (initial.color || DEFAULT_ENV_COLOR));
@@ -187,8 +189,29 @@ function EnvForm({ initial, saving, onCancel, onSave }: { initial: Partial<ApiEn
   const pickColor = (c: string) => { setColor(c); setColorTouched(true); };
   const [vars, setVars] = useState<EnvVariable[]>(initial.variables?.length ? initial.variables : [{ key: '', value: '', secret: false }]);
   const update = (i: number, patch: Partial<EnvVariable>) => setVars((p) => p.map((v, j) => (j === i ? { ...v, ...patch } : v)));
+  const [auth, setAuth] = useState<AuthSetup>(initial.authSetup ? { ...EMPTY_AUTH_SETUP, ...initial.authSetup, request: { ...EMPTY_AUTH_SETUP.request, ...initial.authSetup.request } } : EMPTY_AUTH_SETUP);
+  const setAuthReq = (patch: Partial<AuthSetup['request']>) => setAuth((a) => ({ ...a, request: { ...a.request, ...patch } }));
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ status?: number; ok: boolean; error?: string; token?: string; body?: string } | null>(null);
+  const readTokenPath = (bodyText: string, path: string): string | undefined => {
+    try {
+      const obj = JSON.parse(bodyText);
+      const segs = path.replace(/^\$\.?/, '').split('.').filter(Boolean);
+      let cur: any = obj;
+      for (const s of segs) { if (cur == null) return undefined; cur = cur[s]; }
+      return typeof cur === 'string' && cur ? cur : undefined;
+    } catch { return undefined; }
+  };
+  const testLogin = async () => {
+    setTesting(true); setTestResult(null);
+    try {
+      const r = await sendApiRequest({ method: auth.request.method, url: auth.request.url, headers: auth.request.headers, body: auth.request.body, auth: auth.request.auth as any, environmentId: initial.id, bodyMode: 'json' });
+      setTestResult({ status: r.status, ok: r.ok, error: r.error, token: r.bodyText ? readTokenPath(r.bodyText, auth.tokenPath) : undefined, body: (r.bodyText || '').slice(0, 400) });
+    } catch (e: any) { setTestResult({ ok: false, error: e?.message || 'Request failed' }); }
+    finally { setTesting(false); }
+  };
   return (
-    <form onSubmit={(e) => { e.preventDefault(); onSave({ id: initial.id, name, baseUrl: baseUrl.trim(), color, variables: vars, isDefault, workers: workers.trim() ? Math.max(1, Math.min(10, Math.round(Number(workers)) || 1)) : null }); }} className={`${CARD} p-4 space-y-3`}>
+    <form onSubmit={(e) => { e.preventDefault(); onSave({ id: initial.id, name, baseUrl: baseUrl.trim(), color, variables: vars, isDefault, workers: workers.trim() ? Math.max(1, Math.min(10, Math.round(Number(workers)) || 1)) : null, authSetup: auth }); }} className={`${CARD} p-4 space-y-3`}>
       <div className="flex items-center gap-2 mb-1"><Server className="w-4 h-4 text-[#7C3AED]" /><h3 className="text-[12.5px] font-semibold text-gray-900">{initial.id ? 'Edit environment' : 'New environment'}</h3><button type="button" onClick={onCancel} className="ml-auto p-1 text-gray-400 hover:text-[#7C3AED]"><X className="w-4 h-4" /></button></div>
       <div className="grid grid-cols-[220px_1fr_auto_auto] gap-3 items-end">
         <div>
@@ -254,6 +277,43 @@ function EnvForm({ initial, saving, onCancel, onSave }: { initial: Partial<ApiEn
           <button type="button" onClick={() => setVars((p) => [...p, { key: '', value: '', secret: false }])} className="inline-flex items-center gap-1 text-[11px] font-medium text-[#7C3AED]"><Plus className="w-3 h-3" />Add variable</button>
         </div>
         <p className="mt-1.5 text-[10.5px] text-gray-400 leading-relaxed">Reference any variable as <code className="font-mono">{'{{name}}'}</code> in an endpoint's URL, headers, query params or body — it resolves to this environment's value at run time, so the same tests retarget by switching environments. Conventional names resolve auth automatically: <code className="font-mono">token</code> → Bearer, <code className="font-mono">apiKey</code> → API key header, <code className="font-mono">basicAuth</code> (user:password) → Basic. A masked secret left unchanged keeps its stored value.</p>
+      </div>
+      {/* ── Login / token setup — mints a runtime bearer token before each run ── */}
+      <div className="rounded-lg border border-[#E9E5FF] bg-[#FBFAFF] p-3">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={auth.enabled} onChange={(e) => setAuth((a) => ({ ...a, enabled: e.target.checked }))} className="w-3.5 h-3.5 rounded border-gray-300 text-[#7C3AED] focus:ring-[#A5B4FC]" />
+          <KeyRound className="w-3.5 h-3.5 text-[#7C3AED]" />
+          <span className="text-[12px] font-semibold text-gray-900">Login / token setup</span>
+          <span className="text-[10.5px] text-gray-400">runs once before a run and mints a token for authenticated endpoints</span>
+        </label>
+        {auth.enabled && (
+          <div className="mt-3 space-y-2">
+            <div className="grid grid-cols-[90px_1fr] gap-1.5">
+              <select value={auth.request.method} onChange={(e) => setAuthReq({ method: e.target.value })} className={INPUT}>
+                {['POST', 'GET', 'PUT'].map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <input value={auth.request.url} onChange={(e) => setAuthReq({ url: e.target.value })} placeholder="{{baseUrl}}/auth/login" spellCheck={false} className={`${INPUT} font-mono`} />
+            </div>
+            <textarea value={auth.request.body || ''} onChange={(e) => setAuthReq({ body: e.target.value })} placeholder={'{ "username": "{{username}}", "password": "{{password}}" }'} spellCheck={false} rows={3} className={`${INPUT} font-mono text-[11px]`} />
+            <div className="grid grid-cols-2 gap-1.5">
+              <div>
+                <label className={LABEL}>Token JSONPath</label>
+                <input value={auth.tokenPath} onChange={(e) => setAuth((a) => ({ ...a, tokenPath: e.target.value }))} placeholder="$.token" spellCheck={false} className={`${INPUT} font-mono`} />
+              </div>
+              <div>
+                <label className={LABEL}>Store in variable</label>
+                <input value={auth.varName} onChange={(e) => setAuth((a) => ({ ...a, varName: e.target.value.replace(/[^\w]/g, '') }))} placeholder="token" spellCheck={false} className={`${INPUT} font-mono`} />
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={testLogin} disabled={testing || !auth.request.url.trim()} className={SECONDARY_BTN}>{testing ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}Test login</button>
+              {testResult && (testResult.token
+                ? <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700"><Check className="w-3.5 h-3.5" />Token extracted (HTTP {testResult.status}) — ending …{testResult.token.slice(-6)}</span>
+                : <span className="inline-flex items-center gap-1 text-[11px] text-red-600"><AlertTriangle className="w-3.5 h-3.5" />{testResult.error ? testResult.error : testResult.ok ? `No token at "${auth.tokenPath}" (HTTP ${testResult.status})` : `Login failed (HTTP ${testResult.status})`}</span>)}
+            </div>
+            <p className="text-[10.5px] text-gray-400 leading-relaxed">Reference credentials as <code className="font-mono">{'{{username}}'}</code>/<code className="font-mono">{'{{password}}'}</code> and keep their values in encrypted variables above — never inline. Save the environment first so the test resolves <code className="font-mono">{'{{vars}}'}</code>. The minted token populates <code className="font-mono">{auth.varName || 'token'}</code>, which Bearer auth resolves automatically.</p>
+          </div>
+        )}
       </div>
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onCancel} className={SECONDARY_BTN}>Cancel</button>

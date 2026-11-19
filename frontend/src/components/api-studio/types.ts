@@ -134,6 +134,21 @@ export interface Strategy {
 
 export interface EnvVariable { key: string; value: string; secret: boolean }
 
+/** A pre-run login request that mints a runtime token into a variable. Reference
+ *  secrets as `{{var}}` (stored in encrypted environment variables), never inline. */
+export interface AuthSetup {
+  enabled: boolean;
+  request: {
+    method: string;
+    url: string;
+    headers?: { key: string; value: string }[];
+    body?: string;
+    auth?: { type: string; value?: string; headerName?: string; in?: 'header' | 'query' };
+  };
+  tokenPath: string;
+  varName: string;
+}
+
 export interface ApiEnvironment {
   id: string;
   name: string;
@@ -146,6 +161,8 @@ export interface ApiEnvironment {
   customerLike?: boolean;
   /** Parallel test workers for runs against this environment (1–10); unset ⇒ global default. */
   workers?: number;
+  /** Optional pre-run login that mints a runtime token into a variable. */
+  authSetup?: AuthSetup;
   createdBy?: string;
   createdAt: string;
   updatedAt: string;

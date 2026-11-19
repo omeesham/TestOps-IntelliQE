@@ -771,6 +771,11 @@ export async function initDb(): Promise<void> {
     // Per-environment parallel worker count (1–10) — additive; NULL ⇒ use the
     // global API_TEST_WORKERS default (IQE parallel-execution per-environment).
     await addColumn('api_environments', 'workers', 'INT');
+    // Auth setup: a login request + token JSONPath that runs ONCE before a run to
+    // mint a runtime bearer token into an environment variable (default `token`),
+    // so authenticated endpoints in an auto-generated suite stop failing with 401.
+    // Additive JSON column; NULL ⇒ no auth setup (prior behaviour).
+    await addColumn('api_environments', 'auth_setup', 'NVARCHAR(MAX)');
     // Import history: every intake (file, URL, cURL, GraphQL, MCP…) with what
     // it produced — the dashboard's "sources" panel and the REST /imports feed.
     await createTable('api_import_sources', `

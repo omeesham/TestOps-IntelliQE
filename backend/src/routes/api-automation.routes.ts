@@ -176,7 +176,9 @@ import { grpcClientStream, grpcBidi } from '../services/api-messaging.service.js
 import { logAudit } from '../utils/audit.js';
 import {
   listEnvironments, getEnvironment, createEnvironment, updateEnvironment, deleteEnvironment, importVariables, applyEnvironment, resolveApiCase, spansMultipleHosts,
+  // (auth-setup helpers imported separately below)
 } from '../services/api-environments.service.js';
+import { mintAuthToken, injectAuthToken } from '../services/api-auth-setup.service.js';
 import {
   getReadinessConfig, saveReadinessConfig, evaluateReadiness, enforceReadiness, listReadinessHistory,
 } from '../services/api-env-readiness.service.js';
@@ -1683,8 +1685,10 @@ router.delete('/environments/:id', async (req: Request, res: Response) => {
  */
 router.post('/environments/:id/resolve', async (req: Request, res: Response) => {
   try {
-    const env = await getEnvironment(req.user!.tenantId, String(req.params.id), { reveal: true });
-    if (!env) { res.status(404).json({ error: 'Environment not found.' }); return; }
+    const env0 = await getEnvironment(req.user!.tenantId, String(req.params.id), { reveal: true });
+    if (!env0) { res.status(404).json({ error: 'Environment not found.' }); return; }
+    // Mint a runtime token from the login setup (if any) so authenticated endpoints resolve a bearer.
+    const env = injectAuthToken(env0, await mintAuthToken(env0)) || env0;
     const rawEndpoints = endpointsFromBody(req.body?.endpoints);
     const preserveRealHosts = spansMultipleHosts(rawEndpoints);
     const endpoints = rawEndpoints.map((e) => applyEnvironment(e, env, { preserveRealHosts }));
@@ -1826,7 +1830,10 @@ router.post('/design', async (req: Request, res: Response) => {
   const environmentId = typeof req.body?.environmentId === 'string' ? req.body.environmentId : undefined;
   const jobId = startJob(tenantId, async (id) => {
     setJobProgress(id, { phase: 'design', done: 0, total: specs.length, message: 'Starting…' });
-    const env = environmentId ? await getEnvironment(tenantId, environmentId, { reveal: true }) : null;
+    const env0 = environmentId ? await getEnvironment(tenantId, environmentId, { reveal: true }) : null;
+    // Mint + inject the login-setup token so the generator bakes a valid bearer
+    // into authenticated scenarios instead of an empty (→ 401) header.
+    const env = env0 ? injectAuthToken(env0, await mintAuthToken(env0)) : null;
     // Compose free text + stored BRD/FRD grounding into the requirements the
     // pipeline grounds generation in.
     const grounding = enrichWithAgents ? await assembleRequirementGrounding(tenantId, requirementRefs) : '';
@@ -1871,8 +1878,10 @@ router.post('/render', async (req: Request, res: Response) => {
     const cases = Array.isArray(req.body?.cases) ? req.body.cases.slice(0, 2000) : [];
     if (!cases.length) { res.status(400).json({ error: 'Send the run\'s designed cases to re-render.' }); return; }
     const environmentId = typeof req.body?.environmentId === 'string' ? req.body.environmentId : undefined;
-    const env = environmentId ? await getEnvironment(tenantId, environmentId, { reveal: true }) : null;
-    if (environmentId && !env) { res.status(404).json({ error: 'Environment not found.' }); return; }
+    const env0 = environmentId ? await getEnvironment(tenantId, environmentId, { reveal: true }) : null;
+    if (environmentId && !env0) { res.status(404).json({ error: 'Environment not found.' }); return; }
+    // Retarget re-render: mint + inject the login-setup token for the new environment.
+    const env = env0 ? injectAuthToken(env0, await mintAuthToken(env0)) : null;
     const preserveRealHosts = spansMultipleHosts(cases as any[]);
     const resolved = (cases as any[]).map((nc) => resolveApiCase(nc, env, { preserveRealHosts }));
     const { testCases, automationScripts, pageObjects } = renderApiCases(resolved);

@@ -20,6 +20,26 @@ export interface EnvVariable {
   secret: boolean;
 }
 
+/**
+ * A login request that runs ONCE before a run to mint a runtime token. Secrets
+ * are NOT stored here — reference them as `{{var}}` and keep the value in an
+ * encrypted environment variable; `mintAuthToken` resolves the placeholders.
+ */
+export interface AuthSetup {
+  enabled: boolean;
+  request: {
+    method: string;
+    url: string;
+    headers?: { key: string; value: string }[];
+    body?: string;
+    auth?: { type: string; value?: string; headerName?: string; in?: 'header' | 'query' };
+  };
+  /** JSONPath to the token in the login response, e.g. `$.token` or `data.accessToken`. */
+  tokenPath: string;
+  /** Environment variable to populate (default `token` — the bearer fallback name). */
+  varName: string;
+}
+
 export interface ApiEnvironment {
   id: string;
   name: string;
@@ -33,6 +53,8 @@ export interface ApiEnvironment {
   /** Parallel test workers for runs against this environment (1–10). Omitted ⇒
    *  use the global API_TEST_WORKERS default. */
   workers?: number;
+  /** Optional pre-run login that mints a runtime token into a variable. */
+  authSetup?: AuthSetup;
   createdBy?: string;
   createdAt: string;
   updatedAt: string;
@@ -70,9 +92,49 @@ function rowToEnv(row: any, opts: { reveal: boolean }): ApiEnvironment {
     isDefault: !!row.is_default,
     customerLike: !!row.customer_like,
     workers: row.workers != null && Number.isFinite(Number(row.workers)) ? Number(row.workers) : undefined,
+    authSetup: parseAuthSetup(row.auth_setup),
     createdBy: row.created_by || undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+/** Parse the stored `auth_setup` JSON into an AuthSetup (or undefined). */
+function parseAuthSetup(raw: unknown): AuthSetup | undefined {
+  if (raw == null) return undefined;
+  try {
+    const p = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return sanitizeAuthSetup(p) ?? undefined;
+  } catch { return undefined; }
+}
+
+/** Validate/clamp an incoming AuthSetup; null when absent or unusable. Secrets
+ *  are never stored — only `{{var}}` placeholders resolved at mint time. */
+function sanitizeAuthSetup(input: unknown): AuthSetup | null {
+  if (!input || typeof input !== 'object') return null;
+  const i = input as Record<string, any>;
+  const req = (i.request && typeof i.request === 'object') ? i.request : {};
+  const url = String(req.url ?? '').trim().slice(0, 2000);
+  const tokenPath = String(i.tokenPath ?? '').trim().slice(0, 200);
+  // An unusable setup (no URL or no token path) is stored as disabled rather than
+  // silently dropped, so the UI round-trips what the user typed.
+  const headers = Array.isArray(req.headers)
+    ? req.headers.filter((h: any) => h && h.key).slice(0, 50).map((h: any) => ({ key: String(h.key).slice(0, 200), value: String(h.value ?? '').slice(0, 4000) }))
+    : [];
+  const auth = (req.auth && typeof req.auth === 'object')
+    ? { type: String(req.auth.type || 'none').slice(0, 20), value: req.auth.value != null ? String(req.auth.value).slice(0, 4000) : undefined, headerName: req.auth.headerName ? String(req.auth.headerName).slice(0, 100) : undefined, in: req.auth.in === 'query' ? 'query' as const : 'header' as const }
+    : undefined;
+  return {
+    enabled: !!i.enabled && !!url && !!tokenPath,
+    request: {
+      method: String(req.method || 'POST').toUpperCase().slice(0, 10),
+      url,
+      headers,
+      body: req.body != null ? String(req.body).slice(0, 20000) : undefined,
+      auth,
+    },
+    tokenPath,
+    varName: (String(i.varName ?? 'token').trim().replace(/[^A-Za-z0-9_]/g, '') || 'token').slice(0, 80),
   };
 }
 
@@ -132,7 +194,7 @@ export async function getEnvironment(tenantId: string, id: string, opts: { revea
 export async function createEnvironment(
   tenantId: string,
   username: string,
-  input: { name: string; baseUrl?: string; color?: string; variables?: unknown; isDefault?: boolean; customerLike?: boolean; workers?: unknown },
+  input: { name: string; baseUrl?: string; color?: string; variables?: unknown; isDefault?: boolean; customerLike?: boolean; workers?: unknown; authSetup?: unknown },
 ): Promise<ApiEnvironment> {
   const name = String(input.name || '').trim().slice(0, NAME_MAX);
   if (!name) throw new Error('An environment needs a name.');
@@ -141,11 +203,12 @@ export async function createEnvironment(
   const color = sanitizeColor(input.color);
   const vars = sanitizeVariables(input.variables);
   const workers = sanitizeWorkers(input.workers);
+  const authSetup = input.authSetup !== undefined ? sanitizeAuthSetup(input.authSetup) : null;
   if (input.isDefault) await pool.query(`UPDATE api_environments SET is_default = 0 WHERE tenant_id = $1`, [tenantId]);
   const { rows } = await pool.query(
-    `INSERT INTO api_environments (tenant_id, name, base_url, color, variables, is_default, customer_like, workers, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-    [tenantId, name, baseUrl || null, color, JSON.stringify(vars), input.isDefault ? 1 : 0, input.customerLike ? 1 : 0, workers, username],
+    `INSERT INTO api_environments (tenant_id, name, base_url, color, variables, is_default, customer_like, workers, auth_setup, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+    [tenantId, name, baseUrl || null, color, JSON.stringify(vars), input.isDefault ? 1 : 0, input.customerLike ? 1 : 0, workers, authSetup ? JSON.stringify(authSetup) : null, username],
   );
   return rowToEnv(rows[0], { reveal: false });
 }
@@ -153,7 +216,7 @@ export async function createEnvironment(
 export async function updateEnvironment(
   tenantId: string,
   id: string,
-  input: { name?: string; baseUrl?: string; color?: string; variables?: unknown; isDefault?: boolean; customerLike?: boolean; workers?: unknown },
+  input: { name?: string; baseUrl?: string; color?: string; variables?: unknown; isDefault?: boolean; customerLike?: boolean; workers?: unknown; authSetup?: unknown },
 ): Promise<ApiEnvironment | null> {
   const existing = await getEnvironment(tenantId, id);
   if (!existing) return null;
@@ -166,11 +229,12 @@ export async function updateEnvironment(
   const isDefault = input.isDefault !== undefined ? !!input.isDefault : existing.isDefault;
   const customerLike = input.customerLike !== undefined ? !!input.customerLike : existing.customerLike;
   const workers = input.workers !== undefined ? sanitizeWorkers(input.workers) : (existing.workers ?? null);
+  const authSetup = input.authSetup !== undefined ? sanitizeAuthSetup(input.authSetup) : (existing.authSetup ?? null);
   if (isDefault) await pool.query(`UPDATE api_environments SET is_default = 0 WHERE tenant_id = $1 AND id <> $2`, [tenantId, id]);
   const { rows } = await pool.query(
-    `UPDATE api_environments SET name = $1, base_url = $2, color = $3, variables = $4, is_default = $5, customer_like = $6, workers = $7, updated_at = SYSUTCDATETIME()
-     WHERE tenant_id = $8 AND id = $9 RETURNING *`,
-    [name, baseUrl || null, color, JSON.stringify(vars), isDefault ? 1 : 0, customerLike ? 1 : 0, workers, tenantId, id],
+    `UPDATE api_environments SET name = $1, base_url = $2, color = $3, variables = $4, is_default = $5, customer_like = $6, workers = $7, auth_setup = $8, updated_at = SYSUTCDATETIME()
+     WHERE tenant_id = $9 AND id = $10 RETURNING *`,
+    [name, baseUrl || null, color, JSON.stringify(vars), isDefault ? 1 : 0, customerLike ? 1 : 0, workers, authSetup ? JSON.stringify(authSetup) : null, tenantId, id],
   );
   return rows.length ? rowToEnv(rows[0], { reveal: false }) : null;
 }
@@ -304,6 +368,8 @@ export async function defaultEnvProcessVars(tenantId: string): Promise<Record<st
     return {};
   }
 }
+
+export function environmentVarMap(env: ApiEnvironment): Record<string, string> { return envVarMap(env); }
 
 function envVarMap(env: ApiEnvironment): Record<string, string> {
   const vars: Record<string, string> = {};

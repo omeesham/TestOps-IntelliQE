@@ -948,11 +948,11 @@ export async function listApiEnvironments(): Promise<{ environments: any[] }> {
   const { data } = await api.get('/api-automation/environments');
   return data;
 }
-export async function createApiEnvironment(input: { name: string; baseUrl?: string; color?: string; variables?: any[]; isDefault?: boolean; workers?: number | null }): Promise<{ environment: any }> {
+export async function createApiEnvironment(input: { name: string; baseUrl?: string; color?: string; variables?: any[]; isDefault?: boolean; workers?: number | null; authSetup?: any }): Promise<{ environment: any }> {
   const { data } = await api.post('/api-automation/environments', input);
   return data;
 }
-export async function updateApiEnvironment(id: string, input: { name?: string; baseUrl?: string; color?: string; variables?: any[]; isDefault?: boolean; workers?: number | null }): Promise<{ environment: any }> {
+export async function updateApiEnvironment(id: string, input: { name?: string; baseUrl?: string; color?: string; variables?: any[]; isDefault?: boolean; workers?: number | null; authSetup?: any }): Promise<{ environment: any }> {
   const { data } = await api.put(`/api-automation/environments/${encodeURIComponent(id)}`, input);
   return data;
 }
