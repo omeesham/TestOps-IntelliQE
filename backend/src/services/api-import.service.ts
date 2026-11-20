@@ -311,6 +311,10 @@ export function finalizeEndpoint(e: Partial<ImportedEndpoint>, source?: Imported
   const expectedStatus = Number.isInteger(statusNum) && statusNum >= 100 && statusNum <= 599 ? statusNum : undefined;
   const auth: ParsedApiSpec['auth'] & { headerName?: string } = { type: authType, value: authValue };
   if (authType === 'apikey' && (e.auth as any)?.headerName) auth.headerName = String((e.auth as any).headerName).slice(0, 100);
+  // Preserve a query-string API-key location (otherwise the key is wrongly sent
+  // as an X-API-Key header and every request fails auth). Execution honours this
+  // via applyQueryAuth / buildHeaders.
+  if (authType === 'apikey' && String((e.auth as any)?.in || '').toLowerCase() === 'query') auth.in = 'query';
   return {
     title,
     method,
@@ -345,7 +349,15 @@ export function dedupeEndpoints(list: ImportedEndpoint[]): ImportedEndpoint[] {
   const seen = new Set<string>();
   const out: ImportedEndpoint[] = [];
   for (const e of list) {
-    const distinguisher = e.style === 'graphql' ? ` ${e.operationId || e.body || ''}` : '';
+    // GraphQL operations all POST to one URL and differ only by operation/body.
+    // Write methods (POST/PUT/PATCH/DELETE) likewise legitimately share a
+    // method+URL while differing by body — e.g. a "create (valid)" and a
+    // "create (missing field)" negative test. Fold the body (then the title)
+    // into the key for those so distinct requests are not collapsed as dupes.
+    const isWrite = /^(post|put|patch|delete)$/i.test(e.method || '');
+    const distinguisher = e.style === 'graphql'
+      ? ` ${e.operationId || e.body || ''}`
+      : (isWrite ? ` ${e.body || e.title || ''}` : '');
     const key = `${e.method} ${e.url}${distinguisher}`.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -713,7 +725,7 @@ export function parseOpenApiDocument(doc: any, opts: { baseUrl?: string; sourceN
   }
 
   // Security schemes → our auth types
-  const schemes: Record<string, { type: ParsedApiSpec['auth']['type']; headerName?: string }> = {};
+  const schemes: Record<string, { type: ParsedApiSpec['auth']['type']; headerName?: string; in?: 'header' | 'query' }> = {};
   const rawSchemes = isV2 ? doc.securityDefinitions : doc.components?.securitySchemes;
   if (isObj(rawSchemes)) {
     for (const [name, def0] of Object.entries<any>(rawSchemes)) {
@@ -724,13 +736,17 @@ export function parseOpenApiDocument(doc: any, opts: { baseUrl?: string; sourceN
         const scheme = String(def.scheme || '').toLowerCase();
         schemes[name] = { type: scheme === 'basic' ? 'basic' : 'bearer' };
       } else if (t === 'apikey') {
-        schemes[name] = { type: 'apikey', headerName: String(def.in || 'header') === 'header' ? String(def.name || 'X-API-Key') : undefined };
+        const loc = String(def.in || 'header').toLowerCase() === 'query' ? 'query' : 'header';
+        // Capture the key's name for BOTH placements: it is the header name when
+        // in a header, and the query-param name (used by applyQueryAuth) when in
+        // the query string. Dropping it for query keys lost the location entirely.
+        schemes[name] = { type: 'apikey', headerName: String(def.name || (loc === 'query' ? 'api_key' : 'X-API-Key')), in: loc };
       } else if (t === 'oauth2' || t === 'openidconnect' || t === 'basic') {
         schemes[name] = { type: t === 'basic' ? 'basic' : 'bearer' };
       }
     }
   }
-  const authFor = (security: any): { type: ParsedApiSpec['auth']['type']; headerName?: string } => {
+  const authFor = (security: any): { type: ParsedApiSpec['auth']['type']; headerName?: string; in?: 'header' | 'query' } => {
     const list = Array.isArray(security) ? security : [];
     for (const req of list) {
       if (!isObj(req)) continue;
@@ -848,7 +864,7 @@ export function parseOpenApiDocument(doc: any, opts: { baseUrl?: string; sourceN
         method: method.toUpperCase(),
         url,
         headers,
-        auth: { type: auth.type, headerName: auth.headerName } as any,
+        auth: { type: auth.type, headerName: auth.headerName, in: auth.in } as any,
         body,
         expectedStatus,
         expectedResponse,
@@ -888,7 +904,7 @@ function fillVars(s: string, vars: Record<string, string>): string {
   return (s || '').replace(/\{\{\s*([^}]+?)\s*\}\}/g, (m, k) => (vars[k] !== undefined ? vars[k]! : m));
 }
 
-function postmanAuth(auth: any): { type: ParsedApiSpec['auth']['type']; value?: string; headerName?: string } {
+function postmanAuth(auth: any): { type: ParsedApiSpec['auth']['type']; value?: string; headerName?: string; in?: 'header' | 'query' } {
   if (!isObj(auth)) return { type: 'none' };
   const t = String(auth.type || '').toLowerCase();
   const kv = (list: any): Record<string, string> => {
@@ -903,7 +919,11 @@ function postmanAuth(auth: any): { type: ParsedApiSpec['auth']['type']; value?: 
   }
   if (t === 'apikey') {
     const a = kv(auth.apikey);
-    return { type: 'apikey', value: a.value, headerName: a.in === 'query' ? undefined : (a.key || 'X-API-Key') };
+    const inQuery = a.in === 'query';
+    // Keep the key NAME and location for query keys too — applyQueryAuth uses the
+    // name as the query-param; previously both were dropped and the key was wrongly
+    // sent as a header.
+    return { type: 'apikey', value: a.value, headerName: a.key || (inQuery ? 'api_key' : 'X-API-Key'), in: inQuery ? 'query' : 'header' };
   }
   if (t === 'oauth2' || t === 'jwt') return { type: 'bearer', value: kv(auth.oauth2 || auth.jwt).accessToken };
   return { type: 'none' };
@@ -1092,7 +1112,7 @@ export function parsePostmanCollection(doc: any, opts: { variables?: Record<stri
         method,
         url: raw,
         headers,
-        auth: { type: auth.type, value: auth.value, headerName: auth.headerName } as any,
+        auth: { type: auth.type, value: auth.value, headerName: auth.headerName, in: auth.in } as any,
         body,
         expectedStatus,
         expectedResponse,
@@ -1104,8 +1124,12 @@ export function parsePostmanCollection(doc: any, opts: { variables?: Record<stri
 
       if (!ep) { record('failed', 'POSTMAN_INVALID_ENDPOINT', 'The request could not be turned into a valid endpoint (missing or malformed URL/method).', urlTemplate); continue; }
 
-      const key = `${ep.method} ${ep.url}`.toLowerCase();
-      if (seen.has(key)) { record('skipped', 'POSTMAN_DUPLICATE', 'A request with the same method and URL was already imported.', urlTemplate); continue; }
+      // Distinct write requests legitimately share method+URL but differ by body
+      // (e.g. a valid create vs. a negative "missing field" create) — keep the
+      // body (then title) in the key so a real negative test is not dropped.
+      const isWriteReq = /^(post|put|patch|delete)$/i.test(ep.method || '');
+      const key = `${ep.method} ${ep.url}${isWriteReq ? ` ${ep.body || ep.title || ''}` : ''}`.toLowerCase();
+      if (seen.has(key)) { record('skipped', 'POSTMAN_DUPLICATE', 'A request with the same method, URL and body was already imported.', urlTemplate); continue; }
       seen.add(key);
       endpoints.push(ep);
 

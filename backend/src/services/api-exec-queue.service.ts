@@ -87,11 +87,42 @@ export async function cancelQueued(tenantId: string, id: string): Promise<boolea
 
 // ── drain loop (in-process; one pump per tenant at a time) ──
 const pumping = new Set<string>();
+// Items with a live in-memory watcher, so reconcileRunning never double-watches.
+const watched = new Set<string>();
+const watchKey = (tenantId: string, itemId: string): string => `${tenantId}:${itemId}`;
+
+/**
+ * Reclaim orphaned 'running' rows. The in-memory job + its setTimeout watcher do
+ * not survive a process restart (deploy/crash), so a row left 'running' would
+ * count toward `slots` forever and stall every queued run. For each 'running'
+ * row whose job is no longer in memory, requeue it (the run never recorded a
+ * result); for one whose job is still present (same process) re-attach a watcher
+ * so its completion is still picked up.
+ */
+async function reconcileRunning(tenantId: string): Promise<void> {
+  const { rows } = await pool.query(
+    `SELECT id, job_id FROM api_exec_queue_items WHERE tenant_id = $1 AND status = 'running'`,
+    [tenantId],
+  );
+  for (const r of rows) {
+    const jobId = r.job_id ? String(r.job_id) : '';
+    const job = jobId ? getJob(tenantId, jobId) : null;
+    if (!job) {
+      await pool.query(
+        `UPDATE api_exec_queue_items SET status = 'queued', job_id = NULL, started_at = NULL WHERE tenant_id = $1 AND id = $2 AND status = 'running'`,
+        [tenantId, r.id],
+      );
+    } else {
+      watchJob(tenantId, String(r.id), jobId);
+    }
+  }
+}
 
 async function pump(tenantId: string): Promise<void> {
   if (pumping.has(tenantId)) return;
   pumping.add(tenantId);
   try {
+    await reconcileRunning(tenantId);
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const slots = await getSlots(tenantId);
@@ -113,11 +144,16 @@ async function pump(tenantId: string): Promise<void> {
 }
 
 function watchJob(tenantId: string, itemId: string, jobId: string): void {
+  const key = watchKey(tenantId, itemId);
+  if (watched.has(key)) return;   // already watched (idempotent for reconcile)
+  watched.add(key);
+  const done = (): void => { watched.delete(key); };
   const poll = async (): Promise<void> => {
     try {
       const job = getJob(tenantId, jobId);
       if (!job) {
         await pool.query(`UPDATE api_exec_queue_items SET status = 'failed', error = 'job lost', finished_at = SYSUTCDATETIME() WHERE tenant_id = $1 AND id = $2`, [tenantId, itemId]);
+        done();
         void pump(tenantId);
         return;
       }
@@ -128,8 +164,9 @@ function watchJob(tenantId: string, itemId: string, jobId: string): void {
         `UPDATE api_exec_queue_items SET status = $3, stats = $4, error = $5, finished_at = SYSUTCDATETIME() WHERE tenant_id = $1 AND id = $2`,
         [tenantId, itemId, job.status === 'completed' ? 'done' : 'failed', stats, job.error || null],
       );
+      done();
       void pump(tenantId);
-    } catch { /* leave item; a later pump reconciles */ }
+    } catch { done(); /* leave item; a later pump reconciles */ }
   };
   setTimeout(() => void poll(), 2000);
 }

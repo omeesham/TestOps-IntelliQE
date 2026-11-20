@@ -315,6 +315,11 @@ const EXEC_BUDGET = 100;       // hard cap on HTTP requests actually issued per 
 const MAX_DEPTH = 8;           // nesting depth cap for if/loop/group
 const MAX_ITERATIONS = 200;    // per-loop iteration cap
 const MAX_WAIT_MS = 15_000;    // per wait-step cap
+// Body cap for flow requests. fetchFull defaults to 8 KB, which silently
+// truncates any larger JSON BEFORE it is parsed — breaking extraction, {{var}}
+// hand-over and every body assertion with no error. Flow steps routinely hit
+// list/create endpoints well over 8 KB, so parse the full body up to 2 MB.
+const FLOW_BODY_LIMIT = 2_000_000;
 
 /**
  * Substitute {{var}} occurrences in a string from the running variable bag.
@@ -775,7 +780,13 @@ function exprBag(res: { status?: number; elapsedMs: number; headers?: Record<str
   flattenInto(bag, parsed, '', 0);
   for (const [k, v] of Object.entries(vars)) bag[k] = v;                      // captured vars
   for (const [k, v] of Object.entries(res.headers || {})) bag[`header.${k.toLowerCase()}`] = String(v);
-  bag.status = res.status != null ? String(res.status) : '';                  // response meta wins
+  // Expose the HTTP status without shadowing a body field of the same name.
+  // `httpStatus` is always the HTTP code; `status` keeps the response body's own
+  // `status` field when present (so `until: status == 'ready'` against a
+  // {"status":"ready"} body works) and falls back to the HTTP code otherwise.
+  const httpStatusStr = res.status != null ? String(res.status) : '';
+  bag.httpStatus = httpStatusStr;
+  if (bag.status === undefined) bag.status = httpStatusStr;
   bag.responseTimeMs = String(res.elapsedMs);
   return bag;
 }
@@ -1037,7 +1048,7 @@ async function execSteps(steps: FlowStep[], ctx: ExecCtx, depth: number): Promis
     const nonIdempotent = method === 'POST' || method === 'PATCH';
     const retryAllowed = s.retryNonIdempotent === true || !nonIdempotent;
     let attempts = 1;
-    let res = await fetchFull(url, init, timeout);
+    let res = await fetchFull(url, init, timeout, FLOW_BODY_LIMIT);
     ctx.budget.used++;
     while (
       attempts < maxAttempts && retryAllowed &&
@@ -1046,7 +1057,7 @@ async function execSteps(steps: FlowStep[], ctx: ExecCtx, depth: number): Promis
     ) {
       if (retryDelay) await sleep(retryDelay);
       attempts++;
-      res = await fetchFull(url, init, timeout);
+      res = await fetchFull(url, init, timeout, FLOW_BODY_LIMIT);
       ctx.budget.used++;
     }
     // IQE-043.9: fold this response's Set-Cookie into the jar for later same-host steps.

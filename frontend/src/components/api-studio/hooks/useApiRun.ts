@@ -348,8 +348,12 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
      ═══════════════════════════════════════════════════════════════ */
   const reresolve = useCallback(async (environment: ApiEnvironment | null) => {
     // Nothing designed yet, or a run is mid-flight — never retarget under it.
+    // Also never retarget a FINISHED run (report/failed): re-rendering would
+    // replace the run's specs — including any healed script code shown in the
+    // Scripts tab — with fresh templates. The next run picks up the new
+    // environment at kickoff instead.
     if (!runCases.length) return;
-    if (['generating', 'automating', 'executing', 'healing'].includes(phase)) return;
+    if (['generating', 'automating', 'executing', 'healing', 'report', 'failed'].includes(phase)) return;
     setReresolving(true);
     try {
       const r = await renderApiRun(runCases, environment?.id);
@@ -389,7 +393,7 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
     });
   };
 
-  const finishReport = (total: number, passed: number, failed: number, notRun: number, healed: number, durationMs: number, reportUrl?: string) => {
+  const finishReport = (total: number, passed: number, failed: number, notRun: number, healed: number, durationMs: number, reportUrl?: string, savedRunId?: string) => {
     setStage('report', 'running', 'Assembling…');
     const passRate = total > 0 ? Math.round((passed / total) * 100) : 0;
     setReport({ total, passed, failed, notRun, healed, passRate, durationMs, reportUrl });
@@ -402,7 +406,10 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
     // path — a failure to notify is swallowed and never surfaces to the user.
     void notifyApiRun({
       title: runLabel || 'API run',
-      runId: testRunId || undefined,
+      // Prefer the id saved during THIS run (passed in); the testRunId state is
+      // a render behind, so it is '' on the first run and the previous run's id
+      // thereafter.
+      runId: savedRunId || testRunId || undefined,
       reportUrl,
       status: (failed > 0 || notRun > 0) ? 'failed' : 'passed',
       stats: { total, passed, failed, notRun, passRate },
@@ -480,7 +487,7 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
       setRows(chosen.map((c) => ({ testCaseId: c.id, name: c.title, status: 'not_run', duration: '', error: reason })));
       setStage('automate', 'skipped', reason); setStage('heal', 'skipped', 'Nothing ran to heal');
       log('automate', reason, 'warn');
-      finishReport(chosen.length, 0, 0, chosen.length, 0, execMs, exec?.reportUrl);
+      finishReport(chosen.length, 0, 0, chosen.length, 0, execMs, exec?.reportUrl, runId);
       return;
     }
 
@@ -531,7 +538,7 @@ export function useApiRun(opts: { onPhase?: (phase: Phase) => void } = {}) {
         setStage('heal', 'failed', msg); log('heal', msg, 'error');
       }
     }
-    finishReport(chosen.length, passed, failed, notRun, healedCount, execMs, exec?.reportUrl);
+    finishReport(chosen.length, passed, failed, notRun, healedCount, execMs, exec?.reportUrl, runId);
   }, [scenarios, selected, specs, serviceObjects, runEndpoints, baseUrl, testRunId, runLabel, user, log, setStage, toast]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── Export ── */

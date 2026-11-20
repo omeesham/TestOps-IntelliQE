@@ -116,6 +116,38 @@ function jsonStringAt(src: string, from: number): string | null {
   try { return JSON.parse(m[0]) as string; } catch { return null; }
 }
 
+/**
+ * Parse a rendered `headers: { … }` literal into a map, resiliently.
+ *
+ * The block is plain JSON when every value is a string literal, but secrets are
+ * rendered as env refs — `{ "Authorization": (process.env.API_TOKEN ?? ''), … }`
+ * — which is NOT valid JSON. The old `JSON.parse` threw on that and dropped
+ * EVERY header, so the probe ran unauthenticated and the real failure was
+ * misdiagnosed as an auth-defect. Here, on parse failure we keep every literal
+ * header AND resolve env-ref values from the process environment (the same place
+ * the rendered spec reads them), so the probe sends the real request.
+ */
+function parseHeaderLiteral(lit: string): Record<string, string> {
+  try {
+    const obj = JSON.parse(lit);
+    if (obj && typeof obj === 'object') return obj as Record<string, string>;
+  } catch { /* mixed JSON + expressions — fall through to a resilient scan */ }
+  const out: Record<string, string> = {};
+  const reLit = /"((?:[^"\\]|\\.)*)"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = reLit.exec(lit)) !== null) {
+    try { out[JSON.parse(`"${m[1]}"`)] = JSON.parse(`"${m[2]}"`); } catch { /* skip */ }
+  }
+  const reEnv = /"((?:[^"\\]|\\.)*)"\s*:\s*\(?\s*process\.env\.([A-Za-z_]\w*)/g;
+  while ((m = reEnv.exec(lit)) !== null) {
+    try {
+      const key = JSON.parse(`"${m[1]}"`) as string;
+      if (out[key] === undefined) out[key] = process.env[m[2]!] ?? '';
+    } catch { /* skip */ }
+  }
+  return out;
+}
+
 export interface ParsedApiRequest {
   method: string;
   url: string;
@@ -149,7 +181,7 @@ export function parseRenderedRequest(code: string): ParsedApiRequest | null {
   if (hIdx !== -1) {
     const brace = code.indexOf('{', hIdx);
     const lit = brace === -1 ? null : balanced(code, brace);
-    if (lit) { try { headers = JSON.parse(lit); } catch { /* leave empty */ } }
+    if (lit) headers = parseHeaderLiteral(lit);
   }
 
   let body: string | undefined;
@@ -212,11 +244,20 @@ export function parseServiceRequest(serviceCode: string, methodName: string): Pa
   const url = jsonStringAt(serviceCode, methodEnd);
   if (!url || !/^https?:\/\//i.test(url)) return null;
 
-  // Options object — scoped to THIS method so a later method's headers can't
-  // bleed in (the whole-file indexOf the flat parser used would do exactly that).
+  // Options object — scoped to THIS `this.send(...)` call's own argument list,
+  // bounded by the matching ')' for the '(' we are inside. A no-options method
+  // (`return this.send("GET", "url");`) must NOT reach into the NEXT method's
+  // body brace: using the next `this.send(` as the bound let exactly that bleed
+  // through, lifting a sibling method's headers/body into this request.
+  let pd = 1, inStr = false, scopeEnd = serviceCode.length;
+  for (let i = afterSend; i < serviceCode.length; i++) {
+    const ch = serviceCode[i];
+    if (inStr) { if (ch === '\\') { i++; continue; } if (ch === '"') inStr = false; continue; }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '(') pd++;
+    else if (ch === ')') { pd--; if (pd === 0) { scopeEnd = i; break; } }
+  }
   const optsStart = serviceCode.indexOf('{', methodEnd);
-  const methodBodyEnd = serviceCode.indexOf('this.send(', afterSend + 1);
-  const scopeEnd = methodBodyEnd === -1 ? serviceCode.length : methodBodyEnd;
   let headers: Record<string, string> = {};
   let body: string | undefined;
   if (optsStart !== -1 && optsStart < scopeEnd) {
@@ -226,7 +267,7 @@ export function parseServiceRequest(serviceCode: string, methodName: string): Pa
       if (hIdx !== -1) {
         const brace = opts.indexOf('{', hIdx);
         const lit = brace === -1 ? null : balanced(opts, brace);
-        if (lit) { try { headers = JSON.parse(lit); } catch { /* leave empty */ } }
+        if (lit) headers = parseHeaderLiteral(lit);
       }
       const dIdx = opts.indexOf('data:');
       if (dIdx !== -1) {

@@ -29,8 +29,11 @@ export interface ParsedApiSpec {
   auth: {
     type: 'none' | 'bearer' | 'basic' | 'apikey';
     value?: string;
-    /** apikey only — the header the key travels in when it is not X-API-Key. */
+    /** apikey only — the header (or query-param, when `in` is 'query') the key
+     *  travels in; defaults to X-API-Key / api_key. */
     headerName?: string;
+    /** apikey only — where the key is placed. Defaults to 'header'. */
+    in?: 'header' | 'query';
   };
   body?: string;
   /** Expected success HTTP status code, when the doc states one. */
