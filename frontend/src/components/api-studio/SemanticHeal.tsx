@@ -15,7 +15,7 @@ import { useToast } from '@/components/feedback/ToastProvider';
 import { CARD, STRIP, INPUT, FIELD, LABEL, PRIMARY_BTN, SECONDARY_BTN } from './format';
 import { MethodBadge, StatusCode } from './primitives';
 import type { CatalogEndpoint } from './types';
-import { proposeHeal, type HealResult, type HealProposal } from '@/services/api';
+import { proposeHeal, recordHealDecision, type HealResult, type HealProposal } from '@/services/api';
 
 const CHIP = 'inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-medium';
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
@@ -46,6 +46,23 @@ export default function SemanticHeal({ endpoints, onClose }: { endpoints: Catalo
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<HealResult | null>(null);
+  const [decisions, setDecisions] = useState<Record<number, 'approved' | 'rejected'>>({});
+  const [deciding, setDeciding] = useState<number | null>(null);
+
+  const decide = async (i: number, p: HealProposal, decision: 'approved' | 'rejected') => {
+    setDeciding(i);
+    try {
+      await recordHealDecision({
+        decision, title: p.title, method: p.method, url: p.url,
+        classification: p.classification, confidence: p.confidence,
+        after: { status: p.patch?.expectedStatus, response: p.patch?.expectedResponse },
+      });
+      setDecisions((d) => ({ ...d, [i]: decision }));
+      toast.success(decision === 'approved' ? 'Heal approved' : 'Heal rejected', `Recorded to the audit trail · ${p.title}`);
+    } catch (err: any) {
+      toast.error('Could not record decision', err?.response?.data?.error || err?.message || '');
+    } finally { setDeciding(null); }
+  };
 
   const updateCase = (i: number, patch: Partial<FailingCase>) =>
     setCases((cs) => cs.map((c, idx) => (idx === i ? { ...c, ...patch } : c)));
@@ -232,6 +249,24 @@ export default function SemanticHeal({ endpoints, onClose }: { endpoints: Catalo
                   )}
 
                   {p.note && <p className="text-[11px] text-gray-400 italic">{p.note}</p>}
+
+                  {/* Explicit approve/reject gate — the thing that makes auto-heal trustworthy.
+                      Only a healable (contract-evolution) proposal can be adopted. */}
+                  {p.shouldHeal && p.patch && (
+                    decisions[i] ? (
+                      <div className={`${CHIP} ${decisions[i] === 'approved' ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-gray-600 bg-gray-50 border-gray-200'}`}>
+                        {decisions[i] === 'approved' ? '✓ Approved — apply the change to your test' : '✕ Rejected — change discarded'} · audit-logged
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 pt-0.5">
+                        <button type="button" disabled={deciding === i} onClick={() => void decide(i, p, 'approved')}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 text-[12px] font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg disabled:opacity-40">Approve change</button>
+                        <button type="button" disabled={deciding === i} onClick={() => void decide(i, p, 'rejected')}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 text-[12px] font-medium text-gray-700 bg-white border border-[#E7E3F5] rounded-lg hover:bg-gray-50 disabled:opacity-40">Reject</button>
+                        <span className="text-[10.5px] text-gray-400">Recorded to the audit trail.</span>
+                      </div>
+                    )
+                  )}
                 </div>
               ))}
 

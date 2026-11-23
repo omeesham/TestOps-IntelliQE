@@ -1260,6 +1260,24 @@ export async function runFlowReliability(input: { flowId?: string; steps?: unkno
   const { data } = await api.post('/api-automation/flows/reliability', input, { timeout: 180_000 });
   return data;
 }
+
+/* ── Self-heal review: before→after diff + approve/reject with audit ── */
+export interface HealDiffLine { kind: 'same' | 'add' | 'del'; text: string }
+export interface HealDiff { statusChanged: boolean; status?: { before?: number; after?: number }; responseChanged: boolean; responseDiff: HealDiffLine[]; added: number; removed: number; summary: string }
+export async function healDiff(before: { status?: number; response?: string }, after: { status?: number; response?: string }): Promise<{ diff: HealDiff }> {
+  const { data } = await api.post('/api-automation/heal/diff', { before, after });
+  return data;
+}
+/** Approve or reject a heal proposal — recorded to the audit trail. Approving returns the patch to apply. */
+export async function recordHealDecision(input: {
+  decision: 'approved' | 'rejected';
+  title?: string; method?: string; url?: string; classification?: string; confidence?: string; note?: string;
+  before?: { status?: number; response?: string };
+  after?: { status?: number; response?: string };
+}): Promise<{ ok: boolean; decision: string; diff: HealDiff; patch: unknown }> {
+  const { data } = await api.post('/api-automation/heal/decisions', input);
+  return data;
+}
 export async function closeCaptureSession(id: string): Promise<{ ok: boolean }> {
   const { data } = await api.post(`/api-automation/capture/sessions/${encodeURIComponent(id)}/close`, {});
   return data;

@@ -115,6 +115,7 @@ import { listSignoffs, createSignoff, deleteSignoff, latestSignoffForEnvironment
 import { analyzeMultimodal } from '../services/api-multimodal.service.js';
 import { optimizeSuite } from '../services/api-suite-optimizer.service.js';
 import { proposeHeal } from '../services/api-heal.service.js';
+import { buildHealDiff } from '../utils/heal-diff.js';
 import { proposeRequestFix } from '../services/api-request-heal.service.js';
 import { analyzeImpactDeep } from '../services/api-impact.service.js';
 import { buildBugReport } from '../services/api-bug-report.service.js';
@@ -2423,6 +2424,41 @@ router.post('/heal/propose', async (req: Request, res: Response) => {
     const llm = await getTenantLlm(req.user!.tenantId);
     if (!llm) { res.status(400).json({ error: 'Configure an LLM (System Configuration → LLM) or an API-automation provider to self-heal tests.' }); return; }
     res.json(await proposeHeal(req.body?.failures, llm, { allowWrites: !!req.body?.allowWrites }));
+  } catch (err) { fail(res, err); }
+});
+
+/** Assemble a before→after diff for a proposed heal, so the reviewer sees exactly
+ *  what would change before approving. Pure transform; no side effects. */
+router.post('/heal/diff', (req: Request, res: Response) => {
+  try {
+    const before = { status: Number(req.body?.before?.status) || undefined, response: req.body?.before?.response };
+    const after = { status: Number(req.body?.after?.status) || undefined, response: req.body?.after?.response };
+    res.json({ diff: buildHealDiff(before, after) });
+  } catch (err) { fail(res, err); }
+});
+
+/** Approve or reject a heal proposal. Records the decision (with the before→after
+ *  diff) to the audited trail — the explicit gate + audit that makes auto-heal
+ *  trustworthy. Approving returns the patch for the caller to apply to its test;
+ *  nothing is mutated server-side. */
+router.post('/heal/decisions', (req: Request, res: Response) => {
+  try {
+    const decision = req.body?.decision === 'approved' ? 'approved' : req.body?.decision === 'rejected' ? 'rejected' : null;
+    if (!decision) { res.status(400).json({ error: 'decision must be "approved" or "rejected".' }); return; }
+    const before = { status: Number(req.body?.before?.status) || undefined, response: req.body?.before?.response };
+    const after = { status: Number(req.body?.after?.status) || undefined, response: req.body?.after?.response };
+    const diff = buildHealDiff(before, after);
+    const meta = {
+      title: String(req.body?.title || '').slice(0, 200),
+      method: String(req.body?.method || '').slice(0, 10),
+      url: String(req.body?.url || '').slice(0, 400),
+      classification: String(req.body?.classification || '').slice(0, 40),
+      confidence: String(req.body?.confidence || '').slice(0, 10),
+      note: String(req.body?.note || '').slice(0, 400),
+      diffSummary: diff.summary,
+    };
+    void logAudit(req, decision === 'approved' ? 'approve' : 'reject', 'heal_proposal', meta.url || null, meta);
+    res.json({ ok: true, decision, diff, patch: decision === 'approved' ? (req.body?.after ?? null) : null });
   } catch (err) { fail(res, err); }
 });
 
