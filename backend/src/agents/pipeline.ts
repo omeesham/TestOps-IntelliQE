@@ -170,26 +170,45 @@ export async function runGenerationOnly(
     if (options.enrichWithAgents && (state.requirements || '').trim().length > 0) {
       // Requirement → parsedRequirements. Grounded in the assembled
       // BRD/FRD/Story requirements the route placed on state.requirements.
+      //
+      // Enrichment is OPTIONAL: it only grounds generation in structured
+      // requirements. If the requirement LLM call fails (rate limit, network,
+      // provider error), degrade to the ungrounded path (enrichWithAgents=false)
+      // instead of aborting the whole design job — the generator still runs and
+      // produces endpoint-driven cases. Audit/Planner are skipped too, since both
+      // depend on parsedRequirements, keeping the fallback byte-identical to the
+      // single-stage path.
+      let requirementOk = false;
       state.onProgress?.({ phase: 'requirement', done: 0, total: 1, message: 'Analysing requirements' });
-      state = await timed(tenantId, 'requirement', () => requirementAgent(state),
-        (s) => ({ features: s.parsedRequirements?.features?.length ?? 0 }));
+      try {
+        state = await timed(tenantId, 'requirement', () => requirementAgent(state),
+          (s) => ({ features: s.parsedRequirements?.features?.length ?? 0 }));
+        requirementOk = true;
+      } catch (err) {
+        console.warn(`[pipeline:api] requirement enrichment failed, generating without grounding: ${(err as Error).message}`);
+        state.onProgress?.({ phase: 'requirement', done: 1, total: 1, message: 'Requirement analysis unavailable — generating without grounding' });
+      }
 
-      // Audit (enhances edge cases) and Planner (risk-based plan) both depend
-      // only on parsedRequirements — run in PARALLEL, then merge, mirroring the
-      // web pipeline. Both read the SAME pre-audit state (planner does not see
-      // audit's extra edge cases), matching runPipeline's behaviour.
-      state.onProgress?.({ phase: 'planning', done: 0, total: 1, message: 'Auditing edge cases & planning strategy' });
-      const [audited, planned] = await Promise.all([
-        timed(tenantId, 'audit', () => auditAgent(state)),
-        timed(tenantId, 'planner', () => plannerAgent(state),
-          (s) => ({ apiTests: s.testPlan?.apiTests ?? 0 })),
-      ]);
-      state = {
-        ...state,
-        parsedRequirements: audited.parsedRequirements,
-        testPlan: planned.testPlan,
-        extendedTestPlan: planned.extendedTestPlan,
-      };
+      if (requirementOk) {
+        // Audit (enhances edge cases) and Planner (risk-based plan) both depend
+        // only on parsedRequirements — run in PARALLEL, then merge, mirroring the
+        // web pipeline. Both read the SAME pre-audit state (planner does not see
+        // audit's extra edge cases), matching runPipeline's behaviour. Both already
+        // degrade internally (planner → heuristic plan, audit → no-op), so they
+        // never abort the job.
+        state.onProgress?.({ phase: 'planning', done: 0, total: 1, message: 'Auditing edge cases & planning strategy' });
+        const [audited, planned] = await Promise.all([
+          timed(tenantId, 'audit', () => auditAgent(state)),
+          timed(tenantId, 'planner', () => plannerAgent(state),
+            (s) => ({ apiTests: s.testPlan?.apiTests ?? 0 })),
+        ]);
+        state = {
+          ...state,
+          parsedRequirements: audited.parsedRequirements,
+          testPlan: planned.testPlan,
+          extendedTestPlan: planned.extendedTestPlan,
+        };
+      }
     }
 
     state = await timed(tenantId, 'generator', () => apiGeneratorAgent(state),

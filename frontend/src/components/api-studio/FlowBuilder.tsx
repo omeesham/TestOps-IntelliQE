@@ -75,6 +75,7 @@ const CHECK_LABELS: Record<FlowCheck['kind'], string> = {
   header: 'Header',
   bodyMatches: 'Body matches (compare)',
   xpath: 'XPath (XML/SOAP)',
+  htmlSelect: 'CSS selector (HTML)',
   expr: 'Expression',
   schema: 'JSON Schema (contract)',
   graphql: 'GraphQL (no errors)',
@@ -125,6 +126,7 @@ function editCheckToApi(c: EditCheck): FlowCheck {
     case 'header': return { kind: 'header', name: c.name, op: (c.op || 'exists') as FlowCheck['op'], value: c.value };
     case 'bodyMatches': return { kind: 'bodyMatches', value: c.value, compareMode: (c.compareMode || 'lenient') as FlowCheck['compareMode'], ...(c.ignore.trim() ? { ignore: c.ignore.split(',').map((p) => p.trim()).filter(Boolean) } : {}) };
     case 'xpath': return { kind: 'xpath', path: c.path, op: (c.op || 'exists') as FlowCheck['op'], value: c.value };
+    case 'htmlSelect': return { kind: 'htmlSelect', path: c.path, op: (c.op || 'exists') as FlowCheck['op'], ...(c.op && c.op !== 'exists' ? { value: c.value } : {}), ...(c.name.trim() ? { name: c.name.trim() } : {}), ...(c.caseInsensitive ? { caseInsensitive: true } : {}) };
     case 'expr': return { kind: 'expr', expr: c.expr };
     case 'schema': return { kind: 'schema', schema: c.schema, ...(c.path.trim() ? { path: c.path } : {}) };
     case 'graphql': return { kind: 'graphql' };
@@ -783,6 +785,16 @@ export default function FlowBuilder({ catalog, onClose, initialFlow }: { catalog
                             )}
                             {c.kind === 'xpath' && <input value={c.path} onChange={(e) => setCheck(s, c._k, { path: e.target.value })} placeholder="//book[1]/title/text()" title="XPath over an XML/SOAP response body" className={`${FIELD} flex-1 min-w-0`} />}
                             {(c.kind === 'header' || c.kind === 'xpath') && c.op !== 'exists' && <input value={c.value} onChange={(e) => setCheck(s, c._k, { value: e.target.value })} placeholder="expected value" className={`${FIELD} w-32 flex-shrink-0`} />}
+                            {c.kind === 'htmlSelect' && <input value={c.path} onChange={(e) => setCheck(s, c._k, { path: e.target.value })} placeholder="CSS selector (e.g. h1.title · .price · a[href])" title="CSS selector matched against the DOM-parsed HTML response body" className={`${FIELD} flex-1 min-w-0`} />}
+                            {c.kind === 'htmlSelect' && (
+                              <select value={c.op} onChange={(e) => setCheck(s, c._k, { op: e.target.value })} className={`${FIELD} flex-shrink-0`}>
+                                <option value="exists">exists</option>
+                                <option value="equals">equals</option>
+                                <option value="contains">contains</option>
+                              </select>
+                            )}
+                            {c.kind === 'htmlSelect' && <input value={c.name} onChange={(e) => setCheck(s, c._k, { name: e.target.value })} placeholder="attr (optional)" title="Assert this element ATTRIBUTE instead of its text (e.g. href, class). Blank = text content." className={`${FIELD} w-24 flex-shrink-0`} />}
+                            {c.kind === 'htmlSelect' && c.op !== 'exists' && <input value={c.value} onChange={(e) => setCheck(s, c._k, { value: e.target.value })} placeholder="expected value" className={`${FIELD} w-32 flex-shrink-0`} />}
                             {c.kind === 'bodyMatches' && (
                               <select value={c.compareMode} onChange={(e) => setCheck(s, c._k, { compareMode: e.target.value })} title="strict = exact · strict-order = ordered, extra allowed · lenient = subset, any order · non-extensible = no extra keys" className={`${FIELD} flex-shrink-0`}>
                                 <option value="lenient">lenient</option>

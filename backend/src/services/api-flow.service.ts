@@ -121,6 +121,7 @@ export interface FlowCheck {
     | 'header'        // assert a response header (exists | equals | contains)
     | 'bodyMatches'   // structural JSON compare vs an expected body, with a compareMode
     | 'xpath'         // XPath over an XML/SOAP response (exists | equals | contains)
+    | 'htmlSelect'    // CSS selector over a DOM-parsed HTML response (exists | equals | contains; `name` = assert an attribute)
     | 'expr'          // a boolean expression over status/timing/headers/body + captured vars
     | 'schema'        // validate the body (or a path-selected part) against a JSON Schema (ajv)
     | 'graphql'       // GraphQL envelope has no `errors` (a failed query still returns HTTP 200)
@@ -136,14 +137,14 @@ export interface FlowCheck {
   oneOf?: number[];
   /** expr: the boolean expression to assert, e.g. `status >= 200 && status < 300`. */
   expr?: string;
-  /** jsonPath*: a rich JSONPath (dotted, [*], slices, ..recursion, [?(@.k==v)] filters). xpath: an XPath expression. */
+  /** jsonPath*: a rich JSONPath (dotted, [*], slices, ..recursion, [?(@.k==v)] filters). xpath: an XPath expression. htmlSelect: a CSS selector. */
   path?: string;
   value?: unknown;
   text?: string;
   ms?: number;
-  /** header: the header name. */
+  /** header: the header name. htmlSelect: an optional element attribute to assert instead of its text (e.g. `href`, `class`). */
   name?: string;
-  /** header / xpath / everyMatches operator. Defaults to 'exists' (header/xpath) or 'equals' (everyMatches). */
+  /** header / xpath / htmlSelect / everyMatches operator. Defaults to 'exists' (header/xpath/htmlSelect) or 'equals' (everyMatches). */
   op?: 'equals' | 'contains' | 'exists';
   /** everyMatches / sortedBy / noDuplicates: the item field to compare/sort/dedupe by (dotted). Omit ⇒ whole item. */
   field?: string;
@@ -414,6 +415,50 @@ async function evalXPath(xml: string, expr: string): Promise<{ value: string; ma
   }
 }
 
+/**
+ * DOM-parse an HTML body once with node-html-parser (lenient — tolerates
+ * real-world, non-well-formed HTML, unlike the strict XML parser). Resolved via
+ * a dynamic import so a missing dep degrades to a clear message rather than a
+ * crash (mirrors evalXPath). The returned root is reused across every htmlSelect
+ * check on the same response, so a step with N selectors parses the body once.
+ */
+async function parseHtmlRoot(html: string): Promise<{ root: any } | { error: string }> {
+  try {
+    const spec = 'node-html-parser';
+    const mod: any = await import(spec);
+    const parse = mod.parse || mod.default?.parse || mod.default;
+    if (typeof parse !== 'function') return { error: 'HTML support is not installed on the server (npm i node-html-parser).' };
+    return { root: parse(String(html || '')) };
+  } catch (e) {
+    const msg = (e as Error).message || String(e);
+    return { error: /Cannot find (module|package)|ERR_MODULE_NOT_FOUND/i.test(msg) ? 'HTML support is not installed on the server (npm i node-html-parser).' : msg.split('\n')[0] };
+  }
+}
+
+/**
+ * Evaluate a CSS selector against an already-parsed HTML root. `attr` targets an
+ * element attribute instead of its text; `attrPresent` reports whether that
+ * attribute is actually present on the first match (null ⇒ absent), so an
+ * attribute `exists` assertion can distinguish "element present" from
+ * "attribute present".
+ */
+function queryHtml(
+  root: any,
+  selector: string,
+  attr?: string,
+): { matched: boolean; count: number; value: string; attrPresent?: boolean } | { error: string } {
+  if (!selector.trim()) return { error: 'no CSS selector provided' };
+  let nodes: any[];
+  try { nodes = root.querySelectorAll(selector) || []; }
+  catch (e) { return { error: `invalid CSS selector: ${((e as Error).message || String(e)).split('\n')[0]}` }; }
+  const count = nodes.length;
+  if (count === 0) return { matched: false, count: 0, value: '' };
+  const first = nodes[0];
+  const rawAttr = attr ? first.getAttribute(attr) : undefined;
+  const value = attr ? String(rawAttr ?? '') : String(first.text ?? '').trim();
+  return { matched: true, count, value, attrPresent: attr ? rawAttr != null : undefined };
+}
+
 /** DOM-parse XML with @xmldom/xmldom; returns the document or an error string. */
 async function parseXmlDom(xml: string): Promise<{ doc: any } | { error: string }> {
   try {
@@ -551,6 +596,9 @@ function stripPaths(obj: unknown, paths: string[]): unknown {
 async function runChecks(checks: FlowCheck[] | undefined, res: { status?: number; bodyText: string; elapsedMs: number; headers?: Record<string, string> }, parsed: unknown, vars: Record<string, string> = {}): Promise<FlowStepResult['checks']> {
   const out: FlowStepResult['checks'] = [];
   const headers = res.headers || {};
+  // Parsed lazily on the first htmlSelect check and reused by the rest (one
+  // DOM parse per response, not per check).
+  let htmlRootResult: { root: any } | { error: string } | undefined;
   for (const c of checks || []) {
     if (c.kind === 'status') {
       const codes = c.oneOf && c.oneOf.length ? c.oneOf : (c.equals != null ? [Number(c.equals)] : []);
@@ -600,6 +648,38 @@ async function runChecks(checks: FlowCheck[] | undefined, res: { status?: number
       else {
         const pass = op === 'equals' ? r.value === want : op === 'contains' ? r.value.includes(want) : r.matched;
         out.push({ kind: c.kind, label: `xpath ${String(c.path || '').slice(0, 40)} ${op}${op === 'exists' ? '' : ` "${want.slice(0, 30)}"`}`, pass, detail: r.matched ? `got "${r.value.slice(0, 80)}"` : 'no match' });
+      }
+    } else if (c.kind === 'htmlSelect') {
+      // CSS-selector assertion over a DOM-parsed HTML response — the real DOM check
+      // for text/html bodies (beyond raw bodyContains/regex). `path` is the selector;
+      // `op` exists|equals|contains; `name` (optional) asserts an element ATTRIBUTE
+      // instead of its text; `caseInsensitive` folds case on equals/contains.
+      const op = c.op || 'exists';
+      const want = String(c.value ?? c.text ?? c.equals ?? '');
+      const attr = c.name ? String(c.name) : undefined;
+      const sel = String(c.path || '').slice(0, 40);
+      const label = `css ${sel}${op === 'exists' ? ' exists' : ` ${op} "${want.slice(0, 30)}"`}${attr ? ` @${attr}` : ''}`;
+      if (htmlRootResult === undefined) htmlRootResult = await parseHtmlRoot(res.bodyText);
+      if ('error' in htmlRootResult) {
+        out.push({ kind: c.kind, label, pass: false, detail: htmlRootResult.error });
+      } else {
+        const r = queryHtml(htmlRootResult.root, String(c.path || ''), attr);
+        if ('error' in r) out.push({ kind: c.kind, label, pass: false, detail: r.error });
+        else {
+          const a = c.caseInsensitive ? r.value.toLowerCase() : r.value;
+          const w = c.caseInsensitive ? want.toLowerCase() : want;
+          // With `attr` set, every op requires the attribute to be present —
+          // `exists` then means "element has this attribute", not just "element
+          // matched". Without `attr`, exists = element matched (unchanged).
+          const attrAbsent = attr ? r.attrPresent !== true : false;
+          const pass = op === 'equals' ? (r.matched && !attrAbsent && a === w)
+            : op === 'contains' ? (r.matched && !attrAbsent && a.includes(w))
+            : (r.matched && !attrAbsent);
+          const detail = !r.matched ? 'no element matched'
+            : attrAbsent ? `element matched but @${attr} absent`
+            : `${r.count} match${r.count === 1 ? '' : 'es'}${op === 'exists' ? '' : ` · ${attr ? `@${attr}` : 'text'}="${r.value.slice(0, 60)}"`}`;
+          out.push({ kind: c.kind, label, pass, detail });
+        }
       }
     } else if (c.kind === 'soapFault') {
       // IQE-046.2 — a SOAP fault fails the test unless the test EXPECTS that fault.

@@ -1344,10 +1344,16 @@ export async function apiGeneratorAgent(state: TestOpsState): Promise<TestOpsSta
   });
   // Normalise in input order so TC ids are stable regardless of which call
   // finished first.
+  let lastError = '';
   results.forEach(({ raw, lastHead: head }, i) => {
     const spec = specs[i]!;
     if (raw.length === 0) {
       if (head) lastHead = head;
+      // A thrown model call (rate limit / network / provider error) is recorded
+      // as "error: …" by the per-endpoint catch above; remember it independently
+      // of iteration order so a real failure is never masked by a later endpoint
+      // that merely returned unparseable text.
+      if (head.startsWith('error:')) lastError = head;
       failedEndpoints.push(spec.url);
       return;
     }
@@ -1358,9 +1364,14 @@ export async function apiGeneratorAgent(state: TestOpsState): Promise<TestOpsSta
   });
 
   if (normalized.length === 0) {
+    // Prefer the real call failure (any endpoint that threw) over an unparseable
+    // reply, so the surfaced message points at the actual cause.
     throw new Error(
-      `API test generation produced no cases — the model's response was not a usable JSON array. ` +
-      `Response started with: "${lastHead.slice(0, 200)}". Check the configured model in System Configuration → LLM Configuration and try again.`,
+      lastError
+        ? `API test generation failed — the model could not be reached or returned an error (${lastError.replace(/^error:\s*/, '').slice(0, 200)}). ` +
+          `Check the configured model and credentials in System Configuration → LLM Configuration and try again.`
+        : `API test generation produced no cases — the model's response was not a usable JSON array. ` +
+          `Response started with: "${lastHead.slice(0, 200)}". Check the configured model in System Configuration → LLM Configuration and try again.`,
     );
   }
   if (failedEndpoints.length) {

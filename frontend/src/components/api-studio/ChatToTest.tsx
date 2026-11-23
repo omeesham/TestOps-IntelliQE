@@ -33,6 +33,7 @@ function describeCheck(c: FlowCheck): string {
     case 'header': return `header ${c.name || ''} ${c.op || 'exists'}${c.op && c.op !== 'exists' ? ` "${String(c.value ?? '')}"` : ''}`;
     case 'bodyMatches': return `body matches (${c.compareMode || 'lenient'})`;
     case 'xpath': return `xpath ${c.path || ''} ${c.op || 'exists'}${c.op && c.op !== 'exists' ? ` "${String(c.value ?? '')}"` : ''}`;
+    case 'htmlSelect': return `css ${c.path || ''} ${c.op || 'exists'}${c.op && c.op !== 'exists' ? ` "${String(c.value ?? '')}"` : ''}${c.name ? ` @${c.name}` : ''}`;
     default: return 'check';
   }
 }
