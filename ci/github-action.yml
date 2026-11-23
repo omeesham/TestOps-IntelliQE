@@ -1,0 +1,40 @@
+# IntelliQE API tests — GitHub Actions workflow.
+# Copy to .github/workflows/intelliqe.yml in your repo.
+#
+# Gates every pull request on an IntelliQE flow/suite: the job fails (red check,
+# PR blocked) when an API test fails. Set two secrets in the repo:
+#   INTELLIQE_URL    e.g. https://intelliqe.example.com
+#   INTELLIQE_TOKEN  a token for a user with the api.run permission
+#
+# Point --flow / --suite at the flow id(s) you want gated (copy the id from the
+# Flows list in API Studio).
+name: IntelliQE API tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  api-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run IntelliQE flow and gate the build
+        env:
+          INTELLIQE_URL: ${{ secrets.INTELLIQE_URL }}
+          INTELLIQE_TOKEN: ${{ secrets.INTELLIQE_TOKEN }}
+        run: node ci/intelliqe-ci.mjs --flow ${{ vars.INTELLIQE_FLOW_ID }} --junit junit.xml
+
+      - name: Publish test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: intelliqe-junit
+          path: junit.xml

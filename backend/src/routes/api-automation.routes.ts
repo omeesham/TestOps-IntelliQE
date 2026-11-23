@@ -82,6 +82,7 @@ import { analyzeFailureClusters } from '../services/api-failure-clusters.service
 import { listListeners, createListener, deleteListener, getEvents } from '../services/api-callback.service.js';
 import { runFlow, runSuite, runFlowDataset, listFlows, getFlow, saveFlow, deleteFlow, listStepGroups, saveStepGroup, deleteStepGroup, getStepGroupMap, type FlowStep } from '../services/api-flow.service.js';
 import { toJUnit } from '../utils/junit.js';
+import { summarizeCiRun, exitCodeFor, type CiRunKind } from '../utils/ci-gate.js';
 import { toMarkdown } from '../utils/run-report.js';
 import { postmanToFlow } from '../utils/postman-import.js';
 import { maskResult } from '../utils/secret-mask.js';
@@ -210,6 +211,8 @@ const ROUTE_PERMISSIONS: { prefix: string; perm: string }[] = [
   { prefix: '/import', perm: 'api.import' },
   { prefix: '/runs', perm: 'api.run' },
   { prefix: '/flows/run', perm: 'api.run' },
+  { prefix: '/flows/ci-run', perm: 'api.run' },
+  { prefix: '/flows/reliability', perm: 'api.run' },
   { prefix: '/render', perm: 'api.run' },
   { prefix: '/security', perm: 'api.security_scan' },
   { prefix: '/owasp', perm: 'api.security_scan' },
@@ -2059,6 +2062,44 @@ router.post('/flows/run', async (req: Request, res: Response) => {
     sendRun(req, res, 'flow', await runFlow({ steps: req.body?.steps, variables: req.body?.variables, allowWrites: !!req.body?.allowWrites, groups }));
   } catch (err) { fail(res, err); }
 });
+/** One-call CI gate: run a saved flow (flowId), a suite (suiteFlowIds), or ad-hoc
+ *  steps, and return { passed, exitCode, summary, junit } — everything a pipeline
+ *  needs in a single request. The companion CLI (ci/intelliqe-ci.mjs) and the
+ *  GitHub Action template hit this endpoint and exit non-zero on failure. */
+router.post('/flows/ci-run', async (req: Request, res: Response) => {
+  try {
+    if (await readinessGate(req, res)) return;
+    const groups = await getStepGroupMap(req.user!.tenantId).catch(() => ({}));
+    const variables = req.body?.variables;
+    const allowWrites = !!req.body?.allowWrites;
+    const wantJunit = req.body?.junit !== false;
+    const name = String(req.body?.name || 'IntelliQE CI run').slice(0, 200);
+
+    let kind: CiRunKind = 'flow';
+    let result: any;
+    if (Array.isArray(req.body?.suiteFlowIds) && req.body.suiteFlowIds.length) {
+      kind = 'suite';
+      const loaded = await Promise.all(req.body.suiteFlowIds.slice(0, 50).map((id: unknown) => getFlow(req.user!.tenantId, String(id))));
+      const flows = loaded.filter(Boolean).map((f: any) => ({ name: f.name, steps: f.steps, variables: f.variables }));
+      if (!flows.length) { res.status(404).json({ error: 'None of the given flow ids were found.' }); return; }
+      result = await runSuite({ flows, variables, allowWrites, groups, stopOnFailure: !!req.body?.stopOnFailure });
+    } else if (req.body?.flowId) {
+      const flow = await getFlow(req.user!.tenantId, String(req.body.flowId));
+      if (!flow) { res.status(404).json({ error: 'Flow not found.' }); return; }
+      result = await runFlow({ steps: flow.steps, variables: { ...flow.variables, ...variables }, allowWrites, groups });
+    } else if (Array.isArray(req.body?.steps) && req.body.steps.length) {
+      result = await runFlow({ steps: req.body.steps, variables, allowWrites, groups });
+    } else {
+      res.status(400).json({ error: 'Provide flowId, suiteFlowIds[], or steps[] to run.' });
+      return;
+    }
+
+    const summary = summarizeCiRun(kind, result);
+    const junit = wantJunit ? toJUnit(kind, name, maskResult(kind, result)) : undefined;
+    res.json({ passed: summary.ok, exitCode: exitCodeFor(summary), summary, junit });
+  } catch (err) { fail(res, err); }
+});
+
 // Suggest runnable integration flows from the catalogue: the analyzer's detected
 // create→read→update→delete / list→read journeys, turned into FlowSteps the
 // engine runs. Deterministic (no LLM); the client saves the ones it wants.
