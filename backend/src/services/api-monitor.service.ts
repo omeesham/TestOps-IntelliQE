@@ -19,7 +19,15 @@ import { buildRequestInit, timedFetch, isWriteMethod } from '../utils/api-http.j
 import { scanDrift } from './api-drift.service.js';
 import { analyzeCoverageGaps } from './api-coverage-gaps.service.js';
 import { dispatchWebhooks } from './api-webhooks.service.js';
+import { evaluateHealthSla, type HealthSample } from '../utils/sla-eval.js';
 import type { ImportedEndpoint } from './api-import.service.js';
+
+/** Latency SLA for the always-on monitor (ms). Operator-tunable; 0 disables. */
+function monitorSlaMs(): number {
+  const n = Math.floor(Number(process.env.MONITOR_SLA_MAX_MS));
+  if (!Number.isFinite(n)) return 2000;          // sensible default SLA
+  return n < 0 ? 0 : Math.min(120_000, n);
+}
 
 export type MonitorCheck = 'health' | 'drift' | 'coverage';
 const ALL_CHECKS: MonitorCheck[] = ['health', 'drift', 'coverage'];
@@ -112,16 +120,20 @@ export async function listMonitorEvents(tenantId: string, limit = 100): Promise<
 
 interface RaisedAlert { checkKind: string; severity: 'info' | 'warning' | 'critical'; title: string; detail: string; signature?: string }
 
-/** Run the enabled checks for one monitor config row. Read-only; returns alerts. */
-async function runChecks(row: any): Promise<RaisedAlert[]> {
+interface MonitorAvailability { availabilityPct: number; reachable: number; total: number; avgMs: number; slowestMs: number }
+
+/** Run the enabled checks for one monitor config row. Read-only; returns alerts + availability. */
+async function runChecks(row: any): Promise<{ alerts: RaisedAlert[]; availability?: MonitorAvailability }> {
   const endpoints: ImportedEndpoint[] = endpointsFromRaw((() => { try { return typeof row.endpoints === 'string' ? JSON.parse(row.endpoints) : row.endpoints; } catch { return []; } })());
   const checks = sanitizeChecks((() => { try { return typeof row.checks === 'string' ? JSON.parse(row.checks) : row.checks; } catch { return null; } })());
   const alerts: RaisedAlert[] = [];
-  if (!endpoints.length) return alerts;
+  let availability: MonitorAvailability | undefined;
+  if (!endpoints.length) return { alerts };
 
   // 1) HEALTH — probe read-only endpoints; never fire a write.
   if (checks.includes('health')) {
     const probeable = endpoints.filter((e) => !isWriteMethod(e.method)).slice(0, 60);
+    const samples: HealthSample[] = [];
     for (let i = 0; i < probeable.length; i += HEALTH_CONC) {
       const batch = probeable.slice(i, i + HEALTH_CONC);
       const results = await Promise.all(batch.map(async (e) => {
@@ -131,10 +143,19 @@ async function runChecks(row: any): Promise<RaisedAlert[]> {
       }));
       for (const { e, r } of results) {
         const sig = `${e.method} ${e.url}`;
+        const reachable = !!r.ok || (!r.error && r.status !== undefined);
+        samples.push({ method: e.method, url: e.url, ok: reachable, status: r.status, elapsedMs: r.elapsedMs });
         if (!r.ok && r.error) alerts.push({ checkKind: 'health', severity: 'critical', title: `Unreachable: ${e.method} ${e.url}`, detail: r.error.slice(0, 400), signature: sig });
         else if (r.status && r.status >= 500) alerts.push({ checkKind: 'health', severity: 'critical', title: `${r.status} server error: ${e.method} ${e.url}`, detail: `Responded ${r.status} in ${r.elapsedMs}ms`, signature: sig });
         else if (e.expectedStatus && r.status && r.status !== e.expectedStatus) alerts.push({ checkKind: 'health', severity: 'warning', title: `Status ${r.status} ≠ expected ${e.expectedStatus}: ${e.method} ${e.url}`, detail: `Responded ${r.status} in ${r.elapsedMs}ms`, signature: sig });
       }
+    }
+    // SLA + availability over the health samples.
+    const slaMs = monitorSlaMs();
+    const sla = evaluateHealthSla(samples, { maxResponseMs: slaMs });
+    availability = { availabilityPct: sla.availabilityPct, reachable: sla.reachable, total: sla.total, avgMs: sla.avgMs, slowestMs: sla.slowest?.elapsedMs ?? 0 };
+    for (const b of sla.breaches.slice(0, 20)) {
+      alerts.push({ checkKind: 'sla', severity: 'warning', title: `Slow response: ${b.method} ${b.url}`, detail: `Responded in ${b.elapsedMs}ms — over the ${b.limitMs}ms SLA`, signature: `${b.method} ${b.url}` });
     }
   }
 
@@ -158,18 +179,19 @@ async function runChecks(row: any): Promise<RaisedAlert[]> {
     } catch { /* coverage needs capture sessions; absence is not an alert */ }
   }
 
-  return alerts;
+  return { alerts, availability };
 }
 
 /** Run one monitor row: checks → record alerts → update status → notify. */
 async function runMonitor(row: any): Promise<void> {
   const tenantId = String(row.tenant_id);
   try {
-    const alerts = await runChecks(row);
+    const { alerts, availability } = await runChecks(row);
     const critical = alerts.filter((a) => a.severity === 'critical').length;
     const warnings = alerts.filter((a) => a.severity === 'warning').length;
     const status = critical ? 'critical' : warnings ? 'warning' : 'healthy';
-    const summary = alerts.length ? `${critical} critical · ${warnings} warning · ${alerts.length - critical - warnings} info` : 'All checks healthy';
+    const availNote = availability ? ` · availability ${availability.availabilityPct}% (${availability.reachable}/${availability.total})${availability.slowestMs ? ` · slowest ${availability.slowestMs}ms` : ''}` : '';
+    const summary = (alerts.length ? `${critical} critical · ${warnings} warning · ${alerts.length - critical - warnings} info` : 'All checks healthy') + availNote;
 
     for (const a of alerts.slice(0, 50)) {
       await pool.query(
