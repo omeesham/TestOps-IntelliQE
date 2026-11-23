@@ -68,7 +68,7 @@ export default function LoadTest({ endpoints, onClose }: { endpoints: CatalogEnd
             </div>
             <div>
               <label className={LABEL}>Concurrency</label>
-              <input type="number" min={1} max={50} value={concurrency} onChange={(e) => setConcurrency(Math.min(50, Math.max(1, Number(e.target.value) || 1)))} className={INPUT} />
+              <input type="number" min={1} max={250} value={concurrency} onChange={(e) => setConcurrency(Math.min(250, Math.max(1, Number(e.target.value) || 1)))} className={INPUT} />
             </div>
           </div>
 

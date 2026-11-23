@@ -99,7 +99,7 @@ export default function LoadProfile({ endpoints, onClose }: { endpoints: Catalog
                 <div key={i} className="flex items-center gap-2">
                   <span className="text-[11px] text-gray-400 w-12">Stage {i + 1}</span>
                   <label className="flex items-center gap-1 text-[11px] text-gray-600">
-                    <input type="number" min={1} max={50} value={s.concurrency} onChange={(e) => setStage(i, { concurrency: Math.max(1, Number(e.target.value)) })} className={`${INPUT} w-20 py-1`} /> conc.
+                    <input type="number" min={1} max={250} value={s.concurrency} onChange={(e) => setStage(i, { concurrency: Math.max(1, Number(e.target.value)) })} className={`${INPUT} w-20 py-1`} /> conc.
                   </label>
                   <label className="flex items-center gap-1 text-[11px] text-gray-600">
                     <input type="number" min={1} max={60} value={s.durationSec} onChange={(e) => setStage(i, { durationSec: Math.max(1, Number(e.target.value)) })} className={`${INPUT} w-20 py-1`} /> sec
@@ -109,7 +109,7 @@ export default function LoadProfile({ endpoints, onClose }: { endpoints: Catalog
               ))}
             </div>
             <button type="button" onClick={addStage} disabled={stages.length >= 10} className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-[#6D28D9] hover:underline disabled:opacity-40"><Plus className="w-3.5 h-3.5" />Add stage</button>
-            <p className="text-[10px] text-gray-400 mt-1">Capped at 10 stages, 50 concurrency, 60s per stage and 120s total.</p>
+            <p className="text-[10px] text-gray-400 mt-1">Capped at 10 stages, 250 concurrency, 120s per stage and 300s total (operator-tunable via LOADTEST_* env).</p>
           </div>
 
           {/* SLA thresholds */}

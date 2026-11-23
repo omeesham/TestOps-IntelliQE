@@ -10,6 +10,7 @@
  * explicitly allows them (a load run repeats the request many times).
  */
 import { buildRequestInit, timedFetch, clampInt, isWriteMethod, type HttpEndpoint } from '../utils/api-http.js';
+import { resolveLoadLimits } from '../utils/load-limits.js';
 
 export interface LoadTestInput {
   endpoint: HttpEndpoint;
@@ -53,8 +54,9 @@ export async function runLoadTest(input: LoadTestInput): Promise<LoadTestResult>
   if (isWriteMethod(method) && !input.allowWrites) {
     throw new Error(`Load-testing a ${method} endpoint repeats a write many times. Re-run with writes explicitly allowed if that is safe against this environment.`);
   }
-  const total = clampInt(input.totalRequests, 50, 1, 500);
-  const concurrency = clampInt(input.concurrency, 10, 1, 50);
+  const limits = resolveLoadLimits(process.env);
+  const total = clampInt(input.totalRequests, 50, 1, limits.maxTotalRequests);
+  const concurrency = clampInt(input.concurrency, 10, 1, limits.maxConcurrency);
   const { url, init } = buildRequestInit(ep);
 
   const latencies: number[] = [];
@@ -124,10 +126,6 @@ export async function runLoadTest(input: LoadTestInput): Promise<LoadTestResult>
    ──────────────────────────────────────────────────────────────── */
 
 const MAX_STAGES = 10;
-const MAX_STAGE_CONCURRENCY = 50;
-const MAX_STAGE_SEC = 60;
-const MAX_TOTAL_SEC = 120;
-const HARD_REQUEST_CAP = 50_000;
 
 export interface LoadStageInput { durationSec: number; concurrency: number }
 export interface SlaThresholds { p95Ms?: number; p99Ms?: number; maxErrorRatePct?: number; minThroughputRps?: number }
@@ -164,13 +162,13 @@ export interface LoadProfileResult {
 }
 
 /** Normalise + clamp a requested profile into something safe to execute. */
-function sanitizeStages(raw: unknown): LoadStageInput[] {
+function sanitizeStages(raw: unknown, limits = resolveLoadLimits(process.env)): LoadStageInput[] {
   const arr = Array.isArray(raw) ? raw : [];
   const stages: LoadStageInput[] = [];
-  let budget = MAX_TOTAL_SEC;
+  let budget = limits.maxTotalSec;
   for (const s of arr.slice(0, MAX_STAGES)) {
-    const concurrency = clampInt((s as any)?.concurrency, 10, 1, MAX_STAGE_CONCURRENCY);
-    let durationSec = clampInt((s as any)?.durationSec, 10, 1, MAX_STAGE_SEC);
+    const concurrency = clampInt((s as any)?.concurrency, 10, 1, limits.maxConcurrency);
+    let durationSec = clampInt((s as any)?.durationSec, 10, 1, limits.maxStageSec);
     if (budget <= 0) break;
     durationSec = Math.min(durationSec, budget);
     budget -= durationSec;
@@ -186,7 +184,8 @@ export async function runLoadProfile(input: LoadProfileInput): Promise<LoadProfi
   if (isWriteMethod(method) && !input.allowWrites) {
     throw new Error(`Load-testing a ${method} endpoint repeats a write many times. Re-run with writes explicitly allowed if that is safe against this environment.`);
   }
-  const stages = sanitizeStages(input.stages);
+  const limits = resolveLoadLimits(process.env);
+  const stages = sanitizeStages(input.stages, limits);
   const { url, init } = buildRequestInit(ep);
 
   const statusCounts: Record<string, number> = {};
@@ -204,7 +203,7 @@ export async function runLoadProfile(input: LoadProfileInput): Promise<LoadProfi
     const stageStarted = Date.now();
 
     async function worker(): Promise<void> {
-      while (Date.now() < deadline && gDispatched < HARD_REQUEST_CAP) {
+      while (Date.now() < deadline && gDispatched < limits.hardRequestCap) {
         gDispatched++;
         const r = await timedFetch(url, init);
         if (r.error) {
