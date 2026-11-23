@@ -25,7 +25,6 @@ npm run preview  # Preview production build
 ### Prerequisites
 - Azure SQL Database (Basic 5 DTU in prod). Local dev uses SQL Server in Docker (`docker-compose.yml`) on localhost:1433 — database `JBSTestOpsAI`, schema `JBSTestOpsAI`. Set `DB_BOOTSTRAP=true` locally to auto-create the database.
 - Backend must be running before frontend (frontend proxies `/api` → `http://localhost:3001`)
-- **AI auth:** set `ANTHROPIC_API_KEY` in `backend/.env` (see `backend/.env.example`). The generation pipeline then calls the Anthropic API directly via the official SDK — durable, headless, and portable (every developer who clones the repo sets their own key). If the key is unset, `claude-runner.ts` falls back to a locally signed-in `claude` CLI whose login **expires periodically** — the recurring "AI engine not connected" failure. Optional `ANTHROPIC_MODEL` overrides the default `claude-opus-4-8`.
 - Worker requires env vars: `ANTHROPIC_API_KEY`, `WORKER_SECRET`, `BACKEND_URL`
 
 ## Architecture Overview
@@ -55,7 +54,7 @@ Frontend (React SPA) → Backend (Express API, port 3001) → Azure SQL Database
   6. `auditAgent.ts` → quality review
   - `pipeline.ts` — orchestrates the full pipeline with healing loop
   - `state.ts` — `TestOpsState` interface shared across agents
-  - `claude-runner.ts` — `runClaudePrompt` (async) runs a prompt through Claude: the **Anthropic API via the official `@anthropic-ai/sdk`** when `ANTHROPIC_API_KEY` is set (preferred — durable/portable), else the `claude` CLI as a fallback. All agents `await` it. Also exposes `isClaudeCliAuthenticated` (true when the key is set OR CLI is logged in) and `parseJsonFromResponse`.
+  - `claude-runner.ts` — wraps Claude CLI calls with fallback
 - **`orchestrator/`** — Advanced pipeline management:
   - `orchestrator.ts` — loads pipeline definition, processes stage completion, routes next stage
   - `dependency-engine.ts` — page readiness checks, cascade planning
@@ -74,7 +73,7 @@ Frontend (React SPA) → Backend (Express API, port 3001) → Azure SQL Database
 - **`App.tsx`** — Route definitions. Public: `/`, `/login`. Protected routes wrapped in `Layout` with `AuthProvider`.
 - **`services/api.ts`** — Centralized axios client with Bearer token interceptor. All backend API calls (~150 functions).
 - **`components/layout/`** — `Layout.tsx` (sidebar+header+outlet), `Sidebar.tsx` (role-based nav from server config), `Header.tsx`
-- **`pages/`** — 20+ pages: ChatPage (main wizard flow), DashboardPage, ReportsPage, SystemConfigurationPage, etc.
+- **`pages/`** — 20+ pages: ChatPage (main wizard flow), ReportsPage, SystemConfigurationPage, etc.
 - **`types/index.ts`** — Core interfaces: TestCase, TestConfiguration, ExecutionResult, AgentInfo, etc.
 - **`utils/tts.ts`** — Tessa voice assistant (Web Speech API)
 - Path alias: `@` → `frontend/src/`
@@ -99,3 +98,14 @@ Every DB query filters by `tenant_id`. Auth middleware attaches tenant context f
 - **Credential storage**: Fields matching sensitive key names are XOR-encrypted at rest with `__ENC__` prefix
 - **Database dates**: The `db.ts` shim converts `Date` values to ISO strings on read (not Date objects)
 - **Frontend state**: sessionStorage for auth (`intelliqe_token`, `intelliqe_user`), localStorage for preferences
+
+## Definition of Done
+
+Before calling any feature "done", confirm every item. If one can't be met, say so explicitly instead of reporting success.
+
+1. **Acceptance criteria restated** — before building, state what "done" means for this specific task (behavior, inputs/outputs, where it lives in the UI). Don't substitute a different design.
+2. **Right layer, additive by default** — place code in the correct layer (route → service → agent/worker; UI in `pages`/`components` + `services/api.ts`). Prefer new `api-*.service.ts` / new tab / new check kind over editing shared machinery. Changes to `db.ts`, auth middleware, the pipeline orchestrator, or the tenant filter are **core-touching**: plan first, show the plan, get approval before building.
+3. **Framework rules respected** — every DB query filters by `tenant_id`; use the `db.ts` pg-shim SQL conventions (or explicit T-SQL for dialect-heavy queries); sensitive fields encrypted with `__ENC__`; real-time via SSE; token/date/state patterns per **Key Patterns** above.
+4. **Typecheck is the gate** — frontend: `tsc -b` (NOT `tsc --noEmit`, which checks nothing and always passes); backend: `npm run build`. Must be clean.
+5. **Proven running, not just compiled** — exercise the feature end to end (live run / pipeline / browser), and show the proof (output, screenshot, or diff). Report failures honestly with the actual output.
+6. **Reviewable commit** — land the change as a feature-sized commit (not left in a large uncommitted pile); offer `/code-review` or `/security-review` for core-touching work.

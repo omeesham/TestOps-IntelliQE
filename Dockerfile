@@ -36,14 +36,24 @@ RUN npm prune --omit=dev   # strip devDeps (tsx, typescript, @types) for runtime
 # ── Stage 3: Final Runtime Image ──────────────────────────────────
 FROM mcr.microsoft.com/playwright:v1.48.0-jammy
 
+# Trial/license expiry (YYYY-MM-DD). entrypoint.sh refuses to start the
+# container past this date; the backend's license-expiry.middleware.ts
+# enforces the same cutoff at request time as a runtime safety net.
+ARG LICENSE_EXPIRY=2026-12-31
+
 ENV NODE_ENV=production \
     PORT=3001 \
     RUN_WORKER=true \
-    BACKEND_URL=http://127.0.0.1:3001
+    BACKEND_URL=http://127.0.0.1:3001 \
+    LICENSE_EXPIRY=$LICENSE_EXPIRY
 
-# nginx + supervisor + envsubst (gettext-base) + wget for healthcheck
+# nginx + supervisor + envsubst (gettext-base) + wget for healthcheck +
+# default-jre-headless: allure-commandline (the Allure 2 `allure generate` CLI)
+# is a JAVA app. The Playwright base image ships Node + browsers but NO JRE, so
+# without this `allure generate` fails in the container and the Allure report is
+# never produced (the Basic/Playwright report is pure Node and works regardless).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nginx supervisor gettext-base wget \
+    && apt-get install -y --no-install-recommends nginx supervisor gettext-base wget default-jre-headless \
     && rm -f /etc/nginx/sites-enabled/default \
     && rm -rf /var/lib/apt/lists/*
 
@@ -57,6 +67,14 @@ COPY --from=api-builder /api/package.json  ./backend/package.json
 COPY --from=api-builder /api/config        ./backend/config
 # Agent prompt definitions — worker resolves AGENTS_DIR to backend/.github/agents
 COPY .github/agents                        ./backend/.github/agents
+# POM scaffold (base.page.ts, fixtures, utils). In-image test execution lays these
+# into each test workspace so generated specs/page objects resolve their imports
+# (e.g. `../base.page`). WITHOUT it every spec fails with
+# "Cannot find module '../base.page'" and the whole suite fails to load.
+# Copied to a fixed path + pinned via CLIENT_DELIVERABLE_DIR so the compiled
+# (dist/) runtime finds it regardless of relative-path resolution.
+COPY client-deliverable/src                ./client-deliverable/src
+ENV CLIENT_DELIVERABLE_DIR=/app/client-deliverable/src
 
 # Built React UI -> nginx web root
 COPY --from=ui-builder /ui/dist /usr/share/nginx/html

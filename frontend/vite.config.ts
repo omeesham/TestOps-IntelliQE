@@ -2,19 +2,38 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
+import { version } from './package.json'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  define: {
+    // Fallback build stamp when CI doesn't inject VITE_APP_VERSION:
+    // the package.json version, shown as "V<version>" in the sidebar.
+    'import.meta.env.VITE_PKG_VERSION': JSON.stringify(version),
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
   },
   server: {
-    port: 5173,
+    // PORT lets a second instance (e.g. the Claude preview harness) run
+    // alongside the default dev server on 5173.
+    port: Number(process.env.PORT) || 5173,
     host: '127.0.0.1',
     proxy: {
-      '/api': 'http://localhost:3001',
+      // Use explicit IPv4 — `localhost` can resolve to ::1 (IPv6) while the
+      // backend listens on 127.0.0.1, which surfaces as an intermittent
+      // ECONNREFUSED on /api. 127.0.0.1 matches the backend and avoids it.
+      '/api': 'http://127.0.0.1:3001',
+      // Hosted mock servers are served publicly from the backend at /mock/* —
+      // proxy it too so a copied mock URL works against the dev frontend origin.
+      '/mock': 'http://127.0.0.1:3001',
+      // Same deal for the contract proxy (/proxy/*) and the public status page
+      // (/status/*): both are served publicly from the backend, so proxy them
+      // so a copied URL resolves against the dev frontend origin as it does in prod.
+      '/proxy': 'http://127.0.0.1:3001',
+      '/status': 'http://127.0.0.1:3001',
     },
   },
 })
