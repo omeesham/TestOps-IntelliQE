@@ -1240,6 +1240,26 @@ export async function correlateCaptureToFlow(id: string, save = true): Promise<C
   const { data } = await api.post(`/api-automation/capture/sessions/${encodeURIComponent(id)}/correlate?save=${save ? 1 : 0}`, {}, { timeout: 60_000 });
   return data;
 }
+
+/* ── Reliability / determinism benchmark: run a flow N times, measure flake ── */
+export interface StepReliability { name: string; runs: number; passes: number; passRate: number; flaky: boolean }
+export interface ReliabilityReport {
+  runs: number;
+  passedRuns: number;
+  failedRuns: number;
+  flakeRate: number;
+  deterministic: boolean;
+  flakySteps: StepReliability[];
+  steps: StepReliability[];
+  latency?: { minMs: number; maxMs: number; avgMs: number };
+  verdict: string;
+  flowName?: string;
+  perRun: { run: number; passed: boolean; durationMs: number; stepsRun: number }[];
+}
+export async function runFlowReliability(input: { flowId?: string; steps?: unknown[]; variables?: Record<string, string>; allowWrites?: boolean; runs?: number }): Promise<{ report: ReliabilityReport }> {
+  const { data } = await api.post('/api-automation/flows/reliability', input, { timeout: 180_000 });
+  return data;
+}
 export async function closeCaptureSession(id: string): Promise<{ ok: boolean }> {
   const { data } = await api.post(`/api-automation/capture/sessions/${encodeURIComponent(id)}/close`, {});
   return data;

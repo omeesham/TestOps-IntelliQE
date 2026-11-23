@@ -73,6 +73,7 @@ import {
   captureToEndpoints, closeCaptureSession, deleteCaptureSession,
 } from '../services/api-capture.service.js';
 import { correlateSessionToFlow } from '../services/api-correlate.service.js';
+import { runReliability } from '../services/api-flake.service.js';
 import { listMocks, createMock, setMockEnabled, deleteMock } from '../services/api-mock.service.js';
 import { toWireMock, fromWireMock, toPrism, pushToWireMock, pingWireMock } from '../services/api-wiremock.service.js';
 import { analyzeCoverageGaps } from '../services/api-coverage-gaps.service.js';
@@ -2023,6 +2024,17 @@ router.delete('/flows/:id', async (req: Request, res: Response) => {
     const ok = await deleteFlow(req.user!.tenantId, String(req.params.id));
     if (!ok) { res.status(404).json({ error: 'Flow not found.' }); return; }
     res.json({ ok: true });
+  } catch (err) { fail(res, err); }
+});
+/** Reliability / determinism benchmark: run a flow N times, report the flake rate,
+ *  unstable steps and latency spread. Turns "deterministic execution" into a number. */
+router.post('/flows/reliability', async (req: Request, res: Response) => {
+  try {
+    const report = await runReliability(req.user!.tenantId, {
+      steps: req.body?.steps, flowId: req.body?.flowId, variables: req.body?.variables,
+      allowWrites: req.body?.allowWrites, groups: req.body?.groups, runs: req.body?.runs,
+    });
+    res.json({ report });
   } catch (err) { fail(res, err); }
 });
 // Send a run result either as JSON or, when `format:'junit'` was requested, as a

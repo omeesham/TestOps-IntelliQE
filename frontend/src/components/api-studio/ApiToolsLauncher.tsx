@@ -106,6 +106,7 @@ import ImpactAnalysis from './ImpactAnalysis';
 import SemanticHeal from './SemanticHeal';
 import BugReport from './BugReport';
 import Monitoring from './Monitoring';
+import ReliabilityCheck from './ReliabilityCheck';
 import DataProfiles from './DataProfiles';
 import HybridTest from './HybridTest';
 import ReleaseGate from './ReleaseGate';
@@ -326,6 +327,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
   const [healOpen, setHealOpen] = useState(false);
   const [bugReportOpen, setBugReportOpen] = useState(false);
   const [monitorOpen, setMonitorOpen] = useState(false);
+  const [reliabilityOpen, setReliabilityOpen] = useState(false);
   const [profilesOpen, setProfilesOpen] = useState(false);
   const [hybridOpen, setHybridOpen] = useState(false);
   const [releaseGateOpen, setReleaseGateOpen] = useState(false);
@@ -475,6 +477,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
         { icon: MonitorSmartphone, label: 'Cloud browser lab', desc: 'Run UI checks on hosted browsers · matrix', open: () => setCloudLabOpen(true) },
         { icon: Combine, label: 'API + UI hybrid test', desc: 'Seed via API → verify in UI → cleanup', open: () => setHybridOpen(true) },
         { icon: Activity, label: 'Monitoring', desc: 'Always-on health / drift / coverage watcher', open: () => setMonitorOpen(true) },
+        { icon: Gauge, label: 'Reliability benchmark', desc: 'Run a flow N times → flake rate & unstable steps', open: () => setReliabilityOpen(true) },
         { icon: Gauge, label: 'Public status page', desc: 'Shareable uptime + SLO', open: () => setStatusPagesOpen(true) },
         { icon: HeartPulse, label: 'Failure → fix workflow', desc: 'Cluster → heal → PR, one guided flow', open: () => setFixWorkflowOpen(true) },
         { icon: Bug, label: 'Bug report', desc: 'Tracker-ready report from a failure', open: () => setBugReportOpen(true) },
@@ -788,6 +791,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
       {healOpen && <SemanticHeal endpoints={ep} onClose={() => setHealOpen(false)} />}
       {bugReportOpen && <BugReport endpoints={ep} onClose={() => setBugReportOpen(false)} />}
       {monitorOpen && <Monitoring endpoints={ep} onClose={() => setMonitorOpen(false)} />}
+      {reliabilityOpen && <ReliabilityCheck onClose={() => setReliabilityOpen(false)} />}
       {profilesOpen && <DataProfiles onClose={() => setProfilesOpen(false)} />}
       {hybridOpen && <HybridTest endpoints={ep} onClose={() => setHybridOpen(false)} />}
       {releaseGateOpen && <ReleaseGate onClose={() => setReleaseGateOpen(false)} />}
