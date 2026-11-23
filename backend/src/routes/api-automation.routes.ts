@@ -143,6 +143,7 @@ import { listEvalDatasets, saveEvalDataset, deleteEvalDataset, listEvalRuns, run
 import { listProxies, createProxy, setProxyEnabled, deleteProxy, listProxyEvents } from '../services/api-proxy.service.js';
 import { listStatusPages, saveStatusPage, setStatusEnabled, deleteStatusPage, getStatusView, probeNow } from '../services/api-status.service.js';
 import { getGitSyncConfig, saveGitSyncConfig, pushToGit, pullFromGit } from '../services/api-git-sync.service.js';
+import { publishApiTestsToGit } from '../services/api-git-publish.service.js';
 // ─── Execution/CI batch: API+UI hybrid, release gate, CI trigger, parallel queue (all additive, opt-in) ───
 import { listHybridTests, saveHybridTest, deleteHybridTest, runHybrid } from '../services/api-hybrid.service.js';
 import { listGatePolicies, saveGatePolicy, deleteGatePolicy, evaluateGate } from '../services/api-release-gate.service.js';
@@ -213,6 +214,7 @@ const ROUTE_PERMISSIONS: { prefix: string; perm: string }[] = [
   { prefix: '/flows/run', perm: 'api.run' },
   { prefix: '/flows/ci-run', perm: 'api.run' },
   { prefix: '/flows/reliability', perm: 'api.run' },
+  { prefix: '/git/publish', perm: 'api.run' },
   { prefix: '/render', perm: 'api.run' },
   { prefix: '/security', perm: 'api.security_scan' },
   { prefix: '/owasp', perm: 'api.security_scan' },
@@ -2962,6 +2964,20 @@ router.post('/git-sync/push', async (req: Request, res: Response) => {
 });
 router.post('/git-sync/pull', async (req: Request, res: Response) => {
   try { res.json(await pullFromGit(req.user!.tenantId)); } catch (err) { fail(res, err); }
+});
+/** Multi-provider API-automation CODE PUSH — GitHub, GitLab, Bitbucket (Cloud +
+ *  Server/DC) and Azure DevOps Repos. Reuses the connected git-repo integration,
+ *  the shared provider layer and the pre-push secret scan. */
+router.post('/git/publish', async (req: Request, res: Response) => {
+  try {
+    const result = await publishApiTestsToGit(req.user!.tenantId, req.user!.username, {
+      integrationId: req.body?.integrationId,
+      scripts: req.body?.scripts, files: req.body?.files, catalogue: req.body?.catalogue,
+      scriptsPath: req.body?.scriptsPath, branch: req.body?.branch, mode: req.body?.mode,
+      title: req.body?.title, body: req.body?.body, commitMessage: req.body?.commitMessage,
+    });
+    res.json(result);
+  } catch (err) { fail(res, err); }
 });
 
 /* ── API + UI hybrid tests (opt-in; seed via API → verify in a real browser → cleanup via API) ── */

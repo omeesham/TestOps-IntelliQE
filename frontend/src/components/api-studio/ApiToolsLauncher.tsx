@@ -68,6 +68,7 @@ import AccessControl from './AccessControl';
 import RemediationPr from './RemediationPr';
 import CompliancePacks from './CompliancePacks';
 import GitSync from './GitSync';
+import ApiGitPublish from './ApiGitPublish';
 import AuthzScan from './AuthzScan';
 import SpecDiff from './SpecDiff';
 import ReplayTest from './ReplayTest';
@@ -303,6 +304,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
   const [remediationOpen, setRemediationOpen] = useState(false);
   const [complianceOpen, setComplianceOpen] = useState(false);
   const [gitSyncOpen, setGitSyncOpen] = useState(false);
+  const [gitPublishOpen, setGitPublishOpen] = useState(false);
   const [finopsOpen, setFinopsOpen] = useState(false);
   const [onPremOpen, setOnPremOpen] = useState(false);
   const [aiComplianceOpen, setAiComplianceOpen] = useState(false);
@@ -485,6 +487,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
         { icon: Bug, label: 'Azure DevOps sync & defects', desc: 'Failures → Azure defects · dedupe · audit trail', open: () => setAzureSyncOpen(true) },
         { icon: GitMerge, label: 'Remediation PR', desc: 'Open a GitHub/GitLab PR with a changeset', open: () => setRemediationOpen(true) },
         { icon: FolderGit2, label: 'Git-synced tests', desc: 'Push / pull the catalogue as test-as-code', open: () => setGitSyncOpen(true) },
+        { icon: GitMerge, label: 'Push to repository', desc: 'Code push → GitHub · GitLab · Bitbucket · Azure DevOps', open: () => setGitPublishOpen(true) },
         { icon: FileCheck2, label: 'Evidence export', desc: 'Compliance evidence → PDF', open: () => setEvidenceOpen(true) },
         { icon: ScrollText, label: 'Audit log', desc: 'Filter & export recorded actions', open: () => setAuditOpen(true) },
         { icon: Waypoints, label: 'Traceability matrix', desc: 'Requirement → case → defect', open: () => setTraceMatrixOpen(true) },
@@ -738,6 +741,7 @@ export default function ApiToolsLauncher({ catalog, scenarios = [], initialSearc
       {accessOpen && <AccessControl onClose={() => setAccessOpen(false)} />}
       {remediationOpen && <RemediationPr onClose={() => setRemediationOpen(false)} />}
       {gitSyncOpen && <GitSync endpoints={ep} onClose={() => setGitSyncOpen(false)} />}
+      {gitPublishOpen && <ApiGitPublish endpoints={ep} onClose={() => setGitPublishOpen(false)} />}
       {onPremOpen && <OnPremDeploy endpoints={ep} onClose={() => setOnPremOpen(false)} />}
       {finopsOpen && <FinOpsMetering endpoints={ep} onClose={() => setFinopsOpen(false)} />}
       {aiComplianceOpen && <AiCompliance endpoints={ep} onClose={() => setAiComplianceOpen(false)} />}

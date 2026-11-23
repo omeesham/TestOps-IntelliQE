@@ -1836,6 +1836,24 @@ export async function saveGitSyncConfig(input: any): Promise<GitSyncConfigView> 
 export async function pushToGit(content: string): Promise<{ url: string; path: string; branch: string; commit?: string }> { const { data } = await api.post('/api-automation/git-sync/push', { content }, { timeout: 60_000 }); return data; }
 export async function pullFromGit(): Promise<{ content: string; path: string; branch: string }> { const { data } = await api.post('/api-automation/git-sync/pull', {}, { timeout: 60_000 }); return data; }
 
+/* ── Multi-provider API code push: GitHub, GitLab, Bitbucket (Cloud + Server), Azure DevOps Repos ── */
+export interface ApiGitPublishResult { provider: string; mode: 'pr' | 'direct'; prUrl: string; prNumber: number; branch: string; fileCount: number; integrationId: string }
+export async function publishApiTestsToGit(input: {
+  integrationId?: string;
+  scripts?: { fileName?: string; code?: string }[];
+  files?: { path: string; content: string }[];
+  catalogue?: string;
+  scriptsPath?: string;
+  branch?: string;
+  mode?: 'pr' | 'direct';
+  title?: string;
+  body?: string;
+  commitMessage?: string;
+}): Promise<ApiGitPublishResult> {
+  const { data } = await api.post('/api-automation/git/publish', input, { timeout: 120_000 });
+  return data;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Testsigma-gap batch — rich requests, flow control, data profiles,
    AI coworker, identity hardening. All additive, opt-in.

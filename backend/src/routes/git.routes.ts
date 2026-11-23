@@ -24,13 +24,14 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import pool from '../db.js';
-import { decryptConfigData, isMaskedSecret } from '../utils/crypto.js';
+import { isMaskedSecret } from '../utils/crypto.js';
 import { parseRepoUrl, type GitProvider, type GitFile, type GitProviderConfig } from '../services/git/git.types.js';
 import { githubProvider } from '../services/git/github.provider.js';
 import { gitlabProvider } from '../services/git/gitlab.provider.js';
 import { bitbucketProvider } from '../services/git/bitbucket.provider.js';
 import { bitbucketServerProvider } from '../services/git/bitbucket-server.provider.js';
 import { azureProvider } from '../services/git/azure.provider.js';
+import { loadGitConfig, isFrameworkRepo, resolvePublishBranch } from '../services/git/credentials.js';
 import { assembleClientPackage } from '../services/client-package.service.js';
 import { getReportStats, readAllureResults, readBasicReport } from '../services/allure-report.service.js';
 import { scanFilesForSecrets, formatSecretFindings } from '../services/git/secret-scan.js';
@@ -78,22 +79,6 @@ async function buildExecutionReportDoc(tenantId: string, runId: string): Promise
   }
 }
 
-/**
- * Repo-name fragments that identify the IntelliQE FRAMEWORK monorepo. Pushing a
- * client deliverable there would expose framework IP, so we refuse it. Override
- * via FRAMEWORK_REPO_GUARD (comma-separated) for differently-named forks.
- */
-const FRAMEWORK_REPO_MARKERS = (process.env.FRAMEWORK_REPO_GUARD || 'jbsintelliqe,intelliqe-framework,testops-intelliqe')
-  .split(',')
-  .map((s) => s.trim().toLowerCase())
-  .filter(Boolean);
-
-/** True when the repo name looks like the IntelliQE framework monorepo. */
-function isFrameworkRepo(repoName: string): boolean {
-  const lower = String(repoName || '').toLowerCase();
-  return FRAMEWORK_REPO_MARKERS.some((m) => lower.includes(m));
-}
-
 const router = Router();
 
 const PROVIDERS: Record<string, GitProvider> = {
@@ -103,124 +88,6 @@ const PROVIDERS: Record<string, GitProvider> = {
   'bitbucket-server': bitbucketServerProvider,
   azure: azureProvider,
 };
-
-/** The git-repo integration ids that back a code-push provider. */
-const GIT_REPO_INTEGRATIONS = ['github', 'gitlab', 'bitbucket', 'azure-repos'];
-
-/**
- * IQE-056.1 crit 6 — reuse the existing Azure DevOps (work-item) connection's
- * PAT for code push when the code-repo config carries no token of its own.
- * The `azure-devops` connection stores a ready `Basic <base64>` auth_header;
- * borrow it so the user never re-enters the PAT (it must have Code scope).
- */
-async function borrowAzureAuthHeader(tenantId: string): Promise<string | undefined> {
-  const r = await pool.query(
-    `SELECT config_data FROM client_configurations
-      WHERE tenant_id = $1 AND integration_id = 'azure-devops' AND status = 'connected'`,
-    [tenantId],
-  );
-  if (r.rows.length === 0) return undefined;
-  const cfg = decryptConfigData(r.rows[0].config_data || {});
-  return cfg.auth_header ? String(cfg.auth_header).trim() : undefined;
-}
-
-/**
- * Look up the user's connected git-repo integration. We prefer an
- * explicit integrationId (when the caller passes one) over auto-detect
- * so the user can pick which connection to use if they have several.
- */
-async function loadGitConfig(
-  tenantId: string,
-  preferred?: string,
-): Promise<{ integrationId: string; config: GitProviderConfig } | null> {
-  // 1. Try the preferred integration first.
-  if (preferred) {
-    const r = await pool.query(
-      `SELECT integration_id, config_data FROM client_configurations
-        WHERE tenant_id = $1 AND integration_id = $2 AND status = 'connected'`,
-      [tenantId, preferred],
-    );
-    if (r.rows.length > 0) {
-      const cfg = decryptConfigData(r.rows[0].config_data);
-      const config = await withAzureReuse(tenantId, r.rows[0].integration_id, cfgToProvider(cfg));
-      return { integrationId: r.rows[0].integration_id, config };
-    }
-  }
-  // 2. Fall back to any connected git-repo integration.
-  const r = await pool.query(
-    `SELECT integration_id, config_data FROM client_configurations
-      WHERE tenant_id = $1
-        AND integration_id IN ('github','gitlab','bitbucket','azure-repos')
-        AND status = 'connected'
-      ORDER BY connected_at DESC
-      LIMIT 1`,
-    [tenantId],
-  );
-  if (r.rows.length === 0) return null;
-  const cfg = decryptConfigData(r.rows[0].config_data);
-  const config = await withAzureReuse(tenantId, r.rows[0].integration_id, cfgToProvider(cfg));
-  return { integrationId: r.rows[0].integration_id, config };
-}
-
-/**
- * For the Azure code-push integration that was saved without its own PAT,
- * borrow the auth header from the existing `azure-devops` work-item connection.
- */
-async function withAzureReuse(
-  tenantId: string,
-  integrationId: string,
-  config: GitProviderConfig,
-): Promise<GitProviderConfig> {
-  if (integrationId === 'azure-repos' && !config.accessToken && !config.authHeader) {
-    config.authHeader = await borrowAzureAuthHeader(tenantId);
-  }
-  return config;
-}
-
-/**
- * Resolve the branch to publish to from the requested push `mode` (IQE-053.1).
- * Only GitHub supports a direct commit (committing straight onto the default
- * branch); GitLab/Bitbucket/Azure always branch + open a PR/MR.
- *
- *   - An explicit `requestedBranch` always wins (a named branch ⇒ PR).
- *   - `mode: 'pr'`     → a fresh `intelliqe/tests-*` branch (PR) for EVERY provider.
- *   - `mode: 'direct'` → the default branch (direct commit) on GitHub; on the
- *                        other providers direct isn't possible, so it falls back
- *                        to a PR branch.
- *   - no `mode`        → branch + PR for EVERY provider, GitHub included (IQE-053.1 #2):
- *                        a direct commit now requires an explicit `mode: 'direct'`,
- *                        so GitHub behaves like GitLab/Bitbucket/Azure by default.
- */
-export function resolvePublishBranch(opts: {
-  mode?: 'pr' | 'direct';
-  requestedBranch?: string;
-  provider: 'github' | 'gitlab' | 'bitbucket' | 'bitbucket-server' | 'azure';
-  defaultBranch: string;
-  ts: string;
-}): string {
-  const explicit = opts.requestedBranch && String(opts.requestedBranch).trim();
-  if (explicit) return explicit;
-  const canDirect = opts.provider === 'github';
-  // Default to a PR for every provider; only commit straight to the default
-  // branch when the caller explicitly asks for it (and only where supported).
-  const wantDirect = opts.mode === 'direct' && canDirect;
-  return wantDirect ? opts.defaultBranch : `intelliqe/tests-${opts.ts}`;
-}
-
-/** Translate the stored config_data shape into the provider-neutral GitProviderConfig. */
-function cfgToProvider(cfg: Record<string, any>): GitProviderConfig {
-  return {
-    repoUrl: String(cfg.repo_url || cfg.repoUrl || '').trim(),
-    defaultBranch: String(cfg.branch || cfg.default_branch || 'main').trim(),
-    accessToken: String(cfg.access_token || cfg.accessToken || cfg.app_password || cfg.pat || '').trim(),
-    authHeader: cfg.auth_header ? String(cfg.auth_header).trim() : undefined,
-    username: cfg.username ? String(cfg.username).trim() : undefined,
-    scriptsPath: String(cfg.scripts_path || cfg.scriptsPath || '').trim() || undefined,
-    // Bitbucket Server / Data Center self-hosted base URL (optional — otherwise
-    // derived from the repo URL's host).
-    baseUrl: String(cfg.base_url || cfg.baseUrl || cfg.server_url || '').trim() || undefined,
-  };
-}
 
 router.post('/publish', requirePermission('api.run'), async (req: Request, res: Response) => {
   try {
