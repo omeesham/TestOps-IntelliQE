@@ -2,9 +2,15 @@
  * Unit tests for suite-level auth/login chaining (api-auth-setup.service).
  * `fetch` is stubbed — no real network. Run with: `npm test` (vitest).
  */
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mintAuthToken, injectAuthToken } from './api-auth-setup.service.js';
 import type { ApiEnvironment } from './api-environments.service.js';
+
+// `fetch` is stubbed, so the SSRF guard's real DNS lookup of the mock host would
+// fail offline — allowlist it to keep the test hermetic (the guard itself is
+// covered by ssrf-guard.test.ts).
+beforeEach(() => { process.env.SSRF_ALLOWED_HOSTS = 'api.example.com'; });
+afterEach(() => { delete process.env.SSRF_ALLOWED_HOSTS; });
 
 function env(partial: Partial<ApiEnvironment>): ApiEnvironment {
   return {

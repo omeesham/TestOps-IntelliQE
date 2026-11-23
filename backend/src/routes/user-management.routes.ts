@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { revokeUserFromCache } from '../middleware/auth.middleware.js';
 import type { Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import pool from '../db.js';
@@ -198,6 +199,7 @@ router.put('/:userId', async (req: Request, res: Response) => {
       vals
     );
 
+    revokeUserFromCache(String(userId)); // role/active change takes effect at once
     res.json({ success: true, user: rows[0] });
   } catch (err: any) {
     console.error('Update user error:', err.message);
@@ -241,6 +243,7 @@ router.put('/:userId/status', async (req: Request, res: Response) => {
       [isActive, userId]
     );
 
+    revokeUserFromCache(String(userId)); // a deactivation locks out existing JWTs at once
     res.json({ success: true, user: rows[0] });
   } catch (err: any) {
     console.error('Update user status error:', err.message);
@@ -274,6 +277,7 @@ router.delete('/:userId', async (req: Request, res: Response) => {
     }
 
     await pool.query(`DELETE FROM ${S}.users WHERE id = $1`, [userId]);
+    revokeUserFromCache(String(userId)); // a deleted user's JWT stops working at once
     res.json({ success: true });
   } catch (err: any) {
     console.error('Delete user error:', err.message);

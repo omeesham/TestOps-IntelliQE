@@ -33,6 +33,38 @@ declare global {
 
 const LEGACY_PREFIX = 'intelliqe-demo-token-';
 
+// ── Session revocation ──────────────────────────────────────────────────────
+// A JWT is stateless, so a deactivated/deleted user would otherwise keep a valid
+// token until it expires. We re-check `is_active` on the JWT path, cached briefly
+// so it is not a DB hit on every request. Deactivating/deleting a user busts the
+// cache in-process (immediate here); other replicas pick it up within the TTL.
+const ACTIVE_TTL_MS = Number(process.env.AUTH_ACTIVE_TTL_MS) || 30_000;
+const activeCache = new Map<string, { active: boolean; expiresAt: number }>();
+
+async function isUserActive(userId: string): Promise<boolean> {
+  if (!userId) return false;
+  const now = Date.now();
+  const hit = activeCache.get(userId);
+  if (hit && hit.expiresAt > now) return hit.active;
+  let active: boolean;
+  try {
+    const { rows } = await pool.query(`SELECT 1 AS ok FROM users WHERE id = $1 AND is_active = 1`, [userId]);
+    active = rows.length > 0;
+  } catch {
+    // Fail OPEN on a transient DB error: the token is already cryptographically
+    // valid, and a DB blip must not log every user out. Do not cache this.
+    return true;
+  }
+  activeCache.set(userId, { active, expiresAt: now + ACTIVE_TTL_MS });
+  return active;
+}
+
+/** Drop a user's cached active-status so a deactivate/delete takes effect at once
+ *  (in this process). Call it from the user-management mutation handlers. */
+export function revokeUserFromCache(userId: string): void {
+  if (userId) activeCache.delete(userId);
+}
+
 export async function authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const authHeader = req.headers.authorization;
@@ -44,23 +76,29 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
 
     // ── Path A: JWT (current) ──────────────────────────────
     if (!token.startsWith(LEGACY_PREFIX)) {
+      let claims;
       try {
-        const claims = verifyToken(token);
-        req.user = {
-          username: claims.sub,
-          userId: claims.uid,
-          role: claims.role,
-          displayName: claims.sub,
-          tenantId: claims.tid,
-          tenantName: claims.tn,
-          isPlatform: claims.pf,
-        };
-        next();
-        return;
+        claims = verifyToken(token);
       } catch {
         res.status(401).json({ error: 'Invalid or expired token' });
         return;
       }
+      // Reject a token whose user has since been deactivated or deleted.
+      if (!(await isUserActive(claims.uid))) {
+        res.status(401).json({ error: 'Session revoked — please log in again' });
+        return;
+      }
+      req.user = {
+        username: claims.sub,
+        userId: claims.uid,
+        role: claims.role,
+        displayName: claims.sub,
+        tenantId: claims.tid,
+        tenantName: claims.tn,
+        isPlatform: claims.pf,
+      };
+      next();
+      return;
     }
 
     // ── Path B: Legacy demo token — DB-backed lookup ──────

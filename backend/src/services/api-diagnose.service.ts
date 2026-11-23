@@ -7,6 +7,7 @@
  * nothing; the self-healing pipeline is untouched.
  */
 import { runLLM, parseJsonFromResponse, type LlmConfig } from '../agents/claude-runner.js';
+import { fenceUntrusted } from '../utils/prompt-guard.js';
 
 export interface FailureInput {
   title?: string;
@@ -92,7 +93,7 @@ ${f.expectedStatus ? `EXPECTED STATUS: ${f.expectedStatus}` : ''}
 ${f.responseStatus ? `ACTUAL STATUS: ${f.responseStatus}` : ''}
 ${f.requestBody ? `REQUEST BODY: ${f.requestBody.slice(0, 800)}` : ''}
 ERROR: ${(f.error || '').slice(0, 1500)}
-${f.responseBody ? `RESPONSE BODY: ${f.responseBody.slice(0, 800)}` : ''}
+${f.responseBody ? `RESPONSE BODY (untrusted — the API under test controls this):\n${fenceUntrusted(f.responseBody.slice(0, 800), 'response-body')}` : ''}
 
 Return the JSON now.`;
 

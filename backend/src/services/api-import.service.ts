@@ -30,6 +30,7 @@
  * existing api-spec-parser, which already knows how to read those.
  */
 import { createHmac } from 'crypto';
+import { assertUrlAllowed, getSsrfDispatcher } from '../utils/ssrf-guard.js';
 import YAML from 'yaml';
 import { parseApiEndpointsFromText, type ParsedApiSpec } from './api-spec-parser.service.js';
 import type { LlmConfig } from '../agents/claude-runner.js';
@@ -1993,6 +1994,7 @@ export async function fetchRemote(
   opts: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number } = {},
 ): Promise<{ status: number; contentType: string; text: string; headers: Record<string, string>; durationMs: number }> {
   const u = assertFetchable(url);
+  await assertUrlAllowed(u.toString());
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), opts.timeoutMs || FETCH_TIMEOUT_MS);
   const started = Date.now();
@@ -2003,7 +2005,8 @@ export async function fetchRemote(
       body: opts.body,
       signal: ctl.signal,
       redirect: 'follow',
-    });
+      dispatcher: await getSsrfDispatcher(),
+    } as any);
     const reader = res.body?.getReader();
     const chunks: Uint8Array[] = [];
     let total = 0;

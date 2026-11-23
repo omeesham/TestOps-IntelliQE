@@ -11,6 +11,7 @@
  *   - Teams:  Workflows webhook                          (Adaptive Card payload)
  */
 import pool from '../db.js';
+import { assertUrlAllowed, getSsrfDispatcher } from '../utils/ssrf-guard.js';
 import { decryptStored } from '../utils/crypto.js';
 import type { TestRunEmailPayload } from './email.service.js';
 
@@ -205,11 +206,13 @@ function buildTeamsBody(payload: TestRunEmailPayload): Record<string, unknown> {
 }
 
 async function postWebhook(url: string, body: Record<string, unknown>): Promise<void> {
+  await assertUrlAllowed(url);
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  });
+    dispatcher: await getSsrfDispatcher(),
+  } as any);
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
     throw new Error(`Webhook returned ${res.status}${detail ? ': ' + detail.slice(0, 200) : ''}`);

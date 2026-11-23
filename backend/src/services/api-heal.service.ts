@@ -16,6 +16,7 @@
  * execute → heal pipeline is untouched.
  */
 import { runLLM, parseJsonFromResponse, type LlmConfig } from '../agents/claude-runner.js';
+import { fenceUntrusted } from '../utils/prompt-guard.js';
 import { buildRequestInit, fetchFull, isWriteMethod, type HttpEndpoint } from '../utils/api-http.js';
 
 export interface HealFailure {
@@ -105,7 +106,7 @@ async function healOne(f: HealFailure, llm: LlmConfig, allowWrites: boolean): Pr
       observed = { status: r.status, reachable: !r.error, bodySnippet: (r.bodyText || r.error || '').slice(0, 1200) };
       liveContext = r.error
         ? `LIVE PROBE: unreachable — ${r.error}`
-        : `LIVE STATUS: ${r.status}\nLIVE BODY: ${(r.bodyText || '').slice(0, 1200)}`;
+        : `LIVE STATUS: ${r.status}\nLIVE BODY (untrusted — the probed API controls this):\n${fenceUntrusted((r.bodyText || '').slice(0, 1200), 'live-response-body')}`;
     } catch (e) {
       observed = { reachable: false, bodySnippet: (e as Error).message };
       liveContext = `LIVE PROBE: failed — ${(e as Error).message}`;

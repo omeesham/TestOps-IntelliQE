@@ -6,6 +6,7 @@
  * These tools live ALONGSIDE the generate → execute → heal pipeline and reuse
  * nothing from it; this helper keeps them from each re-deriving requests.
  */
+import { assertUrlAllowed, getSsrfDispatcher } from './ssrf-guard.js';
 /**
  * oauth2 config to fetch a token on demand (resolved at the CALL SITE, never
  * here — this helper stays dependency-free). When `type === 'oauth2'`, `value`
@@ -134,7 +135,9 @@ export interface TimedResult { ok: boolean; status?: number; elapsedMs: number; 
 export async function timedFetch(url: string, init: RequestInit, timeoutMs = 15_000): Promise<TimedResult> {
   const started = Date.now();
   try {
-    const res = await fetch(url, { ...init, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
+    await assertUrlAllowed(url);
+    const dispatcher = await getSsrfDispatcher();
+    const res = await fetch(url, { ...init, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs), dispatcher } as any);
     try { await res.arrayBuffer(); } catch { /* body drained best-effort */ }
     return { ok: res.ok, status: res.status, elapsedMs: Date.now() - started };
   } catch (e) {
@@ -147,11 +150,18 @@ export interface FullResult { ok: boolean; status?: number; headers: Record<stri
 export async function fetchFull(url: string, init: RequestInit, timeoutMs = 15_000, bodyLimit = 8000, dispatcher?: unknown): Promise<FullResult> {
   const started = Date.now();
   try {
-    // `dispatcher` is an undici Agent (mTLS client cert); it's a non-standard
-    // fetch option undici honours, so it is cast through `any`.
+    // SSRF egress guard: reject private/metadata/reserved targets before the
+    // request, and route through an undici dispatcher whose connect step
+    // re-validates the resolved IP (blocks redirect hops + DNS-rebinding too).
+    await assertUrlAllowed(url);
+    // `dispatcher` is an undici Agent (mTLS client cert, already carrying the
+    // guard's connect.lookup); it's a non-standard fetch option undici honours,
+    // so it is cast through `any`. When the caller supplies none, use the shared
+    // guarded dispatcher.
+    const effectiveDispatcher = dispatcher ?? await getSsrfDispatcher();
     // Default to following redirects, but honour an explicit `init.redirect`
     // (e.g. 'manual') so a caller can assert a 3xx status + Location (IQE-043.8).
-    const res = await fetch(url, { redirect: 'follow', ...init, signal: AbortSignal.timeout(timeoutMs), ...(dispatcher ? { dispatcher } : {}) } as any);
+    const res = await fetch(url, { redirect: 'follow', ...init, signal: AbortSignal.timeout(timeoutMs), dispatcher: effectiveDispatcher } as any);
     const headers: Record<string, string> = {};
     res.headers.forEach((v, k) => { headers[k] = v; });
     // Preserve EACH Set-Cookie (res.headers collapses them into one comma-joined

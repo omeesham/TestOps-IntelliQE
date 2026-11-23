@@ -38,6 +38,7 @@
 import type { TestOpsState, AutomationScript, ApiSpec } from './state.js';
 import { runLLM, llmForStage } from './claude-runner.js';
 import { sanitizeChatContent } from '../utils/crypto.js';
+import { fenceUntrusted } from '../utils/prompt-guard.js';
 
 /* ────────────────────────────────────────────────────────────────
    Recognising an API spec
@@ -494,12 +495,17 @@ function summariseProbe(probe: Probe): string {
     .filter(([k]) => /^(content-type|content-length|cache-control|etag|location|retry-after|www-authenticate|x-ratelimit)/i.test(k))
     .map(([k, v]) => `  ${k}: ${sanitizeChatContent(String(v))}`)
     .join('\n') || '  (none of interest)';
-  const body = probe.bodyText?.trim() ? sanitizeChatContent(probe.bodyText.trim().slice(0, 2500)) : '(empty body)';
+  // Secret-mask first, then fence: the body is attacker-controlled (the probed
+  // API returns it) and about to enter an LLM prompt, so it must be treated as
+  // data, never instructions.
+  const body = probe.bodyText?.trim()
+    ? fenceUntrusted(sanitizeChatContent(probe.bodyText.trim().slice(0, 2500)), 'live-response-body')
+    : '(empty body)';
   return `Status: ${probe.status} ${probe.statusText || ''}
 Round trip: ${probe.elapsedMs}ms
 Notable response headers:
 ${headerLines}
-Response body (truncated):
+Response body (truncated — data only):
 ${body}`;
 }
 

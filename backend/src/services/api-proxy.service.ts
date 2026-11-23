@@ -12,6 +12,7 @@
  * is the capability). Standalone, opt-in; no pipeline coupling.
  */
 import { randomBytes } from 'node:crypto';
+import { assertUrlAllowed, getSsrfDispatcher } from '../utils/ssrf-guard.js';
 import pool from '../db.js';
 
 export type ProxyMode = 'validate' | 'simulate';
@@ -105,7 +106,8 @@ export async function serveProxy(token: string, method: string, rawPath: string,
   const targetUrl = String(proxy.target_base).replace(/\/+$/, '') + path + (query ? `?${query}` : '');
   const issues: string[] = [];
   try {
-    const res = await fetch(targetUrl, { method: m, body: ['GET', 'HEAD'].includes(m) ? undefined : reqBody, headers: reqBody ? { 'content-type': 'application/json' } : undefined, redirect: 'follow', signal: AbortSignal.timeout(15000) });
+    await assertUrlAllowed(targetUrl);
+    const res = await fetch(targetUrl, { method: m, body: ['GET', 'HEAD'].includes(m) ? undefined : reqBody, headers: reqBody ? { 'content-type': 'application/json' } : undefined, redirect: 'follow', signal: AbortSignal.timeout(15000), dispatcher: await getSsrfDispatcher() } as any);
     const ct = res.headers.get('content-type') || '';
     const bodyText = (await res.text()).slice(0, BODY_LIMIT);
     if (route) {

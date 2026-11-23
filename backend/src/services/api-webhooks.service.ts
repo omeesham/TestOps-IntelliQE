@@ -12,6 +12,7 @@
  * affect generation, execution, or healing.
  */
 import pool from '../db.js';
+import { assertUrlAllowed, getSsrfDispatcher } from '../utils/ssrf-guard.js';
 import { createHmac } from 'crypto';
 import { encryptAtRest, decryptStored, isMaskedSecret } from '../utils/crypto.js';
 
@@ -144,7 +145,8 @@ async function postOne(webhook: { id: string; url: string; kind: WebhookKind; se
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), DISPATCH_TIMEOUT_MS);
   try {
-    const res = await fetch(webhook.url, { method: 'POST', headers, body, signal: ctrl.signal });
+    await assertUrlAllowed(webhook.url);
+    const res = await fetch(webhook.url, { method: 'POST', headers, body, signal: ctrl.signal, dispatcher: await getSsrfDispatcher() } as any);
     return res.ok ? 'ok' : 'failed';
   } catch {
     return 'failed';

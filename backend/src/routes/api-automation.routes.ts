@@ -86,6 +86,7 @@ import { summarizeCiRun, exitCodeFor, type CiRunKind } from '../utils/ci-gate.js
 import { toMarkdown } from '../utils/run-report.js';
 import { postmanToFlow } from '../utils/postman-import.js';
 import { maskResult } from '../utils/secret-mask.js';
+import { ssrfConnectLookup } from '../utils/ssrf-guard.js';
 import { flowToPostman } from '../utils/postman.js';
 import { lintFlow } from '../utils/flow-lint.js';
 import { suggestIntegrationFlows } from '../services/api-flow-bridge.service.js';
@@ -2258,6 +2259,9 @@ async function makeMtlsDispatcher(cfg: any): Promise<unknown> {
       ca: cfg.ca || undefined,
       passphrase: cfg.passphrase || undefined,
       rejectUnauthorized: cfg.rejectUnauthorized !== false,
+      // SSRF egress guard at connect time (blocks private/metadata/rebinding),
+      // same policy as the shared dispatcher — mTLS requests are not exempt.
+      lookup: ssrfConnectLookup,
     },
   });
 }

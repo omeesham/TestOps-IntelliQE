@@ -13,6 +13,7 @@
  * The generate → execute → heal pipeline is never involved.
  */
 import { randomBytes, createHmac } from 'crypto';
+import { assertUrlAllowed, getSsrfDispatcher } from '../utils/ssrf-guard.js';
 import type { Request, Response, NextFunction } from 'express';
 import pool from '../db.js';
 import { signToken } from '../utils/jwt.js';
@@ -119,7 +120,9 @@ export async function saveSsoConfig(tenantId: string, input: { type?: string; en
 export async function testOidcDiscovery(issuer: string): Promise<{ ok: boolean; authorizationEndpoint?: string; tokenEndpoint?: string; userinfoEndpoint?: string; error?: string }> {
   try {
     if (!/^https?:\/\//i.test(issuer)) throw new Error('issuer must be an absolute https URL.');
-    const res = await fetch(`${issuer.replace(/\/+$/, '')}/.well-known/openid-configuration`, { signal: AbortSignal.timeout(15000) });
+    const discoUrl = `${issuer.replace(/\/+$/, '')}/.well-known/openid-configuration`;
+    await assertUrlAllowed(discoUrl);
+    const res = await fetch(discoUrl, { signal: AbortSignal.timeout(15000), dispatcher: await getSsrfDispatcher() } as any);
     if (!res.ok) throw new Error(`discovery ${res.status}`);
     const d: any = await res.json();
     return { ok: true, authorizationEndpoint: d.authorization_endpoint, tokenEndpoint: d.token_endpoint, userinfoEndpoint: d.userinfo_endpoint };
@@ -151,13 +154,15 @@ export async function exchangeOidcCode(tenantId: string, code: string, redirectU
 
   const form = new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: redirectUri, client_id: c.clientId });
   if (c.clientSecret) form.set('client_secret', decryptStored(c.clientSecret));
-  const tr = await fetch(disco.tokenEndpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(), signal: AbortSignal.timeout(20000) });
+  await assertUrlAllowed(disco.tokenEndpoint);
+  const tr = await fetch(disco.tokenEndpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString(), signal: AbortSignal.timeout(20000), dispatcher: await getSsrfDispatcher() } as any);
   const td: any = await tr.json().catch(() => ({}));
   if (!tr.ok || !td.access_token) throw new Error(`Token exchange failed: ${td.error_description || td.error || tr.status}`);
 
   let claims: any = {};
   if (disco.userinfoEndpoint) {
-    const ur = await fetch(disco.userinfoEndpoint, { headers: { authorization: `Bearer ${td.access_token}` }, signal: AbortSignal.timeout(15000) });
+    await assertUrlAllowed(disco.userinfoEndpoint);
+    const ur = await fetch(disco.userinfoEndpoint, { headers: { authorization: `Bearer ${td.access_token}` }, signal: AbortSignal.timeout(15000), dispatcher: await getSsrfDispatcher() } as any);
     claims = await ur.json().catch(() => ({}));
   }
   const email = String(claims.email || '').toLowerCase();

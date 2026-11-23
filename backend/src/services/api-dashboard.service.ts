@@ -13,6 +13,7 @@
  * slowing down, and where the imported endpoints came from.
  */
 import pool from '../db.js';
+import { latencyStats, type LatencyStats } from '../utils/percentile.js';
 import { listReports, readAllureResults, readBasicReport, type ReportStats, type ReportResultRow } from './allure-report.service.js';
 
 export interface ApiRunSummary {
@@ -51,6 +52,8 @@ export interface ApiOverview {
   recentRuns: ApiRunSummary[];
   anomalies: { name: string; kind: 'flaky' | 'slow' | 'new-failure'; detail: string; runs: number }[];
   slowest: { name: string; durationMs: number; runId: string }[];
+  /** Latency distribution (ms) over the latest run's per-scenario durations. Null when no timed results. */
+  latency: LatencyStats | null;
   imports: { total: number; byMethod: Record<string, number>; recent: { id: string; method: string; name: string; format: string; endpointCount: number; createdAt: string; createdBy: string }[] };
 }
 
@@ -201,6 +204,7 @@ export async function getApiOverview(tenantId: string, opts: { fresh?: boolean }
   // Anomalies — compare per-scenario outcomes across the last runs.
   const anomalies: ApiOverview['anomalies'] = [];
   const slowest: ApiOverview['slowest'] = [];
+  let latency: LatencyStats | null = null;
   const history = withStats.slice(0, 8);
   if (history.length) {
     const perRun = await Promise.all(history.map((r) => resultsFor(tenantId, r.runId, r.hasAllure)));
@@ -239,6 +243,8 @@ export async function getApiOverview(tenantId: string, opts: { fresh?: boolean }
     for (const row of [...latestRows].sort((a, b) => b.durationMs - a.durationMs).slice(0, 5)) {
       slowest.push({ name: row.name, durationMs: row.durationMs, runId: history[0]!.runId });
     }
+    const durations = latestRows.map((r) => r.durationMs).filter((d) => typeof d === 'number' && d > 0);
+    if (durations.length) latency = latencyStats(durations);
   }
 
   // Imports + environments
@@ -278,6 +284,7 @@ export async function getApiOverview(tenantId: string, opts: { fresh?: boolean }
     recentRuns: ordered.slice(0, 10),
     anomalies: anomalies.slice(0, 12),
     slowest,
+    latency,
     imports: { total: importsTotal, byMethod, recent: recentImports },
   };
   overviewCache.set(tenantId, { at: Date.now(), data: overview });

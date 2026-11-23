@@ -278,7 +278,7 @@ router.get('/history', async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/reports/:runId/export?format=xlsx|html|pdf
+ * GET /api/reports/:runId/export?format=xlsx|html|pdf|csv
  * Download a report as Excel (summary + per-test sheets), a self-contained HTML
  * file, or a PDF (rendered summary). The HTML and the PDF are rendered from the
  * same `buildReportHtml` markup, so they are byte-for-byte the same report in
@@ -413,7 +413,33 @@ router.get('/:runId/export', async (req: Request, res: Response) => {
       return;
     }
 
-    res.status(400).json({ error: "format must be 'xlsx', 'html' or 'pdf'" });
+    if (format === 'csv') {
+      // RFC-4180 CSV: commented metadata header, then the test-result rows. A
+      // UTF-8 BOM makes Excel open it in the right encoding.
+      const esc = (v: unknown) => { const s = String(v ?? ''); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+      const passed = stats?.passed ?? results.filter((r) => r.status === 'passed').length;
+      const failed = stats?.failed ?? results.filter((r) => r.status === 'failed').length;
+      const lines = [
+        `# IntelliQE Test Report`,
+        `# Report,${esc(title)}`,
+        `# Run ID,${esc(runId)}`,
+        `# Source,${esc(source)}`,
+        `# Exported at,${esc(generatedAt)}`,
+        `# Total,${stats?.total ?? results.length}`,
+        `# Passed,${passed}`,
+        `# Failed,${failed}`,
+        `# Pass rate,${stats?.passRate ?? 0}%`,
+        '',
+        ['#', 'Test Case', 'Status', 'Duration (ms)'].join(','),
+        ...results.map((r, i) => [i + 1, esc(r.name), esc(r.status), r.durationMs ?? 0].join(',')),
+      ];
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeName}.csv"`);
+      res.send('﻿' + lines.join('\r\n'));
+      return;
+    }
+
+    res.status(400).json({ error: "format must be 'xlsx', 'html', 'pdf' or 'csv'" });
   } catch (err: any) {
     console.error('Report export error:', err.message);
     res.status(500).json({ error: `Failed to export report: ${err.message}` });
