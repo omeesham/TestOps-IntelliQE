@@ -14,12 +14,12 @@
  * Nothing here touches the generation/execute/heal pipeline.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { X, Antenna, Plus, Trash2, RefreshCw, Upload, Terminal, Copy, Check, AlertTriangle, Layers, CircleStop } from 'lucide-react';
+import { X, Antenna, Plus, Trash2, RefreshCw, Upload, Terminal, Copy, Check, AlertTriangle, Layers, CircleStop, Workflow } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
 import { useToast } from '@/components/feedback/ToastProvider';
 import {
   listCaptureSessions, createCaptureSession, getCaptureSession, ingestCaptureEntries,
-  captureToEndpoints, closeCaptureSession, deleteCaptureSession, type CaptureSession,
+  captureToEndpoints, correlateCaptureToFlow, closeCaptureSession, deleteCaptureSession, type CaptureSession,
 } from '@/services/api';
 import { CARD, STRIP, INPUT, LABEL, PRIMARY_BTN, SECONDARY_BTN } from './format';
 import { MethodBadge } from './primitives';
@@ -154,6 +154,22 @@ export default function TrafficCapture({ catalog, onClose, onBuilt }: { catalog:
       onClose();
     } catch (err: any) {
       setError(err?.response?.data?.error || err?.message || 'Could not build endpoints.');
+    } finally { setBusy(false); }
+  };
+
+  const buildFlow = async () => {
+    if (!activeId) return;
+    setBusy(true); setError('');
+    try {
+      const res = await correlateCaptureToFlow(activeId, true);
+      toast.success(
+        'Runnable flow built from traffic',
+        `${res.stepCount} step${res.stepCount === 1 ? '' : 's'} · ${res.linkCount} dependency link${res.linkCount === 1 ? '' : 's'} auto-wired${res.saved ? ' · saved to Flows' : ''}.`,
+      );
+      onBuilt?.();
+      onClose();
+    } catch (err: any) {
+      setError(err?.response?.data?.error || err?.message || 'Could not build a flow.');
     } finally { setBusy(false); }
   };
 
@@ -292,8 +308,12 @@ export default function TrafficCapture({ catalog, onClose, onBuilt }: { catalog:
 
         {active && (
           <div className="flex items-center gap-2 px-4 h-14 border-t border-[#EDE9FE] flex-shrink-0 bg-white">
-            <p className="text-[11px] text-gray-400">Builds deduped, noise-filtered endpoints from {count} captured request{count === 1 ? '' : 's'}.</p>
-            <button type="button" onClick={() => void build()} disabled={busy || count === 0} className={`${PRIMARY_BTN} ml-auto`}>
+            <p className="text-[11px] text-gray-400 min-w-0">Endpoints feed the generator; a flow chains the calls — response ids/tokens auto-wired into later requests.</p>
+            <button type="button" onClick={() => void buildFlow()} disabled={busy || count === 0} className={`${SECONDARY_BTN} ml-auto`} title="Correlate the recorded calls into one runnable journey (ids & tokens wired step-to-step)">
+              {busy ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Workflow className="w-3.5 h-3.5" />}
+              Build runnable flow
+            </button>
+            <button type="button" onClick={() => void build()} disabled={busy || count === 0} className={PRIMARY_BTN}>
               {busy ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Layers className="w-3.5 h-3.5" />}
               Build endpoints ({count})
             </button>

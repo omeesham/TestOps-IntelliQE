@@ -72,6 +72,7 @@ import {
   listCaptureSessions, createCaptureSession, getCaptureSession, ingestCapture,
   captureToEndpoints, closeCaptureSession, deleteCaptureSession,
 } from '../services/api-capture.service.js';
+import { correlateSessionToFlow } from '../services/api-correlate.service.js';
 import { listMocks, createMock, setMockEnabled, deleteMock } from '../services/api-mock.service.js';
 import { toWireMock, fromWireMock, toPrism, pushToWireMock, pingWireMock } from '../services/api-wiremock.service.js';
 import { analyzeCoverageGaps } from '../services/api-coverage-gaps.service.js';
@@ -1505,6 +1506,35 @@ router.post('/capture/sessions/:id/endpoints', async (req: Request, res: Respons
     if (!endpoints.length) { res.status(400).json({ error: fromEntries ? 'The recorded traffic had no API requests (only static assets?).' : 'Nothing recorded yet — capture some traffic first.' }); return; }
     await recordImport(req.user!.tenantId, req.user!.username, { method: 'capture', name, format: 'Captured traffic', parser: 'har', endpointCount: endpoints.length, warnings: [] });
     res.json({ endpoints, count: endpoints.length, parser: 'har', format: 'Captured traffic', profile: analyzeApiSurface(endpoints) });
+  } catch (err) { fail(res, err); }
+});
+
+/** Auto-dependency correlation: recorded traffic → a RUNNABLE flow where values
+ *  produced in one response are extracted ({{var}}) and injected into later
+ *  requests. Deterministic; feeds the flow runner, not the pipeline. Saves the
+ *  flow by default (?save=0 to preview only). */
+router.post('/capture/sessions/:id/correlate', async (req: Request, res: Response) => {
+  try {
+    const result = await correlateSessionToFlow(req.user!.tenantId, String(req.params.id));
+    if (!result.stepCount) {
+      res.status(400).json({ error: result.fromEntries ? 'The recorded traffic had no correlatable API requests.' : 'Nothing recorded yet — capture some traffic first.' });
+      return;
+    }
+    const doSave = String(req.query.save ?? '1') !== '0' && req.body?.save !== false;
+    let flow: { id: string } | undefined;
+    if (doSave) {
+      const saved = await saveFlow(req.user!.tenantId, req.user!.username, { name: result.name, steps: result.steps, variables: result.variables });
+      flow = { id: saved.id };
+    }
+    res.json({
+      flow, saved: doSave,
+      name: result.name,
+      steps: result.steps,
+      links: result.links,
+      linkCount: result.linkCount,
+      stepCount: result.stepCount,
+      fromEntries: result.fromEntries,
+    });
   } catch (err) { fail(res, err); }
 });
 

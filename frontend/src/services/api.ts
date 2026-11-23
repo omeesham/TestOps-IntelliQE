@@ -1223,6 +1223,23 @@ export async function captureToEndpoints(id: string): Promise<ApiImportResponse>
   const { data } = await api.post(`/api-automation/capture/sessions/${encodeURIComponent(id)}/endpoints`, {}, { timeout: 60_000 });
   return data;
 }
+
+export interface CaptureCorrelationLink { fromStep: number; toStep: number; var: string; in: 'url' | 'header' | 'body'; header?: string; via: 'body' | 'header' }
+export interface CaptureCorrelateResult {
+  flow?: { id: string };
+  saved: boolean;
+  name: string;
+  steps: unknown[];
+  links: CaptureCorrelationLink[];
+  linkCount: number;
+  stepCount: number;
+  fromEntries: number;
+}
+/** Correlate recorded traffic into a RUNNABLE flow (response values → {{var}} in later requests). */
+export async function correlateCaptureToFlow(id: string, save = true): Promise<CaptureCorrelateResult> {
+  const { data } = await api.post(`/api-automation/capture/sessions/${encodeURIComponent(id)}/correlate?save=${save ? 1 : 0}`, {}, { timeout: 60_000 });
+  return data;
+}
 export async function closeCaptureSession(id: string): Promise<{ ok: boolean }> {
   const { data } = await api.post(`/api-automation/capture/sessions/${encodeURIComponent(id)}/close`, {});
   return data;
