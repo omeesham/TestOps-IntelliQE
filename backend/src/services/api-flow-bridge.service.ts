@@ -168,7 +168,13 @@ function buildSmokeFlow(endpoints: ImportedEndpoint[]): SuggestedFlow[] {
       url: e.url,
       headers: (e.headers || []).map((h) => ({ key: h.key, value: h.value })),
       auth: e.auth,
-      checks: Number.isInteger(e.expectedStatus) ? [{ kind: 'status', equals: e.expectedStatus as number }] : [],
+      // Documented status when known (else the engine's default <400 gate, which
+      // still applies because protocolChecks adds no `status` kind), plus the
+      // protocol-appropriate body assertion.
+      checks: [
+        ...(Number.isInteger(e.expectedStatus) ? [{ kind: 'status', equals: e.expectedStatus as number } as FlowCheck] : []),
+        ...protocolChecks(e),
+      ],
     });
   }
   if (steps.length < 2) return [];   // a 1-step smoke adds nothing over the browse journey
@@ -353,7 +359,7 @@ function buildCrossServiceFlow(flow: ApiFlow, endpoints: ImportedEndpoint[]): Su
         auth: e.auth,
         body: e.body,
         extract: [{ name: capVar, from: 'body', path: idPath }],
-        checks: [statusCheck(e, method, method === 'POST', false, false), { kind: 'jsonPathExists', path: idPath }],
+        checks: [statusCheck(e, method, method === 'POST', false, false), ...protocolChecks(e), { kind: 'jsonPathExists', path: idPath }],
       });
       return;
     }
@@ -373,7 +379,7 @@ function buildCrossServiceFlow(flow: ApiFlow, endpoints: ImportedEndpoint[]): Su
       headers: (e.headers || []).map((h) => ({ key: h.key, value: h.value })),
       auth: e.auth,
       body,
-      checks: [statusCheck(e, method, method === 'POST', false, false)],
+      checks: [statusCheck(e, method, method === 'POST', false, false), ...protocolChecks(e)],
     });
   });
 
@@ -476,6 +482,9 @@ function buildRunnableFlow(flow: ApiFlow, endpoints: ImportedEndpoint[], profile
 
     const url = injectId ? injectIdIntoUrl(e, resource) : e.url;
     const checks: FlowCheck[] = [statusCheck(e, method, isCapture && idx === createIdx, isDelete, isConfirmGone)];
+    // Seed protocol-appropriate body assertions on steps that return a body to
+    // inspect — skip delete/confirm-gone (empty body / an expected 404 error page).
+    if (!isDelete && !isConfirmGone) checks.push(...protocolChecks(e));
 
     const step: FlowStep = {
       name: stepName(method, e, idx, { createIdx, listIdx, delIdx, isConfirmGone }),
@@ -514,6 +523,75 @@ function buildRunnableFlow(flow: ApiFlow, endpoints: ImportedEndpoint[], profile
     suggested: true,
     hasWrites,
   };
+}
+
+/**
+ * The response shape a step should be asserted against, inferred from the
+ * endpoint's declared `style`/`soap` metadata, then its documented response
+ * sample, then a Content-Type/Accept header. Drives `protocolChecks()` so an
+ * auto-generated suite asserts more than status + JSON for non-JSON protocols.
+ */
+type ResponseShape = 'graphql' | 'soap' | 'xml' | 'html' | 'json' | 'unknown';
+
+function headerValue(e: ImportedEndpoint, name: string): string | undefined {
+  const h = (e.headers || []).find((x) => (x.key || '').toLowerCase() === name.toLowerCase());
+  return h?.value;
+}
+
+export function detectResponseShape(e: ImportedEndpoint): ResponseShape {
+  const style = e.style || 'rest';
+  if (style === 'graphql') return 'graphql';
+  if (style === 'soap' || e.soap) return 'soap';
+  // REST (and jsonrpc/webhook/mcp, which are JSON-shaped): sniff the documented
+  // response body first — it's the most reliable signal of the real format.
+  const sample = (e.expectedResponse || '').trim();
+  if (sample) {
+    if (/^<!doctype html|^<html[\s>]/i.test(sample)) return 'html';
+    if (/^<\?xml|^<(?:[\w-]+:)?(?:soap|envelope)\b/i.test(sample)) return 'xml';
+    if (/^[[{]/.test(sample)) return 'json';
+    if (/^</.test(sample)) return 'xml';   // generic XML/markup
+  }
+  // Fall back to a declared content-type / accept header.
+  const ct = headerValue(e, 'content-type') || headerValue(e, 'accept') || '';
+  if (/graphql/i.test(ct)) return 'graphql';
+  if (/html/i.test(ct)) return 'html';
+  if (/xml/i.test(ct)) return 'xml';
+  if (/json/i.test(ct)) return 'json';
+  return 'unknown';
+}
+
+/**
+ * Protocol-appropriate body assertions to append AFTER the status check on a
+ * positive step — closing the gap where auto-generated suites only asserted
+ * status + JSON path. All check kinds are evaluated by `runChecks` and are
+ * additive (they never replace the status gate):
+ *  - GraphQL → `graphql` (the envelope has no `errors`, which HTTP 200 hides)
+ *  - SOAP    → `soapFault` (+ a WSDL-derived `xmlSchema` contract when known)
+ *  - XML     → `contentType` contains "xml"
+ *  - HTML    → `contentType` contains "html"
+ *  - JSON    → `noError` (catch a "200 but failed" REST error envelope)
+ * Returns [] for an unknown shape, so nothing weakens or noises up the step.
+ */
+export function protocolChecks(e: ImportedEndpoint): FlowCheck[] {
+  switch (detectResponseShape(e)) {
+    case 'graphql':
+      return [{ kind: 'graphql' }];
+    case 'soap': {
+      const checks: FlowCheck[] = [{ kind: 'soapFault' }];
+      if (e.soap?.responseElement) {
+        checks.push({ kind: 'xmlSchema', schema: JSON.stringify({ element: e.soap.responseElement, required: e.soap.responseRequired || [] }) });
+      }
+      return checks;
+    }
+    case 'xml':
+      return [{ kind: 'contentType', value: 'xml' }];
+    case 'html':
+      return [{ kind: 'contentType', value: 'html' }];
+    case 'json':
+      return [{ kind: 'noError' }];
+    default:
+      return [];
+  }
 }
 
 /** The status a step is expected to return. */
