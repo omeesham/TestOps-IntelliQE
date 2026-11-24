@@ -29,9 +29,12 @@ export const gitlabProvider: GitProvider = {
     const projectPath = coords.projectPath || `${coords.owner}/${coords.repo}`;
     const api = new Gitlab({ host: `https://${coords.host}`, token: config.accessToken });
 
-    // 1. Project reachable + token valid.
+    // 1. Project reachable + token valid. Keep the project — it tells us the
+    //    repo's real default branch, which we surface if the typed one is wrong.
+    let repoDefault = '';
     try {
-      await api.Projects.show(projectPath);
+      const project = await api.Projects.show(projectPath);
+      repoDefault = String((project as any)?.default_branch || '');
     } catch (err: any) {
       const status = err?.cause?.response?.status || err?.response?.status;
       if (status === 401) throw new Error('Authentication failed — the personal access token is invalid or expired.');
@@ -45,7 +48,8 @@ export const gitlabProvider: GitProvider = {
     } catch (err: any) {
       const status = err?.cause?.response?.status || err?.response?.status;
       if (status === 404) {
-        throw new Error(`Default branch '${config.defaultBranch}' does not exist on ${projectPath}. Set "Default Branch" to an existing branch (e.g. main).`);
+        const hint = repoDefault ? ` The repository's default branch is '${repoDefault}' — use that.` : ' Set "Default Branch" to an existing branch (e.g. main).';
+        throw new Error(`Default branch '${config.defaultBranch}' does not exist on ${projectPath}.${hint}`);
       }
       throw new Error(`Could not read default branch '${config.defaultBranch}': ${err.message || err}`);
     }
