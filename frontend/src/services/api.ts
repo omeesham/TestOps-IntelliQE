@@ -3027,54 +3027,6 @@ export async function getPipelinePage(id: string) {
   return data;
 }
 
-export async function getAgentTypes() {
-  const { data } = await api.get('/pipeline-admin/agent-types');
-  return data;
-}
-
-export async function getPipelineDefinition() {
-  const { data } = await api.get('/pipeline-admin/pipeline-definition');
-  return data;
-}
-
-export async function getWorkerStatus() {
-  const { data } = await api.get('/pipeline-admin/worker-status');
-  return data;
-}
-
-export async function getPipelineUsage() {
-  const { data } = await api.get('/pipeline-admin/usage');
-  return data;
-}
-
-/** Save the whole pipeline definition for the current tenant. The server
- *  versions it (qa_pipeline_definitions.version++), so a previous version is
- *  always recoverable. */
-export async function savePipelineDefinition(definition: any) {
-  const { data } = await api.put('/pipeline-admin/pipeline-definition', definition);
-  return data as { saved: boolean };
-}
-
-/** Read-only fetch of an agent's on-disk instructions (to seed the editor when a
- *  stage has no saved override yet). Path is server-constrained to agent files. */
-export async function getAgentPrompt(file: string) {
-  const { data } = await api.get('/pipeline-admin/agent-prompt', { params: { file } });
-  return data as { file: string; content: string };
-}
-
-/** Validate an AI provider/model/key (or the Claude CLI) without saving. */
-export async function testAiConnection(payload: {
-  provider?: string;
-  authMethod?: string;
-  apiKey?: string;
-  model?: string;
-  baseUrl?: string;
-  cliPath?: string;
-}) {
-  const { data } = await api.post('/pipeline-admin/test-ai-connection', payload);
-  return data as { ok?: boolean; message?: string; resolvedPath?: string };
-}
-
 /* ─────────────────────────────────────────────────────────────
    SSE — real-time pipeline events
    ───────────────────────────────────────────────────────────── */

@@ -10,7 +10,6 @@ import LlmConfigurationSection from '@/components/system-config/LLMConfiguration
 import VoiceAssistantSection from '@/components/system-config/VoiceAssistantSection';
 import IntegrationsView from '@/components/api-studio/views/IntegrationsView';
 import DeveloperView from '@/components/api-studio/views/DeveloperView';
-import PipelineStudioSection from '@/components/system-config/PipelineStudioSection';
 import { getConfigurations } from '@/services/api';
 import { useAuth } from '@/contexts/AuthContext';
 import ErrorAlert from '@/components/feedback/ErrorAlert';
@@ -56,9 +55,6 @@ export default function SystemConfigurationPage() {
     // blank the developer docs or the tool catalogue.
     if (activeTab === 'api-integrations') return <IntegrationsView />;
     if (activeTab === 'api-developer') return isAdmin ? <DeveloperView /> : null;
-    // Pipeline Studio manages its own data (reads no `configs`), and is
-    // admin-only — render it regardless of a configs-fetch error.
-    if (activeTab === 'pipeline-studio') return isAdmin ? <PipelineStudioSection /> : null;
 
     // Show errors prominently — but never block rendering on initial load.
     // Sections handle empty `configs` gracefully (they show form defaults),

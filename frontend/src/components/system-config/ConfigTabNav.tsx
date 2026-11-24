@@ -1,6 +1,6 @@
 import {
   Settings, AppWindow, FileText, Database,
-  GitBranch, Bell, BrainCircuit, Volume2, Blocks, Workflow,
+  GitBranch, Bell, BrainCircuit, Volume2, Blocks,
 } from 'lucide-react';
 
 export type TabKey =
@@ -12,7 +12,6 @@ export type TabKey =
   | 'notifications'
   | 'llm-config'
   | 'voice'
-  | 'pipeline-studio'
   | 'api-integrations'
   | 'api-developer';
 
@@ -33,7 +32,6 @@ const TABS: Tab[] = [
   { key: 'notifications',    label: 'Notifications',          icon: Bell      },
   { key: 'llm-config',       label: 'LLM Configuration',      icon: BrainCircuit },
   { key: 'voice',            label: 'Voice Assistant',        icon: Volume2   },
-  { key: 'pipeline-studio',  label: 'Pipeline Studio',        icon: Workflow, adminOnly: true },
   { key: 'api-integrations', label: 'API Integrations',       icon: Blocks    },
 ];
 
