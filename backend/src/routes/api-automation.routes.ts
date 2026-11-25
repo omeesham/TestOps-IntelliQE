@@ -207,7 +207,9 @@ const router = Router();
    ROUTE_PERMISSIONS decides the required permission; an UNMAPPED path passes
    (so behaviour is unchanged for anything not listed — blast radius is only
    the mapped prefixes). The decision reuses api-access.checkPermission:
-   platform/admin bypass, role→permission map, fail-open on lookup error.
+   platform/admin bypass, role→permission map, fail-CLOSED on lookup error
+   (a non-admin mutating request is denied while the permission store is
+   unreachable — checkPermission returns 'deny', never silently granting access).
    Order matters — most specific prefixes first.
    ════════════════════════════════════════════════════════════════ */
 const ROUTE_PERMISSIONS: { prefix: string; perm: string }[] = [
