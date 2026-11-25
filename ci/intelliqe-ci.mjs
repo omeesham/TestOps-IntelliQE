@@ -1,6 +1,9 @@
-#!/usr/bin/env node
 /**
  * intelliqe-ci.mjs — headless IntelliQE runner for CI pipelines.
+ *
+ * Invoked as `node ci/intelliqe-ci.mjs …` (see Usage below) — no shebang is
+ * needed, and omitting it keeps the file importable by the unit tests, whose
+ * runner does not strip a leading `#!` the way Node's ESM loader does.
  *
  * Zero dependencies (Node 18+ global fetch). Runs a saved flow, a suite, or a
  * local flow JSON against an IntelliQE backend via POST /flows/ci-run, writes a
