@@ -146,7 +146,7 @@ function sanitizeWorkers(input: unknown): number | null {
   return Math.max(1, Math.min(10, n));
 }
 
-function sanitizeVariables(input: unknown, previous: EnvVariable[] = []): EnvVariable[] {
+export function sanitizeVariables(input: unknown, previous: EnvVariable[] = []): EnvVariable[] {
   if (!Array.isArray(input)) return [];
   const prevByKey = new Map(previous.map((v) => [v.key, v]));
   const out: EnvVariable[] = [];

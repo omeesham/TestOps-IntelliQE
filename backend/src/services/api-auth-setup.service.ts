@@ -18,6 +18,7 @@ import {
   getEnvironment, environmentVarMap, fillTemplate,
   type ApiEnvironment,
 } from './api-environments.service.js';
+import { applyGlobals } from './api-global-variables.service.js';
 import { buildRequestInit, fetchFull, type HttpEndpoint } from '../utils/api-http.js';
 import { queryPath } from '../utils/assert-engine.js';
 
@@ -88,8 +89,11 @@ export async function revealEnvForRun(
   envId: string | null | undefined,
 ): Promise<{ env: ApiEnvironment | null; diagnostic?: string }> {
   if (!envId) return { env: null };
-  const env = await getEnvironment(tenantId, envId, { reveal: true });
-  if (!env) return { env: null };
+  const env0 = await getEnvironment(tenantId, envId, { reveal: true });
+  if (!env0) return { env: null };
+  // Widen with workspace globals (env vars win) before minting, so the login
+  // request and the run both see {{globals}}.
+  const env = await applyGlobals(tenantId, env0);
   const mint = await mintAuthToken(env);
   return { env: injectAuthToken(env, mint), diagnostic: mint.diagnostic };
 }

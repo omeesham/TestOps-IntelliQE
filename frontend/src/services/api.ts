@@ -965,6 +965,17 @@ export async function resolveApiEnvironment(id: string, endpoints: any[]): Promi
   return data;
 }
 
+/* ── Workspace global variables (broadest {{var}} scope; an environment variable
+   of the same name wins). Secrets stored AES-encrypted and masked, like env vars. */
+export async function listGlobalVariables(): Promise<{ variables: { key: string; value: string; secret: boolean }[] }> {
+  const { data } = await api.get('/api-automation/global-variables');
+  return data;
+}
+export async function saveGlobalVariables(variables: { key: string; value: string; secret: boolean }[]): Promise<{ variables: { key: string; value: string; secret: boolean }[] }> {
+  const { data } = await api.put('/api-automation/global-variables', { variables });
+  return data;
+}
+
 /* ── Environment readiness gate (opt-in pre-run checks) ── */
 export interface ApiReadinessConfig {
   enabled: boolean;

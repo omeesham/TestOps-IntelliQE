@@ -776,6 +776,17 @@ export async function initDb(): Promise<void> {
     // so authenticated endpoints in an auto-generated suite stop failing with 401.
     // Additive JSON column; NULL ⇒ no auth setup (prior behaviour).
     await addColumn('api_environments', 'auth_setup', 'NVARCHAR(MAX)');
+    // Workspace GLOBAL variables — the broadest scope in the {{var}} resolution
+    // hierarchy (globals → environment → extracted → dynamic). One shared set per
+    // tenant (tenant_id PK); an environment variable of the same name overrides a
+    // global. Secrets AES-encrypted at rest exactly like environment variables.
+    await createTable('api_global_variables', `
+      CREATE TABLE ${SCHEMA}.api_global_variables (
+        tenant_id   UNIQUEIDENTIFIER PRIMARY KEY,
+        variables   NVARCHAR(MAX) NOT NULL DEFAULT '[]',
+        updated_by  NVARCHAR(100),
+        updated_at  DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME()
+      )`);
     // Import history: every intake (file, URL, cURL, GraphQL, MCP…) with what
     // it produced — the dashboard's "sources" panel and the REST /imports feed.
     await createTable('api_import_sources', `

@@ -21,6 +21,7 @@ import { getTenantLlm } from './llm.service.js';
 import { sanitizeApiSpec } from '../utils/api-spec.js';
 import { analyzeApiSurface, type ApiProfile } from './api-intelligence.service.js';
 import { applyEnvironment, getEnvironment, listEnvironments, spansMultipleHosts } from './api-environments.service.js';
+import { applyGlobals } from './api-global-variables.service.js';
 import { mintAuthToken, injectAuthToken } from './api-auth-setup.service.js';
 import { executeStage, healStage } from '../routes/pipeline-flow.routes.js';
 import { setJobProgress } from './async-jobs.service.js';
@@ -110,6 +111,9 @@ export async function runHeadlessApiRun(
     const def = all.find((e) => e.isDefault);
     if (def) env = await getEnvironment(tenantId, def.id, { reveal: true });
   }
+  // Widen the environment with the workspace's global variables (an environment
+  // variable of the same name wins), so {{globals}} resolve on a run too.
+  env = await applyGlobals(tenantId, env);
   // Mint a runtime token from the environment's login setup (if configured) and
   // inject it so authenticated endpoints resolve a valid bearer, instead of
   // being sent with no Authorization header → 401.

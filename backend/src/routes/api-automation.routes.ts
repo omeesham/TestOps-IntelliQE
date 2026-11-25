@@ -185,6 +185,7 @@ import {
   // (auth-setup helpers imported separately below)
 } from '../services/api-environments.service.js';
 import { mintAuthToken, injectAuthToken } from '../services/api-auth-setup.service.js';
+import { listGlobalVariables, saveGlobalVariables, applyGlobals } from '../services/api-global-variables.service.js';
 import {
   getReadinessConfig, saveReadinessConfig, evaluateReadiness, enforceReadiness, listReadinessHistory,
 } from '../services/api-env-readiness.service.js';
@@ -1716,6 +1717,17 @@ router.delete('/environments/:id', async (req: Request, res: Response) => {
   } catch (err) { fail(res, err); }
 });
 
+/* ── Workspace global variables (the broadest {{var}} scope; env overrides) ── */
+router.get('/global-variables', async (req: Request, res: Response) => {
+  try { res.json({ variables: await listGlobalVariables(req.user!.tenantId) }); }
+  catch (err) { fail(res, err, 500); }
+});
+
+router.put('/global-variables', async (req: Request, res: Response) => {
+  try { res.json({ variables: await saveGlobalVariables(req.user!.tenantId, req.user!.username, req.body?.variables) }); }
+  catch (err) { fail(res, err); }
+});
+
 /**
  * Resolve endpoints against an environment — secrets revealed server-side and
  * substituted, so the run sends real values without the browser ever holding
@@ -1725,8 +1737,10 @@ router.post('/environments/:id/resolve', async (req: Request, res: Response) => 
   try {
     const env0 = await getEnvironment(req.user!.tenantId, String(req.params.id), { reveal: true });
     if (!env0) { res.status(404).json({ error: 'Environment not found.' }); return; }
-    // Mint a runtime token from the login setup (if any) so authenticated endpoints resolve a bearer.
-    const env = injectAuthToken(env0, await mintAuthToken(env0)) || env0;
+    // Widen with workspace globals (env vars win), then mint a runtime token from
+    // the login setup (if any) so authenticated endpoints resolve a bearer.
+    const envG = await applyGlobals(req.user!.tenantId, env0);
+    const env = injectAuthToken(envG, await mintAuthToken(envG)) || envG;
     const rawEndpoints = endpointsFromBody(req.body?.endpoints);
     const preserveRealHosts = spansMultipleHosts(rawEndpoints);
     const endpoints = rawEndpoints.map((e) => applyEnvironment(e, env, { preserveRealHosts }));
@@ -1869,9 +1883,11 @@ router.post('/design', async (req: Request, res: Response) => {
   const jobId = startJob(tenantId, async (id) => {
     setJobProgress(id, { phase: 'design', done: 0, total: specs.length, message: 'Starting…' });
     const env0 = environmentId ? await getEnvironment(tenantId, environmentId, { reveal: true }) : null;
-    // Mint + inject the login-setup token so the generator bakes a valid bearer
-    // into authenticated scenarios instead of an empty (→ 401) header.
-    const env = env0 ? injectAuthToken(env0, await mintAuthToken(env0)) : null;
+    // Widen with workspace globals (env vars win), then mint + inject the
+    // login-setup token so the generator bakes a valid bearer into authenticated
+    // scenarios instead of an empty (→ 401) header.
+    const envG = env0 ? await applyGlobals(tenantId, env0) : null;
+    const env = envG ? injectAuthToken(envG, await mintAuthToken(envG)) : null;
     // Compose free text + stored BRD/FRD grounding into the requirements the
     // pipeline grounds generation in.
     const grounding = enrichWithAgents ? await assembleRequirementGrounding(tenantId, requirementRefs) : '';
@@ -1918,8 +1934,10 @@ router.post('/render', async (req: Request, res: Response) => {
     const environmentId = typeof req.body?.environmentId === 'string' ? req.body.environmentId : undefined;
     const env0 = environmentId ? await getEnvironment(tenantId, environmentId, { reveal: true }) : null;
     if (environmentId && !env0) { res.status(404).json({ error: 'Environment not found.' }); return; }
-    // Retarget re-render: mint + inject the login-setup token for the new environment.
-    const env = env0 ? injectAuthToken(env0, await mintAuthToken(env0)) : null;
+    // Retarget re-render: widen with workspace globals (env vars win), then mint +
+    // inject the login-setup token for the new environment.
+    const envG = env0 ? await applyGlobals(tenantId, env0) : null;
+    const env = envG ? injectAuthToken(envG, await mintAuthToken(envG)) : null;
     const preserveRealHosts = spansMultipleHosts(cases as any[]);
     const resolved = (cases as any[]).map((nc) => resolveApiCase(nc, env, { preserveRealHosts }));
     const { testCases, automationScripts, pageObjects } = renderApiCases(resolved);
@@ -2298,7 +2316,7 @@ router.post('/request/send', async (req: Request, res: Response) => {
     // absolute-URL check so a `{{baseUrl}}/path` URL is allowed and resolved.
     let shaped: any = { method: r.method, url: r.url, headers: r.headers, auth: r.auth, body: r.body };
     if (r.environmentId) {
-      const env = await getEnvironment(req.user!.tenantId, String(r.environmentId), { reveal: true });
+      const env = await applyGlobals(req.user!.tenantId, await getEnvironment(req.user!.tenantId, String(r.environmentId), { reveal: true }));
       if (env) {
         const applied = applyEnvironment({ url: r.url, headers: r.headers || [], body: r.body, auth: r.auth }, env, { preserveRealHosts: true });
         shaped = { ...shaped, url: applied.url, headers: applied.headers, body: applied.body, auth: applied.auth };

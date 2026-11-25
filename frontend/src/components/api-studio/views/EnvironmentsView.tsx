@@ -11,10 +11,10 @@
  * the toolbar picker at once, and the environment marked active for runs is the
  * same one the picker points at.
  */
-import { useState } from 'react';
-import { Plus, Server, Star, Trash2, Pencil, Save, X, Lock, Check, Zap, ShieldCheck, ShieldAlert, KeyRound, AlertTriangle } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Plus, Server, Star, Trash2, Pencil, Save, X, Lock, Check, Zap, ShieldCheck, ShieldAlert, KeyRound, AlertTriangle, Globe, ChevronDown } from 'lucide-react';
 import Spinner from '@/components/feedback/Spinner';
-import { createApiEnvironment, updateApiEnvironment, deleteApiEnvironment, sendApiRequest } from '@/services/api';
+import { createApiEnvironment, updateApiEnvironment, deleteApiEnvironment, sendApiRequest, listGlobalVariables, saveGlobalVariables } from '@/services/api';
 import EnvironmentReadinessPanel from './EnvironmentReadinessPanel';
 import { useToast } from '@/components/feedback/ToastProvider';
 import Loader from '@/components/feedback/Loader';
@@ -115,6 +115,8 @@ export default function EnvironmentsView({ store }: { store: ApiEnvironmentsStor
           }
         />
 
+        <GlobalsCard />
+
         {editing && <EnvForm initial={editing} saving={saving} onCancel={() => setEditing(null)} onSave={save} />}
         {readinessFor && <EnvironmentReadinessPanel env={readinessFor} onClose={() => setReadinessFor(null)} />}
 
@@ -168,6 +170,88 @@ export default function EnvironmentsView({ store }: { store: ApiEnvironmentsStor
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * GlobalsCard — the workspace's GLOBAL variables, the broadest scope in the
+ * {{var}} resolution hierarchy. Shared across every environment; an environment
+ * variable of the same name overrides a global. Secrets are stored AES-encrypted
+ * and masked, exactly like environment variables — a masked value left unchanged
+ * keeps the stored secret.
+ */
+function GlobalsCard() {
+  const toast = useToast();
+  const [vars, setVars] = useState<EnvVariable[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [dirty, setDirty] = useState(false);
+
+  const mapVars = (list: unknown): EnvVariable[] =>
+    (Array.isArray(list) ? list : []).map((x: any) => ({ key: String(x?.key ?? ''), value: String(x?.value ?? ''), secret: !!x?.secret }));
+
+  useEffect(() => {
+    let alive = true;
+    listGlobalVariables()
+      .then(({ variables }) => { if (alive) { const v = mapVars(variables); setVars(v); if (v.length) setOpen(true); } })
+      .catch((err) => toast.fromError(err))
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [toast]);
+
+  const update = (i: number, patch: Partial<EnvVariable>) => { setVars((p) => p.map((v, j) => (j === i ? { ...v, ...patch } : v))); setDirty(true); };
+  const add = () => { setVars((p) => [...p, { key: '', value: '', secret: false }]); setDirty(true); };
+  const remove = (i: number) => { setVars((p) => p.filter((_, j) => j !== i)); setDirty(true); };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const payload = vars.filter((v) => v.key.trim());
+      const { variables } = await saveGlobalVariables(payload);
+      setVars(mapVars(variables));
+      setDirty(false);
+      toast.success('Globals saved', `${payload.length} workspace variable${payload.length === 1 ? '' : 's'}`);
+    } catch (err) { toast.fromError(err); }
+    finally { setSaving(false); }
+  };
+
+  const count = vars.filter((v) => v.key.trim()).length;
+  return (
+    <div className={`${CARD} p-4`}>
+      <button type="button" onClick={() => setOpen((o) => !o)} className="w-full flex items-center gap-2 text-left">
+        <span className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 bg-[#EEF2FF]"><Globe className="w-4 h-4 text-[#4F46E5]" /></span>
+        <div className="min-w-0">
+          <h3 className="text-[13px] font-semibold text-gray-900">Workspace globals</h3>
+          <p className="text-[10.5px] text-gray-400">Shared across every environment — an environment variable of the same name wins.</p>
+        </div>
+        <span className={`ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9.5px] font-semibold ${MUTED_CHIP}`}>{count} var{count === 1 ? '' : 's'}</span>
+        <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="mt-3">
+          {loading ? <Loader.Block label="Loading globals" /> : (
+            <>
+              <div className="space-y-1">
+                {vars.map((v, i) => (
+                  <div key={i} className="flex items-center gap-1.5">
+                    <input value={v.key} onChange={(e) => update(i, { key: e.target.value.replace(/[^\w.-]/g, '') })} placeholder="baseUrl" spellCheck={false} className={`${INPUT} font-mono w-[200px]`} />
+                    <input value={v.value} onChange={(e) => update(i, { value: e.target.value })} type={v.secret ? 'password' : 'text'} autoComplete="off" placeholder={v.secret ? 'stored encrypted' : 'value'} spellCheck={false} className={`${INPUT} font-mono flex-1`} />
+                    <button type="button" onClick={() => update(i, { secret: !v.secret })} title={v.secret ? 'Secret — stored encrypted, masked in the UI' : 'Plain value'} className={`p-1.5 rounded border transition-all active:translate-y-px ${CHIP_3D} ${v.secret ? 'bg-gradient-to-b from-[#F5F3FF] to-[#EDE9FE] border-[#DDD6FE] text-[#6D28D9]' : 'bg-white border-gray-200 text-gray-400 hover:text-[#7C3AED]'}`}><Lock className="w-3.5 h-3.5" /></button>
+                    <button type="button" onClick={() => remove(i)} className="p-1.5 text-gray-300 hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
+                  </div>
+                ))}
+                <button type="button" onClick={add} className="inline-flex items-center gap-1 text-[11px] font-medium text-[#7C3AED]"><Plus className="w-3 h-3" />Add global variable</button>
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <p className="text-[10.5px] text-gray-400 leading-relaxed flex-1">Reference as <code className="font-mono">{'{{name}}'}</code> anywhere. Resolution order: <strong>globals → environment → extracted → dynamic</strong> (narrower wins). A masked secret left unchanged keeps its stored value.</p>
+                <button type="button" onClick={save} disabled={saving || !dirty} className={PRIMARY_BTN}>{saving ? <Spinner className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}Save globals</button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

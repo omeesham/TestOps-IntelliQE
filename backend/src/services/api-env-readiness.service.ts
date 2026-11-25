@@ -19,6 +19,7 @@
  */
 import pool from '../db.js';
 import { getEnvironment, type ApiEnvironment } from './api-environments.service.js';
+import { applyGlobals } from './api-global-variables.service.js';
 import { mintAuthToken } from './api-auth-setup.service.js';
 import { buildRequestInit, timedFetch } from '../utils/api-http.js';
 
@@ -195,8 +196,10 @@ export async function evaluateReadiness(
   opts: { context?: ReadinessContext; allowWrites?: boolean } = {},
 ): Promise<ReadinessResult> {
   const context: ReadinessContext = opts.context || 'preview';
-  const env = await getEnvironment(tenantId, envId, { reveal: true });
-  if (!env) throw new Error('Environment not found.');
+  const env0 = await getEnvironment(tenantId, envId, { reveal: true });
+  if (!env0) throw new Error('Environment not found.');
+  // A required var satisfied by a workspace global should pass the gate too.
+  const env = await applyGlobals(tenantId, env0);
   const config = await getReadinessConfig(tenantId, envId);
   const checks: ReadinessCheck[] = [];
   const vars = varMap(env);
